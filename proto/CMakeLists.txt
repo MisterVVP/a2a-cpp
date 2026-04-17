@@ -1,5 +1,5 @@
 set(A2A_PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
-set(A2A_GENERATED_DIR "${CMAKE_SOURCE_DIR}/generated")
+set(A2A_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${A2A_GENERATED_DIR}")
 
 set(A2A_PROTO_FILE "${A2A_PROTO_ROOT}/a2a/v1/a2a.proto")
@@ -18,9 +18,16 @@ add_custom_command(
     --grpc_out=${A2A_GENERATED_DIR}
     --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
     ${A2A_PROTO_FILE}
-  DEPENDS ${A2A_PROTO_FILE}
+  DEPENDS
+    ${A2A_PROTO_FILE}
+    protobuf::protoc
+    gRPC::grpc_cpp_plugin
   COMMENT "Generating C++ sources from ${A2A_PROTO_FILE}"
   VERBATIM
+)
+
+add_custom_target(a2a_proto_codegen
+  DEPENDS ${A2A_PROTO_SRCS} ${A2A_PROTO_HDRS} ${A2A_GRPC_SRCS} ${A2A_GRPC_HDRS}
 )
 
 add_library(a2a_proto_generated STATIC
@@ -40,3 +47,5 @@ target_include_directories(a2a_proto_generated
   PUBLIC
     ${A2A_GENERATED_DIR}
 )
+
+add_dependencies(a2a_proto_generated a2a_proto_codegen)

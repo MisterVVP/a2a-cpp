@@ -16,8 +16,8 @@ endif()
 find_package(Protobuf REQUIRED)
 find_package(gRPC REQUIRED)
 
-add_subdirectory(src)
 add_subdirectory(proto)
+add_subdirectory(src)
 
 if(A2A_ENABLE_TESTING)
   include(CTest)
