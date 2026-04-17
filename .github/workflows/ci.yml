@@ -37,6 +37,9 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
+      - name: Generate protobuf/gRPC sources
+        run: cmake --build build --target a2a_proto_codegen --parallel
+
       - name: Build
         run: cmake --build build --parallel
 

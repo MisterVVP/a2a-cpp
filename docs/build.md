@@ -21,6 +21,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COM
 cmake --build build
 ```
 
+To run only proto generation:
+
+```bash
+cmake --build build --target a2a_proto_codegen
+```
+
 ## Run tests
 
 ```bash
@@ -42,7 +48,7 @@ clang-format --dry-run --Werror $(git ls-files '*.h' '*.hpp' '*.c' '*.cc' '*.cpp
 ## Notes on code generation
 
 - Proto definitions are kept under `proto/a2a/v1/a2a.proto`.
-- Generated outputs are written to `generated/a2a/v1/`.
+- Generated outputs are written to `build/generated/a2a/v1/`.
 - Generation is wired through the `a2a::proto_generated` target and runs automatically when needed.
 
 ## CI
