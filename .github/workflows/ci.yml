@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-format \
+            clang-tidy \
+            cmake \
+            ninja-build \
+            protobuf-compiler \
+            libprotobuf-dev \
+            protobuf-compiler-grpc \
+            libgrpc++-dev
+
+      - name: Verify formatting
+        run: |
+          mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cc' '*.cpp')
+          if [ "${#CPP_FILES[@]}" -gt 0 ]; then
+            clang-format --dry-run --Werror "${CPP_FILES[@]}"
+          fi
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Lint (clang-tidy)
+        run: ./scripts/run_clang_tidy.sh build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
