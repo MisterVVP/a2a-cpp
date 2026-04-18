@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -12,7 +13,9 @@
 
 namespace a2a::client {
 
-enum class PreferredTransport {
+inline constexpr std::chrono::seconds kDefaultDiscoveryCacheTtl{300};
+
+enum class PreferredTransport : std::uint8_t {
   kRest,
   kJsonRpc,
   kGrpc,
@@ -35,7 +38,7 @@ struct ResolvedInterface final {
 class DiscoveryClient final {
  public:
   explicit DiscoveryClient(HttpFetcher fetcher,
-                           std::chrono::seconds cache_ttl = std::chrono::seconds(300));
+                           std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
 
