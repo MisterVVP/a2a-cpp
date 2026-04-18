@@ -1,5 +1,9 @@
 add_library(a2a_core STATIC
   core/core.cpp
+  core/error.cc
+  core/extensions.cc
+  core/protojson.cc
+  core/version.cc
 )
 add_library(a2a::core ALIAS a2a_core)
 
@@ -11,6 +15,7 @@ target_include_directories(a2a_core
 target_link_libraries(a2a_core
   PUBLIC
     a2a::proto_generated
+    protobuf::libprotobuf
 )
 
 add_library(a2a_client STATIC
