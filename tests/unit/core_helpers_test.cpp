@@ -52,6 +52,23 @@ TEST(CoreErrorTest, ErrorCarriesTransportAndProtocolContext) {
   EXPECT_EQ(*http_status, 400);
 }
 
+TEST(CoreErrorTest, SupportsAllCoreErrorCategories) {
+  const auto validation = a2a::core::Error::Validation("invalid payload");
+  EXPECT_EQ(validation.code(), a2a::core::ErrorCode::kValidation);
+
+  const auto unsupported_version = a2a::core::Error::UnsupportedVersion("Unsupported A2A version");
+  EXPECT_EQ(unsupported_version.code(), a2a::core::ErrorCode::kUnsupportedVersion);
+
+  const auto network = a2a::core::Error::Network("network unavailable");
+  EXPECT_EQ(network.code(), a2a::core::ErrorCode::kNetwork);
+
+  const auto remote_protocol = a2a::core::Error::RemoteProtocol("remote validation failed");
+  EXPECT_EQ(remote_protocol.code(), a2a::core::ErrorCode::kRemoteProtocol);
+
+  const auto serialization = a2a::core::Error::Serialization("failed to parse json");
+  EXPECT_EQ(serialization.code(), a2a::core::ErrorCode::kSerialization);
+}
+
 TEST(CoreResultTest, WorksForValuesAndErrors) {
   constexpr int kExpectedValue = 7;
   a2a::core::Result<int> ok_result = kExpectedValue;
@@ -101,6 +118,17 @@ TEST(CoreProtoJsonTest, RejectsUnknownFieldsByDefault) {
       a2a::core::JsonToMessage(R"({"id":"task-2","unknownField":true})", &task);
   ASSERT_FALSE(parse_status.ok());
   EXPECT_EQ(parse_status.error().code(), a2a::core::ErrorCode::kSerialization);
+}
+
+TEST(CoreProtoJsonTest, CanIgnoreUnknownFieldsWhenRequested) {
+  lf::a2a::v1::Task task;
+  a2a::core::ProtoJsonParseOptions parse_options;
+  parse_options.ignore_unknown_fields = true;
+
+  const auto parse_status =
+      a2a::core::JsonToMessage(R"({"id":"task-3","unknownField":true})", &task, parse_options);
+  ASSERT_TRUE(parse_status.ok());
+  EXPECT_EQ(task.id(), "task-3");
 }
 
 TEST(CoreProtoJsonTest, NullMessageTargetReturnsValidationError) {
