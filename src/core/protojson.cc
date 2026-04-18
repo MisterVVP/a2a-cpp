@@ -21,8 +21,7 @@ Result<std::string> MessageToJson(const google::protobuf::Message& message,
   return json;
 }
 
-Result<void> JsonToMessage(std::string_view json,
-                           google::protobuf::Message* message,
+Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* message,
                            const ProtoJsonParseOptions& options) {
   if (message == nullptr) {
     return Error::Validation("ProtoJSON parse target cannot be null");

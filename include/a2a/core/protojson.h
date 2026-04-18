@@ -1,9 +1,9 @@
 #pragma once
 
+#include <google/protobuf/message.h>
+
 #include <string>
 #include <string_view>
-
-#include <google/protobuf/message.h>
 
 #include "a2a/core/result.h"
 
@@ -20,13 +20,10 @@ struct ProtoJsonParseOptions {
   bool ignore_unknown_fields = false;
 };
 
-[[nodiscard]] Result<std::string> MessageToJson(
-    const google::protobuf::Message& message,
-    const ProtoJsonWriteOptions& options = {});
+[[nodiscard]] Result<std::string> MessageToJson(const google::protobuf::Message& message,
+                                                const ProtoJsonWriteOptions& options = {});
 
-[[nodiscard]] Result<void> JsonToMessage(
-    std::string_view json,
-    google::protobuf::Message* message,
-    const ProtoJsonParseOptions& options = {});
+[[nodiscard]] Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* message,
+                                         const ProtoJsonParseOptions& options = {});
 
 }  // namespace a2a::core

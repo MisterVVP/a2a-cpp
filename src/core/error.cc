@@ -4,8 +4,7 @@
 
 namespace a2a::core {
 
-Error::Error(ErrorCode code, std::string message)
-    : code_(code), message_(std::move(message)) {}
+Error::Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
 Error Error::Validation(std::string message) {
   return Error(ErrorCode::kValidation, std::move(message));
@@ -15,9 +14,7 @@ Error Error::UnsupportedVersion(std::string message) {
   return Error(ErrorCode::kUnsupportedVersion, std::move(message));
 }
 
-Error Error::Network(std::string message) {
-  return Error(ErrorCode::kNetwork, std::move(message));
-}
+Error Error::Network(std::string message) { return Error(ErrorCode::kNetwork, std::move(message)); }
 
 Error Error::RemoteProtocol(std::string message) {
   return Error(ErrorCode::kRemoteProtocol, std::move(message));
@@ -49,13 +46,9 @@ ErrorCode Error::code() const noexcept { return code_; }
 
 std::string_view Error::message() const noexcept { return message_; }
 
-const std::optional<std::string>& Error::transport() const noexcept {
-  return transport_;
-}
+const std::optional<std::string>& Error::transport() const noexcept { return transport_; }
 
-const std::optional<std::string>& Error::protocol_code() const noexcept {
-  return protocol_code_;
-}
+const std::optional<std::string>& Error::protocol_code() const noexcept { return protocol_code_; }
 
 const std::optional<int>& Error::http_status() const noexcept { return http_status_; }
 

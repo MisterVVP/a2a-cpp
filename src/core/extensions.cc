@@ -25,8 +25,7 @@ bool IsValidToken(std::string_view token) {
     return false;
   }
   return std::all_of(token.begin(), token.end(), [](char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_' ||
-           c == '.';
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_' || c == '.';
   });
 }
 
