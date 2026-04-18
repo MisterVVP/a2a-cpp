@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cassert>
-#include <optional>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -44,18 +43,18 @@ template <>
 class Result<void> final {
  public:
   Result() = default;
-  Result(const Error& error) : error_(error) {}
-  Result(Error&& error) : error_(std::move(error)) {}
+  Result(const Error& error) : state_(error) {}
+  Result(Error&& error) : state_(std::move(error)) {}
 
-  [[nodiscard]] bool ok() const noexcept { return !error_.has_value(); }
+  [[nodiscard]] bool ok() const noexcept { return std::holds_alternative<std::monostate>(state_); }
 
   [[nodiscard]] const Error& error() const {
-    assert(error_.has_value());
-    return *error_;
+    assert(!ok());
+    return std::get<Error>(state_);
   }
 
  private:
-  std::optional<Error> error_;
+  std::variant<std::monostate, Error> state_;
 };
 
 }  // namespace a2a::core

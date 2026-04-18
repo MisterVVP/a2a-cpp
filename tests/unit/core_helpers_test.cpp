@@ -39,17 +39,17 @@ TEST(CoreErrorTest, ErrorCarriesTransportAndProtocolContext) {
 
   EXPECT_EQ(error.code(), a2a::core::ErrorCode::kRemoteProtocol);
   EXPECT_EQ(error.message(), "Request rejected");
-  const auto transport = error.transport();
+  const auto& transport = error.transport();
   ASSERT_TRUE(transport.has_value());
-  EXPECT_EQ(*transport, "http");
+  EXPECT_EQ(transport, std::optional<std::string>("http"));
 
-  const auto protocol_code = error.protocol_code();
+  const auto& protocol_code = error.protocol_code();
   ASSERT_TRUE(protocol_code.has_value());
-  EXPECT_EQ(*protocol_code, "invalid_request");
+  EXPECT_EQ(protocol_code, std::optional<std::string>("invalid_request"));
 
-  const auto http_status = error.http_status();
+  const auto& http_status = error.http_status();
   ASSERT_TRUE(http_status.has_value());
-  EXPECT_EQ(*http_status, 400);
+  EXPECT_EQ(http_status, std::optional<int>(400));
 }
 
 TEST(CoreErrorTest, SupportsAllCoreErrorCategories) {
