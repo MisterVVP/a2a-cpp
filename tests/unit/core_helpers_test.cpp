@@ -1,0 +1,106 @@
+#include <gtest/gtest.h>
+
+#include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
+#include "a2a/core/protojson.h"
+#include "a2a/core/result.h"
+#include "a2a/core/version.h"
+#include "a2a/v1/a2a.pb.h"
+
+namespace {
+
+TEST(CoreVersionTest, EmitsAndValidatesA2AVersion10) {
+  EXPECT_EQ(a2a::core::Version::kHeaderName, "A2A-Version");
+  EXPECT_EQ(a2a::core::Version::HeaderValue(), "1.0");
+  EXPECT_TRUE(a2a::core::Version::IsSupported("1.0"));
+  EXPECT_FALSE(a2a::core::Version::IsSupported("2.0"));
+}
+
+TEST(CoreExtensionsTest, FormatSortsAndDeduplicatesExtensionsDeterministically) {
+  const std::vector<std::string> input = {"streaming", "auth", "streaming", ""};
+  EXPECT_EQ(a2a::core::Extensions::Format(input), "auth,streaming");
+}
+
+TEST(CoreExtensionsTest, ParseHandlesWhitespaceAndValidation) {
+  const auto parsed = a2a::core::Extensions::Parse("  streaming , auth,streaming  ");
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_EQ(parsed.value(), (std::vector<std::string>{"auth", "streaming"}));
+
+  const auto invalid = a2a::core::Extensions::Parse("valid,bad/token");
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(CoreErrorTest, ErrorCarriesTransportAndProtocolContext) {
+  const auto error = a2a::core::Error::RemoteProtocol("Request rejected")
+                         .WithTransport("http")
+                         .WithProtocolCode("invalid_request")
+                         .WithHttpStatus(400);
+
+  EXPECT_EQ(error.code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(error.message(), "Request rejected");
+  ASSERT_TRUE(error.transport().has_value());
+  EXPECT_EQ(error.transport().value(), "http");
+  ASSERT_TRUE(error.protocol_code().has_value());
+  EXPECT_EQ(error.protocol_code().value(), "invalid_request");
+  ASSERT_TRUE(error.http_status().has_value());
+  EXPECT_EQ(error.http_status().value(), 400);
+}
+
+TEST(CoreResultTest, WorksForValuesAndErrors) {
+  a2a::core::Result<int> ok_result = 7;
+  ASSERT_TRUE(ok_result.ok());
+  EXPECT_EQ(ok_result.value(), 7);
+
+  a2a::core::Result<int> error_result = a2a::core::Error::Network("connection dropped");
+  ASSERT_FALSE(error_result.ok());
+  EXPECT_EQ(error_result.error().code(), a2a::core::ErrorCode::kNetwork);
+
+  a2a::core::Result<void> void_ok;
+  EXPECT_TRUE(void_ok.ok());
+
+  a2a::core::Result<void> void_error = a2a::core::Error::Serialization("bad payload");
+  ASSERT_FALSE(void_error.ok());
+  EXPECT_EQ(void_error.error().code(), a2a::core::ErrorCode::kSerialization);
+}
+
+TEST(CoreProtoJsonTest, CanRoundTripRepresentativeA2AMessage) {
+  lf::a2a::v1::Task task;
+  task.set_id("task-001");
+  task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+
+  const auto json = a2a::core::MessageToJson(task);
+  ASSERT_TRUE(json.ok()) << json.error().message();
+
+  lf::a2a::v1::Task parsed_task;
+  const auto parse_status = a2a::core::JsonToMessage(json.value(), &parsed_task);
+  ASSERT_TRUE(parse_status.ok()) << parse_status.error().message();
+
+  EXPECT_EQ(parsed_task.id(), "task-001");
+  EXPECT_EQ(parsed_task.status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+}
+
+TEST(CoreProtoJsonTest, EnumSerializationUsesNamesByDefault) {
+  lf::a2a::v1::Task task;
+  task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_FAILED);
+
+  const auto json = a2a::core::MessageToJson(task);
+  ASSERT_TRUE(json.ok());
+  EXPECT_NE(json.value().find("\"TASK_STATE_FAILED\""), std::string::npos);
+}
+
+TEST(CoreProtoJsonTest, RejectsUnknownFieldsByDefault) {
+  lf::a2a::v1::Task task;
+  const auto parse_status =
+      a2a::core::JsonToMessage(R"({"id":"task-2","unknownField":true})", &task);
+  ASSERT_FALSE(parse_status.ok());
+  EXPECT_EQ(parse_status.error().code(), a2a::core::ErrorCode::kSerialization);
+}
+
+TEST(CoreProtoJsonTest, NullMessageTargetReturnsValidationError) {
+  const auto parse_status = a2a::core::JsonToMessage("{}", nullptr);
+  ASSERT_FALSE(parse_status.ok());
+  EXPECT_EQ(parse_status.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+}  // namespace
