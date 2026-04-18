@@ -1,0 +1,26 @@
+{
+  "protocolVersion": "1.0",
+  "name": "Fixture Agent",
+  "supportedInterfaces": [
+    {
+      "transport": "TRANSPORT_PROTOCOL_REST",
+      "url": "https://agent.example.com/a2a",
+      "securityRequirements": [
+        "oauth2"
+      ]
+    },
+    {
+      "transport": "TRANSPORT_PROTOCOL_JSON_RPC",
+      "url": "https://agent.example.com/rpc"
+    }
+  ],
+  "securitySchemes": {
+    "oauth2": {
+      "type": "oauth2",
+      "description": "OAuth2 token"
+    }
+  },
+  "defaultSecurityRequirements": [
+    "oauth2"
+  ]
+}

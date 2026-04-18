@@ -181,3 +181,32 @@ message TaskPushNotificationConfig {
 message Metadata {
   google.protobuf.Struct entries = 1;
 }
+
+enum TransportProtocol {
+  TRANSPORT_PROTOCOL_UNSPECIFIED = 0;
+  TRANSPORT_PROTOCOL_REST = 1;
+  TRANSPORT_PROTOCOL_JSON_RPC = 2;
+  TRANSPORT_PROTOCOL_GRPC = 3;
+}
+
+message SecurityScheme {
+  string type = 1;
+  string scheme = 2;
+  string bearer_format = 3;
+  string open_id_connect_url = 4;
+  string description = 5;
+}
+
+message AgentInterface {
+  TransportProtocol transport = 1;
+  string url = 2;
+  repeated string security_requirements = 3;
+}
+
+message AgentCard {
+  string protocol_version = 1;
+  string name = 2;
+  repeated AgentInterface supported_interfaces = 3;
+  map<string, SecurityScheme> security_schemes = 4;
+  repeated string default_security_requirements = 5;
+}

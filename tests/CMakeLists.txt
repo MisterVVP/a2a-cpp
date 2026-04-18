@@ -34,3 +34,22 @@ target_link_libraries(core_helpers_test
 )
 
 gtest_discover_tests(core_helpers_test)
+
+add_executable(discovery_test
+  unit/discovery_test.cpp
+)
+
+target_link_libraries(discovery_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+target_compile_definitions(discovery_test
+  PRIVATE
+    A2A_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+gtest_discover_tests(discovery_test)
