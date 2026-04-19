@@ -19,6 +19,11 @@ enum class ErrorCode : std::uint8_t {
 class Error final {
  public:
   Error(ErrorCode code, std::string message);
+  Error(const Error&) = default;
+  Error(Error&&) noexcept = default;
+  Error& operator=(const Error&) = default;
+  Error& operator=(Error&&) noexcept = default;
+  ~Error() = default;
 
   [[nodiscard]] static Error Validation(std::string message);
   [[nodiscard]] static Error UnsupportedVersion(std::string message);
@@ -37,11 +42,11 @@ class Error final {
   [[nodiscard]] const std::optional<int>& http_status() const noexcept;
 
  private:
-  ErrorCode code_;
+  ErrorCode code_ = ErrorCode::kInternal;
   std::string message_;
-  std::optional<std::string> transport_;
-  std::optional<std::string> protocol_code_;
-  std::optional<int> http_status_;
+  std::optional<std::string> transport_ = std::nullopt;
+  std::optional<std::string> protocol_code_ = std::nullopt;
+  std::optional<int> http_status_ = std::nullopt;
 };
 
 }  // namespace a2a::core
