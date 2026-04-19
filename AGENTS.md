@@ -34,6 +34,11 @@ These instructions apply to the entire repository. Follow them for all changes u
   - Avoid surprising side effects.
   - Leave code cleaner than found.
 
+## File naming and extensions
+- Use `.cpp` for C++ implementation files.
+- Use `.h` for headers unless a nested scope explicitly defines `.hpp`.
+- Do not introduce `.cc` files for hand-written source; when touching legacy code, prefer migrating `.cc` to `.cpp` (generated protobuf files are exempt).
+
 ## Style and quality
 - Use project formatter and linter in CI and locally before merging.
 - Treat warnings as actionable; keep warning count at zero for touched code.
@@ -60,6 +65,13 @@ These instructions apply to the entire repository. Follow them for all changes u
 Before submitting changes:
 1. Build succeeds in a clean environment.
 2. Formatter and linter pass.
+   - AI agents must run the exact CI formatting mechanism locally before pushing changes:
+     ```bash
+     mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
+     if [ "${#CPP_FILES[@]}" -gt 0 ]; then
+       clang-format --dry-run --Werror "${CPP_FILES[@]}"
+     fi
+     ```
    - After a successful build/configure, run `./scripts/run_clang_tidy.sh build` and verify it exits with code `0`.
    - Code must not be pushed to any branch unless this linter command succeeds (exit code `0`).
 3. Unit tests pass.

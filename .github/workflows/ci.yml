@@ -27,9 +27,17 @@ jobs:
             protobuf-compiler-grpc \
             libgrpc++-dev
 
+      - name: Enforce C++ file extensions
+        run: |
+          if git ls-files '*.cc' | grep -q .; then
+            echo 'Found forbidden .cc files. Use .cpp instead.' >&2
+            git ls-files '*.cc'
+            exit 1
+          fi
+
       - name: Verify formatting
         run: |
-          mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cc' '*.cpp')
+          mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
           if [ "${#CPP_FILES[@]}" -gt 0 ]; then
             clang-format --dry-run --Werror "${CPP_FILES[@]}"
           fi
@@ -46,5 +54,8 @@ jobs:
       - name: Lint (clang-tidy)
         run: ./scripts/run_clang_tidy.sh build
 
-      - name: Test
+      - name: Unit and integration tests
         run: ctest --test-dir build --output-on-failure
+
+      - name: Functional tests (HTTP+JSON transport)
+        run: ctest --test-dir build --output-on-failure -R 'HttpJsonClientIntegrationTest\..*'

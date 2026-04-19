@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ranges>
 
 #include "a2a/core/error.h"
 
@@ -24,14 +25,15 @@ bool IsValidToken(std::string_view token) {
   if (token.empty()) {
     return false;
   }
-  return std::all_of(token.begin(), token.end(), [](char c) {
+  return std::ranges::all_of(token, [](char c) {
     return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_' || c == '.';
   });
 }
 
 void Normalize(std::vector<std::string>* extensions) {
-  std::sort(extensions->begin(), extensions->end());
-  extensions->erase(std::unique(extensions->begin(), extensions->end()), extensions->end());
+  std::ranges::sort(*extensions);
+  const auto unique_end = std::ranges::unique(*extensions);
+  extensions->erase(unique_end.begin(), extensions->end());
 }
 
 }  // namespace
