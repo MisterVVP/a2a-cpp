@@ -37,6 +37,29 @@ bool HasHttpScheme(std::string_view url) {
   return url.starts_with("http://") || url.starts_with("https://");
 }
 
+bool HasGrpcScheme(std::string_view url) {
+  return url.starts_with("grpc://") || url.starts_with("grpcs://") || url.starts_with("dns:///");
+}
+
+bool HasHostPortShape(std::string_view endpoint) {
+  return endpoint.find(':') != std::string_view::npos;
+}
+
+bool IsValidInterfaceEndpoint(lf::a2a::v1::TransportProtocol transport, std::string_view endpoint) {
+  switch (transport) {
+    case lf::a2a::v1::TRANSPORT_PROTOCOL_REST:
+    case lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC:
+      return HasHttpScheme(endpoint);
+    case lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC:
+      return HasGrpcScheme(endpoint) || HasHttpScheme(endpoint) || HasHostPortShape(endpoint);
+    case lf::a2a::v1::TRANSPORT_PROTOCOL_UNSPECIFIED:
+    case lf::a2a::v1::TransportProtocol_INT_MIN_SENTINEL_DO_NOT_USE_:
+    case lf::a2a::v1::TransportProtocol_INT_MAX_SENTINEL_DO_NOT_USE_:
+      return false;
+  }
+  return false;
+}
+
 PreferredTransport ToPreferredTransport(lf::a2a::v1::TransportProtocol transport) {
   switch (transport) {
     case lf::a2a::v1::TRANSPORT_PROTOCOL_REST:
@@ -146,8 +169,8 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
     if (iface.url().empty()) {
       return core::Error::Validation("Agent Card contains an interface without a URL");
     }
-    if (!HasHttpScheme(iface.url())) {
-      return core::Error::Validation("Agent Card interface URL must use http:// or https://");
+    if (!IsValidInterfaceEndpoint(iface.transport(), iface.url())) {
+      return core::Error::Validation("Agent Card interface endpoint is invalid for its transport");
     }
     for (const auto& requirement : iface.security_requirements()) {
       if (!card.security_schemes().contains(requirement)) {
@@ -229,8 +252,8 @@ core::Result<void> AgentCardResolver::ValidateInterface(const lf::a2a::v1::Agent
   if (iface.url().empty()) {
     return core::Error::Validation("Missing interface URL");
   }
-  if (!HasHttpScheme(iface.url())) {
-    return core::Error::Validation("Interface URL must be http:// or https://");
+  if (!IsValidInterfaceEndpoint(iface.transport(), iface.url())) {
+    return core::Error::Validation("Interface endpoint is invalid for its transport");
   }
   return {};
 }
