@@ -45,11 +45,11 @@ include/a2a/core/extensions.h
 include/a2a/core/error.h
 include/a2a/core/result.h
 include/a2a/core/protojson.h
-src/core/version.cc
-src/core/extensions.cc
-src/core/error.cc
-src/core/protojson.cc
-tests/unit/core_*.cc
+src/core/version.cpp
+src/core/extensions.cpp
+src/core/error.cpp
+src/core/protojson.cpp
+tests/unit/core_*.cpp
 ```
 
 ## Implementation notes

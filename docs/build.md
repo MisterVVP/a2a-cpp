@@ -36,7 +36,7 @@ ctest --test-dir build --output-on-failure
 ## Run style checks
 
 ```bash
-clang-format --dry-run --Werror $(git ls-files '*.h' '*.hpp' '*.c' '*.cc' '*.cpp')
+clang-format --dry-run --Werror $(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
 ```
 
 ## Run lints

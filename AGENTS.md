@@ -34,6 +34,11 @@ These instructions apply to the entire repository. Follow them for all changes u
   - Avoid surprising side effects.
   - Leave code cleaner than found.
 
+## File naming and extensions
+- Use `.cpp` for C++ implementation files.
+- Use `.h` for headers unless a nested scope explicitly defines `.hpp`.
+- Do not introduce `.cc` files for hand-written source; when touching legacy code, prefer migrating `.cc` to `.cpp` (generated protobuf files are exempt).
+
 ## Style and quality
 - Use project formatter and linter in CI and locally before merging.
 - Treat warnings as actionable; keep warning count at zero for touched code.

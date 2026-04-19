@@ -30,6 +30,7 @@ class Error final {
   [[nodiscard]] static Error Network(std::string message);
   [[nodiscard]] static Error RemoteProtocol(std::string message);
   [[nodiscard]] static Error Serialization(std::string message);
+  [[nodiscard]] static Error Internal(std::string message);
 
   [[nodiscard]] Error WithTransport(std::string transport) const;
   [[nodiscard]] Error WithProtocolCode(std::string protocol_code) const;

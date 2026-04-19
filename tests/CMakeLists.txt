@@ -55,3 +55,31 @@ target_compile_definitions(discovery_test
 )
 
 gtest_discover_tests(discovery_test)
+
+add_executable(client_test
+  unit/client_test.cpp
+)
+
+target_link_libraries(client_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(client_test)
+
+add_executable(http_json_client_integration_test
+  integration/http_json_client_integration_test.cpp
+)
+
+target_link_libraries(http_json_client_integration_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(http_json_client_integration_test)

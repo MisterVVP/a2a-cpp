@@ -6,19 +6,14 @@ namespace a2a::core {
 
 Error::Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
-Error::Error(const Error& other)
-    : code_(other.code_),
-      message_(other.message_),
-      transport_(other.transport_),
-      protocol_code_(other.protocol_code_),
-      http_status_(other.http_status_) {}
+Error::Error(const Error& other) = default;
 
 Error::Error(Error&& other) noexcept
     : code_(other.code_),
       message_(std::move(other.message_)),
       transport_(std::move(other.transport_)),
       protocol_code_(std::move(other.protocol_code_)),
-      http_status_(std::move(other.http_status_)) {}
+      http_status_(other.http_status_) {}
 
 Error& Error::operator=(const Error& other) {
   if (this == &other) {
@@ -40,26 +35,30 @@ Error& Error::operator=(Error&& other) noexcept {
   message_ = std::move(other.message_);
   transport_ = std::move(other.transport_);
   protocol_code_ = std::move(other.protocol_code_);
-  http_status_ = std::move(other.http_status_);
+  http_status_ = other.http_status_;
   return *this;
 }
 
 Error Error::Validation(std::string message) {
-  return Error(ErrorCode::kValidation, std::move(message));
+  return {ErrorCode::kValidation, std::move(message)};
 }
 
 Error Error::UnsupportedVersion(std::string message) {
-  return Error(ErrorCode::kUnsupportedVersion, std::move(message));
+  return {ErrorCode::kUnsupportedVersion, std::move(message)};
 }
 
-Error Error::Network(std::string message) { return Error(ErrorCode::kNetwork, std::move(message)); }
+Error Error::Network(std::string message) { return {ErrorCode::kNetwork, std::move(message)}; }
 
 Error Error::RemoteProtocol(std::string message) {
-  return Error(ErrorCode::kRemoteProtocol, std::move(message));
+  return {ErrorCode::kRemoteProtocol, std::move(message)};
 }
 
 Error Error::Serialization(std::string message) {
-  return Error(ErrorCode::kSerialization, std::move(message));
+  return {ErrorCode::kSerialization, std::move(message)};
+}
+
+Error Error::Internal(std::string message) {
+  return {ErrorCode::kInternal, std::move(message)};
 }
 
 Error Error::WithTransport(std::string transport) const {

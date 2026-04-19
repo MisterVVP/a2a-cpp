@@ -1,9 +1,9 @@
 add_library(a2a_core STATIC
   core/core.cpp
-  core/error.cc
-  core/extensions.cc
-  core/protojson.cc
-  core/version.cc
+  core/error.cpp
+  core/extensions.cpp
+  core/protojson.cpp
+  core/version.cpp
 )
 add_library(a2a::core ALIAS a2a_core)
 
@@ -21,6 +21,7 @@ target_link_libraries(a2a_core
 add_library(a2a_client STATIC
   client/client.cpp
   client/discovery.cpp
+  client/http_json_transport.cpp
 )
 add_library(a2a::client ALIAS a2a_client)
 

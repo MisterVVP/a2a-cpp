@@ -36,10 +36,10 @@ Use the discovered Agent Card and resolved interface from Task 03.
 ```text
 include/a2a/client/client.h
 include/a2a/client/call_options.h
-src/client/client.cc
-src/client/http_json/http_json_transport.cc
+src/client/client.cpp
+src/client/http_json/http_json_transport.cpp
 src/client/http_json/http_json_transport.h
-tests/integration/http_json_client_*.cc
+tests/integration/http_json_client_*.cpp
 ```
 
 ## Implementation notes
