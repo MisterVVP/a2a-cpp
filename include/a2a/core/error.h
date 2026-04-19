@@ -19,10 +19,10 @@ enum class ErrorCode : std::uint8_t {
 class Error final {
  public:
   Error(ErrorCode code, std::string message);
-  Error(const Error&) = default;
-  Error(Error&&) noexcept = default;
-  Error& operator=(const Error&) = default;
-  Error& operator=(Error&&) noexcept = default;
+  Error(const Error& other);
+  Error(Error&& other) noexcept;
+  Error& operator=(const Error& other);
+  Error& operator=(Error&& other) noexcept;
   ~Error() = default;
 
   [[nodiscard]] static Error Validation(std::string message);

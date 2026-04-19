@@ -60,7 +60,8 @@ These instructions apply to the entire repository. Follow them for all changes u
 Before submitting changes:
 1. Build succeeds in a clean environment.
 2. Formatter and linter pass.
-   - `./scripts/run_clang_tidy.sh build` must succeed before code can be pushed to any branch.
+   - After a successful build/configure, run `./scripts/run_clang_tidy.sh build` and verify it exits with code `0`.
+   - Code must not be pushed to any branch unless this linter command succeeds (exit code `0`).
 3. Unit tests pass.
 4. Functional/integration tests pass.
 5. Vulnerability/dependency checks pass.
