@@ -65,6 +65,13 @@ These instructions apply to the entire repository. Follow them for all changes u
 Before submitting changes:
 1. Build succeeds in a clean environment.
 2. Formatter and linter pass.
+   - AI agents must run the exact CI formatting mechanism locally before pushing changes:
+     ```bash
+     mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
+     if [ "${#CPP_FILES[@]}" -gt 0 ]; then
+       clang-format --dry-run --Werror "${CPP_FILES[@]}"
+     fi
+     ```
    - After a successful build/configure, run `./scripts/run_clang_tidy.sh build` and verify it exits with code `0`.
    - Code must not be pushed to any branch unless this linter command succeeds (exit code `0`).
 3. Unit tests pass.

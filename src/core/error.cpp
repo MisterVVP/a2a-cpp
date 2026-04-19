@@ -57,9 +57,7 @@ Error Error::Serialization(std::string message) {
   return {ErrorCode::kSerialization, std::move(message)};
 }
 
-Error Error::Internal(std::string message) {
-  return {ErrorCode::kInternal, std::move(message)};
-}
+Error Error::Internal(std::string message) { return {ErrorCode::kInternal, std::move(message)}; }
 
 Error Error::WithTransport(std::string transport) const {
   Error updated = *this;

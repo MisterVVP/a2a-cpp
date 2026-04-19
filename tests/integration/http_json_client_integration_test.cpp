@@ -1,12 +1,11 @@
-#include "a2a/client/client.h"
-#include "a2a/client/http_json_transport.h"
-
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <string>
 #include <utility>
 
+#include "a2a/client/client.h"
+#include "a2a/client/http_json_transport.h"
 #include "a2a/core/error.h"
 
 namespace {
@@ -37,7 +36,8 @@ ResolvedInterface MakeResolvedRest() {
 TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResponse) {
   HttpRequest captured;
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(), [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
         return HttpClientResponse{.status_code = kHttpOk,
                                   .headers = {{"A2A-Version", "1.0"}},
@@ -75,7 +75,8 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
 TEST(HttpJsonClientIntegrationTest, GetTaskAndCancelTaskHappyPath) {
   int call = 0;
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(), [&call](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(),
+      [&call](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         ++call;
         if (call == 1) {
           EXPECT_EQ(request.method, "GET");
@@ -87,9 +88,10 @@ TEST(HttpJsonClientIntegrationTest, GetTaskAndCancelTaskHappyPath) {
         EXPECT_EQ(request.method, "POST");
         EXPECT_EQ(request.url, "https://agent.example.com/a2a/tasks/t-1:cancel");
         EXPECT_EQ(request.body, "{}");
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})"};
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})"};
       });
   A2AClient client(std::move(transport));
 
@@ -112,23 +114,27 @@ TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         if (request.method == "POST" && request.url.ends_with("/pushNotificationConfigs")) {
-          return HttpClientResponse{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}},
-                                    .body = R"({"id":"pn-1","taskId":"t-1","endpoint":"https://cb"})"};
+          return HttpClientResponse{
+              .status_code = kHttpOk,
+              .headers = {{"A2A-Version", "1.0"}},
+              .body = R"({"id":"pn-1","taskId":"t-1","endpoint":"https://cb"})"};
         }
         if (request.method == "GET" && request.url.ends_with("/pushNotificationConfigs/pn-1")) {
-          return HttpClientResponse{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}},
-                                    .body = R"({"id":"pn-1","taskId":"t-1","endpoint":"https://cb"})"};
+          return HttpClientResponse{
+              .status_code = kHttpOk,
+              .headers = {{"A2A-Version", "1.0"}},
+              .body = R"({"id":"pn-1","taskId":"t-1","endpoint":"https://cb"})"};
         }
-        if (request.method == "GET" && request.url.find("/pushNotificationConfigs?taskId=t-1&pageSize=25") !=
-                                          std::string::npos) {
+        if (request.method == "GET" &&
+            request.url.find("/pushNotificationConfigs?taskId=t-1&pageSize=25") !=
+                std::string::npos) {
           return HttpClientResponse{.status_code = kHttpOk,
                                     .headers = {{"A2A-Version", "1.0"}},
                                     .body = R"({"configs":[{"id":"pn-1","taskId":"t-1"}]})"};
         }
         if (request.method == "DELETE" && request.url.ends_with("/pushNotificationConfigs/pn-1")) {
-          return HttpClientResponse{.status_code = kHttpNoContent, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+          return HttpClientResponse{
+              .status_code = kHttpNoContent, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
         }
         return a2a::core::Error::Internal("unexpected request");
       });
@@ -184,9 +190,8 @@ TEST(HttpJsonClientIntegrationTest, MapsRemote4xxAnd5xxIntoProtocolErrors) {
 TEST(HttpJsonClientIntegrationTest, InvalidJsonBodyMapsToSerializationError) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = "{broken json"};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = "{broken json"};
       });
   A2AClient client(std::move(transport));
 
@@ -201,9 +206,8 @@ TEST(HttpJsonClientIntegrationTest, InvalidJsonBodyMapsToSerializationError) {
 TEST(HttpJsonClientIntegrationTest, UnsupportedVersionResponseFailsFast) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "2.0"}},
-                                  .body = R"({"id":"t-1"})"};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "2.0"}}, .body = R"({"id":"t-1"})"};
       });
   A2AClient client(std::move(transport));
 
@@ -230,6 +234,5 @@ TEST(HttpJsonClientIntegrationTest, MissingEndpointMappingFromAgentCardReturnsVa
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), ErrorCode::kValidation);
 }
-
 
 }  // namespace

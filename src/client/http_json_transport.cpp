@@ -35,8 +35,7 @@ std::string ToLower(std::string_view value) {
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-std::string JoinUrl(std::string_view interface_base_url,
-                    std::string_view rpc_endpoint) {
+std::string JoinUrl(std::string_view interface_base_url, std::string_view rpc_endpoint) {
   std::string base(interface_base_url);
   while (!base.empty() && base.back() == '/') {
     base.pop_back();
@@ -152,7 +151,8 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
   request.headers["Accept"] = "application/json";
 
   if (!options.extensions.empty()) {
-    request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
+    request.headers[std::string(core::Extensions::kHeaderName)] =
+        core::Extensions::Format(options.extensions);
   }
 
   if (options.auth_hook) {
@@ -179,7 +179,8 @@ core::Result<lf::a2a::v1::SendMessageResponse> HttpJsonTransport::SendMessage(
   }
 
   const std::string endpoint(EndpointMap::kSendMessage);
-  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
+  const auto response =
+      SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
   }
@@ -187,8 +188,8 @@ core::Result<lf::a2a::v1::SendMessageResponse> HttpJsonTransport::SendMessage(
   return ParseBodyOrMapError<lf::a2a::v1::SendMessageResponse>("POST", endpoint, response.value());
 }
 
-core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
-                                                           const CallOptions& options) {
+core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(
+    const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskRequest.id is required");
   }
@@ -219,7 +220,8 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(
   return ParseBodyOrMapError<lf::a2a::v1::Task>("POST", endpoint, response.value());
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::SetTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig>
+HttpJsonTransport::SetTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   const auto body = core::MessageToJson(request);
   if (!body.ok()) {
@@ -227,15 +229,17 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::SetTask
   }
 
   const std::string endpoint(EndpointMap::kPushConfigCollection);
-  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
+  const auto response =
+      SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
   }
   return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("POST", endpoint,
-                                                                       response.value());
+                                                                      response.value());
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig>
+HttpJsonTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
@@ -247,12 +251,13 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTask
     return response.error();
   }
   return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("GET", endpoint,
-                                                                       response.value());
+                                                                      response.value());
 }
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
 HttpJsonTransport::ListTaskPushNotificationConfigs(
-    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
+    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+    const CallOptions& options) {
   std::ostringstream endpoint;
   endpoint << EndpointMap::kPushConfigCollection;
   if (!request.task_id().empty() || request.page_size() > 0 || !request.page_token().empty()) {
@@ -282,8 +287,8 @@ HttpJsonTransport::ListTaskPushNotificationConfigs(
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>("GET", path,
-                                                                                    response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(
+      "GET", path, response.value());
 }
 
 core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(

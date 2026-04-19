@@ -7,7 +7,6 @@
 #include <unordered_map>
 #include <vector>
 
-
 namespace a2a::client {
 
 using HeaderMap = std::unordered_map<std::string, std::string>;

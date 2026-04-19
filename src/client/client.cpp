@@ -6,7 +6,8 @@
 
 namespace a2a::client {
 
-A2AClient::A2AClient(std::unique_ptr<ClientTransport> transport) : transport_(std::move(transport)) {}
+A2AClient::A2AClient(std::unique_ptr<ClientTransport> transport)
+    : transport_(std::move(transport)) {}
 
 core::Result<lf::a2a::v1::SendMessageResponse> A2AClient::SendMessage(
     const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) {
