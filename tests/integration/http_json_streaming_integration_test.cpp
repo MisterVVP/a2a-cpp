@@ -26,6 +26,7 @@ using a2a::client::StreamObserver;
 
 constexpr std::string_view kStreamingSendUrl = "https://agent.example.com/a2a/messages:stream";
 constexpr int kHttpOk = 200;
+constexpr int kHttpBadGateway = 502;
 constexpr int kStreamLoopMaxIterations = 100;
 constexpr int kCancelDelayMs = 30;
 
@@ -222,6 +223,90 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes)
   EXPECT_TRUE(observer.completed);
   ASSERT_EQ(observer.events.size(), 1U);
   EXPECT_EQ(observer.events[0].task().id(), "t-1");
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolError) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return EmitSseChunks(
+            {"event: error\ndata: {\"code\":\"TASK_FAILED\",\"message\":\"boom\"}\n\n"}, on_chunk);
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role("user");
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  ASSERT_FALSE(observer.errors.empty());
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  ASSERT_TRUE(observer.errors.front().protocol_code().has_value());
+  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), "TASK_FAILED");
+  EXPECT_FALSE(observer.completed);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpBadGateway,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"code":"UPSTREAM_FAILURE"})"};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role("user");
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  ASSERT_FALSE(observer.errors.empty());
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  ASSERT_TRUE(observer.errors.front().http_status().has_value());
+  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
+  EXPECT_FALSE(observer.completed);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskWithoutIdReturnsValidationError) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::GetTaskRequest request;
+
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_FALSE(stream.ok());
+  EXPECT_EQ(stream.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, MissingStreamRequesterReturnsInternalError) {
+  auto transport = std::make_unique<HttpJsonTransport>(MakeResolvedRest(), UnusedHttpRequester);
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role("user");
+
+  const auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_FALSE(stream.ok());
+  EXPECT_EQ(stream.error().code(), a2a::core::ErrorCode::kInternal);
 }
 
 }  // namespace
