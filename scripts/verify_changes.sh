@@ -8,8 +8,8 @@ if [ "${#CPP_FILES[@]}" -gt 0 ]; then
 fi
 
 echo "[verify_changes] Building project..."
-if [ ! -d build ]; then
-  echo "[verify_changes] Configuring CMake (build directory missing)..."
+if [ ! -f build/CMakeCache.txt ] || [ ! -f build/Makefile ]; then
+  echo "[verify_changes] Configuring CMake (build files missing)..."
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 fi
 cmake --build build -j"$(nproc)"
