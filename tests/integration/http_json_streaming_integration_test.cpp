@@ -3,6 +3,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -22,6 +23,38 @@ using a2a::client::HttpJsonTransport;
 using a2a::client::HttpRequest;
 using a2a::client::ResolvedInterface;
 using a2a::client::StreamObserver;
+
+constexpr std::string_view kStreamingSendUrl = "https://agent.example.com/a2a/messages:stream";
+constexpr int kHttpOk = 200;
+constexpr int kStreamLoopMaxIterations = 100;
+constexpr int kCancelDelayMs = 30;
+
+ResolvedInterface MakeResolvedRest();
+
+a2a::core::Result<HttpClientResponse> UnusedHttpRequester(const HttpRequest& request) {
+  (void)request;
+  return a2a::core::Error::Internal("unused");
+}
+
+a2a::core::Result<HttpClientResponse> EmitSseChunks(
+    const std::vector<std::string>& chunks, const a2a::client::HttpStreamChunkHandler& on_chunk) {
+  for (const auto& chunk : chunks) {
+    const auto status = on_chunk(chunk);
+    if (!status.ok()) {
+      return status.error();
+    }
+  }
+  return HttpClientResponse{
+      .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+}
+
+std::unique_ptr<HttpJsonTransport> MakeStreamingTransport(
+    const std::function<a2a::core::Result<HttpClientResponse>(
+        const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
+        const a2a::client::StreamCancelled&)>& stream_requester) {
+  return std::make_unique<HttpJsonTransport>(MakeResolvedRest(), UnusedHttpRequester,
+                                             stream_requester);
+}
 
 ResolvedInterface MakeResolvedRest() {
   ResolvedInterface resolved;
@@ -65,34 +98,27 @@ class RecordingObserver final : public StreamObserver {
   std::condition_variable cv_;
 };
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEventsInOrder) {
-  auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(),
-      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return a2a::core::Error::Internal("unused");
-      },
-      [](const HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
-         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        EXPECT_EQ(request.method, "POST");
-        EXPECT_EQ(request.url, "https://agent.example.com/a2a/messages:stream");
-        EXPECT_EQ(request.headers.at("Accept"), "text/event-stream");
+  const std::vector<std::string> chunks = {
+      "event: message\ndata: {\"task\":{\"id\":\"t-1\"}}\n\n",
+      "event: message\ndata: {\"statusUpdate\":{\"taskId\":\"t-1\",\"final\":false,",
+      "\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n",
+      "data: {\"artifactUpdate\":{\"taskId\":\"t-1\",\"artifact\":{\"artifactId\":\"a-1\"}}}\n\n"};
 
-        const std::vector<std::string> chunks = {
-            "event: message\ndata: {\"task\":{\"id\":\"t-1\"}}\n\n",
-            "event: message\ndata: {\"statusUpdate\":{\"taskId\":\"t-1\",\"final\":false,",
-            "\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n",
-            "data: "
-            "{\"artifactUpdate\":{\"taskId\":\"t-1\",\"artifact\":{\"artifactId\":\"a-1\"}}}\n\n"};
-
-        for (const auto& chunk : chunks) {
-          const auto status = on_chunk(chunk);
-          if (!status.ok()) {
-            return status.error();
-          }
+  auto transport = MakeStreamingTransport(
+      [chunks](const HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
+               const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        if (request.method != "POST") {
+          return a2a::core::Error::Internal("unexpected method");
         }
-
-        return HttpClientResponse{
-            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+        if (request.url != kStreamingSendUrl) {
+          return a2a::core::Error::Internal("unexpected url");
+        }
+        if (request.headers.at("Accept") != "text/event-stream") {
+          return a2a::core::Error::Internal("unexpected accept header");
+        }
+        return EmitSseChunks(chunks, on_chunk);
       });
 
   A2AClient client(std::move(transport));
@@ -114,20 +140,12 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
   EXPECT_TRUE(observer.completed);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
-  auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(),
-      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return a2a::core::Error::Internal("unused");
-      },
+  auto transport = MakeStreamingTransport(
       [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        const auto chunk_status = on_chunk("broken-field\n\n");
-        if (!chunk_status.ok()) {
-          return chunk_status.error();
-        }
-        return HttpClientResponse{
-            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+        return EmitSseChunks({"broken-field\n\n"}, on_chunk);
       });
 
   A2AClient client(std::move(transport));
@@ -144,28 +162,25 @@ TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
   EXPECT_FALSE(observer.completed);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompletion) {
-  auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(),
-      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return a2a::core::Error::Internal("unused");
-      },
-      [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
-         const a2a::client::StreamCancelled& is_cancelled)
-          -> a2a::core::Result<HttpClientResponse> {
-        for (int i = 0; i < 100; ++i) {
-          if (is_cancelled()) {
-            break;
-          }
-          const auto status = on_chunk("data: {\"task\":{\"id\":\"t-1\"}}\n\n");
-          if (!status.ok()) {
-            return status.error();
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        return HttpClientResponse{
-            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
-      });
+  auto transport = MakeStreamingTransport([](const HttpRequest&,
+                                             const a2a::client::HttpStreamChunkHandler& on_chunk,
+                                             const a2a::client::StreamCancelled& is_cancelled)
+                                              -> a2a::core::Result<HttpClientResponse> {
+    for (int i = 0; i < kStreamLoopMaxIterations; ++i) {
+      if (is_cancelled()) {
+        break;
+      }
+      const auto status = on_chunk("data: {\"task\":{\"id\":\"t-1\"}}\n\n");
+      if (!status.ok()) {
+        return status.error();
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return HttpClientResponse{
+        .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+  });
 
   A2AClient client(std::move(transport));
   RecordingObserver observer;
@@ -175,7 +190,7 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
 
   auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  std::this_thread::sleep_for(std::chrono::milliseconds(kCancelDelayMs));
   EXPECT_TRUE(stream.value()->IsActive());
   stream.value()->Cancel();
 
@@ -185,20 +200,12 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
   EXPECT_FALSE(observer.completed);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes) {
-  auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(),
-      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return a2a::core::Error::Internal("unused");
-      },
+  auto transport = MakeStreamingTransport(
       [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        const auto status = on_chunk("data: {\"task\":{\"id\":\"t-1\"}}\n\n");
-        if (!status.ok()) {
-          return status.error();
-        }
-        return HttpClientResponse{
-            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+        return EmitSseChunks({"data: {\"task\":{\"id\":\"t-1\"}}\n\n"}, on_chunk);
       });
 
   A2AClient client(std::move(transport));

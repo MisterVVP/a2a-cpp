@@ -7,6 +7,23 @@
 
 namespace {
 
+a2a::core::Result<void> CaptureEvent(std::vector<a2a::client::SseEvent>& events,
+                                     const a2a::client::SseEvent& event) {
+  events.push_back(event);
+  return {};
+}
+
+void FeedChunksOrFail(a2a::client::SseParser& parser, const std::vector<std::string>& chunks,
+                      std::vector<a2a::client::SseEvent>& events) {
+  for (const auto& chunk : chunks) {
+    const auto status = parser.Feed(chunk, [&events](const a2a::client::SseEvent& event) {
+      return CaptureEvent(events, event);
+    });
+    ASSERT_TRUE(status.ok()) << status.error().message();
+  }
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(SseParserTest, ParsesSimpleSequenceAndMultilineData) {
   a2a::client::SseParser parser;
   std::vector<a2a::client::SseEvent> events;
@@ -15,17 +32,12 @@ TEST(SseParserTest, ParsesSimpleSequenceAndMultilineData) {
       "event: message\ndata: {\"task\":{\"id\":\"t-1\"}}\n\n"
       "data: {\"message\":{\"role\":\"agent\"}}\n"
       "data: {\"metadata\":{}}\n\n",
-      [&events](const a2a::client::SseEvent& event) {
-        events.push_back(event);
-        return a2a::core::Result<void>();
-      });
+      [&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
 
   ASSERT_TRUE(first_feed.ok()) << first_feed.error().message();
 
-  const auto finish = parser.Finish([&events](const a2a::client::SseEvent& event) {
-    events.push_back(event);
-    return a2a::core::Result<void>();
-  });
+  const auto finish = parser.Finish(
+      [&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
   ASSERT_TRUE(finish.ok()) << finish.error().message();
 
   ASSERT_EQ(events.size(), 2U);
@@ -35,43 +47,14 @@ TEST(SseParserTest, ParsesSimpleSequenceAndMultilineData) {
   EXPECT_EQ(events[1].data, "{\"message\":{\"role\":\"agent\"}}\n{\"metadata\":{}}");
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(SseParserTest, HandlesFragmentedFramesAcrossChunks) {
   a2a::client::SseParser parser;
   std::vector<a2a::client::SseEvent> events;
+  FeedChunksOrFail(parser, {"eve", "nt: mes", "sage\nda", "ta: {}\n\n"}, events);
 
-  ASSERT_TRUE(parser
-                  .Feed("eve",
-                        [&events](const a2a::client::SseEvent& event) {
-                          events.push_back(event);
-                          return a2a::core::Result<void>();
-                        })
-                  .ok());
-  ASSERT_TRUE(parser
-                  .Feed("nt: mes",
-                        [&events](const a2a::client::SseEvent& event) {
-                          events.push_back(event);
-                          return a2a::core::Result<void>();
-                        })
-                  .ok());
-  ASSERT_TRUE(parser
-                  .Feed("sage\nda",
-                        [&events](const a2a::client::SseEvent& event) {
-                          events.push_back(event);
-                          return a2a::core::Result<void>();
-                        })
-                  .ok());
-  ASSERT_TRUE(parser
-                  .Feed("ta: {}\n\n",
-                        [&events](const a2a::client::SseEvent& event) {
-                          events.push_back(event);
-                          return a2a::core::Result<void>();
-                        })
-                  .ok());
-
-  const auto finish = parser.Finish([&events](const a2a::client::SseEvent& event) {
-    events.push_back(event);
-    return a2a::core::Result<void>();
-  });
+  const auto finish = parser.Finish(
+      [&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
 
   ASSERT_TRUE(finish.ok()) << finish.error().message();
   ASSERT_EQ(events.size(), 1U);
@@ -79,6 +62,7 @@ TEST(SseParserTest, HandlesFragmentedFramesAcrossChunks) {
   EXPECT_EQ(events[0].data, "{}");
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(SseParserTest, ReportsMalformedFrame) {
   a2a::client::SseParser parser;
 
@@ -89,13 +73,14 @@ TEST(SseParserTest, ReportsMalformedFrame) {
   EXPECT_EQ(feed.error().code(), a2a::core::ErrorCode::kSerialization);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(SseParserTest, ReportsUnterminatedEventOnFinish) {
   a2a::client::SseParser parser;
 
-  ASSERT_TRUE(parser
-                  .Feed("data: {\"task\":{}}\n",
-                        [](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); })
-                  .ok());
+  const auto feed = parser.Feed("data: {\"task\":{}}\n", [](const a2a::client::SseEvent&) {
+    return a2a::core::Result<void>();
+  });
+  ASSERT_TRUE(feed.ok()) << feed.error().message();
 
   const auto finish =
       parser.Finish([](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); });
