@@ -27,6 +27,11 @@ struct HttpClientResponse final {
 };
 
 using HttpRequester = std::function<core::Result<HttpClientResponse>(const HttpRequest& request)>;
+using HttpStreamChunkHandler = std::function<core::Result<void>(std::string_view chunk)>;
+using StreamCancelled = std::function<bool()>;
+using HttpStreamRequester = std::function<core::Result<HttpClientResponse>(
+    const HttpRequest& request, const HttpStreamChunkHandler& on_chunk,
+    const StreamCancelled& is_cancelled)>;
 
 struct HttpOperation final {
   std::string_view method;
@@ -36,6 +41,10 @@ struct HttpOperation final {
 class HttpJsonTransport final : public ClientTransport {
  public:
   static constexpr std::chrono::milliseconds kDefaultTimeout{30000};
+
+  explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                             HttpStreamRequester stream_requester,
+                             std::chrono::milliseconds default_timeout = kDefaultTimeout);
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              std::chrono::milliseconds default_timeout = kDefaultTimeout);
@@ -63,13 +72,26 @@ class HttpJsonTransport final : public ClientTransport {
       const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
       const CallOptions& options) override;
 
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SendStreamingMessage(
+      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
+      const CallOptions& options) override;
+
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(
+      const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
+      const CallOptions& options) override;
+
  private:
   [[nodiscard]] core::Result<HttpClientResponse> SendRequest(HttpOperation operation,
                                                              std::string body,
                                                              const CallOptions& options) const;
 
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> StartSseStream(
+      HttpOperation operation, std::string body, StreamObserver& observer,
+      const CallOptions& options) const;
+
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
+  HttpStreamRequester stream_requester_;
   std::chrono::milliseconds default_timeout_;
 };
 
