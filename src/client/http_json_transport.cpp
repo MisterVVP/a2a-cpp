@@ -3,11 +3,15 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
+#include <memory>
 #include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 
+#include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/protojson.h"
@@ -22,6 +26,7 @@ constexpr int kHttpNoContent = 204;
 
 struct EndpointMap final {
   static constexpr std::string_view kSendMessage = "/messages:send";
+  static constexpr std::string_view kSendStreamingMessage = "/messages:stream";
   static constexpr std::string_view kTaskCollection = "/tasks";
   static constexpr std::string_view kPushConfigCollection = "/pushNotificationConfigs";
 };
@@ -118,13 +123,102 @@ std::string BuildPushConfigPath(std::string_view id) {
   return std::string(EndpointMap::kPushConfigCollection) + "/" + std::string(id);
 }
 
+core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
+  google::protobuf::Struct payload;
+  const auto parse =
+      core::JsonToMessage(std::string(payload_json), &payload, {.ignore_unknown_fields = true});
+
+  core::Error error =
+      core::Error::RemoteProtocol("Remote stream reported error event").WithTransport("http");
+  if (!parse.ok()) {
+    return error;
+  }
+
+  const auto code = payload.fields().find("code");
+  if (code != payload.fields().end() && code->second.has_string_value()) {
+    error = error.WithProtocolCode(code->second.string_value());
+  }
+
+  const auto message = payload.fields().find("message");
+  if (message != payload.fields().end() && message->second.has_string_value()) {
+    error = core::Error::RemoteProtocol(message->second.string_value())
+                .WithTransport("http")
+                .WithProtocolCode(error.protocol_code().value_or(""));
+  }
+  return error;
+}
+
+core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& observer) {
+  if (event.event == "error") {
+    auto error = BuildRemoteStreamEventError(event.data);
+    observer.OnError(error);
+    return error;
+  }
+
+  lf::a2a::v1::StreamResponse response;
+  const auto parsed = core::JsonToMessage(event.data, &response);
+  if (!parsed.ok()) {
+    auto error = parsed.error().WithTransport("http");
+    observer.OnError(error);
+    return error;
+  }
+
+  observer.OnEvent(response);
+  return {};
+}
+
+void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
+
+void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer,
+                        const core::Error& error) {
+  observer.OnError(error);
+  MarkInactive(state);
+}
+
+core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolved_interface,
+                                                HttpOperation operation, std::string body,
+                                                const CallOptions& options,
+                                                std::chrono::milliseconds default_timeout) {
+  if (resolved_interface.transport != PreferredTransport::kRest) {
+    return core::Error::Validation("HttpJsonTransport requires a REST interface");
+  }
+  if (resolved_interface.url.empty()) {
+    return core::Error::Validation("Resolved REST interface URL is required");
+  }
+
+  HttpRequest request;
+  request.method = std::string(operation.method);
+  request.url = JoinUrl(resolved_interface.url, operation.endpoint);
+  request.body = std::move(body);
+  request.timeout = options.timeout.value_or(default_timeout);
+  request.headers = options.headers;
+  request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  request.headers["Content-Type"] = "application/json";
+  request.headers["Accept"] = "text/event-stream";
+
+  if (!options.extensions.empty()) {
+    request.headers[std::string(core::Extensions::kHeaderName)] =
+        core::Extensions::Format(options.extensions);
+  }
+  if (options.auth_hook) {
+    options.auth_hook(request.headers);
+  }
+  return request;
+}
+
 }  // namespace
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                                     HttpStreamRequester stream_requester,
                                      std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
+      stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout) {}
+
+HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                                     std::chrono::milliseconds default_timeout)
+    : HttpJsonTransport(std::move(resolved_interface), std::move(requester), {}, default_timeout) {}
 
 core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation,
                                                                 std::string body,
@@ -318,6 +412,101 @@ core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
   }
 
   return {};
+}
+
+core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SendStreamingMessage(
+    const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
+    const CallOptions& options) {
+  const auto body = core::MessageToJson(request);
+  if (!body.ok()) {
+    return body.error();
+  }
+
+  return StartSseStream({.method = "POST", .endpoint = EndpointMap::kSendStreamingMessage},
+                        body.value(), observer, options);
+}
+
+core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(
+    const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
+    const CallOptions& options) {
+  if (request.id().empty()) {
+    return core::Error::Validation("GetTaskRequest.id is required");
+  }
+
+  std::string endpoint = BuildTaskPath(request.id()) + ":subscribe";
+  if (!request.history_length().empty()) {
+    endpoint += "?historyLength=" + request.history_length();
+  }
+
+  return StartSseStream({.method = "GET", .endpoint = endpoint}, {}, observer, options);
+}
+
+core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(
+    HttpOperation operation, std::string body, StreamObserver& observer,
+    const CallOptions& options) const {
+  if (stream_requester_ == nullptr) {
+    return core::Error::Internal("HTTP stream requester is not configured");
+  }
+
+  auto request = BuildStreamingRequest(resolved_interface_, operation, std::move(body), options,
+                                       default_timeout_);
+  if (!request.ok()) {
+    return request.error();
+  }
+
+  auto state = std::make_shared<StreamHandle::State>();
+  auto worker = std::jthread([this, request = std::move(request.value()), state, &observer,
+                              method = std::string(operation.method),
+                              endpoint = std::string(operation.endpoint)]() mutable {
+    SseParser parser;
+
+    const auto stream_response = stream_requester_(
+        request,
+        [&parser, &observer, state](std::string_view chunk) -> core::Result<void> {
+          if (state->cancel_requested.load()) {
+            return {};
+          }
+          return parser.Feed(chunk, [&observer](const SseEvent& event) {
+            return DispatchSseEvent(event, observer);
+          });
+        },
+        [state]() { return state->cancel_requested.load(); });
+
+    if (state->cancel_requested.load()) {
+      MarkInactive(*state);
+      return;
+    }
+
+    if (!stream_response.ok()) {
+      NotifyErrorAndStop(*state, observer, stream_response.error());
+      return;
+    }
+
+    const auto version_check = ValidateResponseVersion(stream_response.value());
+    if (!version_check.ok()) {
+      NotifyErrorAndStop(*state, observer, version_check.error());
+      return;
+    }
+
+    if (stream_response.value().status_code < kHttpOkMin ||
+        stream_response.value().status_code > kHttpOkMax) {
+      NotifyErrorAndStop(*state, observer,
+                         BuildHttpError(method, endpoint, stream_response.value()));
+      return;
+    }
+
+    const auto finish = parser.Finish(
+        [&observer](const SseEvent& event) { return DispatchSseEvent(event, observer); });
+    if (!finish.ok()) {
+      NotifyErrorAndStop(*state, observer, finish.error());
+      return;
+    }
+
+    observer.OnCompleted();
+    MarkInactive(*state);
+  });
+
+  return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
 
 }  // namespace a2a::client
