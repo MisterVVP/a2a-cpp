@@ -74,7 +74,23 @@ Before submitting changes:
      ```
    - After a successful build/configure, run `./scripts/run_clang_tidy.sh build` and verify it exits with code `0`.
    - Code must not be pushed to any branch unless this linter command succeeds (exit code `0`).
+   - Contributors should run `./scripts/verify_changes.sh` as the canonical local validation entrypoint.
+   - AI agents must run `./scripts/verify_changes.sh` and must not claim success unless it exits with code `0`.
+   - `clang-tidy` passing is not a substitute for `clang-format --dry-run --Werror`; both are required.
 3. Unit tests pass.
 4. Functional/integration tests pass.
 5. Vulnerability/dependency checks pass.
 6. Documentation is updated when behavior or interfaces change.
+
+## Mandatory contributor validation command
+Run this command before opening or updating a PR:
+
+```bash
+./scripts/verify_changes.sh
+```
+
+This script enforces the repository quality gates in order:
+- format (`clang-format --dry-run --Werror`)
+- build (`cmake --build`)
+- tests (`ctest --output-on-failure`)
+- lint (`./scripts/run_clang_tidy.sh build`)

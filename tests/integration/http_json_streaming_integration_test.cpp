@@ -67,7 +67,8 @@ class RecordingObserver final : public StreamObserver {
 
 TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEventsInOrder) {
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return a2a::core::Error::Internal("unused");
       },
       [](const HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
@@ -80,7 +81,8 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
             "event: message\ndata: {\"task\":{\"id\":\"t-1\"}}\n\n",
             "event: message\ndata: {\"statusUpdate\":{\"taskId\":\"t-1\",\"final\":false,",
             "\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n",
-            "data: {\"artifactUpdate\":{\"taskId\":\"t-1\",\"artifact\":{\"artifactId\":\"a-1\"}}}\n\n"};
+            "data: "
+            "{\"artifactUpdate\":{\"taskId\":\"t-1\",\"artifact\":{\"artifactId\":\"a-1\"}}}\n\n"};
 
         for (const auto& chunk : chunks) {
           const auto status = on_chunk(chunk);
@@ -89,9 +91,8 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
           }
         }
 
-        return HttpClientResponse{.status_code = 200,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = ""};
+        return HttpClientResponse{
+            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
       });
 
   A2AClient client(std::move(transport));
@@ -115,7 +116,8 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
 
 TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return a2a::core::Error::Internal("unused");
       },
       [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
@@ -124,9 +126,8 @@ TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
         if (!chunk_status.ok()) {
           return chunk_status.error();
         }
-        return HttpClientResponse{.status_code = 200,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = ""};
+        return HttpClientResponse{
+            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
       });
 
   A2AClient client(std::move(transport));
@@ -145,11 +146,13 @@ TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
 
 TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompletion) {
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return a2a::core::Error::Internal("unused");
       },
       [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
-         const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<HttpClientResponse> {
+         const a2a::client::StreamCancelled& is_cancelled)
+          -> a2a::core::Result<HttpClientResponse> {
         for (int i = 0; i < 100; ++i) {
           if (is_cancelled()) {
             break;
@@ -160,9 +163,8 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        return HttpClientResponse{.status_code = 200,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = ""};
+        return HttpClientResponse{
+            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
       });
 
   A2AClient client(std::move(transport));
@@ -185,7 +187,8 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
 
 TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes) {
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return a2a::core::Error::Internal("unused");
       },
       [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
@@ -194,9 +197,8 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes)
         if (!status.ok()) {
           return status.error();
         }
-        return HttpClientResponse{.status_code = 200,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = ""};
+        return HttpClientResponse{
+            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
       });
 
   A2AClient client(std::move(transport));
