@@ -44,6 +44,11 @@ These instructions apply to the entire repository. Follow them for all changes u
 - Treat warnings as actionable; keep warning count at zero for touched code.
 - Keep diffs small and reviewable.
 - Document non-obvious decisions with short comments near the code.
+- Test code must satisfy `clang-tidy` readability checks in this repository:
+  - Keep each test body and helper function below the cognitive complexity threshold (currently 25).
+  - Prefer extracting fixture helpers/builders over large inline lambdas inside `TEST(...)`.
+  - Avoid magic numbers in tests; define named `constexpr` constants for status codes, timeouts, IDs, etc.
+  - Prefer raw string literals for JSON payload templates instead of heavily escaped JSON strings.
 
 ## Testing requirements
 - Every behavior change must include tests.

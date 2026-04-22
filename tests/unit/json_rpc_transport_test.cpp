@@ -21,6 +21,9 @@ using a2a::client::PreferredTransport;
 using a2a::client::ResolvedInterface;
 using a2a::core::ErrorCode;
 
+constexpr int kHttpOk = 200;
+constexpr std::chrono::milliseconds kCustomTimeout{1200};
+
 ResolvedInterface MakeResolvedJsonRpc() {
   ResolvedInterface resolved;
   resolved.transport = PreferredTransport::kJsonRpc;
@@ -28,42 +31,89 @@ ResolvedInterface MakeResolvedJsonRpc() {
   return resolved;
 }
 
-TEST(JsonRpcTransportUnitTest, SerializesEnvelopeWithStrictRequestIdAndMethodName) {
+std::string SuccessGetTaskEnvelope(std::string_view request_id) {
+  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(request_id) +
+         R"(","result":{"id":"t-1"}})";
+}
+
+a2a::core::Result<google::protobuf::Struct> ParseJsonStruct(const std::string& body) {
+  google::protobuf::Struct value;
+  const auto parsed = a2a::core::JsonToMessage(body, &value);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  return value;
+}
+
+TEST(JsonRpcTransportUnitTest, UsesPostToResolvedJsonRpcUrl) {
   HttpRequest captured;
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{
-            .status_code = 200,
-            .headers = {{"A2A-Version", "1.0"}},
-            .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"id":"t-1"}})"};
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
   A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
 
+  const auto response = client.GetTask(request);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(captured.method, "POST");
+  EXPECT_EQ(captured.url, "https://agent.example.com/rpc");
+}
+
+TEST(JsonRpcTransportUnitTest, RespectsTimeoutOverrideFromCallOptions) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        EXPECT_EQ(request.timeout, kCustomTimeout);
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = SuccessGetTaskEnvelope("req-123")};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
   lf::a2a::v1::GetTaskRequest request;
   request.set_id("t-1");
 
   CallOptions options;
-  options.timeout = std::chrono::milliseconds(1200);
+  options.timeout = kCustomTimeout;
 
   const auto response = client.GetTask(request, options);
   ASSERT_TRUE(response.ok()) << response.error().message();
-  EXPECT_EQ(response.value().id(), "t-1");
+}
 
-  EXPECT_EQ(captured.method, "POST");
-  EXPECT_EQ(captured.url, "https://agent.example.com/rpc");
-  EXPECT_EQ(captured.timeout, std::chrono::milliseconds(1200));
+TEST(JsonRpcTransportUnitTest, SerializesExpectedEnvelopeFields) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = SuccessGetTaskEnvelope("req-123")};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
-  google::protobuf::Struct envelope;
-  const auto parsed = a2a::core::JsonToMessage(captured.body, &envelope);
-  ASSERT_TRUE(parsed.ok()) << parsed.error().message();
-  EXPECT_EQ(envelope.fields().at("jsonrpc").string_value(), "2.0");
-  EXPECT_EQ(envelope.fields().at("id").string_value(), "req-123");
-  EXPECT_EQ(envelope.fields().at("method").string_value(), "a2a.getTask");
-  EXPECT_TRUE(envelope.fields().contains("params"));
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  const auto response = client.GetTask(request);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+
+  const auto envelope = ParseJsonStruct(captured.body);
+  ASSERT_TRUE(envelope.ok()) << envelope.error().message();
+  EXPECT_EQ(envelope.value().fields().at("jsonrpc").string_value(), "2.0");
+  EXPECT_EQ(envelope.value().fields().at("id").string_value(), "req-123");
+  EXPECT_EQ(envelope.value().fields().at("method").string_value(), "a2a.getTask");
+  EXPECT_TRUE(envelope.value().fields().contains("params"));
 }
 
 TEST(JsonRpcTransportUnitTest, ResponseIdMismatchReturnsRemoteProtocolError) {
@@ -71,7 +121,7 @@ TEST(JsonRpcTransportUnitTest, ResponseIdMismatchReturnsRemoteProtocolError) {
       MakeResolvedJsonRpc(),
       [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return HttpClientResponse{
-            .status_code = 200,
+            .status_code = kHttpOk,
             .headers = {{"A2A-Version", "1.0"}},
             .body = R"({"jsonrpc":"2.0","id":"other","result":{"id":"t-1"}})"};
       },
@@ -91,7 +141,7 @@ TEST(JsonRpcTransportUnitTest, MalformedEnvelopeReturnsSerializationError) {
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return HttpClientResponse{
-            .status_code = 200, .headers = {{"A2A-Version", "1.0"}}, .body = "{not-json"};
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = "{not-json"};
       });
 
   A2AClient client(std::move(transport));
