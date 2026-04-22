@@ -22,6 +22,7 @@ add_library(a2a_client STATIC
   client/client.cpp
   client/discovery.cpp
   client/http_json_transport.cpp
+  client/json_rpc_transport.cpp
   client/sse_parser.cpp
 )
 add_library(a2a::client ALIAS a2a_client)
