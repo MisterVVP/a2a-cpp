@@ -9,7 +9,9 @@ class StoreBackedExecutor final : public a2a::server::AgentExecutor {
   explicit StoreBackedExecutor(a2a::server::TaskStore* store) : store_(store) {}
 
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext&) override {
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
+    (void)context;
     if (request.message().task_id().empty()) {
       return a2a::core::Error::Validation("message.task_id is required");
     }
@@ -28,22 +30,28 @@ class StoreBackedExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest&, a2a::server::RequestContext&) override {
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
     return a2a::core::Error::Validation("streaming is not enabled");
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
-                                               a2a::server::RequestContext&) override {
+                                               a2a::server::RequestContext& context) override {
+    (void)context;
     return store_->Get(request.id());
   }
 
   a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext&) override {
+      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+    (void)context;
     return store_->List(request);
   }
 
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
-                                                  a2a::server::RequestContext&) override {
+                                                  a2a::server::RequestContext& context) override {
+    (void)context;
     return store_->Cancel(request.id());
   }
 

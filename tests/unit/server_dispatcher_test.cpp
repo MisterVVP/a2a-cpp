@@ -41,7 +41,10 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest&, a2a::server::RequestContext&) override {
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_message()->set_role("assistant");
     return std::unique_ptr<a2a::server::ServerStreamSession>(
@@ -49,7 +52,8 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
-                                               a2a::server::RequestContext&) override {
+                                               a2a::server::RequestContext& context) override {
+    (void)context;
     if (request.id() == "missing") {
       return a2a::core::Error::RemoteProtocol("task not found");
     }
@@ -60,7 +64,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest&, a2a::server::RequestContext&) override {
+      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
     a2a::server::ListTasksResponse response;
     lf::a2a::v1::Task task;
     task.set_id("task-1");
@@ -69,7 +75,8 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
-                                                  a2a::server::RequestContext&) override {
+                                                  a2a::server::RequestContext& context) override {
+    (void)context;
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
