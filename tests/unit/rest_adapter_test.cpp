@@ -72,9 +72,12 @@ TEST(RestAdapterTest, MissingVersionHeaderReturnsProtocolValidationError) {
       adapter.Handle(MakeSendMessageDispatchRequest(), {}, context);
 
   EXPECT_EQ(response.status_code, kHttpStatusBadRequest);
-  ASSERT_TRUE(response.error.has_value());
-  EXPECT_EQ(response.error->code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_EQ(response.error->http_status().value_or(0), kHttpStatusBadRequest);
+  if (!response.error.has_value()) {
+    GTEST_FAIL() << "Expected protocol error for missing A2A-Version header";
+  }
+  const a2a::core::Error& error = *response.error;
+  EXPECT_EQ(error.code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(error.http_status().value_or(0), kHttpStatusBadRequest);
 }
 
 TEST(RestAdapterTest, UnsupportedVersionHeaderReturnsProtocolVersionError) {
@@ -89,10 +92,13 @@ TEST(RestAdapterTest, UnsupportedVersionHeaderReturnsProtocolVersionError) {
       adapter.Handle(MakeSendMessageDispatchRequest(), headers, context);
 
   EXPECT_EQ(response.status_code, kHttpStatusBadRequest);
-  ASSERT_TRUE(response.error.has_value());
-  EXPECT_EQ(response.error->code(), a2a::core::ErrorCode::kUnsupportedVersion);
-  EXPECT_EQ(response.error->protocol_code(), std::optional<std::string>("2.0"));
-  EXPECT_EQ(response.error->http_status().value_or(0), kHttpStatusBadRequest);
+  if (!response.error.has_value()) {
+    GTEST_FAIL() << "Expected protocol error for unsupported A2A-Version header";
+  }
+  const a2a::core::Error& error = *response.error;
+  EXPECT_EQ(error.code(), a2a::core::ErrorCode::kUnsupportedVersion);
+  EXPECT_EQ(error.protocol_code(), std::optional<std::string>("2.0"));
+  EXPECT_EQ(error.http_status().value_or(0), kHttpStatusBadRequest);
 }
 
 TEST(RestAdapterTest, SupportedVersionHeaderSetsVersionOnSuccessfulResponse) {
