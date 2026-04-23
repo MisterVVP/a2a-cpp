@@ -106,8 +106,9 @@ std::string ErrorCodeName(core::ErrorCode code) {
 }
 
 int ToHttpStatus(const core::Error& error) {
-  if (error.http_status().has_value()) {
-    return error.http_status().value();
+  const auto& http_status = error.http_status();
+  if (http_status.has_value()) {
+    return *http_status;
   }
   switch (error.code()) {
     case core::ErrorCode::kValidation:
@@ -179,18 +180,16 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
 
   if (request.method == "GET" && request.path == RestEndpointPaths::kTaskCollection) {
     ListTasksRequest payload;
-    const auto raw_page_size = LookupQuery(request, "pageSize");
-    if (raw_page_size.has_value()) {
-      const int parsed_page_size = ParsePageSize(raw_page_size.value());
+    if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
+      const int parsed_page_size = ParsePageSize(*raw_page_size);
       if (parsed_page_size < 0) {
         return std::nullopt;
       }
       payload.page_size = static_cast<std::size_t>(parsed_page_size);
     }
 
-    const auto raw_page_token = LookupQuery(request, "pageToken");
-    if (raw_page_token.has_value()) {
-      payload.page_token = raw_page_token.value();
+    if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
+      payload.page_token = *raw_page_token;
     }
     return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
   }
@@ -200,9 +199,9 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
     if (task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest payload;
       payload.set_id(task_id.value());
-      const auto history_length = LookupQuery(request, "historyLength");
-      if (history_length.has_value()) {
-        payload.set_history_length(history_length.value());
+      if (const auto history_length = LookupQuery(request, "historyLength");
+          history_length.has_value()) {
+        payload.set_history_length(*history_length);
       }
       return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
     }
@@ -260,15 +259,17 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   code_name.set_string_value(ErrorCodeName(error.code()));
   (*detail_fields)["code"] = std::move(code_name);
 
-  if (error.transport().has_value()) {
+  const auto& transport_value = error.transport();
+  if (transport_value.has_value()) {
     google::protobuf::Value transport;
-    transport.set_string_value(error.transport().value());
+    transport.set_string_value(*transport_value);
     (*detail_fields)["transport"] = std::move(transport);
   }
 
-  if (error.protocol_code().has_value()) {
+  const auto& protocol_code_value = error.protocol_code();
+  if (protocol_code_value.has_value()) {
     google::protobuf::Value protocol_code;
-    protocol_code.set_string_value(error.protocol_code().value());
+    protocol_code.set_string_value(*protocol_code_value);
     (*detail_fields)["protocolCode"] = std::move(protocol_code);
   }
 
