@@ -18,13 +18,16 @@ struct RestRequest final {
   std::unordered_map<std::string, std::string> headers;
 };
 
+inline constexpr int kDefaultHttpStatusCode = 200;
+
 struct RestResponse final {
-  int status_code = 200;
+  int status_code = kDefaultHttpStatusCode;
   std::unordered_map<std::string, std::string> headers;
   std::string body;
 };
 
-using AgentCardProvider = std::function<core::Result<lf::a2a::v1::AgentCard>(const RequestContext&)>;
+using AgentCardProvider =
+    std::function<core::Result<lf::a2a::v1::AgentCard>(const RequestContext&)>;
 
 struct RestAdapterConfig final {
   std::string rest_base_url;

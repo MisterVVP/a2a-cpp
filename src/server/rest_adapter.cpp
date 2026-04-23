@@ -28,8 +28,9 @@ std::string NormalizeBaseUrl(std::string_view url) {
   return normalized;
 }
 
-void KeepDefinedSecurityRequirements(const std::unordered_set<std::string>& scheme_names,
-                                     google::protobuf::RepeatedPtrField<std::string>* requirements) {
+void KeepDefinedSecurityRequirements(
+    const std::unordered_set<std::string>& scheme_names,
+    google::protobuf::RepeatedPtrField<std::string>* requirements) {
   if (requirements == nullptr) {
     return;
   }
