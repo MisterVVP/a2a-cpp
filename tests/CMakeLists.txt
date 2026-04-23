@@ -140,6 +140,20 @@ target_link_libraries(server_dispatcher_test
 
 gtest_discover_tests(server_dispatcher_test)
 
+add_executable(rest_transport_test
+  unit/rest_transport_test.cpp
+)
+
+target_link_libraries(rest_transport_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(rest_transport_test)
+
 add_executable(json_rpc_client_functional_test
   functional/json_rpc_client_functional_test.cpp
 )
