@@ -8,10 +8,12 @@
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/json_rpc_transport.h"
-#include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/core/protojson.h"
+#include "a2a/server/json_rpc_server_transport.h"
 
 namespace {
+
+constexpr int kHttpOk = 200;
 
 std::string UrlToTarget(std::string_view url) {
   const std::size_t scheme = url.find("://");
@@ -32,7 +34,7 @@ class JsonRpcIntegrationHarness final {
       : executor_(&store_),
         dispatcher_(&executor_),
         card_(a2a::tests::support::BuildJsonRpcAgentCard("Integration JSON-RPC Agent",
-                                                          "http://agent.local/rpc")),
+                                                         "http://agent.local/rpc")),
         server_(&dispatcher_, {.rpc_path = "/rpc"}) {
     card_.set_protocol_version("1.0");
   }
@@ -57,10 +59,11 @@ class JsonRpcIntegrationHarness final {
     if (!body.ok()) {
       return body.error();
     }
-    return a2a::client::HttpResponse{.status_code = 200, .body = body.value()};
+    return a2a::client::HttpResponse{.status_code = kHttpOk, .body = body.value()};
   }
 
-  a2a::core::Result<a2a::client::HttpClientResponse> SendHttp(const a2a::client::HttpRequest& request) {
+  a2a::core::Result<a2a::client::HttpClientResponse> SendHttp(
+      const a2a::client::HttpRequest& request) {
     const auto response = server_.Handle({.method = request.method,
                                           .target = UrlToTarget(request.url),
                                           .headers = request.headers,

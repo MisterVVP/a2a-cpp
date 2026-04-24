@@ -67,6 +67,139 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   return std::nullopt;
 }
 
+core::Result<google::protobuf::Struct> ParseJsonObject(std::string_view body) {
+  google::protobuf::Struct envelope;
+  const auto parsed = core::JsonToMessage(body, &envelope);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  return envelope;
+}
+
+core::Result<google::protobuf::Value> FindIdField(const google::protobuf::Struct& envelope) {
+  const auto& fields = envelope.fields();
+  const auto id_it = fields.find("id");
+  if (id_it == fields.end() || !IsValidIdType(id_it->second)) {
+    return core::Error::Validation("JSON-RPC request id must be a string, number, or null");
+  }
+  return id_it->second;
+}
+
+core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelope) {
+  const auto& fields = envelope.fields();
+  const auto method_it = fields.find("method");
+  if (method_it == fields.end() || !method_it->second.has_string_value() ||
+      method_it->second.string_value().empty()) {
+    return core::Error::Validation("JSON-RPC request method must be a non-empty string");
+  }
+  return method_it->second.string_value();
+}
+
+core::Result<google::protobuf::Struct> FindParamsField(const google::protobuf::Struct& envelope) {
+  const auto& fields = envelope.fields();
+  const auto params_it = fields.find("params");
+  if (params_it == fields.end() || !params_it->second.has_struct_value()) {
+    return core::Error::Validation("JSON-RPC request params must be an object");
+  }
+  return params_it->second.struct_value();
+}
+
+core::Result<void> ValidateJsonRpcVersion(const google::protobuf::Struct& envelope) {
+  const auto& fields = envelope.fields();
+  const auto version_it = fields.find("jsonrpc");
+  if (version_it == fields.end() || !version_it->second.has_string_value() ||
+      version_it->second.string_value() != core::json_rpc::kVersion) {
+    return core::Error::Validation("JSON-RPC request has invalid version");
+  }
+  return {};
+}
+
+template <typename T>
+core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
+  const auto params_json = core::MessageToJson(params);
+  if (!params_json.ok()) {
+    return params_json.error();
+  }
+  T payload;
+  const auto parse_payload = core::JsonToMessage(params_json.value(), &payload);
+  if (!parse_payload.ok()) {
+    return parse_payload.error();
+  }
+  return payload;
+}
+
+core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params) {
+  ListTasksRequest payload;
+  const auto page_size_it = params.fields().find("pageSize");
+  if (page_size_it != params.fields().end()) {
+    if (!page_size_it->second.has_number_value() || page_size_it->second.number_value() < 0) {
+      return core::Error::Validation("ListTasksRequest.pageSize must be a non-negative number");
+    }
+    payload.page_size = static_cast<std::size_t>(page_size_it->second.number_value());
+  }
+
+  const auto page_token_it = params.fields().find("pageToken");
+  if (page_token_it != params.fields().end()) {
+    if (!page_token_it->second.has_string_value()) {
+      return core::Error::Validation("ListTasksRequest.pageToken must be a string");
+    }
+    payload.page_token = page_token_it->second.string_value();
+  }
+
+  return payload;
+}
+
+core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
+    std::string_view method_name, const google::protobuf::Struct& params) {
+  const auto operation = MethodToOperation(method_name);
+  if (!operation.has_value()) {
+    return core::Error::RemoteProtocol("JSON-RPC method is not supported")
+        .WithProtocolCode(std::to_string(kJsonRpcMethodNotFound));
+  }
+
+  DispatchRequest dispatch_request;
+  dispatch_request.operation = operation.value();
+
+  switch (dispatch_request.operation) {
+    case DispatcherOperation::kSendMessage: {
+      const auto payload = ParseProtoPayload<lf::a2a::v1::SendMessageRequest>(params);
+      if (!payload.ok()) {
+        return payload.error();
+      }
+      dispatch_request.payload = payload.value();
+      return dispatch_request;
+    }
+    case DispatcherOperation::kGetTask: {
+      const auto payload = ParseProtoPayload<lf::a2a::v1::GetTaskRequest>(params);
+      if (!payload.ok()) {
+        return payload.error();
+      }
+      dispatch_request.payload = payload.value();
+      return dispatch_request;
+    }
+    case DispatcherOperation::kCancelTask: {
+      const auto payload = ParseProtoPayload<lf::a2a::v1::CancelTaskRequest>(params);
+      if (!payload.ok()) {
+        return payload.error();
+      }
+      dispatch_request.payload = payload.value();
+      return dispatch_request;
+    }
+    case DispatcherOperation::kListTasks: {
+      const auto payload = ParseListTasksPayload(params);
+      if (!payload.ok()) {
+        return payload.error();
+      }
+      dispatch_request.payload = payload.value();
+      return dispatch_request;
+    }
+    case DispatcherOperation::kSendStreamingMessage:
+      return core::Error::Validation("Streaming JSON-RPC route is not supported");
+  }
+
+  return core::Error::Internal("Unsupported JSON-RPC dispatcher operation");
+}
+
 core::Result<google::protobuf::Value> BuildJsonValueFromMessage(
     const google::protobuf::Message& message) {
   const auto json = core::MessageToJson(message);
@@ -218,106 +351,38 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
-    std::string_view body) const {
-  google::protobuf::Struct envelope;
-  const auto parsed = core::JsonToMessage(body, &envelope);
-  if (!parsed.ok()) {
-    return parsed.error();
+    std::string_view body) {
+  const auto envelope = ParseJsonObject(body);
+  if (!envelope.ok()) {
+    return envelope.error();
   }
 
-  const auto& fields = envelope.fields();
-  const auto version_it = fields.find("jsonrpc");
-  if (version_it == fields.end() || !version_it->second.has_string_value() ||
-      version_it->second.string_value() != core::json_rpc::kVersion) {
-    return core::Error::Validation("JSON-RPC request has invalid version");
+  const auto version = ValidateJsonRpcVersion(envelope.value());
+  if (!version.ok()) {
+    return version.error();
   }
 
-  const auto id_it = fields.find("id");
-  if (id_it == fields.end() || !IsValidIdType(id_it->second)) {
-    return core::Error::Validation("JSON-RPC request id must be a string, number, or null");
+  const auto id = FindIdField(envelope.value());
+  if (!id.ok()) {
+    return id.error();
   }
 
-  const auto method_it = fields.find("method");
-  if (method_it == fields.end() || !method_it->second.has_string_value() ||
-      method_it->second.string_value().empty()) {
-    return core::Error::Validation("JSON-RPC request method must be a non-empty string");
+  const auto method = FindMethodField(envelope.value());
+  if (!method.ok()) {
+    return method.error();
   }
 
-  const auto params_it = fields.find("params");
-  if (params_it == fields.end() || !params_it->second.has_struct_value()) {
-    return core::Error::Validation("JSON-RPC request params must be an object");
+  const auto params = FindParamsField(envelope.value());
+  if (!params.ok()) {
+    return params.error();
   }
 
-  const auto operation = MethodToOperation(method_it->second.string_value());
-  if (!operation.has_value()) {
-    return core::Error::RemoteProtocol("JSON-RPC method is not supported")
-        .WithProtocolCode(std::to_string(kJsonRpcMethodNotFound));
+  const auto dispatch = BuildDispatchRequestFromMethod(method.value(), params.value());
+  if (!dispatch.ok()) {
+    return dispatch.error();
   }
 
-  const auto params_json = core::MessageToJson(params_it->second);
-  if (!params_json.ok()) {
-    return params_json.error();
-  }
-
-  DispatchRequest dispatch_request;
-  dispatch_request.operation = operation.value();
-
-  switch (dispatch_request.operation) {
-    case DispatcherOperation::kSendMessage: {
-      lf::a2a::v1::SendMessageRequest payload;
-      const auto parse_payload = core::JsonToMessage(params_json.value(), &payload);
-      if (!parse_payload.ok()) {
-        return parse_payload.error();
-      }
-      dispatch_request.payload = std::move(payload);
-      break;
-    }
-    case DispatcherOperation::kGetTask: {
-      lf::a2a::v1::GetTaskRequest payload;
-      const auto parse_payload = core::JsonToMessage(params_json.value(), &payload);
-      if (!parse_payload.ok()) {
-        return parse_payload.error();
-      }
-      dispatch_request.payload = std::move(payload);
-      break;
-    }
-    case DispatcherOperation::kCancelTask: {
-      lf::a2a::v1::CancelTaskRequest payload;
-      const auto parse_payload = core::JsonToMessage(params_json.value(), &payload);
-      if (!parse_payload.ok()) {
-        return parse_payload.error();
-      }
-      dispatch_request.payload = std::move(payload);
-      break;
-    }
-    case DispatcherOperation::kListTasks: {
-      google::protobuf::Struct params = params_it->second.struct_value();
-      ListTasksRequest payload;
-
-      const auto page_size_it = params.fields().find("pageSize");
-      if (page_size_it != params.fields().end()) {
-        if (!page_size_it->second.has_number_value() || page_size_it->second.number_value() < 0) {
-          return core::Error::Validation("ListTasksRequest.pageSize must be a non-negative number");
-        }
-        payload.page_size = static_cast<std::size_t>(page_size_it->second.number_value());
-      }
-
-      const auto page_token_it = params.fields().find("pageToken");
-      if (page_token_it != params.fields().end()) {
-        if (!page_token_it->second.has_string_value()) {
-          return core::Error::Validation("ListTasksRequest.pageToken must be a string");
-        }
-        payload.page_token = page_token_it->second.string_value();
-      }
-
-      dispatch_request.payload = std::move(payload);
-      break;
-    }
-    case DispatcherOperation::kSendStreamingMessage:
-      return core::Error::Validation("Streaming JSON-RPC route is not supported");
-  }
-
-  return JsonRpcRequest{.id = ResponseId(id_it->second), .dispatch = std::move(dispatch_request)};
+  return JsonRpcRequest{.id = ResponseId(id.value()), .dispatch = dispatch.value()};
 }
 
 core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchResult(
