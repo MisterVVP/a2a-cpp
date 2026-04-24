@@ -242,8 +242,9 @@ core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksRespon
 }
 
 int HttpStatusFromError(const core::Error& error) {
-  if (error.http_status().has_value()) {
-    return error.http_status().value();
+  const auto http_status = error.http_status();
+  if (http_status.has_value()) {
+    return *http_status;
   }
   switch (error.code()) {
     case core::ErrorCode::kValidation:
@@ -457,15 +458,18 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(
   (*error_fields)["message"].set_string_value(std::string(message));
 
   if (error.has_value()) {
+    const auto protocol_code = error->protocol_code();
+    const auto transport = error->transport();
+
     google::protobuf::Value data;
     auto* data_fields = data.mutable_struct_value()->mutable_fields();
     (*data_fields)["a2aCode"].set_string_value(
         std::to_string(static_cast<std::int32_t>(error->code())));
-    if (error->protocol_code().has_value()) {
-      (*data_fields)["protocolCode"].set_string_value(error->protocol_code().value());
+    if (protocol_code.has_value()) {
+      (*data_fields)["protocolCode"].set_string_value(*protocol_code);
     }
-    if (error->transport().has_value()) {
-      (*data_fields)["transport"].set_string_value(error->transport().value());
+    if (transport.has_value()) {
+      (*data_fields)["transport"].set_string_value(*transport);
     }
     (*error_fields)["data"] = std::move(data);
   }
