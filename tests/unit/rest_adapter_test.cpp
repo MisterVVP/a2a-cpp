@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "a2a/core/version.h"
+#include "a2a/server/rest_transport.h"
 #include "a2a/server/server.h"
 
 namespace {

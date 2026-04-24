@@ -11,7 +11,6 @@
 #include <variant>
 #include <vector>
 
-#include "a2a/core/error.h"
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -135,26 +134,6 @@ class InMemoryTaskStore final : public TaskStore {
   mutable std::mutex mutex_;
   std::vector<std::string> ordered_ids_;
   std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
-};
-
-struct RestPipelineResponse final {
-  int status_code = 0;
-  std::unordered_map<std::string, std::string> headers;
-  std::optional<DispatchResponse> payload;
-  std::optional<core::Error> error;
-};
-
-class RestAdapter final {
- public:
-  explicit RestAdapter(const Dispatcher* dispatcher);
-
-  [[nodiscard]] RestPipelineResponse Handle(
-      const DispatchRequest& request,
-      const std::unordered_map<std::string, std::string>& request_headers,
-      RequestContext& context) const;
-
- private:
-  const Dispatcher* dispatcher_ = nullptr;
 };
 
 }  // namespace a2a::server
