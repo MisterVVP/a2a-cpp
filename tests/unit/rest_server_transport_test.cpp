@@ -71,12 +71,11 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
-  const auto response = server.Handle(
-      {.method = "GET",
-       .target = "/.well-known/agent-card.json",
-       .headers = {},
-       .body = {},
-       .remote_address = {}});
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/.well-known/agent-card.json",
+                                       .headers = {},
+                                       .body = {},
+                                       .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
@@ -111,12 +110,11 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
-  const auto response =
-      server.Handle({.method = "GET",
-                     .target = "/a2a/tasks/task-7",
-                     .headers = {},
-                     .body = {},
-                     .remote_address = {}});
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/a2a/tasks/task-7",
+                                       .headers = {},
+                                       .body = {},
+                                       .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 426);

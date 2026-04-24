@@ -19,7 +19,8 @@ struct HttpServerRequest final {
 };
 
 struct HttpServerResponse final {
-  int status_code = 500;
+  static constexpr int kDefaultStatusCode = 500;
+  int status_code = kDefaultStatusCode;
   std::unordered_map<std::string, std::string> headers;
   std::string body;
 };
@@ -43,7 +44,7 @@ class RestServerTransport final {
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(
       const HttpServerRequest& request) const;
-  [[nodiscard]] HttpServerResponse ToHttpResponse(const RestResponse& response) const;
+  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response);
 
   static std::string NormalizeBasePath(std::string_view path);
 
