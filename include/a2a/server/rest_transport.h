@@ -29,14 +29,14 @@ struct RestResponse final {
 using AgentCardProvider =
     std::function<core::Result<lf::a2a::v1::AgentCard>(const RequestContext&)>;
 
-struct RestAdapterConfig final {
+struct RestTransportConfig final {
   std::string rest_base_url;
   AgentCardProvider agent_card_provider;
 };
 
-class RestAdapter final {
+class RestTransport final {
  public:
-  explicit RestAdapter(RestAdapterConfig config);
+  explicit RestTransport(RestTransportConfig config);
 
   [[nodiscard]] RestResponse Handle(const RestRequest& request,
                                     const RequestContext& context) const;
@@ -44,7 +44,7 @@ class RestAdapter final {
  private:
   [[nodiscard]] RestResponse HandleAgentCard(const RequestContext& context) const;
 
-  RestAdapterConfig config_;
+  RestTransportConfig config_;
 };
 
 }  // namespace a2a::server

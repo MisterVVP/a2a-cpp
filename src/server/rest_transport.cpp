@@ -1,4 +1,4 @@
-#include "a2a/server/rest_adapter.h"
+#include "a2a/server/rest_transport.h"
 
 #include <string>
 #include <string_view>
@@ -59,9 +59,10 @@ RestResponse MakeJsonErrorResponse(std::string body) {
 
 }  // namespace
 
-RestAdapter::RestAdapter(RestAdapterConfig config) : config_(std::move(config)) {}
+RestTransport::RestTransport(RestTransportConfig config) : config_(std::move(config)) {}
 
-RestResponse RestAdapter::Handle(const RestRequest& request, const RequestContext& context) const {
+RestResponse RestTransport::Handle(const RestRequest& request,
+                                   const RequestContext& context) const {
   if (request.method == kHttpMethodGet && request.path == kWellKnownPath) {
     return HandleAgentCard(context);
   }
@@ -71,7 +72,7 @@ RestResponse RestAdapter::Handle(const RestRequest& request, const RequestContex
   return not_found;
 }
 
-RestResponse RestAdapter::HandleAgentCard(const RequestContext& context) const {
+RestResponse RestTransport::HandleAgentCard(const RequestContext& context) const {
   if (!config_.agent_card_provider) {
     return MakeJsonErrorResponse(R"({"error":"AgentCardProvider is not configured"})");
   }

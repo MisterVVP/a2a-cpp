@@ -1,4 +1,4 @@
-#include "a2a/server/rest_adapter.h"
+#include "a2a/server/rest_transport.h"
 
 #include <gtest/gtest.h>
 
@@ -26,8 +26,8 @@ a2a::server::RestRequest MakeGetRequest(std::string path) {
   return request;
 }
 
-a2a::server::RestAdapter MakeAdapterWithDefaults(std::string rest_base_url) {
-  return a2a::server::RestAdapter({
+a2a::server::RestTransport MakeAdapterWithDefaults(std::string rest_base_url) {
+  return a2a::server::RestTransport({
       .rest_base_url = std::move(rest_base_url),
       .agent_card_provider =
           [](const a2a::server::RequestContext&) {
@@ -41,7 +41,7 @@ a2a::server::RestAdapter MakeAdapterWithDefaults(std::string rest_base_url) {
   });
 }
 
-ParsedAgentCardResponse GetAndParseAgentCard(a2a::server::RestAdapter& adapter) {
+ParsedAgentCardResponse GetAndParseAgentCard(a2a::server::RestTransport& adapter) {
   ParsedAgentCardResponse parsed;
   parsed.response =
       adapter.Handle(MakeGetRequest(std::string(kWellKnownPath)), a2a::server::RequestContext{});
@@ -77,7 +77,7 @@ void ExpectProtocolAndRestInterface(const lf::a2a::v1::AgentCard& card) {
   EXPECT_EQ(rest_iface->security_requirements(0), kExpectedSecurityRequirement);
 }
 
-TEST(RestAdapterTest, PublishesAgentCardWithRequiredHeadersAndRestInterface) {
+TEST(RestTransportTest, PublishesAgentCardWithRequiredHeadersAndRestInterface) {
   auto adapter = MakeAdapterWithDefaults(std::string(kRestBaseUrlWithTrailingSlash));
 
   const auto parsed = GetAndParseAgentCard(adapter);
@@ -86,8 +86,8 @@ TEST(RestAdapterTest, PublishesAgentCardWithRequiredHeadersAndRestInterface) {
   ExpectProtocolAndRestInterface(parsed.card);
 }
 
-TEST(RestAdapterTest, FiltersUndefinedSecurityRequirements) {
-  a2a::server::RestAdapter adapter({
+TEST(RestTransportTest, FiltersUndefinedSecurityRequirements) {
+  a2a::server::RestTransport adapter({
       .rest_base_url = std::string(kRestBaseUrl),
       .agent_card_provider =
           [](const a2a::server::RequestContext&) {
@@ -118,7 +118,7 @@ TEST(RestAdapterTest, FiltersUndefinedSecurityRequirements) {
   }
 }
 
-TEST(RestAdapterTest, ReturnsNotFoundForUnknownRoute) {
+TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {
   auto adapter = MakeAdapterWithDefaults(std::string(kRestBaseUrl));
 
   const auto response = adapter.Handle(MakeGetRequest("/unknown"), a2a::server::RequestContext{});
