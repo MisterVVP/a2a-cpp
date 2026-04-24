@@ -15,6 +15,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/json_rpc.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -23,22 +24,6 @@ namespace {
 
 constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
-constexpr std::string_view kJsonRpcVersion = "2.0";
-
-struct JsonRpcMethodMap final {
-  static constexpr std::string_view kSendMessage = "a2a.sendMessage";
-  static constexpr std::string_view kGetTask = "a2a.getTask";
-  static constexpr std::string_view kCancelTask = "a2a.cancelTask";
-  static constexpr std::string_view kSetTaskPushNotificationConfig =
-      "a2a.setTaskPushNotificationConfig";
-  static constexpr std::string_view kGetTaskPushNotificationConfig =
-      "a2a.getTaskPushNotificationConfig";
-  static constexpr std::string_view kListTaskPushNotificationConfigs =
-      "a2a.listTaskPushNotificationConfigs";
-  static constexpr std::string_view kDeleteTaskPushNotificationConfig =
-      "a2a.deleteTaskPushNotificationConfig";
-};
-
 std::string JoinUrl(std::string_view interface_base_url) {
   std::string base(interface_base_url);
   while (!base.empty() && base.back() == '/') {
@@ -139,7 +124,7 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
   const auto& fields = parsed.value().fields();
   const auto version_it = fields.find("jsonrpc");
   if (version_it == fields.end() || !version_it->second.has_string_value() ||
-      version_it->second.string_value() != kJsonRpcVersion) {
+      version_it->second.string_value() != core::json_rpc::kVersion) {
     return BuildJsonRpcEnvelopeError("JSON-RPC response has invalid version", response);
   }
 
@@ -264,7 +249,7 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(
   }
 
   google::protobuf::Struct envelope;
-  (*envelope.mutable_fields())["jsonrpc"].set_string_value(std::string(kJsonRpcVersion));
+  (*envelope.mutable_fields())["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
   (*envelope.mutable_fields())["id"].set_string_value(request_id);
   (*envelope.mutable_fields())["method"].set_string_value(std::string(method_name));
   (*envelope.mutable_fields())["params"] = params;
@@ -295,7 +280,8 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(
 
 core::Result<lf::a2a::v1::SendMessageResponse> JsonRpcTransport::SendMessage(
     const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) {
-  const auto result = InvokeForResultValue(JsonRpcMethodMap::kSendMessage, request, options);
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kSendMessage, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -314,7 +300,7 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(
     return core::Error::Validation("GetTaskRequest.id is required");
   }
 
-  const auto result = InvokeForResultValue(JsonRpcMethodMap::kGetTask, request, options);
+  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kGetTask, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -331,7 +317,8 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(
     return core::Error::Validation("CancelTaskRequest.id is required");
   }
 
-  const auto result = InvokeForResultValue(JsonRpcMethodMap::kCancelTask, request, options);
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kCancelTask, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -345,8 +332,8 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(
 core::Result<lf::a2a::v1::TaskPushNotificationConfig>
 JsonRpcTransport::SetTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
-  const auto result =
-      InvokeForResultValue(JsonRpcMethodMap::kSetTaskPushNotificationConfig, request, options);
+  const auto result = InvokeForResultValue(
+      core::json_rpc::MethodNames::kSetTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -365,8 +352,8 @@ JsonRpcTransport::GetTaskPushNotificationConfig(
     return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
   }
 
-  const auto result =
-      InvokeForResultValue(JsonRpcMethodMap::kGetTaskPushNotificationConfig, request, options);
+  const auto result = InvokeForResultValue(
+      core::json_rpc::MethodNames::kGetTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -382,8 +369,8 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
 JsonRpcTransport::ListTaskPushNotificationConfigs(
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
     const CallOptions& options) {
-  const auto result =
-      InvokeForResultValue(JsonRpcMethodMap::kListTaskPushNotificationConfigs, request, options);
+  const auto result = InvokeForResultValue(
+      core::json_rpc::MethodNames::kListTaskPushNotificationConfigs, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -402,8 +389,8 @@ core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
     return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
   }
 
-  const auto result =
-      InvokeForResultValue(JsonRpcMethodMap::kDeleteTaskPushNotificationConfig, request, options);
+  const auto result = InvokeForResultValue(
+      core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }

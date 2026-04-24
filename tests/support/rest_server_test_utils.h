@@ -74,6 +74,15 @@ inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::str
   return card;
 }
 
+inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::string_view url) {
+  lf::a2a::v1::AgentCard card;
+  card.set_name(std::string(name));
+  auto* iface = card.add_supported_interfaces();
+  iface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC);
+  iface->set_url(std::string(url));
+  return card;
+}
+
 inline server::HttpServerRequest MakeHttpRequest(
     std::string method, std::string target,
     std::unordered_map<std::string, std::string> headers = {}, std::string body = {},

@@ -168,6 +168,21 @@ target_link_libraries(rest_server_transport_test
 
 gtest_discover_tests(rest_server_transport_test)
 
+
+add_executable(json_rpc_server_transport_test
+  unit/json_rpc_server_transport_test.cpp
+)
+
+target_link_libraries(json_rpc_server_transport_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(json_rpc_server_transport_test)
+
 add_executable(json_rpc_client_functional_test
   functional/json_rpc_client_functional_test.cpp
 )
@@ -210,6 +225,21 @@ target_link_libraries(rest_server_transport_functional_test
 
 gtest_discover_tests(rest_server_transport_functional_test)
 
+
+add_executable(json_rpc_server_transport_functional_test
+  functional/json_rpc_server_transport_functional_test.cpp
+)
+
+target_link_libraries(json_rpc_server_transport_functional_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(json_rpc_server_transport_functional_test)
+
 add_executable(json_rpc_client_integration_test
   integration/json_rpc_client_integration_test.cpp
 )
@@ -223,6 +253,22 @@ target_link_libraries(json_rpc_client_integration_test
 )
 
 gtest_discover_tests(json_rpc_client_integration_test)
+
+
+add_executable(json_rpc_server_transport_integration_test
+  integration/json_rpc_server_transport_integration_test.cpp
+)
+
+target_link_libraries(json_rpc_server_transport_integration_test
+  PRIVATE
+    a2a::server
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(json_rpc_server_transport_integration_test)
 
 add_executable(server_dispatcher_task_store_integration_test
   integration/server_dispatcher_task_store_integration_test.cpp
