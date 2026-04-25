@@ -195,6 +195,7 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
   request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   request.headers["Content-Type"] = "application/json";
   request.headers["Accept"] = "text/event-stream";
+  request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
     request.headers[std::string(core::Extensions::kHeaderName)] =
@@ -202,6 +203,13 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
   }
   if (options.auth_hook) {
     options.auth_hook(request.headers);
+  }
+  if (options.credential_provider != nullptr) {
+    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context,
+                                                 &request.headers);
+    if (!applied.ok()) {
+      return applied.error();
+    }
   }
   return request;
 }
@@ -243,6 +251,7 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
   request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   request.headers["Content-Type"] = "application/json";
   request.headers["Accept"] = "application/json";
+  request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
     request.headers[std::string(core::Extensions::kHeaderName)] =
@@ -251,6 +260,13 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
 
   if (options.auth_hook) {
     options.auth_hook(request.headers);
+  }
+  if (options.credential_provider != nullptr) {
+    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context,
+                                                 &request.headers);
+    if (!applied.ok()) {
+      return applied.error();
+    }
   }
 
   const auto response = requester_(request);

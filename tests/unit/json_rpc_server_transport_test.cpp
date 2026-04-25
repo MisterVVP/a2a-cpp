@@ -20,6 +20,7 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
       const lf::a2a::v1::SendMessageRequest& request,
       a2a::server::RequestContext& context) override {
     last_version_header = context.client_headers["A2A-Version"];
+    last_bearer_token = context.auth_metadata["bearer_token"];
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_task()->set_id(request.message().task_id());
     return response;
@@ -57,6 +58,7 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
   }
 
   std::string last_version_header;
+  std::string last_bearer_token;
 };
 
 TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
@@ -168,6 +170,24 @@ TEST(JsonRpcServerTransportTest, MapsExecutorFailureToJsonRpcError) {
   const auto& error_fields = envelope.fields().at("error").struct_value().fields();
   EXPECT_EQ(static_cast<int>(error_fields.at("code").number_value()), kJsonRpcInternalError);
   EXPECT_EQ(error_fields.at("message").string_value(), "cancel unavailable");
+}
+
+TEST(JsonRpcServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}, {"Authorization", "Bearer token-rpc"}},
+       .body =
+           R"({"jsonrpc":"2.0","id":"req-auth","method":"a2a.sendMessage","params":{"message":{"role":"user","taskId":"task-auth"}}})",
+       .remote_address = "127.0.0.1"});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(executor.last_bearer_token, "token-rpc");
 }
 
 }  // namespace

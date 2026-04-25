@@ -3,6 +3,7 @@
 
 #include <string>
 
+#include "a2a/client/auth.h"
 #include "a2a/client/client.h"
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/protojson.h"
@@ -114,6 +115,31 @@ TEST(JsonRpcClientFunctionalTest, CancelTaskRoundTripsThroughTransportContract) 
   const auto response = client.CancelTask(request);
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
+}
+
+TEST(JsonRpcClientFunctionalTest, CredentialProviderDecoratesOutboundHeaders) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        const auto auth_it = request.headers.find("Authorization");
+        EXPECT_NE(auth_it, request.headers.end());
+        if (auth_it != request.headers.end()) {
+          EXPECT_EQ(auth_it->second, "Bearer functional-token");
+        }
+        return HandleFunctionalRequest(request);
+      });
+  A2AClient client(std::move(transport));
+
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  a2a::client::CallOptions options;
+  options.credential_provider =
+      std::make_shared<a2a::client::BearerTokenCredentialProvider>("functional-token");
+
+  const auto response = client.GetTask(request, options);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(response.value().id(), "t-1");
 }
 
 }  // namespace

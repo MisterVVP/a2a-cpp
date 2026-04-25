@@ -6,6 +6,7 @@
 #include <chrono>
 #include <string>
 
+#include "a2a/client/auth.h"
 #include "a2a/client/client.h"
 #include "a2a/core/error.h"
 #include "a2a/core/protojson.h"
@@ -152,6 +153,88 @@ TEST(JsonRpcTransportUnitTest, MalformedEnvelopeReturnsSerializationError) {
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
   EXPECT_EQ(response.error().transport().value_or(""), "jsonrpc");
+}
+
+TEST(JsonRpcTransportUnitTest, InjectsApiKeyHeaderViaCredentialProvider) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = SuccessGetTaskEnvelope("req-123")};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  CallOptions options;
+  options.credential_provider =
+      std::make_shared<a2a::client::ApiKeyCredentialProvider>("secret-key", "X-API-Key");
+
+  const auto response = client.GetTask(request, options);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(captured.headers["X-API-Key"], "secret-key");
+}
+
+TEST(JsonRpcTransportUnitTest, InjectsBearerTokenAndMtlsConfiguration) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = SuccessGetTaskEnvelope("req-123")};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  CallOptions options;
+  options.credential_provider =
+      std::make_shared<a2a::client::BearerTokenCredentialProvider>("token-123");
+  options.mtls = a2a::client::MtlsConfig{.client_certificate_pem = "cert",
+                                         .client_private_key_pem = "key",
+                                         .trusted_ca_pem = "",
+                                         .server_name_override = ""};
+
+  const auto response = client.GetTask(request, options);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(captured.headers["Authorization"], "Bearer token-123");
+  ASSERT_TRUE(captured.mtls.has_value());
+  const a2a::client::MtlsConfig mtls = captured.mtls.value_or(a2a::client::MtlsConfig{});
+  EXPECT_EQ(mtls.client_certificate_pem, "cert");
+}
+
+TEST(JsonRpcTransportUnitTest, InjectsCustomHeadersViaCredentialProvider) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = SuccessGetTaskEnvelope("req-123")};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  CallOptions options;
+  options.credential_provider = std::make_shared<a2a::client::CustomHeaderCredentialProvider>(
+      a2a::client::HeaderMap{{"X-Custom-Auth", "abc"}});
+
+  const auto response = client.GetTask(request, options);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(captured.headers["X-Custom-Auth"], "abc");
 }
 
 }  // namespace

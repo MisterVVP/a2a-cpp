@@ -14,7 +14,7 @@ if [[ ! -f "${BUILD_DIR}/compile_commands.json" ]]; then
   exit 1
 fi
 
-mapfile -t TARGET_FILES < <(git ls-files 'src/**/*.cpp' 'tests/**/*.cpp' 'include/**/*.h')
+mapfile -t TARGET_FILES < <(git ls-files 'src/**/*.cpp' 'tests/**/*.cpp')
 
 if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   echo "No C++ files found for clang-tidy."

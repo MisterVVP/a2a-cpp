@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -18,6 +19,7 @@ struct HttpRequest final {
   HeaderMap headers;
   std::string body;
   std::chrono::milliseconds timeout{0};
+  std::optional<MtlsConfig> mtls = std::nullopt;
 };
 
 struct HttpClientResponse final {

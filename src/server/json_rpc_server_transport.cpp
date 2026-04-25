@@ -314,6 +314,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
                                ? std::optional<std::string>{}
                                : std::optional<std::string>(request.remote_address);
   context.client_headers = request.headers;
+  context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   const auto dispatch = dispatcher_->Dispatch(parsed.value().dispatch, context);
   if (!dispatch.ok()) {

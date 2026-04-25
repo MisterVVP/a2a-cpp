@@ -19,6 +19,7 @@ target_link_libraries(a2a_core
 )
 
 add_library(a2a_client STATIC
+  client/auth.cpp
   client/client.cpp
   client/discovery.cpp
   client/http_json_transport.cpp

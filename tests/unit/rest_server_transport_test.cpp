@@ -14,6 +14,8 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
       const lf::a2a::v1::SendMessageRequest& request,
       a2a::server::RequestContext& context) override {
     observed_request_header = context.client_headers["A2A-Version"];
+    observed_bearer_token = context.auth_metadata["bearer_token"];
+    observed_api_key = context.auth_metadata["api_key"];
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_message()->set_task_id(request.message().task_id());
     response.mutable_message()->set_role("assistant");
@@ -55,6 +57,8 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
 
   std::string observed_request_header;
   std::string observed_history_length;
+  std::string observed_bearer_token;
+  std::string observed_api_key;
 };
 
 lf::a2a::v1::AgentCard BuildCard() {
@@ -135,6 +139,25 @@ TEST(RestServerTransportTest, ParsesAndDecodesQueryString) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(executor.observed_history_length, "alpha beta");
+}
+
+TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+
+  const auto response = server.Handle({.method = "POST",
+                                       .target = "/a2a/messages:send",
+                                       .headers = {{"A2A-Version", "1.0"},
+                                                   {"Authorization", "Bearer token-rest"},
+                                                   {"X-API-Key", "rest-key"}},
+                                       .body = R"({"message":{"role":"user","taskId":"t-2"}})",
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_EQ(executor.observed_bearer_token, "token-rest");
+  EXPECT_EQ(executor.observed_api_key, "rest-key");
 }
 
 }  // namespace

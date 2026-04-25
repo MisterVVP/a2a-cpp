@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "../support/rest_server_test_utils.h"
+#include "a2a/client/auth.h"
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
@@ -148,6 +149,101 @@ TEST(RestServerTransportIntegrationTest, MissingVersionHeaderIsRejected) {
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 426);
+}
+
+class AuthCapturingExecutor final : public a2a::server::AgentExecutor {
+ public:
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
+    observed_bearer_token = context.auth_metadata["bearer_token"];
+    observed_api_key = context.auth_metadata["api_key"];
+
+    lf::a2a::v1::SendMessageResponse response;
+    response.mutable_task()->set_id(request.message().task_id());
+    response.mutable_task()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+    return response;
+  }
+
+  a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
+    return a2a::core::Error::Validation("streaming not implemented");
+  }
+
+  a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                               a2a::server::RequestContext& context) override {
+    (void)context;
+    lf::a2a::v1::Task task;
+    task.set_id(request.id());
+    return task;
+  }
+
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
+      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
+    return a2a::server::ListTasksResponse{};
+  }
+
+  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                  a2a::server::RequestContext& context) override {
+    (void)context;
+    lf::a2a::v1::Task task;
+    task.set_id(request.id());
+    return task;
+  }
+
+  std::string observed_bearer_token;
+  std::string observed_api_key;
+};
+
+TEST(RestServerTransportIntegrationTest, AuthHeadersPropagateToServerContext) {
+  AuthCapturingExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(
+      &dispatcher,
+      a2a::tests::support::BuildRestAgentCard("Integration REST Auth Agent",
+                                              "http://agent.local/a2a"),
+      {.rest_api_base_path = "/a2a"});
+
+  auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
+      a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kRest,
+                                     .url = "http://agent.local/a2a",
+                                     .security_requirements = {},
+                                     .security_schemes = {}},
+      [&server](const a2a::client::HttpRequest& request)
+          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+        const auto response = server.Handle({.method = request.method,
+                                             .target = UrlToTarget(request.url),
+                                             .headers = request.headers,
+                                             .body = request.body,
+                                             .remote_address = {}});
+        if (!response.ok()) {
+          return response.error();
+        }
+        return a2a::client::HttpClientResponse{.status_code = response.value().status_code,
+                                               .headers = response.value().headers,
+                                               .body = response.value().body};
+      });
+
+  a2a::client::A2AClient client(std::move(transport));
+
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_task_id("auth-integration-1");
+
+  a2a::client::CallOptions options;
+  options.credential_provider =
+      std::make_shared<a2a::client::BearerTokenCredentialProvider>("integration-token");
+  options.headers["X-API-Key"] = "integration-api-key";
+
+  const auto response = client.SendMessage(request, options);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(executor.observed_bearer_token, "integration-token");
+  EXPECT_EQ(executor.observed_api_key, "integration-api-key");
 }
 
 }  // namespace

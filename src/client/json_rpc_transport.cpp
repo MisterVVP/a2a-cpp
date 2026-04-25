@@ -204,6 +204,7 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(
   http_request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   http_request.headers["Content-Type"] = "application/json";
   http_request.headers["Accept"] = "application/json";
+  http_request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
     http_request.headers[std::string(core::Extensions::kHeaderName)] =
@@ -211,6 +212,13 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(
   }
   if (options.auth_hook) {
     options.auth_hook(http_request.headers);
+  }
+  if (options.credential_provider != nullptr) {
+    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context,
+                                                 &http_request.headers);
+    if (!applied.ok()) {
+      return applied.error();
+    }
   }
 
   const auto response = requester_(http_request);
