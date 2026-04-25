@@ -11,7 +11,8 @@ int main() {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
-      &dispatcher, a2a::examples::BuildRestAgentCard("REST Example Agent", "http://agent.local/a2a"),
+      &dispatcher,
+      a2a::examples::BuildRestAgentCard("REST Example Agent", "http://agent.local/a2a"),
       {.rest_api_base_path = "/a2a"});
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(

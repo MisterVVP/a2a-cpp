@@ -5,7 +5,26 @@
 
 namespace {
 
+lf::a2a::v1::StreamResponse RequireNextEvent(a2a::server::ServerStreamSession* stream) {
+  EXPECT_NE(stream, nullptr);
+  const auto next = stream->Next();
+  EXPECT_TRUE(next.ok());
+  EXPECT_TRUE(next.value().has_value());
+  if (!next.ok() || !next.value().has_value()) {
+    return {};
+  }
+  return *next.value();
+}
+
+void ExpectStreamEnded(a2a::server::ServerStreamSession* stream) {
+  EXPECT_NE(stream, nullptr);
+  const auto end = stream->Next();
+  EXPECT_TRUE(end.ok());
+  EXPECT_FALSE(end.value().has_value());
+}
+
 TEST(ExamplesFunctionalTest, StreamingExecutorReturnsWorkingThenCompletedEvents) {
+  constexpr bool kExpectedFinalEvent = true;
   a2a::examples::ExampleExecutor executor;
   a2a::server::RequestContext context;
 
@@ -14,22 +33,16 @@ TEST(ExamplesFunctionalTest, StreamingExecutorReturnsWorkingThenCompletedEvents)
 
   auto stream_result = executor.SendStreamingMessage(request, context);
   ASSERT_TRUE(stream_result.ok()) << stream_result.error().message();
-
   auto stream = std::move(stream_result.value());
-  const auto first = stream->Next();
-  ASSERT_TRUE(first.ok());
-  ASSERT_TRUE(first.value().has_value());
-  EXPECT_EQ(first.value()->status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
 
-  const auto second = stream->Next();
-  ASSERT_TRUE(second.ok());
-  ASSERT_TRUE(second.value().has_value());
-  EXPECT_EQ(second.value()->status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
-  EXPECT_TRUE(second.value()->status_update().final());
+  const auto first = RequireNextEvent(stream.get());
+  EXPECT_EQ(first.status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
 
-  const auto end = stream->Next();
-  ASSERT_TRUE(end.ok());
-  EXPECT_FALSE(end.value().has_value());
+  const auto second = RequireNextEvent(stream.get());
+  EXPECT_EQ(second.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  EXPECT_EQ(second.status_update().final(), kExpectedFinalEvent);
+
+  ExpectStreamEnded(stream.get());
 }
 
 }  // namespace

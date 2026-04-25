@@ -47,7 +47,8 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
     (void)context;
-    const std::string task_id = request.message().task_id().empty() ? "example-task" : request.message().task_id();
+    const std::string task_id =
+        request.message().task_id().empty() ? "example-task" : request.message().task_id();
 
     lf::a2a::v1::Task task;
     task.set_id(task_id);
@@ -74,7 +75,8 @@ class ExampleExecutor final : public server::AgentExecutor {
 
     lf::a2a::v1::StreamResponse completed;
     completed.mutable_status_update()->set_task_id(request.message().task_id());
-    completed.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
+    completed.mutable_status_update()->mutable_status()->set_state(
+        lf::a2a::v1::TASK_STATE_COMPLETED);
     completed.mutable_status_update()->set_final(true);
 
     std::vector<lf::a2a::v1::StreamResponse> events;

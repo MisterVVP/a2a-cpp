@@ -14,6 +14,8 @@
 
 namespace {
 
+constexpr int kInternalServerErrorStatusCode = 500;
+
 TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -29,7 +31,7 @@ TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery
                                          .body = {},
                                          .remote_address = {}});
     if (!response.ok()) {
-      return a2a::client::HttpResponse{.status_code = 500, .body = {}};
+      return a2a::client::HttpResponse{.status_code = kInternalServerErrorStatusCode, .body = {}};
     }
     return a2a::client::HttpResponse{.status_code = response.value().status_code,
                                      .body = response.value().body};

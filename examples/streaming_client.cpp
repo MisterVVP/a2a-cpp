@@ -28,11 +28,13 @@ int main() {
                                      .url = "http://agent.local/a2a",
                                      .security_requirements = {},
                                      .security_schemes = {}},
-      [](const a2a::client::HttpRequest& request) -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [](const a2a::client::HttpRequest& request)
+          -> a2a::core::Result<a2a::client::HttpClientResponse> {
         (void)request;
         return a2a::core::Error::Validation("non-streaming not used in this example");
       },
-      [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
+      [](const a2a::client::HttpRequest& request,
+         const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled& is_cancelled)
           -> a2a::core::Result<a2a::client::HttpClientResponse> {
         (void)request;
