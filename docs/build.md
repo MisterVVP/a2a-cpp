@@ -21,6 +21,13 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COM
 cmake --build build
 ```
 
+## Build examples
+
+```bash
+cmake -S . -B build -DA2A_BUILD_EXAMPLES=ON
+cmake --build build --target example_rest_client
+```
+
 To run only proto generation:
 
 ```bash
@@ -55,3 +62,11 @@ clang-format --dry-run --Werror $(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
 
 - `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
 - `.github/workflows/codeql.yml` runs CodeQL analysis for C/C++ on push, pull request, and a weekly schedule.
+
+## Install package
+
+```bash
+cmake --install build --prefix /tmp/a2a-cpp-install
+```
+
+This installs headers, generated protobuf headers, static libraries, and exported CMake package files under `lib/cmake/a2a_cpp`.

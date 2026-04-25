@@ -7,9 +7,12 @@ add_library(a2a_core STATIC
 )
 add_library(a2a::core ALIAS a2a_core)
 
+set(A2A_PUBLIC_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
+
 target_include_directories(a2a_core
   PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(a2a_core
@@ -30,7 +33,8 @@ add_library(a2a::client ALIAS a2a_client)
 
 target_include_directories(a2a_client
   PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(a2a_client
@@ -48,10 +52,18 @@ add_library(a2a::server ALIAS a2a_server)
 
 target_include_directories(a2a_server
   PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(a2a_server
   PUBLIC
     a2a::core
+)
+
+install(TARGETS a2a_core a2a_client a2a_server
+  EXPORT a2a_cppTargets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

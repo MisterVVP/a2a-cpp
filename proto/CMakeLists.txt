@@ -45,7 +45,15 @@ target_link_libraries(a2a_proto_generated
 
 target_include_directories(a2a_proto_generated
   PUBLIC
-    ${A2A_GENERATED_DIR}
+    $<BUILD_INTERFACE:${A2A_GENERATED_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 add_dependencies(a2a_proto_generated a2a_proto_codegen)
+
+install(TARGETS a2a_proto_generated
+  EXPORT a2a_cppTargets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
