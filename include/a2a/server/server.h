@@ -23,6 +23,9 @@ struct RequestContext final {
   std::unordered_map<std::string, std::string> client_headers;
 };
 
+[[nodiscard]] std::unordered_map<std::string, std::string> ExtractAuthMetadata(
+    const std::unordered_map<std::string, std::string>& headers);
+
 struct ListTasksRequest final {
   std::size_t page_size = 0;
   std::string page_token;

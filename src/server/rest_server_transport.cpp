@@ -232,6 +232,7 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(
                                             ? std::optional<std::string>{}
                                             : std::optional<std::string>(request.remote_address);
   rest_request.context.client_headers = request.headers;
+  rest_request.context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   if (query_start != std::string::npos) {
     const auto parsed = ParseQueryString(std::string_view(request.target).substr(query_start + 1),

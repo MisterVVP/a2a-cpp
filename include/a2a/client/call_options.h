@@ -1,22 +1,23 @@
 #pragma once
 
 #include <chrono>
-#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-namespace a2a::client {
+#include "a2a/client/auth.h"
 
-using HeaderMap = std::unordered_map<std::string, std::string>;
-using AuthHeaderHook = std::function<void(HeaderMap& headers)>;
+namespace a2a::client {
 
 struct CallOptions final {
   std::optional<std::chrono::milliseconds> timeout = std::nullopt;
   HeaderMap headers;
   std::vector<std::string> extensions;
   AuthHeaderHook auth_hook;
+  std::shared_ptr<const CredentialProvider> credential_provider;
+  AuthContext auth_context;
+  std::optional<MtlsConfig> mtls = std::nullopt;
 };
 
 }  // namespace a2a::client
