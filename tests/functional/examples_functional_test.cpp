@@ -8,12 +8,16 @@ namespace {
 lf::a2a::v1::StreamResponse RequireNextEvent(a2a::server::ServerStreamSession* stream) {
   EXPECT_NE(stream, nullptr);
   const auto next = stream->Next();
-  EXPECT_TRUE(next.ok());
-  EXPECT_TRUE(next.value().has_value());
-  if (!next.ok() || !next.value().has_value()) {
+  if (!next.ok()) {
+    ADD_FAILURE() << next.error().message();
     return {};
   }
-  return *next.value();
+  const auto& maybe_event = next.value();
+  if (!maybe_event.has_value()) {
+    ADD_FAILURE() << "expected stream event but received end-of-stream";
+    return {};
+  }
+  return maybe_event.value();
 }
 
 void ExpectStreamEnded(a2a::server::ServerStreamSession* stream) {
