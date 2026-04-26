@@ -1,9 +1,8 @@
-#include <gtest/gtest.h>
-
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
+#include <gtest/gtest.h>
 
 #include <chrono>
 #include <memory>
@@ -91,9 +90,7 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
 class RecordingObserver final : public a2a::client::StreamObserver {
  public:
   void OnEvent(const lf::a2a::v1::StreamResponse& response) override { events.push_back(response); }
-  void OnError(const a2a::core::Error& error) override {
-    errors.push_back(std::string(error.message()));
-  }
+  void OnError(const a2a::core::Error& error) override { errors.emplace_back(error.message()); }
   void OnCompleted() override { completed = true; }
 
   std::vector<lf::a2a::v1::StreamResponse> events;
@@ -101,65 +98,122 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   bool completed = false;
 };
 
-TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming) {
+struct GrpcServerHarness final {
   a2a::server::InMemoryTaskStore store;
-  StreamingStoreExecutor executor(&store);
-  a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::GrpcServerTransport transport(&dispatcher);
+  StreamingStoreExecutor executor{&store};
+  a2a::server::Dispatcher dispatcher{&executor};
+  a2a::server::GrpcServerTransport transport{&dispatcher};
+  std::unique_ptr<grpc::Server> server;
+  int port = 0;
+};
 
+std::unique_ptr<GrpcServerHarness> StartHarness() {
+  auto harness = std::make_unique<GrpcServerHarness>();
   grpc::ServerBuilder builder;
-  int selected_port = 0;
-  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &selected_port);
-  builder.RegisterService(&transport);
-  std::unique_ptr<grpc::Server> server = builder.BuildAndStart();
-  ASSERT_NE(server, nullptr);
-  ASSERT_GT(selected_port, 0);
+  builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &harness->port);
+  builder.RegisterService(&harness->transport);
+  harness->server = builder.BuildAndStart();
+  return harness;
+}
 
-  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(selected_port),
-                                     grpc::InsecureChannelCredentials());
-
-  a2a::client::GrpcTransport grpc_client(
-      {.transport = a2a::client::PreferredTransport::kGrpc,
-       .url = "127.0.0.1:" + std::to_string(selected_port),
-       .security_requirements = {},
-       .security_schemes = {}},
-      channel);
-  a2a::client::A2AClient client(std::make_unique<a2a::client::GrpcTransport>(std::move(grpc_client)));
-
+[[nodiscard]] a2a::core::Result<void> VerifyCoreLifecycle(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
   lf::a2a::v1::SendMessageRequest send_request;
   send_request.mutable_message()->set_role("user");
   send_request.mutable_message()->set_task_id("grpc-integration-1");
 
-  const auto send_response = client.SendMessage(send_request);
-  ASSERT_TRUE(send_response.ok()) << send_response.error().message();
-  EXPECT_EQ(send_response.value().task().id(), "grpc-integration-1");
+  auto send_response = client->SendMessage(send_request);
+  if (!send_response.ok()) {
+    return send_response.error();
+  }
+  if (send_response.value().task().id() != "grpc-integration-1") {
+    return a2a::core::Error::Internal("SendMessage returned unexpected task id");
+  }
 
   lf::a2a::v1::GetTaskRequest get_request;
   get_request.set_id("grpc-integration-1");
-  const auto get_response = client.GetTask(get_request);
-  ASSERT_TRUE(get_response.ok()) << get_response.error().message();
-  EXPECT_EQ(get_response.value().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  auto get_response = client->GetTask(get_request);
+  if (!get_response.ok()) {
+    return get_response.error();
+  }
+  if (get_response.value().status().state() != lf::a2a::v1::TASK_STATE_WORKING) {
+    return a2a::core::Error::Internal("GetTask returned unexpected state");
+  }
 
   lf::a2a::v1::CancelTaskRequest cancel_request;
   cancel_request.set_id("grpc-integration-1");
-  const auto cancel_response = client.CancelTask(cancel_request);
-  ASSERT_TRUE(cancel_response.ok()) << cancel_response.error().message();
-  EXPECT_EQ(cancel_response.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
+  auto cancel_response = client->CancelTask(cancel_request);
+  if (!cancel_response.ok()) {
+    return cancel_response.error();
+  }
+  if (cancel_response.value().status().state() != lf::a2a::v1::TASK_STATE_CANCELED) {
+    return a2a::core::Error::Internal("CancelTask returned unexpected state");
+  }
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifyStreamingMessage(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_task_id("grpc-integration-1");
 
   RecordingObserver observer;
-  auto stream = client.SendStreamingMessage(send_request, observer);
-  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  auto stream = client->SendStreamingMessage(send_request, observer);
+  if (!stream.ok()) {
+    return stream.error();
+  }
 
   while (stream.value()->IsActive()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
-  ASSERT_EQ(observer.events.size(), 1U);
-  EXPECT_EQ(observer.events.front().task().id(), "grpc-integration-1");
-  EXPECT_TRUE(observer.completed);
-  EXPECT_TRUE(observer.errors.empty());
+  if (observer.events.size() != 1U) {
+    return a2a::core::Error::Internal("Unexpected streaming event count");
+  }
+  if (observer.events.front().task().id() != "grpc-integration-1") {
+    return a2a::core::Error::Internal("Streaming event returned unexpected task id");
+  }
+  if (!observer.completed) {
+    return a2a::core::Error::Internal("Streaming observer was not completed");
+  }
+  if (!observer.errors.empty()) {
+    return a2a::core::Error::Internal("Streaming observer unexpectedly received errors");
+  }
+  return {};
+}
 
-  server->Shutdown();
+std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
+  auto channel =
+      grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+
+  auto transport = std::make_unique<a2a::client::GrpcTransport>(
+      a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kGrpc,
+                                     .url = "127.0.0.1:" + std::to_string(port),
+                                     .security_requirements = {},
+                                     .security_schemes = {}},
+      channel);
+  return std::make_unique<a2a::client::A2AClient>(std::move(transport));
+}
+
+TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+
+  const auto lifecycle = VerifyCoreLifecycle(client.get());
+  ASSERT_TRUE(lifecycle.ok()) << lifecycle.error().message();
+
+  const auto streaming = VerifyStreamingMessage(client.get());
+  ASSERT_TRUE(streaming.ok()) << streaming.error().message();
+
+  harness->server->Shutdown();
 }
 
 }  // namespace

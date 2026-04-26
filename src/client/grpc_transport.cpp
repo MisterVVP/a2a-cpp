@@ -66,7 +66,8 @@ class StubRpcClient final : public GrpcTransport::RpcClient {
   }
 
   [[nodiscard]] ::grpc::Status GetTaskPushNotificationConfig(
-      ::grpc::ClientContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
+      ::grpc::ClientContext* context,
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
       lf::a2a::v1::TaskPushNotificationConfig* response) override {
     return stub_->GetTaskPushNotificationConfig(context, request, response);
   }
@@ -99,7 +100,8 @@ GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface,
           std::make_unique<StubRpcClient>(lf::a2a::v1::A2AService::NewStub(std::move(channel))),
           default_timeout) {}
 
-GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface, std::unique_ptr<RpcClient> rpc_client,
+GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface,
+                             std::unique_ptr<RpcClient> rpc_client,
                              std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
       rpc_client_(std::move(rpc_client)),
@@ -125,13 +127,15 @@ core::Result<std::unique_ptr<::grpc::ClientContext>> GrpcTransport::BuildContext
   headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
 
   if (!options.extensions.empty()) {
-    headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
+    headers[std::string(core::Extensions::kHeaderName)] =
+        core::Extensions::Format(options.extensions);
   }
   if (options.auth_hook) {
     options.auth_hook(headers);
   }
   if (options.credential_provider != nullptr) {
-    const auto apply = ApplyCredentialProvider(*options.credential_provider, options.auth_context, &headers);
+    const auto apply =
+        ApplyCredentialProvider(*options.credential_provider, options.auth_context, &headers);
     if (!apply.ok()) {
       return apply.error();
     }
@@ -139,15 +143,14 @@ core::Result<std::unique_ptr<::grpc::ClientContext>> GrpcTransport::BuildContext
 
   for (const auto& [name, value] : headers) {
     std::string lowered_name = name;
-    std::ranges::transform(lowered_name, lowered_name.begin(), [](unsigned char ch) {
-      return static_cast<char>(std::tolower(ch));
-    });
+    std::ranges::transform(lowered_name, lowered_name.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     context->AddMetadata(lowered_name, value);
   }
   return context;
 }
 
-core::Error GrpcTransport::BuildGrpcError(const ::grpc::Status& status) const {
+core::Error GrpcTransport::BuildGrpcError(const ::grpc::Status& status) {
   core::Error error = core::Error::RemoteProtocol(status.error_message()).WithTransport("grpc");
   error = error.WithProtocolCode(std::to_string(static_cast<int>(status.error_code())));
   return error;
@@ -241,7 +244,8 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::GetTaskPush
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
 GrpcTransport::ListTaskPushNotificationConfigs(
-    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
+    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+    const CallOptions& options) {
   auto context_result = BuildContext(options);
   if (!context_result.ok()) {
     return context_result.error();
@@ -257,7 +261,8 @@ GrpcTransport::ListTaskPushNotificationConfigs(
 }
 
 core::Result<void> GrpcTransport::DeleteTaskPushNotificationConfig(
-    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
+    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+    const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
   }
@@ -269,7 +274,8 @@ core::Result<void> GrpcTransport::DeleteTaskPushNotificationConfig(
   auto context = std::move(context_result.value());
 
   google::protobuf::Empty response;
-  const auto status = rpc_client_->DeleteTaskPushNotificationConfig(context.get(), request, &response);
+  const auto status =
+      rpc_client_->DeleteTaskPushNotificationConfig(context.get(), request, &response);
   if (!status.ok()) {
     return BuildGrpcError(status);
   }
@@ -286,34 +292,35 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SendStreamingMessage(
 
   auto state = std::make_shared<StreamHandle::State>();
   auto context = std::move(context_result.value());
-  auto worker = std::jthread([this, state, request, &observer, context = std::move(context)]() mutable {
-    auto reader = rpc_client_->SendStreamingMessage(context.get(), request);
-    if (reader == nullptr) {
-      observer.OnError(core::Error::Internal("Failed to create gRPC stream reader"));
-      state->active.store(false);
-      return;
-    }
+  auto worker =
+      std::jthread([this, state, request, &observer, context = std::move(context)]() mutable {
+        auto reader = rpc_client_->SendStreamingMessage(context.get(), request);
+        if (reader == nullptr) {
+          observer.OnError(core::Error::Internal("Failed to create gRPC stream reader"));
+          state->active.store(false);
+          return;
+        }
 
-    lf::a2a::v1::StreamResponse event;
-    while (!state->cancel_requested.load() && reader->Read(&event)) {
-      observer.OnEvent(event);
-    }
+        lf::a2a::v1::StreamResponse event;
+        while (!state->cancel_requested.load() && reader->Read(&event)) {
+          observer.OnEvent(event);
+        }
 
-    const auto status = reader->Finish();
-    if (state->cancel_requested.load()) {
-      state->active.store(false);
-      return;
-    }
+        const auto status = reader->Finish();
+        if (state->cancel_requested.load()) {
+          state->active.store(false);
+          return;
+        }
 
-    if (!status.ok()) {
-      observer.OnError(BuildGrpcError(status));
-      state->active.store(false);
-      return;
-    }
+        if (!status.ok()) {
+          observer.OnError(BuildGrpcError(status));
+          state->active.store(false);
+          return;
+        }
 
-    observer.OnCompleted();
-    state->active.store(false);
-  });
+        observer.OnCompleted();
+        state->active.store(false);
+      });
 
   return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }

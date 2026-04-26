@@ -23,8 +23,7 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
       ::grpc::ServerContext* context, const lf::a2a::v1::SendMessageRequest* request,
       ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) override;
 
-  ::grpc::Status GetTask(::grpc::ServerContext* context,
-                         const lf::a2a::v1::GetTaskRequest* request,
+  ::grpc::Status GetTask(::grpc::ServerContext* context, const lf::a2a::v1::GetTaskRequest* request,
                          lf::a2a::v1::Task* response) override;
 
   ::grpc::Status CancelTask(::grpc::ServerContext* context,
@@ -32,7 +31,8 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
                             lf::a2a::v1::Task* response) override;
 
  private:
-  [[nodiscard]] core::Result<RequestContext> BuildRequestContext(const ::grpc::ServerContext& context) const;
+  [[nodiscard]] core::Result<RequestContext> BuildRequestContext(
+      const ::grpc::ServerContext& context) const;
   [[nodiscard]] static ::grpc::Status ToGrpcStatus(const core::Error& error,
                                                    ::grpc::ServerContext* context);
 

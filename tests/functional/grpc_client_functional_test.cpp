@@ -51,7 +51,8 @@ class ContractRpcClient final : public a2a::client::GrpcTransport::RpcClient {
   }
 
   grpc::Status GetTaskPushNotificationConfig(
-      grpc::ClientContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
+      grpc::ClientContext* context,
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
       lf::a2a::v1::TaskPushNotificationConfig* response) override {
     (void)context;
     response->set_id(request.id());

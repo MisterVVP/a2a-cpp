@@ -1,9 +1,9 @@
 #pragma once
 
+#include <google/protobuf/empty.pb.h>
 #include <grpcpp/channel.h>
 #include <grpcpp/client_context.h>
 #include <grpcpp/support/status.h>
-#include <google/protobuf/empty.pb.h>
 
 #include <chrono>
 #include <memory>
@@ -30,10 +30,9 @@ class GrpcTransport final : public ClientTransport {
    public:
     virtual ~RpcClient() = default;
 
-    [[nodiscard]] virtual ::grpc::Status SendMessage(::grpc::ClientContext* context,
-                                                     const lf::a2a::v1::SendMessageRequest& request,
-                                                     lf::a2a::v1::SendMessageResponse* response) =
-        0;
+    [[nodiscard]] virtual ::grpc::Status SendMessage(
+        ::grpc::ClientContext* context, const lf::a2a::v1::SendMessageRequest& request,
+        lf::a2a::v1::SendMessageResponse* response) = 0;
 
     [[nodiscard]] virtual std::unique_ptr<StreamReader> SendStreamingMessage(
         ::grpc::ClientContext* context, const lf::a2a::v1::SendMessageRequest& request) = 0;
@@ -89,8 +88,9 @@ class GrpcTransport final : public ClientTransport {
       const CallOptions& options) override;
 
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-  ListTaskPushNotificationConfigs(const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-                                  const CallOptions& options) override;
+  ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+      const CallOptions& options) override;
 
   [[nodiscard]] core::Result<void> DeleteTaskPushNotificationConfig(
       const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
@@ -107,7 +107,7 @@ class GrpcTransport final : public ClientTransport {
  private:
   [[nodiscard]] core::Result<std::unique_ptr<::grpc::ClientContext>> BuildContext(
       const CallOptions& options) const;
-  [[nodiscard]] core::Error BuildGrpcError(const ::grpc::Status& status) const;
+  [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
   ResolvedInterface resolved_interface_;
   std::unique_ptr<RpcClient> rpc_client_;

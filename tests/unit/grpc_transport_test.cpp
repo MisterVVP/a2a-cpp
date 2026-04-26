@@ -81,7 +81,8 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
   }
 
   grpc::Status GetTaskPushNotificationConfig(
-      grpc::ClientContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
+      grpc::ClientContext* context,
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
       lf::a2a::v1::TaskPushNotificationConfig* response) override {
     (void)context;
     response->set_id(request.id());
@@ -116,9 +117,7 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
 
 class RecordingObserver final : public a2a::client::StreamObserver {
  public:
-  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
-    events.push_back(response);
-  }
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override { events.push_back(response); }
 
   void OnError(const a2a::core::Error& error) override { last_error = error; }
 
@@ -131,12 +130,11 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
 TEST(GrpcTransportTest, GetTaskValidatesRequestId) {
   auto rpc = std::make_unique<FakeRpcClient>();
-  a2a::client::GrpcTransport transport(
-      {.transport = a2a::client::PreferredTransport::kGrpc,
-       .url = "localhost:50051",
-       .security_requirements = {},
-       .security_schemes = {}},
-      std::move(rpc));
+  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
+                                        .url = "localhost:50051",
+                                        .security_requirements = {},
+                                        .security_schemes = {}},
+                                       std::move(rpc));
 
   lf::a2a::v1::GetTaskRequest request;
   const auto result = transport.GetTask(request, {});
@@ -151,12 +149,11 @@ TEST(GrpcTransportTest, SendStreamingMessageDeliversEventsAndCompletion) {
   event.mutable_task()->set_id("stream-task");
   rpc->stream_reader = std::make_unique<FakeStreamReader>(std::vector{event});
 
-  a2a::client::GrpcTransport transport(
-      {.transport = a2a::client::PreferredTransport::kGrpc,
-       .url = "localhost:50051",
-       .security_requirements = {},
-       .security_schemes = {}},
-      std::move(rpc));
+  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
+                                        .url = "localhost:50051",
+                                        .security_requirements = {},
+                                        .security_schemes = {}},
+                                       std::move(rpc));
 
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_task_id("stream-task");
@@ -177,12 +174,11 @@ TEST(GrpcTransportTest, SendStreamingMessageDeliversEventsAndCompletion) {
 
 TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
   auto rpc = std::make_unique<FakeRpcClient>();
-  a2a::client::GrpcTransport transport(
-      {.transport = a2a::client::PreferredTransport::kGrpc,
-       .url = "localhost:50051",
-       .security_requirements = {},
-       .security_schemes = {}},
-      std::move(rpc));
+  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
+                                        .url = "localhost:50051",
+                                        .security_requirements = {},
+                                        .security_schemes = {}},
+                                       std::move(rpc));
 
   lf::a2a::v1::GetTaskRequest request;
   request.set_id("sub-task");

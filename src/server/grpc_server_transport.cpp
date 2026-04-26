@@ -75,7 +75,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     }
   }
 
-  return ::grpc::Status(ToStatusCode(error), std::string(error.message()));
+  return {ToStatusCode(error), std::string(error.message())};
 }
 
 ::grpc::Status GrpcServerTransport::SendMessage(::grpc::ServerContext* context,
@@ -90,8 +90,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kSendMessage, .payload = *request}, request_context.value());
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = *request},
+                            request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -185,8 +186,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kCancelTask, .payload = *request}, request_context.value());
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kCancelTask, .payload = *request},
+                            request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }

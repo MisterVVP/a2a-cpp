@@ -30,7 +30,8 @@ class FakeStreamSession final : public a2a::server::ServerStreamSession {
 class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
     observed_remote_address = context.remote_address.value_or("");
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_task()->set_id(request.message().task_id());
@@ -38,7 +39,8 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request,
+      a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
