@@ -163,6 +163,20 @@ target_link_libraries(json_rpc_transport_test
 
 gtest_discover_tests(json_rpc_transport_test)
 
+add_executable(grpc_transport_test
+  unit/grpc_transport_test.cpp
+)
+
+target_link_libraries(grpc_transport_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(grpc_transport_test)
+
 add_executable(server_dispatcher_test
   unit/server_dispatcher_test.cpp
 )
@@ -220,6 +234,20 @@ target_link_libraries(json_rpc_server_transport_test
 
 gtest_discover_tests(json_rpc_server_transport_test)
 
+add_executable(grpc_server_transport_test
+  unit/grpc_server_transport_test.cpp
+)
+
+target_link_libraries(grpc_server_transport_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(grpc_server_transport_test)
+
 add_executable(json_rpc_client_functional_test
   functional/json_rpc_client_functional_test.cpp
 )
@@ -233,6 +261,20 @@ target_link_libraries(json_rpc_client_functional_test
 )
 
 gtest_discover_tests(json_rpc_client_functional_test)
+
+add_executable(grpc_client_functional_test
+  functional/grpc_client_functional_test.cpp
+)
+
+target_link_libraries(grpc_client_functional_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(grpc_client_functional_test)
 
 add_executable(server_task_store_functional_test
   functional/server_task_store_functional_test.cpp
@@ -354,6 +396,21 @@ target_link_libraries(rest_server_transport_integration_test
 )
 
 gtest_discover_tests(rest_server_transport_integration_test)
+
+add_executable(grpc_transport_integration_test
+  integration/grpc_transport_integration_test.cpp
+)
+
+target_link_libraries(grpc_transport_integration_test
+  PRIVATE
+    a2a::server
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(grpc_transport_integration_test)
 
 add_executable(examples_interop_integration_test
   integration/examples_interop_integration_test.cpp
