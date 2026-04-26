@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install toolchain and dependencies
         run: |
@@ -48,6 +48,9 @@ jobs:
       - name: Generate protobuf/gRPC sources
         run: cmake --build build --target a2a_proto_codegen --parallel
 
+      - name: Verify generation is up-to-date
+        run: git diff --exit-code
+
       - name: Build
         run: cmake --build build --parallel
 
@@ -59,3 +62,36 @@ jobs:
 
       - name: Functional tests (HTTP+JSON transport)
         run: ctest --test-dir build --output-on-failure -R 'HttpJsonClientIntegrationTest\..*'
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install toolchain and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            cmake \
+            ninja-build \
+            protobuf-compiler \
+            libprotobuf-dev \
+            protobuf-compiler-grpc \
+            libgrpc++-dev
+
+      - name: Configure (ASan/UBSan)
+        run: |
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
+            -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+
+      - name: Build
+        run: cmake --build build-asan --parallel
+
+      - name: Run representative integration tests
+        run: ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'

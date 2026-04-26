@@ -37,6 +37,43 @@ target_link_libraries(core_helpers_test
 
 gtest_discover_tests(core_helpers_test)
 
+add_executable(core_protojson_golden_test
+  unit/core_protojson_golden_test.cpp
+)
+
+target_link_libraries(core_protojson_golden_test
+  PRIVATE
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+target_compile_definitions(core_protojson_golden_test
+  PRIVATE
+    A2A_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+
+gtest_discover_tests(core_protojson_golden_test)
+
+add_executable(examples_support_test
+  unit/examples_support_test.cpp
+)
+
+target_include_directories(examples_support_test
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/examples
+)
+
+target_link_libraries(examples_support_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(examples_support_test)
+
 add_executable(discovery_test
   unit/discovery_test.cpp
 )
@@ -211,6 +248,25 @@ target_link_libraries(server_task_store_functional_test
 
 gtest_discover_tests(server_task_store_functional_test)
 
+add_executable(examples_functional_test
+  functional/examples_functional_test.cpp
+)
+
+target_include_directories(examples_functional_test
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/examples
+)
+
+target_link_libraries(examples_functional_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(examples_functional_test)
+
 add_executable(rest_server_transport_functional_test
   functional/rest_server_transport_functional_test.cpp
 )
@@ -298,3 +354,23 @@ target_link_libraries(rest_server_transport_integration_test
 )
 
 gtest_discover_tests(rest_server_transport_integration_test)
+
+add_executable(examples_interop_integration_test
+  integration/examples_interop_integration_test.cpp
+)
+
+target_include_directories(examples_interop_integration_test
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/examples
+)
+
+target_link_libraries(examples_interop_integration_test
+  PRIVATE
+    a2a::server
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(examples_interop_integration_test)

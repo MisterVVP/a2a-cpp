@@ -18,6 +18,13 @@ C++ SDK for the Agent2Agent (A2A) Protocol.
 - Security scanning: `.github/workflows/codeql.yml`.
 
 See [`docs/build.md`](docs/build.md) for build, lint, and test instructions.
+See [`docs/quickstart.md`](docs/quickstart.md) for a first local client/server run.
+Client and server API overviews are documented in:
+
+- [`docs/client-usage.md`](docs/client-usage.md)
+- [`docs/server-usage.md`](docs/server-usage.md)
+- [`docs/streaming-usage.md`](docs/streaming-usage.md)
+- [`docs/auth-hooks.md`](docs/auth-hooks.md)
 
 ## Authentication hooks
 

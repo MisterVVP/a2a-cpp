@@ -26,6 +26,9 @@ This folder contains an ordered set of implementation tasks for building an **A2
 9. `09-json-rpc-server-transport.md`
 10. `10-auth-security-hooks.md`
 11. `11-examples-interop-and-ci.md`
+12. `12-parity-gap-analysis-vs-a2a-go.md`
+13. `13-grpc-transport-parity.md`
+14. `14-client-server-api-parity-extended-rpcs-and-interceptors.md`
 
 ## Recommended repository layout
 
