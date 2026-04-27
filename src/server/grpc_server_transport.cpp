@@ -70,8 +70,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
                                                  ::grpc::ServerContext* context) {
   if (context != nullptr) {
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
-    if (error.protocol_code().has_value()) {
-      context->AddTrailingMetadata("a2a-protocol-code", error.protocol_code().value());
+    const auto& protocol_code = error.protocol_code();
+    if (protocol_code.has_value()) {
+      context->AddTrailingMetadata("a2a-protocol-code", *protocol_code);
     }
   }
 
@@ -136,10 +137,11 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     if (!next.ok()) {
       return ToGrpcStatus(next.error(), context);
     }
-    if (!next.value().has_value()) {
+    const auto& event = next.value();
+    if (!event.has_value()) {
       break;
     }
-    if (!writer->Write(next.value().value())) {
+    if (!writer->Write(*event)) {
       break;
     }
   }
