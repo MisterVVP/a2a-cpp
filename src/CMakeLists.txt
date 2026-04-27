@@ -25,6 +25,7 @@ add_library(a2a_client STATIC
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
+  client/grpc_transport.cpp
   client/http_json_transport.cpp
   client/json_rpc_transport.cpp
   client/sse_parser.cpp
@@ -43,6 +44,7 @@ target_link_libraries(a2a_client
 )
 
 add_library(a2a_server STATIC
+  server/grpc_server_transport.cpp
   server/rest_server_transport.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp

@@ -11,6 +11,7 @@
 namespace a2a::client {
 
 class HttpJsonTransport;
+class GrpcTransport;
 
 class StreamObserver {
  public:
@@ -40,6 +41,7 @@ class StreamHandle final {
 
  private:
   friend class HttpJsonTransport;
+  friend class GrpcTransport;
 
   explicit StreamHandle(std::shared_ptr<State> state, std::jthread worker);
 

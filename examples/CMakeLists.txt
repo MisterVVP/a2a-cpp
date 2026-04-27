@@ -17,3 +17,7 @@ target_link_libraries(example_minimal_server_custom_executor PRIVATE a2a::server
 add_executable(example_streaming_client streaming_client.cpp)
 target_include_directories(example_streaming_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(example_streaming_client PRIVATE a2a::client a2a::core)
+
+add_executable(example_grpc_client grpc_client.cpp)
+target_include_directories(example_grpc_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_grpc_client PRIVATE a2a::client a2a::core)

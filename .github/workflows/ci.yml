@@ -95,3 +95,41 @@ jobs:
 
       - name: Run representative integration tests
         run: ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
+
+  valgrind:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install toolchain and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            protobuf-compiler \
+            libprotobuf-dev \
+            protobuf-compiler-grpc \
+            libgrpc++-dev \
+            valgrind
+
+      - name: Configure
+        run: cmake -S . -B build-valgrind -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-valgrind --parallel
+
+      - name: Run valgrind leak checks on representative tests
+        run: |
+          valgrind --error-exitcode=1 \
+            --leak-check=full \
+            --show-leak-kinds=definite,indirect \
+            --errors-for-leak-kinds=definite,indirect \
+            ./build-valgrind/tests/grpc_transport_integration_test
+
+          valgrind --error-exitcode=1 \
+            --leak-check=full \
+            --show-leak-kinds=definite,indirect \
+            --errors-for-leak-kinds=definite,indirect \
+            ./build-valgrind/tests/examples_interop_integration_test
