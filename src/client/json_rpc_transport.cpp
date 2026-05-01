@@ -319,6 +319,66 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(
   return response.value();
 }
 
+core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksRequest& request,
+                                                            const CallOptions& options) {
+  google::protobuf::Struct params;
+  if (request.page_size > 0) {
+    (*params.mutable_fields())["pageSize"].set_number_value(static_cast<double>(request.page_size));
+  }
+  if (!request.page_token.empty()) {
+    (*params.mutable_fields())["pageToken"].set_string_value(request.page_token);
+  }
+
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kListTasks, params, options);
+  if (!result.ok()) {
+    return result.error();
+  }
+
+  if (!result.value().has_struct_value()) {
+    return core::Error::Serialization("ListTasks JSON-RPC result must be an object")
+        .WithTransport("jsonrpc")
+        .WithHttpStatus(kHttpOkMin);
+  }
+
+  ListTasksResponse parsed;
+  const auto& fields = result.value().struct_value().fields();
+  const auto tasks_it = fields.find("tasks");
+  if (tasks_it != fields.end()) {
+    if (!tasks_it->second.has_list_value()) {
+      return core::Error::Serialization("ListTasks JSON-RPC result field 'tasks' must be an array")
+          .WithTransport("jsonrpc")
+          .WithHttpStatus(kHttpOkMin);
+    }
+    for (const auto& task_value : tasks_it->second.list_value().values()) {
+      const auto task_json = core::MessageToJson(task_value);
+      if (!task_json.ok()) {
+        return task_json.error().WithTransport("jsonrpc").WithHttpStatus(kHttpOkMin);
+      }
+      lf::a2a::v1::Task task;
+      const auto task_parse =
+          core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
+      if (!task_parse.ok()) {
+        return task_parse.error().WithTransport("jsonrpc").WithHttpStatus(kHttpOkMin);
+      }
+      parsed.tasks.push_back(std::move(task));
+    }
+  }
+
+  const auto next_page_token_it = fields.find("nextPageToken");
+  if (next_page_token_it != fields.end()) {
+    if (!next_page_token_it->second.has_string_value()) {
+      return core::Error::Serialization(
+                 "ListTasks JSON-RPC result field 'nextPageToken' must be a string")
+          .WithTransport("jsonrpc")
+          .WithHttpStatus(kHttpOkMin);
+    }
+    parsed.next_page_token = next_page_token_it->second.string_value();
+  }
+
+  return parsed;
+}
+
 core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(
     const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) {
   if (request.id().empty()) {

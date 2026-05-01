@@ -22,6 +22,7 @@ using a2a::core::ErrorCode;
 constexpr int kHttpOk = 200;
 constexpr int kHttpNoContent = 204;
 constexpr int kHttpBadGateway = 502;
+constexpr int kListTasksPageSize = 25;
 constexpr int kPageSize = 25;
 constexpr int kCustomTimeoutMs = 2500;
 
@@ -107,6 +108,28 @@ TEST(HttpJsonClientIntegrationTest, GetTaskAndCancelTaskHappyPath) {
   const auto cancel_response = client.CancelTask(cancel_request);
   ASSERT_TRUE(cancel_response.ok()) << cancel_response.error().message();
   EXPECT_EQ(cancel_response.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST(HttpJsonClientIntegrationTest, ListTasksBuildsQueryAndParsesTasks) {
+  auto transport = std::make_unique<HttpJsonTransport>(
+      MakeResolvedRest(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        EXPECT_EQ(request.method, "GET");
+        EXPECT_EQ(request.url,
+                  "https://agent.example.com/a2a/tasks?pageSize=25&pageToken=cursor-1");
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = R"({"tasks":[{"id":"t-1"},{"id":"t-2"}],"nextPageToken":"cursor-2"})"};
+      });
+  A2AClient client(std::move(transport));
+
+  a2a::client::ListTasksRequest request{.page_size = kListTasksPageSize, .page_token = "cursor-1"};
+  const auto response = client.ListTasks(request);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  ASSERT_EQ(response.value().tasks.size(), 2U);
+  EXPECT_EQ(response.value().tasks[0].id(), "t-1");
+  EXPECT_EQ(response.value().next_page_token, "cursor-2");
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

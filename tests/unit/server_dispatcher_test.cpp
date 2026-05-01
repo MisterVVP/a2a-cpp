@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/server/server.h"
@@ -84,6 +85,38 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   std::string last_request_id;
+};
+
+class RecordingServerInterceptor final : public a2a::server::ServerInterceptor {
+ public:
+  RecordingServerInterceptor(std::vector<std::string>* events, std::string tag,
+                             bool fail_before = false)
+      : events_(events), tag_(std::move(tag)), fail_before_(fail_before) {}
+
+  a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& request,
+                                         a2a::server::RequestContext& context) override {
+    events_->push_back(tag_ + ":before:" + std::to_string(static_cast<int>(request.operation)));
+    if (!context.request_id.has_value()) {
+      context.request_id = "set-by-" + tag_;
+    }
+    if (fail_before_) {
+      return a2a::core::Error::Validation("interceptor rejected request");
+    }
+    return {};
+  }
+
+  void AfterDispatch(const a2a::server::DispatchRequest& request,
+                     a2a::server::RequestContext& context,
+                     const a2a::core::Result<a2a::server::DispatchResponse>& result) override {
+    (void)context;
+    events_->push_back(tag_ + ":after:" + std::to_string(static_cast<int>(request.operation)) +
+                       ":" + (result.ok() ? "ok" : "error"));
+  }
+
+ private:
+  std::vector<std::string>* events_;
+  std::string tag_;
+  bool fail_before_ = false;
 };
 
 TEST(ServerDispatcherTest, DispatchesAllSupportedOperations) {
@@ -179,6 +212,48 @@ TEST(ServerDispatcherTest, ReturnsInternalErrorWithoutExecutor) {
   const auto response = dispatcher.Dispatch(dispatch, context);
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kInternal);
+}
+
+TEST(ServerDispatcherTest, InterceptorsObserveOrderingAndCanMutateContext) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  std::vector<std::string> events;
+  dispatcher.AddInterceptor(std::make_shared<RecordingServerInterceptor>(&events, "i1"));
+  dispatcher.AddInterceptor(std::make_shared<RecordingServerInterceptor>(&events, "i2"));
+
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role("user");
+  a2a::server::RequestContext context;
+
+  const auto result = dispatcher.Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request}, context);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(executor.last_request_id, "set-by-i1");
+
+  const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:ok",
+                                             "i1:after:0:ok"};
+  EXPECT_EQ(events, expected);
+}
+
+TEST(ServerDispatcherTest, InterceptorFailureShortCircuitsDispatchAndTriggersAfterHooks) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  std::vector<std::string> events;
+  dispatcher.AddInterceptor(std::make_shared<RecordingServerInterceptor>(&events, "i1"));
+  dispatcher.AddInterceptor(std::make_shared<RecordingServerInterceptor>(&events, "i2", true));
+
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role("user");
+  a2a::server::RequestContext context;
+
+  const auto result = dispatcher.Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request}, context);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+
+  const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:error",
+                                             "i1:after:0:error"};
+  EXPECT_EQ(events, expected);
 }
 
 }  // namespace

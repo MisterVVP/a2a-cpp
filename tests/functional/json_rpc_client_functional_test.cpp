@@ -71,6 +71,12 @@ a2a::core::Result<HttpClientResponse> HandleFunctionalRequest(const HttpRequest&
                               .body = BuildResultEnvelope(
                                   id, R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})")};
   }
+  if (method == "a2a.listTasks") {
+    return HttpClientResponse{
+        .status_code = kHttpOk,
+        .headers = {{"A2A-Version", "1.0"}},
+        .body = BuildResultEnvelope(id, R"({"tasks":[{"id":"t-1"}],"nextPageToken":"next"})")};
+  }
 
   return HttpClientResponse{.status_code = kHttpOk,
                             .headers = {{"A2A-Version", "1.0"}},
@@ -115,6 +121,18 @@ TEST(JsonRpcClientFunctionalTest, CancelTaskRoundTripsThroughTransportContract) 
   const auto response = client.CancelTask(request);
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
+}
+
+TEST(JsonRpcClientFunctionalTest, ListTasksRoundTripsThroughTransportContract) {
+  auto transport =
+      std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
+  A2AClient client(std::move(transport));
+
+  const auto response = client.ListTasks({.page_size = 5, .page_token = "0"});
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  ASSERT_EQ(response.value().tasks.size(), 1U);
+  EXPECT_EQ(response.value().tasks[0].id(), "t-1");
+  EXPECT_EQ(response.value().next_page_token, "next");
 }
 
 TEST(JsonRpcClientFunctionalTest, CredentialProviderDecoratesOutboundHeaders) {

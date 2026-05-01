@@ -237,4 +237,28 @@ TEST(JsonRpcTransportUnitTest, InjectsCustomHeadersViaCredentialProvider) {
   EXPECT_EQ(captured.headers["X-Custom-Auth"], "abc");
 }
 
+TEST(JsonRpcTransportUnitTest, ListTasksUsesListTasksMethodAndParsesResponse) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[{"id":"task-1"}]}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({.page_size = 20, .page_token = "cursor"});
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  ASSERT_EQ(response.value().tasks.size(), 1U);
+  EXPECT_EQ(response.value().tasks[0].id(), "task-1");
+
+  const auto envelope = ParseJsonStruct(captured.body);
+  ASSERT_TRUE(envelope.ok()) << envelope.error().message();
+  EXPECT_EQ(envelope.value().fields().at("method").string_value(), "a2a.listTasks");
+}
+
 }  // namespace

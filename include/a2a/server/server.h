@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -101,15 +102,42 @@ class DispatchResponse final {
   DispatchPayload payload_;
 };
 
+class ServerInterceptor {
+ public:
+  virtual ~ServerInterceptor() = default;
+
+  virtual core::Result<void> BeforeDispatch(const DispatchRequest& request,
+                                            RequestContext& context) {
+    (void)request;
+    (void)context;
+    return {};
+  }
+
+  virtual void AfterDispatch(const DispatchRequest& request, RequestContext& context,
+                             const core::Result<DispatchResponse>& result) {
+    (void)request;
+    (void)context;
+    (void)result;
+  }
+};
+
 class Dispatcher final {
  public:
   explicit Dispatcher(AgentExecutor* executor);
+  explicit Dispatcher(AgentExecutor* executor,
+                      std::vector<std::shared_ptr<ServerInterceptor>> interceptors);
 
   [[nodiscard]] core::Result<DispatchResponse> Dispatch(const DispatchRequest& request,
                                                         RequestContext& context) const;
+  void AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor);
 
  private:
+  void RunAfterInterceptors(const DispatchRequest& request, RequestContext& context,
+                            const core::Result<DispatchResponse>& result) const;
+
   AgentExecutor* executor_ = nullptr;
+  mutable std::shared_mutex interceptor_mutex_;
+  std::vector<std::shared_ptr<ServerInterceptor>> interceptors_;
 };
 
 class TaskStore {

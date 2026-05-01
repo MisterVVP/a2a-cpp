@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 #include "a2a/server/server.h"
 
 namespace {
@@ -59,6 +62,29 @@ class StoreBackedExecutor final : public a2a::server::AgentExecutor {
   a2a::server::TaskStore* store_;
 };
 
+class TrackingServerInterceptor final : public a2a::server::ServerInterceptor {
+ public:
+  explicit TrackingServerInterceptor(std::vector<std::string>* events) : events_(events) {}
+
+  a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& request,
+                                         a2a::server::RequestContext& context) override {
+    events_->push_back("before:" + std::to_string(static_cast<int>(request.operation)));
+    context.client_headers["x-intercepted"] = "true";
+    return {};
+  }
+
+  void AfterDispatch(const a2a::server::DispatchRequest& request,
+                     a2a::server::RequestContext& context,
+                     const a2a::core::Result<a2a::server::DispatchResponse>& result) override {
+    (void)context;
+    events_->push_back("after:" + std::to_string(static_cast<int>(request.operation)) + ":" +
+                       (result.ok() ? "ok" : "error"));
+  }
+
+ private:
+  std::vector<std::string>* events_;
+};
+
 TEST(ServerDispatcherTaskStoreIntegrationTest, ExecutesTaskLifecycleThroughDispatcher) {
   a2a::server::InMemoryTaskStore store;
   StoreBackedExecutor executor(&store);
@@ -100,6 +126,28 @@ TEST(ServerDispatcherTaskStoreIntegrationTest, ExecutesTaskLifecycleThroughDispa
   ASSERT_TRUE(cancel_result.ok());
   const auto& canceled_task = std::get<lf::a2a::v1::Task>(cancel_result.value().payload());
   EXPECT_EQ(canceled_task.status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
+}
+
+TEST(ServerDispatcherTaskStoreIntegrationTest, InterceptorsObserveRequestLifecycle) {
+  a2a::server::InMemoryTaskStore store;
+  StoreBackedExecutor executor(&store);
+  std::vector<std::string> events;
+  a2a::server::Dispatcher dispatcher(&executor,
+                                     {std::make_shared<TrackingServerInterceptor>(&events)});
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_task_id("integration-task-2");
+
+  const auto send_result = dispatcher.Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = send_request},
+      context);
+  ASSERT_TRUE(send_result.ok());
+  EXPECT_EQ(context.client_headers["x-intercepted"], "true");
+
+  const std::vector<std::string> expected = {"before:0", "after:0:ok"};
+  EXPECT_EQ(events, expected);
 }
 
 }  // namespace

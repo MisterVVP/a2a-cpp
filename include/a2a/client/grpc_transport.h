@@ -76,6 +76,8 @@ class GrpcTransport final : public ClientTransport {
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                         const CallOptions& options) override;
+  [[nodiscard]] core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
+                                                          const CallOptions& options) override;
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) override;
