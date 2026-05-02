@@ -1,6 +1,6 @@
 # A2A C++ vs A2A Go parity snapshot
 
-_Last updated: 2026-04-25._
+_Last updated: 2026-05-02._
 
 This matrix is a lightweight capability comparison against public a2a-go docs (GitHub README and pkg.go.dev API pages).
 
@@ -16,12 +16,18 @@ This matrix is a lightweight capability comparison against public a2a-go docs (G
 | Server call interceptors/middleware hooks | Present | Partial (auth context extraction only, no generic interceptor chain) | ⚠️ partial |
 | `ListTasks` style client API surface | Present in a2a-go transport docs | Missing on public `A2AClient` | ❌ gap |
 | Extended card retrieval (`GetExtendedAgentCard`) | Present in a2a-go docs | Missing | ❌ gap |
+| CLI utility for discovery/send/serve workflows | Present (`cmd/a2a`) | Missing | ❌ gap |
+| Standard package registry release signal | Present (`go get .../v2`, pkg.go.dev indexed) | Not yet published via mainstream C++ registries | ❌ gap |
+| Maintainer readiness signals (templates/governance cadence docs) | Present in repo metadata/workflows | Partial in current repo | ⚠️ partial |
 
 ## Follow-up tasks created from gaps
 
 - `docs/codex-mvp-tasks/12-parity-gap-analysis-vs-a2a-go.md`
 - `docs/codex-mvp-tasks/13-grpc-transport-parity.md`
 - `docs/codex-mvp-tasks/14-client-server-api-parity-extended-rpcs-and-interceptors.md`
+- `docs/codex-mvp-tasks/15-test-coverage-and-quality-gates.md`
+- `docs/codex-mvp-tasks/16-examples-expansion-and-local-runner-guide.md`
+- `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`
 
 ## Notes
 

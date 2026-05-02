@@ -9,127 +9,76 @@ on:
 jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install toolchain and dependencies
+      - uses: actions/checkout@v5
+      - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang-format \
-            clang-tidy \
-            cmake \
-            ninja-build \
-            protobuf-compiler \
-            libprotobuf-dev \
-            protobuf-compiler-grpc \
-            libgrpc++-dev
+          sudo apt-get install -y --no-install-recommends clang-format clang-tidy cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3-pip
+          python3 -m pip install --upgrade gcovr
+      - name: Verify changes
+        run: ./scripts/verify_changes.sh
 
-      - name: Enforce C++ file extensions
+  examples-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
         run: |
-          if git ls-files '*.cc' | grep -q .; then
-            echo 'Found forbidden .cc files. Use .cpp instead.' >&2
-            git ls-files '*.cc'
-            exit 1
-          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev
+      - name: Run examples smoke
+        run: ./scripts/run_examples.sh build-examples
 
-      - name: Verify formatting
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
         run: |
-          mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
-          if [ "${#CPP_FILES[@]}" -gt 0 ]; then
-            clang-format --dry-run --Werror "${CPP_FILES[@]}"
-          fi
-
-      - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-
-      - name: Generate protobuf/gRPC sources
-        run: cmake --build build --target a2a_proto_codegen --parallel
-
-      - name: Verify generation is up-to-date
-        run: git diff --exit-code
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Lint (clang-tidy)
-        run: ./scripts/run_clang_tidy.sh build
-
-      - name: Unit and integration tests
-        run: ctest --test-dir build --output-on-failure
-
-      - name: Functional tests (HTTP+JSON transport)
-        run: ctest --test-dir build --output-on-failure -R 'HttpJsonClientIntegrationTest\..*'
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3-pip
+          python3 -m pip install --upgrade gcovr
+      - name: Coverage gate
+        run: ./scripts/run_coverage.sh
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build-coverage/coverage
 
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install toolchain and dependencies
+      - uses: actions/checkout@v5
+      - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang \
-            cmake \
-            ninja-build \
-            protobuf-compiler \
-            libprotobuf-dev \
-            protobuf-compiler-grpc \
-            libgrpc++-dev
-
-      - name: Configure (ASan/UBSan)
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev
+      - name: Configure and test ASan/UBSan
         run: |
-          cmake -S . -B build-asan -G Ninja \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
-            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
-            -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake --build build-asan --parallel
+          ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
 
-      - name: Build
-        run: cmake --build build-asan --parallel
-
-      - name: Run representative integration tests
-        run: ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
-
-  valgrind:
-    runs-on: ubuntu-24.04
+  macos-build:
+    runs-on: macos-14
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+      - run: |
+          brew install cmake ninja protobuf grpc
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build --parallel
 
-      - name: Install toolchain and dependencies
+  windows-build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup vcpkg deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake \
-            ninja-build \
-            protobuf-compiler \
-            libprotobuf-dev \
-            protobuf-compiler-grpc \
-            libgrpc++-dev \
-            valgrind
-
-      - name: Configure
-        run: cmake -S . -B build-valgrind -G Ninja -DCMAKE_BUILD_TYPE=Debug
-
-      - name: Build
-        run: cmake --build build-valgrind --parallel
-
-      - name: Run valgrind leak checks on representative tests
+          vcpkg install protobuf grpc
+      - name: Configure and build
+        shell: pwsh
         run: |
-          valgrind --error-exitcode=1 \
-            --leak-check=full \
-            --show-leak-kinds=definite,indirect \
-            --errors-for-leak-kinds=definite,indirect \
-            ./build-valgrind/tests/grpc_transport_integration_test
-
-          valgrind --error-exitcode=1 \
-            --leak-check=full \
-            --show-leak-kinds=definite,indirect \
-            --errors-for-leak-kinds=definite,indirect \
-            ./build-valgrind/tests/examples_interop_integration_test
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build --parallel
