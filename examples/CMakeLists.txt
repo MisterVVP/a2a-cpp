@@ -21,3 +21,24 @@ target_link_libraries(example_streaming_client PRIVATE a2a::client a2a::core)
 add_executable(example_grpc_client grpc_client.cpp)
 target_include_directories(example_grpc_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(example_grpc_client PRIVATE a2a::client a2a::core)
+
+
+add_executable(example_list_tasks_client list_tasks_client.cpp)
+target_include_directories(example_list_tasks_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_list_tasks_client PRIVATE a2a::client a2a::server a2a::core)
+
+add_executable(example_cancel_task_client cancel_task_client.cpp)
+target_include_directories(example_cancel_task_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_cancel_task_client PRIVATE a2a::client a2a::server a2a::core)
+
+add_executable(example_push_notification_config_client push_notification_config_client.cpp)
+target_include_directories(example_push_notification_config_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_push_notification_config_client PRIVATE a2a::client a2a::server a2a::core)
+
+add_executable(example_interceptor_client interceptor_client.cpp)
+target_include_directories(example_interceptor_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_interceptor_client PRIVATE a2a::client a2a::server a2a::core)
+
+add_executable(example_auth_policy_server auth_policy_server.cpp)
+target_include_directories(example_auth_policy_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_auth_policy_server PRIVATE a2a::server a2a::core)

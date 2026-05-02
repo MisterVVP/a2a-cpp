@@ -1,0 +1,10 @@
+{
+  "name": "a2a-cpp",
+  "version-semver": "0.1.0",
+  "description": "C++ SDK for the Agent2Agent (A2A) Protocol",
+  "license": "Apache-2.0",
+  "dependencies": [
+    "protobuf",
+    "grpc"
+  ]
+}
