@@ -41,6 +41,70 @@ bool IsAuthSignalHeader(std::string_view lowered_name) {
          lowered_name.find("apikey") != std::string_view::npos;
 }
 
+core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor,
+                                                  const DispatchRequest& request,
+                                                  RequestContext& context) {
+  switch (request.operation) {
+    case DispatcherOperation::kSendMessage: {
+      const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
+      if (payload == nullptr) {
+        return core::Error::Validation("Dispatch payload type mismatch for SendMessage");
+      }
+      const auto response = executor.SendMessage(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+    case DispatcherOperation::kSendStreamingMessage: {
+      const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
+      if (payload == nullptr) {
+        return core::Error::Validation("Dispatch payload type mismatch for SendStreamingMessage");
+      }
+      auto response = executor.SendStreamingMessage(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(std::move(response.value()));
+    }
+    case DispatcherOperation::kGetTask: {
+      const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
+      if (payload == nullptr) {
+        return core::Error::Validation("Dispatch payload type mismatch for GetTask");
+      }
+      const auto response = executor.GetTask(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+    case DispatcherOperation::kListTasks: {
+      const auto* payload = std::get_if<ListTasksRequest>(&request.payload);
+      if (payload == nullptr) {
+        return core::Error::Validation("Dispatch payload type mismatch for ListTasks");
+      }
+      const auto response = executor.ListTasks(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+    case DispatcherOperation::kCancelTask: {
+      const auto* payload = std::get_if<lf::a2a::v1::CancelTaskRequest>(&request.payload);
+      if (payload == nullptr) {
+        return core::Error::Validation("Dispatch payload type mismatch for CancelTask");
+      }
+      const auto response = executor.CancelTask(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+  }
+
+  return core::Error::Validation("Unsupported dispatcher operation");
+}
+
 }  // namespace
 
 std::unordered_map<std::string, std::string> ExtractAuthMetadata(
@@ -79,71 +143,53 @@ std::unordered_map<std::string, std::string> ExtractAuthMetadata(
 
 Dispatcher::Dispatcher(AgentExecutor* executor) : executor_(executor) {}
 
+Dispatcher::Dispatcher(AgentExecutor* executor,
+                       std::vector<std::shared_ptr<ServerInterceptor>> interceptors)
+    : executor_(executor), interceptors_(std::move(interceptors)) {}
+
 core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request,
                                                     RequestContext& context) const {
   if (executor_ == nullptr) {
     return core::Error::Internal("Server dispatcher executor is not configured");
   }
 
-  switch (request.operation) {
-    case DispatcherOperation::kSendMessage: {
-      const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
-      if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for SendMessage");
-      }
-      const auto response = executor_->SendMessage(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
+  std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
+  for (const auto& interceptor : interceptors_) {
+    if (interceptor == nullptr) {
+      continue;
     }
-    case DispatcherOperation::kSendStreamingMessage: {
-      const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
-      if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for SendStreamingMessage");
-      }
-      auto response = executor_->SendStreamingMessage(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(std::move(response.value()));
-    }
-    case DispatcherOperation::kGetTask: {
-      const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
-      if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for GetTask");
-      }
-      const auto response = executor_->GetTask(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
-    }
-    case DispatcherOperation::kListTasks: {
-      const auto* payload = std::get_if<ListTasksRequest>(&request.payload);
-      if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for ListTasks");
-      }
-      const auto response = executor_->ListTasks(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
-    }
-    case DispatcherOperation::kCancelTask: {
-      const auto* payload = std::get_if<lf::a2a::v1::CancelTaskRequest>(&request.payload);
-      if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for CancelTask");
-      }
-      const auto response = executor_->CancelTask(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
+    const auto before_result = interceptor->BeforeDispatch(request, context);
+    if (!before_result.ok()) {
+      core::Result<DispatchResponse> failure = before_result.error();
+      read_lock.unlock();
+      RunAfterInterceptors(request, context, failure);
+      return before_result.error();
     }
   }
+  read_lock.unlock();
 
-  return core::Error::Validation("Unsupported dispatcher operation");
+  auto dispatch_result = DispatchToExecutor(*executor_, request, context);
+  RunAfterInterceptors(request, context, dispatch_result);
+  return dispatch_result;
+}
+
+void Dispatcher::AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor) {
+  if (interceptor == nullptr) {
+    return;
+  }
+  std::unique_lock<std::shared_mutex> lock(interceptor_mutex_);
+  interceptors_.push_back(std::move(interceptor));
+}
+
+void Dispatcher::RunAfterInterceptors(const DispatchRequest& request, RequestContext& context,
+                                      const core::Result<DispatchResponse>& result) const {
+  std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
+  for (const auto& interceptor : std::ranges::reverse_view(interceptors_)) {
+    if (interceptor == nullptr) {
+      continue;
+    }
+    interceptor->AfterDispatch(request, context, result);
+  }
 }
 
 core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& task) {

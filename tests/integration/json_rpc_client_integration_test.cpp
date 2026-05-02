@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <vector>
 
 #include "a2a/client/client.h"
 #include "a2a/client/json_rpc_transport.h"
@@ -51,6 +52,24 @@ std::string ExtractRequestId(const std::string& json_payload) {
   }
   return id->second.string_value();
 }
+
+class RecordingClientInterceptor final : public a2a::client::ClientInterceptor {
+ public:
+  explicit RecordingClientInterceptor(std::vector<std::string>* events) : events_(events) {}
+
+  void BeforeCall(const a2a::client::ClientCallContext& context) override {
+    events_->push_back("before:" + std::string(context.operation));
+  }
+
+  void AfterCall(const a2a::client::ClientCallContext& context,
+                 const a2a::client::ClientCallResult& result) override {
+    events_->push_back("after:" + std::string(context.operation) + ":" +
+                       (result.ok ? "ok" : "error"));
+  }
+
+ private:
+  std::vector<std::string>* events_;
+};
 
 TEST(JsonRpcClientIntegrationTest, MapsRemoteJsonRpcErrorObject) {
   auto transport = std::make_unique<JsonRpcTransport>(
@@ -125,6 +144,29 @@ TEST(JsonRpcClientIntegrationTest, UnsupportedMethodErrorIsSurfacedForDeleteConf
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
   EXPECT_EQ(response.error().protocol_code().value_or(""), "-32601");
+}
+
+TEST(JsonRpcClientIntegrationTest, ListTasksAndInterceptorsCaptureLifecycle) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = BuildResultEnvelope(ExtractRequestId(request.body),
+                                                              R"({"tasks":[{"id":"t-1"}]})")};
+      });
+
+  A2AClient client(std::move(transport));
+  std::vector<std::string> events;
+  client.AddInterceptor(std::make_shared<RecordingClientInterceptor>(&events));
+
+  const auto response = client.ListTasks({});
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  ASSERT_EQ(response.value().tasks.size(), 1U);
+  EXPECT_EQ(response.value().tasks[0].id(), "t-1");
+
+  const std::vector<std::string> expected = {"before:ListTasks", "after:ListTasks:ok"};
+  EXPECT_EQ(events, expected);
 }
 
 }  // namespace

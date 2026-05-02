@@ -167,6 +167,54 @@ core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& obser
   return {};
 }
 
+core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientResponse& response,
+                                                              std::string_view endpoint) {
+  if (response.status_code < kHttpOkMin || response.status_code > kHttpOkMax) {
+    return BuildHttpError("GET", endpoint, response);
+  }
+
+  google::protobuf::Struct payload;
+  const auto parse = core::JsonToMessage(response.body, &payload, {.ignore_unknown_fields = true});
+  if (!parse.ok()) {
+    return parse.error().WithTransport("http").WithHttpStatus(response.status_code);
+  }
+
+  ListTasksResponse parsed;
+  const auto tasks_it = payload.fields().find("tasks");
+  if (tasks_it != payload.fields().end()) {
+    if (!tasks_it->second.has_list_value()) {
+      return core::Error::Serialization("ListTasks response field 'tasks' must be an array")
+          .WithTransport("http")
+          .WithHttpStatus(response.status_code);
+    }
+    for (const auto& task_value : tasks_it->second.list_value().values()) {
+      const auto task_json = core::MessageToJson(task_value);
+      if (!task_json.ok()) {
+        return task_json.error().WithTransport("http").WithHttpStatus(response.status_code);
+      }
+      lf::a2a::v1::Task task;
+      const auto task_parse =
+          core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
+      if (!task_parse.ok()) {
+        return task_parse.error().WithTransport("http").WithHttpStatus(response.status_code);
+      }
+      parsed.tasks.push_back(std::move(task));
+    }
+  }
+
+  const auto next_token_it = payload.fields().find("nextPageToken");
+  if (next_token_it != payload.fields().end()) {
+    if (!next_token_it->second.has_string_value()) {
+      return core::Error::Serialization("ListTasks response field 'nextPageToken' must be a string")
+          .WithTransport("http")
+          .WithHttpStatus(response.status_code);
+    }
+    parsed.next_page_token = next_token_it->second.string_value();
+  }
+
+  return parsed;
+}
+
 void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
 
 void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer,
@@ -314,6 +362,33 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(
     return response.error();
   }
   return ParseBodyOrMapError<lf::a2a::v1::Task>("GET", endpoint, response.value());
+}
+
+core::Result<ListTasksResponse> HttpJsonTransport::ListTasks(const ListTasksRequest& request,
+                                                             const CallOptions& options) {
+  std::ostringstream endpoint;
+  endpoint << EndpointMap::kTaskCollection;
+  if (request.page_size > 0 || !request.page_token.empty()) {
+    endpoint << "?";
+    bool has_previous = false;
+    if (request.page_size > 0) {
+      endpoint << "pageSize=" << request.page_size;
+      has_previous = true;
+    }
+    if (!request.page_token.empty()) {
+      if (has_previous) {
+        endpoint << "&";
+      }
+      endpoint << "pageToken=" << request.page_token;
+    }
+  }
+
+  const std::string endpoint_path = endpoint.str();
+  const auto response = SendRequest({.method = "GET", .endpoint = endpoint_path}, {}, options);
+  if (!response.ok()) {
+    return response.error();
+  }
+  return ParseListTasksResponsePayload(response.value(), endpoint_path);
 }
 
 core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(

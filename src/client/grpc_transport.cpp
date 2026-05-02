@@ -190,6 +190,14 @@ core::Result<lf::a2a::v1::Task> GrpcTransport::GetTask(const lf::a2a::v1::GetTas
   return response;
 }
 
+core::Result<ListTasksResponse> GrpcTransport::ListTasks(const ListTasksRequest& request,
+                                                         const CallOptions& options) {
+  (void)request;
+  (void)options;
+  return core::Error::Validation(
+      "gRPC transport does not support ListTasks in the current protocol");
+}
+
 core::Result<lf::a2a::v1::Task> GrpcTransport::CancelTask(
     const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) {
   if (request.id().empty()) {

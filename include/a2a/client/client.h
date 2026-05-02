@@ -1,8 +1,15 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 #include "a2a/client/call_options.h"
 #include "a2a/core/result.h"
@@ -12,6 +19,36 @@ namespace a2a::client {
 
 class HttpJsonTransport;
 class GrpcTransport;
+
+struct ListTasksRequest final {
+  std::size_t page_size = 0;
+  std::string page_token;
+};
+
+struct ListTasksResponse final {
+  std::vector<lf::a2a::v1::Task> tasks;
+  std::string next_page_token;
+};
+
+struct ClientCallContext final {
+  std::string_view operation;
+  const CallOptions* options = nullptr;
+};
+
+struct ClientCallResult final {
+  bool ok = true;
+  std::optional<core::Error> error = std::nullopt;
+};
+
+class ClientInterceptor {
+ public:
+  virtual ~ClientInterceptor() = default;
+  virtual void BeforeCall(const ClientCallContext& context) { (void)context; }
+  virtual void AfterCall(const ClientCallContext& context, const ClientCallResult& result) {
+    (void)context;
+    (void)result;
+  }
+};
 
 class StreamObserver {
  public:
@@ -57,6 +94,8 @@ class ClientTransport {
       const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> GetTask(
       const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options) = 0;
+  [[nodiscard]] virtual core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
+                                                                  const CallOptions& options) = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> CancelTask(
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) = 0;
 
@@ -87,6 +126,8 @@ class ClientTransport {
   [[nodiscard]] virtual core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(
       const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
       const CallOptions& options) = 0;
+
+  [[nodiscard]] virtual core::Result<void> Shutdown() { return {}; }
 };
 
 class A2AClient final {
@@ -98,6 +139,8 @@ class A2AClient final {
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                         const CallOptions& options = {});
+  [[nodiscard]] core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
+                                                          const CallOptions& options = {});
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options = {});
@@ -126,8 +169,16 @@ class A2AClient final {
       const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
       const CallOptions& options = {});
 
+  void AddInterceptor(std::shared_ptr<ClientInterceptor> interceptor);
+  [[nodiscard]] core::Result<void> Destroy();
+
  private:
+  void RunBeforeInterceptors(const ClientCallContext& context) const;
+  void RunAfterInterceptors(const ClientCallContext& context, const ClientCallResult& result) const;
+
   std::unique_ptr<ClientTransport> transport_;
+  mutable std::mutex interceptor_mutex_;
+  std::vector<std::shared_ptr<ClientInterceptor>> interceptors_;
 };
 
 }  // namespace a2a::client
