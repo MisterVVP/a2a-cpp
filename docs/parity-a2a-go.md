@@ -1,8 +1,8 @@
 # A2A C++ vs A2A Go parity snapshot
 
-_Last updated: 2026-05-02._
+_Last updated: 2026-05-03._
 
-This matrix is a lightweight capability comparison against public a2a-go docs (GitHub README and pkg.go.dev API pages).
+This matrix compares public a2a-go v2 surfaces against current a2a-cpp repository state and backlog.
 
 ## Capability matrix
 
@@ -10,26 +10,31 @@ This matrix is a lightweight capability comparison against public a2a-go docs (G
 |---|---|---|---|
 | REST client transport | Present | Present | ✅ parity |
 | JSON-RPC client transport | Present | Present | ✅ parity |
-| gRPC server/client transport path | Present (`a2agrpc`, gRPC handler in README flow) | Not implemented in SDK runtime | ❌ gap |
+| gRPC server/client transport path | Present (`a2agrpc`) | Client transport present; server runtime parity still incomplete | ⚠️ partial |
 | Streaming send/subscription | Present | Present | ✅ parity |
-| Client interceptors (`Before`/call interceptor pipeline) | Present | Not available as first-class API | ❌ gap |
-| Server call interceptors/middleware hooks | Present | Partial (auth context extraction only, no generic interceptor chain) | ⚠️ partial |
-| `ListTasks` style client API surface | Present in a2a-go transport docs | Missing on public `A2AClient` | ❌ gap |
-| Extended card retrieval (`GetExtendedAgentCard`) | Present in a2a-go docs | Missing | ❌ gap |
-| CLI utility for discovery/send/serve workflows | Present (`cmd/a2a`) | Missing | ❌ gap |
-| Standard package registry release signal | Present (`go get .../v2`, pkg.go.dev indexed) | Not yet published via mainstream C++ registries | ❌ gap |
-| Maintainer readiness signals (templates/governance cadence docs) | Present in repo metadata/workflows | Partial in current repo | ⚠️ partial |
+| Client call interceptors | Present (`WithCallInterceptors`) | Present (`A2AClient` interceptor hooks) | ✅ parity |
+| Server interceptor chain | Present (`InterceptedHandler`) | Present (`Dispatcher` interceptor hooks) | ✅ parity |
+| `ListTasks` API | Present | Present on public `A2AClient` and server transports | ✅ parity |
+| `GetExtendedAgentCard` API | Present | Missing as first-class API | ❌ gap |
+| Push-config lifecycle APIs (`ListTaskPushConfigs`, etc.) | Present | Present across client transports | ✅ parity |
+| CLI workflow utility (`cmd/a2a`) | Present | Missing | ❌ gap |
+| Standard package registry signal | Present (`go get`, pkg.go.dev indexed) | Partially present; needs stronger mainstream registry publication evidence | ⚠️ partial |
+| Maintainer readiness signals (templates, governance cadence, support policy) | Present | Partial | ⚠️ partial |
 
-## Follow-up tasks created from gaps
+## Gap-to-task mitigation map
 
-- `docs/codex-mvp-tasks/12-parity-gap-analysis-vs-a2a-go.md`
-- `docs/codex-mvp-tasks/13-grpc-transport-parity.md`
-- `docs/codex-mvp-tasks/14-client-server-api-parity-extended-rpcs-and-interceptors.md`
-- `docs/codex-mvp-tasks/15-test-coverage-and-quality-gates.md`
-- `docs/codex-mvp-tasks/16-examples-expansion-and-local-runner-guide.md`
-- `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`
+Every non-parity row is mapped to one or more concrete tasks:
+
+| Gap / partial area | Mitigation task(s) |
+|---|---|
+| gRPC server/client transport parity completion | `docs/codex-mvp-tasks/13-grpc-transport-parity.md` |
+| `GetExtendedAgentCard` missing API | `docs/codex-mvp-tasks/14-client-server-api-parity-extended-rpcs-and-interceptors.md` |
+| Missing CLI utility workflows | `docs/codex-mvp-tasks/16-examples-expansion-and-local-runner-guide.md` |
+| Registry publication evidence and release automation | `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`, `docs/codex-mvp-tasks/18-spec-conformance-and-sdk-application-readiness.md` |
+| Maintenance/governance readiness signals | `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`, `docs/codex-mvp-tasks/18-spec-conformance-and-sdk-application-readiness.md` |
+| Windows dependency-install bottleneck affecting CI confidence/velocity | `docs/codex-mvp-tasks/19-windows-build-dependency-acceleration.md` |
 
 ## Notes
 
 - This parity view is capability-oriented, not API-name parity.
-- The next iteration should keep this file updated as tasks 12–14 land.
+- Tasks 18 and 19 are intended to close submission-readiness and operational CI gaps that remain after core protocol parity work.
