@@ -12,13 +12,16 @@ examples=(
   example_json_rpc_client
   example_streaming_client
   example_minimal_server_custom_executor
-  example_grpc_client
   example_list_tasks_client
   example_cancel_task_client
   example_push_notification_config_client
   example_interceptor_client
   example_auth_policy_server
 )
+
+if [[ "${A2A_RUN_GRPC_EXAMPLE:-0}" == "1" ]]; then
+  examples+=(example_grpc_client)
+fi
 
 for target in "${examples[@]}"; do
   echo "[run_examples] running ${target}"

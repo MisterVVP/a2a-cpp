@@ -21,13 +21,15 @@ gcovr --root . --object-directory "${BUILD_DIR}" \
   --xml-pretty --output "${REPORT_DIR}/coverage.xml" \
   --html-details "${REPORT_DIR}/index.html" \
   --print-summary \
+  --exclude-directories '.*/CMakeFiles/3\..*/CompilerIdCXX' \
+  --gcov-ignore-errors source_not_found \
   --fail-under-line 80
 
 gcovr --root . --object-directory "${BUILD_DIR}" \
-  --filter 'src/core/' --print-summary --fail-under-line 85
+  --filter 'src/core/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 85
 
 gcovr --root . --object-directory "${BUILD_DIR}" \
-  --filter 'src/client/' --print-summary --fail-under-line 80
+  --filter 'src/client/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 80
 
 gcovr --root . --object-directory "${BUILD_DIR}" \
-  --filter 'src/server/' --print-summary --fail-under-line 80
+  --filter 'src/server/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 80

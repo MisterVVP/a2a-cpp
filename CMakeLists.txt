@@ -17,8 +17,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
-find_package(Protobuf REQUIRED)
-find_package(gRPC REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+if(NOT TARGET protobuf::libprotobuf)
+  set(protobuf_MODULE_COMPATIBLE ON)
+  find_package(Protobuf REQUIRED)
+endif()
 
 add_subdirectory(proto)
 add_subdirectory(src)

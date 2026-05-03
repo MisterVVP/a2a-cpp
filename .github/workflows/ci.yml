@@ -66,19 +66,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: |
-          brew install cmake ninja protobuf grpc
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          brew install cmake ninja protobuf grpc re2 abseil
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$(brew --prefix)"
           cmake --build build --parallel
 
   windows-build:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
-      - name: Setup vcpkg deps
+      - name: Setup vcpkg
+        shell: pwsh
         run: |
-          vcpkg install protobuf grpc
+          git clone https://github.com/microsoft/vcpkg.git C:/vcpkg
+          C:/vcpkg/bootstrap-vcpkg.bat
+      - name: Install manifest dependencies
+        shell: pwsh
+        run: |
+          C:/vcpkg/vcpkg.exe install --triplet x64-windows
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
           cmake --build build --parallel
