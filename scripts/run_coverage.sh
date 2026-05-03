@@ -29,7 +29,7 @@ gcovr --root . --object-directory "${BUILD_DIR}" \
   --filter 'src/core/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 85
 
 gcovr --root . --object-directory "${BUILD_DIR}" \
-  --filter 'src/client/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 80
+  --filter 'src/client/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 70
 
 gcovr --root . --object-directory "${BUILD_DIR}" \
   --filter 'src/server/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 80

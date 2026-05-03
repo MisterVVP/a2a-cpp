@@ -107,6 +107,21 @@ target_link_libraries(client_test
 
 gtest_discover_tests(client_test)
 
+
+add_executable(auth_test
+  unit/auth_test.cpp
+)
+
+target_link_libraries(auth_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(auth_test)
+
 add_executable(sse_parser_test
   unit/sse_parser_test.cpp
 )
