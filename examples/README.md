@@ -13,7 +13,7 @@ This folder provides runnable, in-process examples for the A2A C++ SDK.
 | grpc_client.cpp | `example_grpc_client` | gRPC `GetTask` | `./build/examples/example_grpc_client` | `Task id:` |
 | list_tasks_client.cpp | `example_list_tasks_client` | REST `ListTasks` | `./build/examples/example_list_tasks_client` | `listed tasks:` |
 | cancel_task_client.cpp | `example_cancel_task_client` | REST `CancelTask` | `./build/examples/example_cancel_task_client` | `task state after cancel:` |
-| push_notification_config_client.cpp | `example_push_notification_config_client` | Push-config CRUD/list APIs | `./build/examples/example_push_notification_config_client` | `push configs:` |
+| push_notification_config_client.cpp | `example_push_notification_config_client` | Push-config CRUD/list APIs (transport support still evolving) | `./build/examples/example_push_notification_config_client` | may return route/validation error on REST server |
 | interceptor_client.cpp | `example_interceptor_client` | Client interceptor before/after hooks | `./build/examples/example_interceptor_client` | `before GetTask` |
 | auth_policy_server.cpp | `example_auth_policy_server` | Server auth metadata extraction + policy point | `./build/examples/example_auth_policy_server` | `missing auth status:` |
 | minimal_server_custom_executor.cpp | `example_minimal_server_custom_executor` | Minimal server setup | `./build/examples/example_minimal_server_custom_executor` | `agent-card status:` |

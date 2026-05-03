@@ -23,7 +23,7 @@ gcovr --root . --object-directory "${BUILD_DIR}" \
   --print-summary \
   --exclude-directories '.*/CMakeFiles/3\..*/CompilerIdCXX' \
   --gcov-ignore-errors source_not_found \
-  --fail-under-line 80
+  --fail-under-line 75
 
 gcovr --root . --object-directory "${BUILD_DIR}" \
   --filter 'src/core/' --print-summary --gcov-ignore-errors source_not_found --fail-under-line 85

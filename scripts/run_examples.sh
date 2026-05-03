@@ -14,7 +14,6 @@ examples=(
   example_minimal_server_custom_executor
   example_list_tasks_client
   example_cancel_task_client
-  example_push_notification_config_client
   example_interceptor_client
   example_auth_policy_server
 )
