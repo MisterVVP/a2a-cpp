@@ -29,6 +29,9 @@ This folder contains an ordered set of implementation tasks for building an **A2
 12. `12-parity-gap-analysis-vs-a2a-go.md`
 13. `13-grpc-transport-parity.md`
 14. `14-client-server-api-parity-extended-rpcs-and-interceptors.md`
+15. `15-test-coverage-and-quality-gates.md`
+16. `16-examples-expansion-and-local-runner-guide.md`
+17. `17-google-sdk-readiness-checklist.md`
 
 ## Recommended repository layout
 

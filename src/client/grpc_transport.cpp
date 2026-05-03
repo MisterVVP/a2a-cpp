@@ -300,8 +300,8 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SendStreamingMessage(
 
   auto state = std::make_shared<StreamHandle::State>();
   auto context = std::move(context_result.value());
-  auto worker =
-      std::jthread([this, state, request, &observer, context = std::move(context)]() mutable {
+  auto worker = StreamHandle::WorkerThread(
+      [this, state, request, &observer, context = std::move(context)]() mutable {
         auto reader = rpc_client_->SendStreamingMessage(context.get(), request);
         if (reader == nullptr) {
           observer.OnError(core::Error::Internal("Failed to create gRPC stream reader"));
@@ -341,7 +341,7 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(
   }
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto worker = std::jthread([this, request, &observer, state, options]() {
+  auto worker = StreamHandle::WorkerThread([this, request, &observer, state, options]() {
     if (state->cancel_requested.load()) {
       state->active.store(false);
       return;

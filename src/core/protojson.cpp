@@ -8,7 +8,11 @@ Result<std::string> MessageToJson(const google::protobuf::Message& message,
                                   const ProtoJsonWriteOptions& options) {
   google::protobuf::util::JsonPrintOptions print_options;
   print_options.add_whitespace = options.add_whitespace;
+#if PROTOBUF_VERSION >= 5026000
+  print_options.always_print_fields_with_no_presence = options.always_print_primitive_fields;
+#else
   print_options.always_print_primitive_fields = options.always_print_primitive_fields;
+#endif
   print_options.preserve_proto_field_names = options.preserve_proto_field_names;
   print_options.always_print_enums_as_ints = options.always_print_enums_as_ints;
 

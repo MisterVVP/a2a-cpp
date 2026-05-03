@@ -1,0 +1,66 @@
+name: Release Packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  conan-github-packages:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        run: python -m pip install --upgrade conan
+
+      - name: Configure Conan remote (GitHub Packages)
+        env:
+          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
+          CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
+          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+        run: |
+          # Placeholders expected in repo secrets:
+          # CONAN_REMOTE_URL=https://npm.pkg.github.com/<owner>
+          # CONAN_LOGIN_USERNAME=<github-username>
+          # CONAN_PASSWORD=<github-token-with-packages:write>
+          conan remote add github "${CONAN_REMOTE_URL}" --force
+          conan remote login github "${CONAN_LOGIN_USERNAME}" -p "${CONAN_PASSWORD}"
+
+      - name: Create package
+        run: conan create . --build=missing
+
+      - name: Upload package
+        run: conan upload a2a-cpp/* --remote=github --confirm
+
+  vcpkg-metadata-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate vcpkg manifest presence
+        run: test -f vcpkg.json
+      - name: Prepare submission metadata artifact
+        run: |
+          mkdir -p out
+          cat > out/vcpkg-submission.md <<'META'
+          vcpkg public registry submission checklist:
+          1. Ensure port file + CI baseline in a fork of microsoft/vcpkg.
+          2. Open PR to vcpkg with port, version, and license metadata.
+          3. Include upstream tag and SHA512 source hash.
+          META
+      - name: Upload vcpkg submission notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-submission-notes
+          path: out/vcpkg-submission.md

@@ -70,3 +70,22 @@ cmake --install build --prefix /tmp/a2a-cpp-install
 ```
 
 This installs headers, generated protobuf headers, static libraries, and exported CMake package files under `lib/cmake/a2a_cpp`.
+
+
+## Run coverage with thresholds
+
+```bash
+python3 -m pip install --upgrade gcovr
+./scripts/run_coverage.sh
+```
+
+This enforces:
+- `src/core` line coverage >= 85%
+- `src/client` line coverage >= 80%
+- `src/server` line coverage >= 80%
+
+## Run all examples
+
+```bash
+./scripts/run_examples.sh
+```

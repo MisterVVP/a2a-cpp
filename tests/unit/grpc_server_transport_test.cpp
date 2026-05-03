@@ -29,10 +29,15 @@ class FakeStreamSession final : public a2a::server::ServerStreamSession {
 
 class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
+  bool fail_send = false;
+
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request,
       a2a::server::RequestContext& context) override {
     observed_remote_address = context.remote_address.value_or("");
+    if (fail_send) {
+      return a2a::core::Error::Validation("bad send").WithProtocolCode("invalid_request");
+    }
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_task()->set_id(request.message().task_id());
     return response;
@@ -87,6 +92,67 @@ TEST(GrpcServerTransportTest, SendMessageDispatchesAndExtractsAuthMetadata) {
   const auto status = transport.SendMessage(&context, &request, &response);
   ASSERT_TRUE(status.ok()) << status.error_message();
   EXPECT_EQ(response.task().id(), "grpc-server-unit-1");
+}
+
+TEST(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::SendMessageRequest send;
+  lf::a2a::v1::SendMessageResponse send_response;
+  EXPECT_EQ(transport.SendMessage(&context, nullptr, &send_response).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(transport.SendMessage(&context, &send, nullptr).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+
+  lf::a2a::v1::GetTaskRequest get;
+  lf::a2a::v1::Task task;
+  EXPECT_EQ(transport.GetTask(&context, nullptr, &task).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(transport.GetTask(&context, &get, nullptr).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+
+  lf::a2a::v1::CancelTaskRequest cancel;
+  EXPECT_EQ(transport.CancelTask(&context, nullptr, &task).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(transport.CancelTask(&context, &cancel, nullptr).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(GrpcServerTransportTest, GetTaskCancelAndStreamingReturnExpectedPayloads) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id("task-1");
+  lf::a2a::v1::Task task;
+  ASSERT_TRUE(transport.GetTask(&context, &get, &task).ok());
+  EXPECT_EQ(task.id(), "task-1");
+
+  lf::a2a::v1::CancelTaskRequest cancel;
+  cancel.set_id("task-2");
+  lf::a2a::v1::Task canceled;
+  ASSERT_TRUE(transport.CancelTask(&context, &cancel, &canceled).ok());
+  EXPECT_EQ(canceled.id(), "task-2");
+}
+
+TEST(GrpcServerTransportTest, MapsDispatcherErrorToGrpcStatusAndMetadata) {
+  FakeExecutor executor;
+  executor.fail_send = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_task_id("task-error");
+  lf::a2a::v1::SendMessageResponse response;
+
+  const auto status = transport.SendMessage(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
 }  // namespace

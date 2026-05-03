@@ -8,7 +8,7 @@
 #include "a2a/core/error.h"
 
 namespace a2a::client {
-StreamHandle::StreamHandle(std::shared_ptr<State> state, std::jthread worker)
+StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
     : state_(std::move(state)), worker_(std::move(worker)) {}
 
 StreamHandle::StreamHandle(StreamHandle&&) noexcept = default;
@@ -23,7 +23,9 @@ void StreamHandle::Cancel() {
     state_->active.store(false);
   }
   if (worker_.joinable()) {
+#if A2A_HAS_JTHREAD
     worker_.request_stop();
+#endif
     worker_.join();
   }
 }
