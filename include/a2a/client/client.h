@@ -9,6 +9,12 @@
 #include <string>
 #include <string_view>
 #include <thread>
+
+#if defined(__cpp_lib_jthread) && (__cpp_lib_jthread >= 201911L)
+#define A2A_HAS_JTHREAD 1
+#else
+#define A2A_HAS_JTHREAD 0
+#endif
 #include <vector>
 
 #include "a2a/client/call_options.h"
@@ -80,10 +86,16 @@ class StreamHandle final {
   friend class HttpJsonTransport;
   friend class GrpcTransport;
 
-  explicit StreamHandle(std::shared_ptr<State> state, std::jthread worker);
+#if A2A_HAS_JTHREAD
+  using WorkerThread = std::jthread;
+#else
+  using WorkerThread = std::thread;
+#endif
+
+  explicit StreamHandle(std::shared_ptr<State> state, WorkerThread worker);
 
   std::shared_ptr<State> state_;
-  std::jthread worker_;
+  WorkerThread worker_;
 };
 
 class ClientTransport {

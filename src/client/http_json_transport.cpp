@@ -546,9 +546,9 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(
   }
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto worker = std::jthread([this, request = std::move(request.value()), state, &observer,
-                              method = std::string(operation.method),
-                              endpoint = std::string(operation.endpoint)]() mutable {
+  auto worker = StreamHandle::WorkerThread([this, request = std::move(request.value()), state,
+                                            &observer, method = std::string(operation.method),
+                                            endpoint = std::string(operation.endpoint)]() mutable {
     SseParser parser;
 
     const auto stream_response = stream_requester_(
