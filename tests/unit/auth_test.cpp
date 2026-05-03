@@ -11,7 +11,7 @@ class FakeTokenProvider final : public a2a::client::OAuth2TokenProvider {
  public:
   explicit FakeTokenProvider(a2a::core::Result<std::string> token) : token_(std::move(token)) {}
 
-  a2a::core::Result<std::string> GetAccessToken(
+  [[nodiscard]] a2a::core::Result<std::string> GetAccessToken(
       const a2a::client::AuthContext& context) const override {
     (void)context;
     return token_;
