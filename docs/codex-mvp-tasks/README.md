@@ -32,6 +32,8 @@ This folder contains an ordered set of implementation tasks for building an **A2
 15. `15-test-coverage-and-quality-gates.md`
 16. `16-examples-expansion-and-local-runner-guide.md`
 17. `17-google-sdk-readiness-checklist.md`
+18. `18-spec-conformance-and-sdk-application-readiness.md`
+19. `19-windows-build-dependency-acceleration.md`
 
 ## Recommended repository layout
 

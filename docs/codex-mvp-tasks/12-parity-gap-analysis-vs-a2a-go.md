@@ -23,6 +23,7 @@ Document feature gaps between the current C++ SDK MVP and the public `a2aproject
 - `docs/parity-a2a-go.md` (single source of truth parity matrix)
 - updates to task ordering in `docs/codex-mvp-tasks/README.md`
 - cross-links from parity matrix rows to actionable task files
+- `docs/parity-a2a-go.md` includes a **gap-to-task mitigation map** where every non-parity row links to at least one actionable task file.
 
 ## Constraints
 
@@ -40,6 +41,7 @@ Document feature gaps between the current C++ SDK MVP and the public `a2aproject
 
 - A reviewer can identify exactly which a2a-go capabilities are missing in C++.
 - Every missing/partial item is linked to a follow-up implementation task.
+- No uncovered gaps remain in the matrix without an explicit mitigation task mapping.
 - Task ordering reflects dependencies and avoids circular planning.
 
 ## Out of scope
