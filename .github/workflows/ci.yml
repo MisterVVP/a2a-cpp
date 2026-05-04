@@ -72,19 +72,52 @@ jobs:
 
   windows-build:
     runs-on: windows-2022
+    env:
+      VCPKG_ROOT: C:/vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
     steps:
       - uses: actions/checkout@v5
+
+      - name: Restore vcpkg source cache
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg
+          key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+
       - name: Setup vcpkg
         shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg.git C:/vcpkg
-          C:/vcpkg/bootstrap-vcpkg.bat
+          if (-not (Test-Path $env:VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          }
+          & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+
       - name: Install manifest dependencies
         shell: pwsh
         run: |
-          C:/vcpkg/vcpkg.exe install --triplet x64-windows
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET
+          $sw.Stop()
+          "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: deps
+
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET
           cmake --build build --parallel
+
+      - name: Publish Windows stage timings
+        shell: pwsh
+        run: |
+          "## Windows dependency timing" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- Install manifest dependencies: ${{ steps.deps.outputs.dependency_install_seconds }}s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
