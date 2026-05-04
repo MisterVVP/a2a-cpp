@@ -74,8 +74,8 @@ jobs:
     runs-on: windows-2022
     env:
       VCPKG_ROOT: C:/vcpkg
-      VCPKG_DEFAULT_TRIPLET: x64-windows
-      VCPKG_BUILD_TYPE: release
+      VCPKG_DEFAULT_TRIPLET: ci-x64-windows-release
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
       VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
     steps:
       - uses: actions/checkout@v5
@@ -84,7 +84,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:/vcpkg
-          key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
 
       - name: Setup vcpkg
         shell: pwsh
@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:/vcpkg-binary-cache
-          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-
 
@@ -109,7 +109,7 @@ jobs:
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "vcpkg_build_type=$env:VCPKG_BUILD_TYPE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: deps
 
       - name: Configure and build
@@ -122,5 +122,5 @@ jobs:
         shell: pwsh
         run: |
           "## Windows dependency timing" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- vcpkg build type: ${{ steps.deps.outputs.vcpkg_build_type }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg triplet: ${{ steps.deps.outputs.vcpkg_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- Install manifest dependencies: ${{ steps.deps.outputs.dependency_install_seconds }}s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

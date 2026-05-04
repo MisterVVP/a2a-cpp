@@ -19,7 +19,8 @@ The Windows CI path spent most startup time in manifest dependency installation 
 
 
 3. **Release-only dependency builds in CI**
-   - Set `VCPKG_BUILD_TYPE=release` in the Windows workflow environment.
+   - Added a custom overlay triplet `triplets/ci-x64-windows-release.cmake` with `set(VCPKG_BUILD_TYPE release)`.
+   - Set `VCPKG_DEFAULT_TRIPLET=ci-x64-windows-release` and `VCPKG_OVERLAY_TRIPLETS` in the Windows workflow so vcpkg uses the release-only triplet for every dependency.
    - This avoids building `*-dbg` variants for large dependencies (notably `protobuf` and `grpc`) when CI only links `RelWithDebInfo` binaries.
    - This materially cuts cold-install time for ports that otherwise build both debug and release variants.
 
