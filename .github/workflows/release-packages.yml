@@ -29,14 +29,10 @@ jobs:
         env:
           CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
           CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
-          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+          CONAN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Placeholders expected in repo secrets:
-          # CONAN_REMOTE_URL=https://npm.pkg.github.com/<owner>
-          # CONAN_LOGIN_USERNAME=<github-username>
-          # CONAN_PASSWORD=<github-token-with-packages:write>
           conan remote add github "${CONAN_REMOTE_URL}" --force
-          conan remote login github "${CONAN_LOGIN_USERNAME}" -p "${CONAN_PASSWORD}"
+          conan remote login github "${CONAN_LOGIN_USERNAME}" -p "${GITHUB_TOKEN}"
 
       - name: Create package
         run: conan create . --build=missing
