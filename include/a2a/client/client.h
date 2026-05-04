@@ -21,6 +21,10 @@
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
 
+#if defined(_WIN32) && defined(SendMessage)
+#undef SendMessage
+#endif
+
 namespace a2a::client {
 
 class HttpJsonTransport;

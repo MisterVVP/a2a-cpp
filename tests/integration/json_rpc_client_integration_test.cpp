@@ -47,7 +47,8 @@ std::string ExtractRequestId(const std::string& json_payload) {
     return {};
   }
   const auto id = envelope.fields().find("id");
-  if (id == envelope.fields().end() || !id->second.has_string_value()) {
+  if (id == envelope.fields().end() ||
+      id->second.kind_case() != ::google::protobuf::Value::kStringValue) {
     return {};
   }
   return id->second.string_value();
