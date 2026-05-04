@@ -25,14 +25,13 @@ TEST(ServerTaskStoreFunctionalTest, SupportsCreateGetListAndCancelLifecycle) {
   ASSERT_TRUE(get_result.ok());
   EXPECT_EQ(get_result.value().id(), "task-1");
 
-  const auto list_result =
-      store.List(a2a::server::ListTasksRequest{.page_size = 1, .page_token = ""});
+  const auto list_result = store.List(a2a::server::ListTasksRequest{1, ""});
   ASSERT_TRUE(list_result.ok());
   ASSERT_EQ(list_result.value().tasks.size(), 1U);
   EXPECT_EQ(list_result.value().tasks.front().id(), "task-1");
   EXPECT_EQ(list_result.value().next_page_token, "1");
 
-  const auto page_2 = store.List(a2a::server::ListTasksRequest{.page_size = 10, .page_token = "1"});
+  const auto page_2 = store.List(a2a::server::ListTasksRequest{10, "1"});
   ASSERT_TRUE(page_2.ok());
   ASSERT_EQ(page_2.value().tasks.size(), 1U);
   EXPECT_EQ(page_2.value().tasks.front().id(), "task-2");
@@ -52,8 +51,7 @@ TEST(ServerTaskStoreFunctionalTest, ValidatesInputs) {
   const auto missing_get = store.Get("unknown");
   ASSERT_FALSE(missing_get.ok());
 
-  const auto invalid_page =
-      store.List(a2a::server::ListTasksRequest{.page_size = 1, .page_token = "not-a-number"});
+  const auto invalid_page = store.List(a2a::server::ListTasksRequest{1, "not-a-number"});
   ASSERT_FALSE(invalid_page.ok());
 }
 

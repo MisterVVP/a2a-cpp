@@ -153,7 +153,7 @@ TEST(ServerDispatcherTest, DispatchesAllSupportedOperations) {
 
   const a2a::server::DispatchRequest list_dispatch{
       .operation = a2a::server::DispatcherOperation::kListTasks,
-      .payload = a2a::server::ListTasksRequest{.page_size = 10, .page_token = ""}};
+      .payload = a2a::server::ListTasksRequest{10, ""}};
   const auto list_result = dispatcher.Dispatch(list_dispatch, context);
   ASSERT_TRUE(list_result.ok());
   ASSERT_TRUE(

@@ -28,6 +28,25 @@ struct RequestContext final {
     const std::unordered_map<std::string, std::string>& headers);
 
 struct ListTasksRequest final {
+  ListTasksRequest() noexcept = default;
+
+  ListTasksRequest(std::size_t page_size_value, std::string page_token_value)
+      : page_size(page_size_value), page_token(std::move(page_token_value)) {}
+
+  ListTasksRequest(const ListTasksRequest& other)
+      : page_size(other.page_size), page_token(other.page_token) {}
+
+  ListTasksRequest& operator=(const ListTasksRequest& other) {
+    if (this != &other) {
+      page_size = other.page_size;
+      page_token = other.page_token;
+    }
+    return *this;
+  }
+
+  ListTasksRequest(ListTasksRequest&&) noexcept = default;
+  ListTasksRequest& operator=(ListTasksRequest&&) noexcept = default;
+
   std::size_t page_size = 0;
   std::string page_token;
 };
