@@ -114,10 +114,17 @@ jobs:
           "vcpkg_host_triplet=$env:VCPKG_HOST_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: deps
 
+      - name: Setup MSVC build environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET -DVCPKG_HOST_TRIPLET=$env:VCPKG_HOST_TRIPLET
+          $toolchain = "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET -DVCPKG_HOST_TRIPLET=$env:VCPKG_HOST_TRIPLET
           cmake --build build --parallel
 
       - name: Publish Windows stage timings
