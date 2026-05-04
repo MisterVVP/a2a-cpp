@@ -82,16 +82,17 @@ core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value,
   std::string code;
 
   const auto message_it = fields.find("message");
-  if (message_it != fields.end() && message_it->second.has_string_value()) {
+  if (message_it != fields.end() &&
+      message_it->second.kind_case() == ::google::protobuf::Value::kStringValue) {
     message = message_it->second.string_value();
   }
 
   const auto code_it = fields.find("code");
   if (code_it != fields.end()) {
-    if (code_it->second.has_number_value()) {
+    if (code_it->second.kind_case() == ::google::protobuf::Value::kNumberValue) {
       const auto numeric_code = static_cast<int>(code_it->second.number_value());
       code = std::to_string(numeric_code);
-    } else if (code_it->second.has_string_value()) {
+    } else if (code_it->second.kind_case() == ::google::protobuf::Value::kStringValue) {
       code = code_it->second.string_value();
     }
   }
@@ -123,13 +124,15 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
 
   const auto& fields = parsed.value().fields();
   const auto version_it = fields.find("jsonrpc");
-  if (version_it == fields.end() || !version_it->second.has_string_value() ||
+  if (version_it == fields.end() ||
+      version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
       version_it->second.string_value() != core::json_rpc::kVersion) {
     return BuildJsonRpcEnvelopeError("JSON-RPC response has invalid version", response);
   }
 
   const auto id_it = fields.find("id");
-  if (id_it == fields.end() || !id_it->second.has_string_value()) {
+  if (id_it == fields.end() ||
+      id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
     return BuildJsonRpcEnvelopeError("JSON-RPC response id must be a string", response);
   }
   if (id_it->second.string_value() != expected_id) {
@@ -367,7 +370,7 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
 
   const auto next_page_token_it = fields.find("nextPageToken");
   if (next_page_token_it != fields.end()) {
-    if (!next_page_token_it->second.has_string_value()) {
+    if (next_page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Serialization(
                  "ListTasks JSON-RPC result field 'nextPageToken' must be a string")
           .WithTransport("jsonrpc")

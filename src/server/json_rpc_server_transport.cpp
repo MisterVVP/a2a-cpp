@@ -48,7 +48,9 @@ std::string FindHeader(const std::unordered_map<std::string, std::string>& heade
 }
 
 bool IsValidIdType(const google::protobuf::Value& value) {
-  return value.has_null_value() || value.has_string_value() || value.has_number_value();
+  return value.kind_case() == ::google::protobuf::Value::kNullValue ||
+         value.kind_case() == ::google::protobuf::Value::kStringValue ||
+         value.kind_case() == ::google::protobuf::Value::kNumberValue;
 }
 
 std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
@@ -88,7 +90,8 @@ core::Result<google::protobuf::Value> FindIdField(const google::protobuf::Struct
 core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelope) {
   const auto& fields = envelope.fields();
   const auto method_it = fields.find("method");
-  if (method_it == fields.end() || !method_it->second.has_string_value() ||
+  if (method_it == fields.end() ||
+      method_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
       method_it->second.string_value().empty()) {
     return core::Error::Validation("JSON-RPC request method must be a non-empty string");
   }
@@ -107,7 +110,8 @@ core::Result<google::protobuf::Struct> FindParamsField(const google::protobuf::S
 core::Result<void> ValidateJsonRpcVersion(const google::protobuf::Struct& envelope) {
   const auto& fields = envelope.fields();
   const auto version_it = fields.find("jsonrpc");
-  if (version_it == fields.end() || !version_it->second.has_string_value() ||
+  if (version_it == fields.end() ||
+      version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
       version_it->second.string_value() != core::json_rpc::kVersion) {
     return core::Error::Validation("JSON-RPC request has invalid version");
   }
@@ -132,7 +136,8 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
   ListTasksRequest payload;
   const auto page_size_it = params.fields().find("pageSize");
   if (page_size_it != params.fields().end()) {
-    if (!page_size_it->second.has_number_value() || page_size_it->second.number_value() < 0) {
+    if (page_size_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
+        page_size_it->second.number_value() < 0) {
       return core::Error::Validation("ListTasksRequest.pageSize must be a non-negative number");
     }
     payload.page_size = static_cast<std::size_t>(page_size_it->second.number_value());
@@ -140,7 +145,7 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
 
   const auto page_token_it = params.fields().find("pageToken");
   if (page_token_it != params.fields().end()) {
-    if (!page_token_it->second.has_string_value()) {
+    if (page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Validation("ListTasksRequest.pageToken must be a string");
     }
     payload.page_token = page_token_it->second.string_value();
