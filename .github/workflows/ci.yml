@@ -74,6 +74,7 @@ jobs:
     runs-on: windows-2022
     env:
       VCPKG_ROOT: C:/vcpkg
+      CI_VCPKG_ROOT: C:/vcpkg
       VCPKG_DEFAULT_TRIPLET: ci-x64-windows-release
       VCPKG_HOST_TRIPLET: ci-x64-windows-release
       VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
@@ -94,6 +95,15 @@ jobs:
             git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
           }
           & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat"
+
+
+      - name: Restore vcpkg downloads cache
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-downloads-
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
@@ -121,7 +131,9 @@ jobs:
       - name: Configure and build
         shell: pwsh
         run: |
-          $toolchain = "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+          $vcpkgRoot = $env:CI_VCPKG_ROOT
+          $env:VCPKG_ROOT = $vcpkgRoot
+          $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
           $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
           $hostTriplet = $env:VCPKG_HOST_TRIPLET
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet"
