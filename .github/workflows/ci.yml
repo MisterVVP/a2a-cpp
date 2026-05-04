@@ -75,6 +75,7 @@ jobs:
     env:
       VCPKG_ROOT: C:/vcpkg
       VCPKG_DEFAULT_TRIPLET: ci-x64-windows-release
+      VCPKG_HOST_TRIPLET: ci-x64-windows-release
       VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
       VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
     steps:
@@ -106,16 +107,17 @@ jobs:
         shell: pwsh
         run: |
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
-          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_host_triplet=$env:VCPKG_HOST_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: deps
 
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET
+          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET -DVCPKG_HOST_TRIPLET=$env:VCPKG_HOST_TRIPLET
           cmake --build build --parallel
 
       - name: Publish Windows stage timings
@@ -123,4 +125,5 @@ jobs:
         run: |
           "## Windows dependency timing" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- vcpkg triplet: ${{ steps.deps.outputs.vcpkg_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg host triplet: ${{ steps.deps.outputs.vcpkg_host_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- Install manifest dependencies: ${{ steps.deps.outputs.dependency_install_seconds }}s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
