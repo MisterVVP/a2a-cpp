@@ -76,7 +76,7 @@ struct DispatchRequest final {
   DispatcherOperation operation = DispatcherOperation::kSendMessage;
   std::variant<lf::a2a::v1::SendMessageRequest, lf::a2a::v1::GetTaskRequest, ListTasksRequest,
                lf::a2a::v1::CancelTaskRequest>
-      payload;
+      payload = ListTasksRequest{};
 };
 
 using DispatchPayload =

@@ -13,6 +13,10 @@
 #include "a2a/client/discovery.h"
 #include "a2a/core/result.h"
 
+#if defined(_WIN32) && defined(SendMessage)
+#undef SendMessage
+#endif
+
 namespace a2a::client {
 
 class GrpcTransport final : public ClientTransport {
