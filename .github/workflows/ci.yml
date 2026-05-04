@@ -75,6 +75,7 @@ jobs:
     env:
       VCPKG_ROOT: C:/vcpkg
       VCPKG_DEFAULT_TRIPLET: x64-windows
+      VCPKG_BUILD_TYPE: release
       VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
     steps:
       - uses: actions/checkout@v5
@@ -108,6 +109,7 @@ jobs:
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_build_type=$env:VCPKG_BUILD_TYPE" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: deps
 
       - name: Configure and build
@@ -120,4 +122,5 @@ jobs:
         shell: pwsh
         run: |
           "## Windows dependency timing" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg build type: ${{ steps.deps.outputs.vcpkg_build_type }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "- Install manifest dependencies: ${{ steps.deps.outputs.dependency_install_seconds }}s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

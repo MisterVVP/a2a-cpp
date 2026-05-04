@@ -17,11 +17,17 @@ The Windows CI path spent most startup time in manifest dependency installation 
    - Key includes OS + triplet + manifest hashes.
    - Added `restore-keys` fallback so partially matching cache lines can still be used to avoid full cold reinstalls.
 
-3. **Determinism and reproducibility safeguards**
+
+3. **Release-only dependency builds in CI**
+   - Set `VCPKG_BUILD_TYPE=release` in the Windows workflow environment.
+   - This avoids building `*-dbg` variants for large dependencies (notably `protobuf` and `grpc`) when CI only links `RelWithDebInfo` binaries.
+   - This materially cuts cold-install time for ports that otherwise build both debug and release variants.
+
+4. **Determinism and reproducibility safeguards**
    - Cache keys are derived from manifest files rather than source tree changes.
    - vcpkg still resolves/install from manifest definitions; caching only reuses previously-built artifacts.
 
-4. **Timing observability**
+5. **Timing observability**
    - Added a stopwatch around dependency installation and exported `dependency_install_seconds`.
    - Added a GitHub Step Summary entry with the measured dependency-install stage duration.
 
