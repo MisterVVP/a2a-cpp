@@ -117,15 +117,15 @@ jobs:
       - name: Setup MSVC build environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
 
       - name: Configure and build
         shell: pwsh
         run: |
           $toolchain = "${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET -DVCPKG_HOST_TRIPLET=$env:VCPKG_HOST_TRIPLET
-          cmake --build build --parallel
+          $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
+          $hostTriplet = $env:VCPKG_HOST_TRIPLET
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet"
+          cmake --build build --config RelWithDebInfo --parallel
 
       - name: Publish Windows stage timings
         shell: pwsh
