@@ -68,8 +68,9 @@ These instructions apply to the entire repository. Follow them for all changes u
 
 ## Validation checklist for contributors
 Before submitting changes:
-1. Build succeeds in a clean environment.
-2. Formatter and linter pass.
+1. Format the code by running `./scripts/run_clang_format.sh`
+2. Build succeeds in a clean environment.
+3. Formatter and linter pass.
    - AI agents must run the exact CI formatting mechanism locally before pushing changes:
      ```bash
      mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
@@ -82,10 +83,10 @@ Before submitting changes:
    - Contributors should run `./scripts/verify_changes.sh` as the canonical local validation entrypoint.
    - AI agents must run `./scripts/verify_changes.sh` and must not claim success unless it exits with code `0`.
    - `clang-tidy` passing is not a substitute for `clang-format --dry-run --Werror`; both are required.
-3. Unit tests pass.
-4. Functional/integration tests pass.
-5. Vulnerability/dependency checks pass.
-6. Documentation is updated when behavior or interfaces change.
+4. Unit tests pass.
+5. Functional/integration tests pass.
+6. Vulnerability/dependency checks pass.
+7. Documentation is updated when behavior or interfaces change.
 
 ## Mandatory contributor validation command
 Run this command before opening or updating a PR:

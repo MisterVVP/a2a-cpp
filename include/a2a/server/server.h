@@ -49,7 +49,6 @@ struct ListTasksRequest final {
 
   ListTasksRequest(ListTasksRequest&&) noexcept = default;
   ListTasksRequest& operator=(ListTasksRequest&&) noexcept = default;
-
 };
 
 struct ListTasksResponse final {
