@@ -28,6 +28,9 @@ struct RequestContext final {
     const std::unordered_map<std::string, std::string>& headers);
 
 struct ListTasksRequest final {
+  std::size_t page_size = 0;
+  std::string page_token;
+
   ListTasksRequest() noexcept = default;
 
   ListTasksRequest(std::size_t page_size_value, std::string page_token_value)
@@ -47,8 +50,6 @@ struct ListTasksRequest final {
   ListTasksRequest(ListTasksRequest&&) noexcept = default;
   ListTasksRequest& operator=(ListTasksRequest&&) noexcept = default;
 
-  std::size_t page_size = 0;
-  std::string page_token;
 };
 
 struct ListTasksResponse final {
