@@ -95,6 +95,12 @@ Run this command before opening or updating a PR:
 ./scripts/verify_changes.sh
 ```
 
+## AI agent pre-commit hygiene
+AI agents must proactively tidy up touched code before every commit:
+- Run clang-format using the repository's required CI-compatible command.
+- Run `./scripts/run_clang_tidy.sh build` and fix all reported issues in touched code.
+- Re-run `./scripts/verify_changes.sh` after fixes and only commit when it exits with code `0`.
+
 This script enforces the repository quality gates in order:
 - format (`clang-format --dry-run --Werror`)
 - build (`cmake --build`)
