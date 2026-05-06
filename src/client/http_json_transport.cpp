@@ -92,7 +92,8 @@ core::Error BuildHttpError(std::string_view method, std::string_view endpoint,
     google::protobuf::Struct status_payload;
     if (core::JsonToMessage(response.body, &status_payload, {.ignore_unknown_fields = true}).ok()) {
       const auto code = status_payload.fields().find("code");
-      if (code != status_payload.fields().end() && code->second.has_string_value()) {
+      if (code != status_payload.fields().end() &&
+          code->second.kind_case() == ::google::protobuf::Value::kStringValue) {
         error = error.WithProtocolCode(code->second.string_value());
       }
     }
@@ -135,12 +136,14 @@ core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
   }
 
   const auto code = payload.fields().find("code");
-  if (code != payload.fields().end() && code->second.has_string_value()) {
+  if (code != payload.fields().end() &&
+      code->second.kind_case() == ::google::protobuf::Value::kStringValue) {
     error = error.WithProtocolCode(code->second.string_value());
   }
 
   const auto message = payload.fields().find("message");
-  if (message != payload.fields().end() && message->second.has_string_value()) {
+  if (message != payload.fields().end() &&
+      message->second.kind_case() == ::google::protobuf::Value::kStringValue) {
     error = core::Error::RemoteProtocol(message->second.string_value())
                 .WithTransport("http")
                 .WithProtocolCode(error.protocol_code().value_or(""));
@@ -204,7 +207,7 @@ core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientRe
 
   const auto next_token_it = payload.fields().find("nextPageToken");
   if (next_token_it != payload.fields().end()) {
-    if (!next_token_it->second.has_string_value()) {
+    if (next_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Serialization("ListTasks response field 'nextPageToken' must be a string")
           .WithTransport("http")
           .WithHttpStatus(response.status_code);

@@ -40,7 +40,8 @@ std::string BuildErrorEnvelope(std::string_view id, int code, std::string_view m
 
 std::string ExtractFieldOrDefault(const google::protobuf::Struct& object, std::string_view field) {
   const auto value = object.fields().find(std::string(field));
-  if (value == object.fields().end() || !value->second.has_string_value()) {
+  if (value == object.fields().end() ||
+      value->second.kind_case() != ::google::protobuf::Value::kStringValue) {
     return {};
   }
   return value->second.string_value();

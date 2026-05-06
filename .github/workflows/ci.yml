@@ -72,19 +72,77 @@ jobs:
 
   windows-build:
     runs-on: windows-2022
+    env:
+      VCPKG_ROOT: C:/vcpkg
+      CI_VCPKG_ROOT: C:/vcpkg
+      VCPKG_DEFAULT_TRIPLET: ci-x64-windows-release
+      VCPKG_HOST_TRIPLET: ci-x64-windows-release
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+      VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
     steps:
       - uses: actions/checkout@v5
+
+      - name: Restore vcpkg source cache
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg
+          key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
+
       - name: Setup vcpkg
         shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg.git C:/vcpkg
-          C:/vcpkg/bootstrap-vcpkg.bat
+          if (-not (Test-Path $env:VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          }
+          & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat"
+
+
+      - name: Restore vcpkg downloads cache
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-downloads-
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+
       - name: Install manifest dependencies
         shell: pwsh
         run: |
-          C:/vcpkg/vcpkg.exe install --triplet x64-windows
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET
+          $sw.Stop()
+          "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_host_triplet=$env:VCPKG_HOST_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: deps
+
+      - name: Setup MSVC build environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+
       - name: Configure and build
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
-          cmake --build build --parallel
+          $vcpkgRoot = $env:CI_VCPKG_ROOT
+          $env:VCPKG_ROOT = $vcpkgRoot
+          $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
+          $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
+          $hostTriplet = $env:VCPKG_HOST_TRIPLET
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet"
+          cmake --build build --config RelWithDebInfo --parallel
+
+      - name: Publish Windows stage timings
+        shell: pwsh
+        run: |
+          "## Windows dependency timing" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg triplet: ${{ steps.deps.outputs.vcpkg_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg host triplet: ${{ steps.deps.outputs.vcpkg_host_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- Install manifest dependencies: ${{ steps.deps.outputs.dependency_install_seconds }}s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
