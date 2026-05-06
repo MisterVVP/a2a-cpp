@@ -47,8 +47,19 @@ struct ListTasksRequest final {
     return *this;
   }
 
-  ListTasksRequest(ListTasksRequest&&) noexcept = default;
-  ListTasksRequest& operator=(ListTasksRequest&&) noexcept = default;
+  ListTasksRequest(ListTasksRequest&& other) noexcept
+      : page_size(other.page_size), page_token(std::move(other.page_token)) {
+    other.page_size = 0;
+  }
+
+  ListTasksRequest& operator=(ListTasksRequest&& other) noexcept {
+    if (this != &other) {
+      page_size = other.page_size;
+      page_token = std::move(other.page_token);
+      other.page_size = 0;
+    }
+    return *this;
+  }
 };
 
 struct ListTasksResponse final {
