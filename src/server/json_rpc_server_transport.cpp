@@ -195,7 +195,9 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
       if (!payload.ok()) {
         return payload.error();
       }
-      dispatch_request.payload = std::move(payload.value());
+      const auto& parsed_payload = payload.value();
+      dispatch_request.payload =
+          ListTasksRequest{parsed_payload.page_size, parsed_payload.page_token};
       return dispatch_request;
     }
     case DispatcherOperation::kSendStreamingMessage:
