@@ -167,35 +167,35 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
 
   switch (dispatch_request.operation) {
     case DispatcherOperation::kSendMessage: {
-      const auto payload = ParseProtoPayload<lf::a2a::v1::SendMessageRequest>(params);
+      auto payload = ParseProtoPayload<lf::a2a::v1::SendMessageRequest>(params);
       if (!payload.ok()) {
         return payload.error();
       }
-      dispatch_request.payload = payload.value();
+      dispatch_request.payload = std::move(payload.value());
       return dispatch_request;
     }
     case DispatcherOperation::kGetTask: {
-      const auto payload = ParseProtoPayload<lf::a2a::v1::GetTaskRequest>(params);
+      auto payload = ParseProtoPayload<lf::a2a::v1::GetTaskRequest>(params);
       if (!payload.ok()) {
         return payload.error();
       }
-      dispatch_request.payload = payload.value();
+      dispatch_request.payload = std::move(payload.value());
       return dispatch_request;
     }
     case DispatcherOperation::kCancelTask: {
-      const auto payload = ParseProtoPayload<lf::a2a::v1::CancelTaskRequest>(params);
+      auto payload = ParseProtoPayload<lf::a2a::v1::CancelTaskRequest>(params);
       if (!payload.ok()) {
         return payload.error();
       }
-      dispatch_request.payload = payload.value();
+      dispatch_request.payload = std::move(payload.value());
       return dispatch_request;
     }
     case DispatcherOperation::kListTasks: {
-      const auto payload = ParseListTasksPayload(params);
+      auto payload = ParseListTasksPayload(params);
       if (!payload.ok()) {
         return payload.error();
       }
-      dispatch_request.payload = payload.value();
+      dispatch_request.payload = std::move(payload.value());
       return dispatch_request;
     }
     case DispatcherOperation::kSendStreamingMessage:
