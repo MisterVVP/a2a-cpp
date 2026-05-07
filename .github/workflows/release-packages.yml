@@ -7,38 +7,43 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
   id-token: write
 
 jobs:
-  conan-github-packages:
+  github-release-artifacts:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Conan
-        run: python -m pip install --upgrade conan
-
-      - name: Configure Conan remote (GitHub Packages)
-        env:
-          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
-          CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
-          CONAN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build release archives
         run: |
-          conan remote add github "${CONAN_REMOTE_URL}" --force
-          conan remote login github "${CONAN_LOGIN_USERNAME}" -p "${GITHUB_TOKEN}"
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-manual}"
+          OUT_DIR="out/release"
+          mkdir -p "${OUT_DIR}"
+          git archive --format=tar.gz --prefix="a2a-cpp-${VERSION}/" -o "${OUT_DIR}/a2a-cpp-${VERSION}.tar.gz" HEAD
+          git archive --format=zip --prefix="a2a-cpp-${VERSION}/" -o "${OUT_DIR}/a2a-cpp-${VERSION}.zip" HEAD
+          (
+            cd "${OUT_DIR}"
+            sha256sum "a2a-cpp-${VERSION}.tar.gz" "a2a-cpp-${VERSION}.zip" > SHA256SUMS.txt
+          )
 
-      - name: Create package
-        run: conan create . --build=missing
+      - name: Upload archive artifact (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-release-archives
+          path: out/release/
 
-      - name: Upload package
-        run: conan upload a2a-cpp/* --remote=github --confirm
+      - name: Publish GitHub release assets (tag pushes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/release/*.tar.gz
+            out/release/*.zip
+            out/release/SHA256SUMS.txt
 
   vcpkg-metadata-check:
     runs-on: ubuntu-24.04

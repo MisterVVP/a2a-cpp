@@ -33,10 +33,56 @@ Every non-parity row is mapped to one or more concrete tasks:
 | Registry publication evidence and release automation | `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`, `docs/codex-mvp-tasks/18-spec-conformance-and-sdk-application-readiness.md` |
 | Maintenance/governance readiness signals | `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`, `docs/codex-mvp-tasks/18-spec-conformance-and-sdk-application-readiness.md` |
 | Python-SDK-specific parity deltas and validation loop | `docs/codex-mvp-tasks/20-cross-sdk-parity-vs-a2a-python.md` |
+| Missing deterministic C++ ↔ Python interop CI path | `docs/codex-mvp-tasks/21-python-cross-sdk-interop-ci.md` |
+| Python CLI workflow parity closure plan | `docs/codex-mvp-tasks/22-python-cli-workflow-parity.md` |
 | Windows dependency-install bottleneck affecting CI confidence/velocity | `docs/codex-mvp-tasks/19-windows-build-dependency-acceleration.md` |
+
+## Python-focused parity expansion (task 20 execution view)
+
+The following Python-facing deltas are tracked as explicit, ordered implementation tasks to ensure no gap remains unowned:
+
+1. Baseline parity and backlog synchronization: `20-cross-sdk-parity-vs-a2a-python.md`.
+2. Deterministic CI interop path (C++ ↔ Python): `21-python-cross-sdk-interop-ci.md`.
+3. CLI workflow parity closure decision + implementation: `22-python-cli-workflow-parity.md`.
 
 ## Notes
 
 - This parity view is capability-oriented, not API-name parity.
 - Cross-language parity should optimize for behavior-level interoperability over naming-level equivalence.
 - Tasks 18–20 are intended to close submission-readiness and cross-SDK parity confidence gaps after core protocol parity work.
+
+## Package publishing workload (release automation)
+
+The package publishing workload is implemented in `.github/workflows/release-packages.yml` and is designed to be deterministic for release evidence collection and parity-readiness tracking.
+
+### Triggers
+
+- Manual: GitHub Actions **Run workflow** (`workflow_dispatch`).
+- Automated release: push a tag matching `v*` (for example, `v0.2.0`).
+
+### Required repository secrets
+
+- `GITHUB_TOKEN`: provided by GitHub Actions runtime and used to publish release assets on tag-triggered runs.
+
+### What the workload does
+
+1. Builds source release archives (`.tar.gz`, `.zip`) and `SHA256SUMS.txt`.
+2. For `workflow_dispatch`, uploads archive artifacts to the workflow run (`github-release-archives`).
+3. For tag pushes (`v*`), publishes those assets to the GitHub Release for that tag.
+4. Verifies `vcpkg.json` exists.
+5. Publishes `vcpkg-submission-notes` artifact containing the public vcpkg registry submission checklist.
+
+### How to run it
+
+1. Ensure secrets are configured in the GitHub repository settings.
+2. Go to **Actions → Release Packages**.
+3. Choose one:
+   - Click **Run workflow** to execute immediately, or
+   - Create/push a release tag:
+     - `git tag vX.Y.Z`
+     - `git push origin vX.Y.Z`
+4. Validate success by checking:
+   - `github-release-artifacts` job passed.
+   - On tag runs, the release contains `.tar.gz`, `.zip`, and `SHA256SUMS.txt` assets.
+   - `vcpkg-metadata-check` job passed.
+   - `vcpkg-submission-notes` artifact is attached to the run.
