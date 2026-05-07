@@ -34,6 +34,7 @@ This folder contains an ordered set of implementation tasks for building an **A2
 17. `17-google-sdk-readiness-checklist.md`
 18. `18-spec-conformance-and-sdk-application-readiness.md`
 19. `19-windows-build-dependency-acceleration.md`
+20. `20-cross-sdk-parity-vs-a2a-python.md`
 
 ## Recommended repository layout
 

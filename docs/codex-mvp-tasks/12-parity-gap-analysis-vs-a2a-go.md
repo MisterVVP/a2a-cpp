@@ -1,8 +1,8 @@
-# Task 12 — A2A Go parity gap analysis and roadmap alignment
+# Task 12 — A2A Go/Python parity gap analysis and roadmap alignment
 
 ## Goal
 
-Document feature gaps between the current C++ SDK MVP and the public `a2aproject/a2a-go` SDK surface, then convert those gaps into concrete, ordered implementation tasks.
+Document feature gaps between the current C++ SDK MVP and the public `a2aproject/a2a-go` and `a2aproject/a2a-python` SDK surfaces, then convert those gaps into concrete, ordered implementation tasks.
 
 ## Scope
 
@@ -20,10 +20,10 @@ Document feature gaps between the current C++ SDK MVP and the public `a2aproject
 
 ## Deliverables
 
-- `docs/parity-a2a-go.md` (single source of truth parity matrix)
+- `docs/parity-a2a.md` (single source of truth parity matrix)
 - updates to task ordering in `docs/codex-mvp-tasks/README.md`
 - cross-links from parity matrix rows to actionable task files
-- `docs/parity-a2a-go.md` includes a **gap-to-task mitigation map** where every non-parity row links to at least one actionable task file.
+- `docs/parity-a2a.md` includes a **gap-to-task mitigation map** where every non-parity row links to at least one actionable task file.
 
 ## Constraints
 
@@ -39,7 +39,7 @@ Document feature gaps between the current C++ SDK MVP and the public `a2aproject
 
 ## Acceptance criteria
 
-- A reviewer can identify exactly which a2a-go capabilities are missing in C++.
+- A reviewer can identify exactly which a2a-go/a2a-python capabilities are missing in C++.
 - Every missing/partial item is linked to a follow-up implementation task.
 - No uncovered gaps remain in the matrix without an explicit mitigation task mapping.
 - Task ordering reflects dependencies and avoids circular planning.

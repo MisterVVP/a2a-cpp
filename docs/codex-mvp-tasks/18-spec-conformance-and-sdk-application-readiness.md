@@ -4,12 +4,23 @@
 
 Produce objective, auditable evidence that the C++ SDK satisfies community SDK requirements before submitting for official listing/review.
 
+## Community requirement verification status (as of 2026-05-07)
+
+Based on `https://a2a-protocol.org/latest/community/#the-future-is-interoperable` requirements and current repo artifacts:
+
+- ✅ **Spec compliance**: substantial evidence exists (`docs/spec-conformance.md`, protocol tests), but section-by-section requirement traceability still needs hardening.
+- ⚠️ **Published package on standard registry**: release workflow and manifests exist, but public registry publication proof for C++ consumers remains incomplete.
+- ✅ **Documentation**: core docs/readmes/build docs exist; linking/navigation and explicit protocol coverage summary should be tightened.
+- ✅ **Tests with CI**: CI pipeline, coverage, sanitizer workflows are present.
+- ✅ **Apache 2.0 license**: repository licensing is in place.
+- ⚠️ **Active maintenance**: strong signals exist (templates/CODEOWNERS/security/support), but measurable cadence/SLA evidence should be made explicit.
+
 ## Scope
 
 - Spec compliance hardening
   - Build a section-by-section A2A v1.0 conformance matrix mapping spec requirements to source files and tests.
-  - Add negative protocol tests (unsupported method, malformed params, version mismatch, auth requirement mismatch).
-  - Add golden cross-SDK interop fixtures (a2a-go ↔ a2a-cpp) for core RPCs and streaming events.
+  - Add/maintain negative protocol tests (unsupported method, malformed params, version mismatch, auth requirement mismatch).
+  - Add golden cross-SDK interop fixtures (a2a-go ↔ a2a-cpp and a2a-python ↔ a2a-cpp) for core RPCs and streaming events.
 - Standard registry publishing readiness
   - Finalize package metadata and publication automation for at least one mainstream C++ registry (vcpkg and/or ConanCenter).
   - Add reproducible source archive + signature/provenance generation in release workflow.
