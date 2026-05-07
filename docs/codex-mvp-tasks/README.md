@@ -35,6 +35,8 @@ This folder contains an ordered set of implementation tasks for building an **A2
 18. `18-spec-conformance-and-sdk-application-readiness.md`
 19. `19-windows-build-dependency-acceleration.md`
 20. `20-cross-sdk-parity-vs-a2a-python.md`
+21. `21-python-cross-sdk-interop-ci.md`
+22. `22-python-cli-workflow-parity.md`
 
 ## Recommended repository layout
 
