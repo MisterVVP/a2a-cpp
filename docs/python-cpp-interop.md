@@ -48,18 +48,19 @@ You are correct: true cross-SDK interop evidence should include **mixed-runtime 
 - Python server ↔ C++ client
 - C++ server ↔ Python client
 
-The current workflow does **not yet** run those two end-to-end mixed-runtime exchanges. It validates prerequisite compatibility signals, but not full bidirectional runtime interop.
+The CI workflow now runs both mixed-runtime exchanges:
 
-## Recommended next step to close the gap
+- `python-server-cpp-client-interop`: Python gRPC fixture server with C++ interop client checks.
+- `cpp-server-python-client-interop`: C++ gRPC fixture server with Python interop client checks.
 
-Add a dedicated mixed-runtime interop suite with two CI scenarios:
+## Mixed-runtime contract assertions
 
-1. **Python server / C++ client**
-   - Start a Python SDK sample/fixture server in CI.
-   - Run C++ integration client tests against it.
-2. **C++ server / Python client**
-   - Start a C++ server fixture in CI.
-   - Run Python SDK client checks against it.
+Both scenarios assert the same behavioral contract set with fixed ports and deterministic startup/teardown:
 
-Each scenario should assert the same contract set (core lifecycle RPCs, streaming semantics, and error mapping), with fixed ports/timeouts and deterministic startup/teardown logic.
+- core lifecycle: `SendMessage`, `GetTask`, `CancelTask`
+- streaming semantics: `SubscribeTask` emits events and completes
+- error mapping/failure path: unknown task lookup returns a transport error
+- unsupported-method behavior for push-config in gRPC fixture path
+
+The orchestration entrypoint is `scripts/run_mixed_runtime_interop.sh`, which uses explicit `SCENARIO` selection and process cleanup traps for deterministic CI behavior.
 

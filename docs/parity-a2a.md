@@ -93,4 +93,4 @@ The package publishing workload is implemented in `.github/workflows/release-pac
 - gRPC parity is evidenced by both client and server transports in `include/a2a/client/grpc_transport.h` and `include/a2a/server/grpc_server_transport.h`, with integration coverage in `tests/integration/grpc_transport_integration_test.cpp`.
 - `GetExtendedAgentCard` is now implemented as a first-class SDK API surface; parity status is updated accordingly.
 
-- Interoperability workflow and current validation scope are documented in `docs/python-cpp-interop.md`.
+- Mixed-runtime interoperability is validated in CI via `python-server-cpp-client-interop` and `cpp-server-python-client-interop`; workflow and contract details are documented in `docs/python-cpp-interop.md`.
