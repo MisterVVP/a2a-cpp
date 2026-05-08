@@ -2,8 +2,8 @@
 import argparse
 import grpc
 
-import a2a_pb2
-import a2a_pb2_grpc
+from a2a.v1 import a2a_pb2
+from a2a.v1 import a2a_pb2_grpc
 
 
 def main():

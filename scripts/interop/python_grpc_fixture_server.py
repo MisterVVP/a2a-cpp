@@ -6,8 +6,8 @@ import time
 import grpc
 from google.protobuf import empty_pb2
 
-import a2a_pb2
-import a2a_pb2_grpc
+from a2a.v1 import a2a_pb2
+from a2a.v1 import a2a_pb2_grpc
 
 TASKS = {}
 

@@ -17,7 +17,17 @@ trap cleanup EXIT
 cmake -S "${ROOT}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build "${BUILD_DIR}" --parallel --target cpp_grpc_interop_client cpp_grpc_interop_server
 
-"${PY_BIN}" -m grpc_tools.protoc -I "${ROOT}/proto" --python_out="${BUILD_DIR}" --grpc_python_out="${BUILD_DIR}" "${ROOT}/proto/a2a/v1/a2a.proto"
+if ! command -v grpc_python_plugin >/dev/null 2>&1; then
+  echo "grpc_python_plugin not found in PATH"
+  exit 1
+fi
+
+protoc \
+  -I "${ROOT}/proto" \
+  --python_out="${BUILD_DIR}" \
+  --grpc_python_out="${BUILD_DIR}" \
+  --plugin=protoc-gen-grpc_python="$(command -v grpc_python_plugin)" \
+  "${ROOT}/proto/a2a/v1/a2a.proto"
 export PYTHONPATH="${BUILD_DIR}:${PYTHONPATH:-}"
 
 if [[ "${SCENARIO}" == "python-server-cpp-client" || "${SCENARIO}" == "both" ]]; then
