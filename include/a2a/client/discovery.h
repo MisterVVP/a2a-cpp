@@ -41,6 +41,8 @@ class DiscoveryClient final {
                            std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
+  [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(
+      std::string_view base_url);
 
  private:
   struct CacheEntry final {
@@ -49,6 +51,8 @@ class DiscoveryClient final {
   };
 
   [[nodiscard]] static core::Result<std::string> BuildDiscoveryUrl(std::string_view base_url);
+  [[nodiscard]] static core::Result<std::string> BuildExtendedDiscoveryUrl(
+      std::string_view base_url);
   [[nodiscard]] static core::Result<void> ValidateAgentCard(const lf::a2a::v1::AgentCard& card);
 
   HttpFetcher fetcher_;

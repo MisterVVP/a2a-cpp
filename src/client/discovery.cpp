@@ -136,6 +136,43 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
   return card;
 }
 
+core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(
+    std::string_view base_url) {
+  const auto discovery_url = BuildExtendedDiscoveryUrl(base_url);
+  if (!discovery_url.ok()) {
+    return discovery_url.error();
+  }
+
+  const auto response = fetcher_(discovery_url.value());
+  if (!response.ok()) {
+    return response.error();
+  }
+  if (response.value().status_code == kHttpStatusNotFound) {
+    return core::Error::RemoteProtocol("Extended Agent Card not found at discovery endpoint")
+        .WithTransport("http")
+        .WithHttpStatus(kHttpStatusNotFound);
+  }
+  if (response.value().status_code < kHttpStatusOkMin ||
+      response.value().status_code > kHttpStatusOkMax) {
+    return core::Error::RemoteProtocol("Extended Agent Card discovery failed")
+        .WithTransport("http")
+        .WithHttpStatus(response.value().status_code);
+  }
+
+  lf::a2a::v1::AgentCard card;
+  const auto parse = core::JsonToMessage(response.value().body, &card);
+  if (!parse.ok()) {
+    return parse.error();
+  }
+
+  const auto validation = ValidateAgentCard(card);
+  if (!validation.ok()) {
+    return validation.error();
+  }
+
+  return card;
+}
+
 core::Result<std::string> DiscoveryClient::BuildDiscoveryUrl(std::string_view base_url) {
   std::string normalized = Trim(base_url);
   if (normalized.empty()) {
@@ -149,6 +186,14 @@ core::Result<std::string> DiscoveryClient::BuildDiscoveryUrl(std::string_view ba
     normalized.pop_back();
   }
   return normalized + "/.well-known/agent-card.json";
+}
+
+core::Result<std::string> DiscoveryClient::BuildExtendedDiscoveryUrl(std::string_view base_url) {
+  const auto standard = BuildDiscoveryUrl(base_url);
+  if (!standard.ok()) {
+    return standard.error();
+  }
+  return standard.value() + "?view=extended";
 }
 
 core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCard& card) {

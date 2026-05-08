@@ -109,6 +109,20 @@ TEST(DiscoveryClientTest, UsesInMemoryCacheWithinTtl) {
   EXPECT_EQ(calls, 1U);
 }
 
+TEST(DiscoveryClientTest, FetchExtendedAgentCardUsesExtendedQueryPath) {
+  std::string called_url;
+  DiscoveryClient client([&called_url](std::string_view url) -> a2a::core::Result<HttpResponse> {
+    called_url = std::string(url);
+    return HttpResponse{
+        .status_code = kHttpOk,
+        .body =
+            R"({"protocolVersion":"1.0","supportedInterfaces":[{"transport":"TRANSPORT_PROTOCOL_REST","url":"https://agent.example.com/a2a"}]})"};
+  });
+
+  const auto fetched = client.FetchExtendedAgentCard("https://agent.example.com/");
+  ASSERT_TRUE(fetched.ok()) << fetched.error().message();
+  EXPECT_EQ(called_url, "https://agent.example.com/.well-known/agent-card.json?view=extended");
+}
 TEST(AgentCardResolverTest, SelectsPreferredThenFallsBack) {
   lf::a2a::v1::AgentCard card;
   card.set_protocol_version("1.0");
