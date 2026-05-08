@@ -89,6 +89,30 @@ The package publishing workload is implemented in `.github/workflows/release-pac
 
 ## Parity evidence
 
-- CI workflow job `python-cross-sdk-interop` in `.github/workflows/ci.yml` runs `scripts/run_python_cross_sdk_interop.sh` with a pinned `a2a-python` ref (`v0.3.0`) to validate deterministic cross-SDK compatibility signals.
+- CI workflow job `python-cross-sdk-interop` in `.github/workflows/ci.yml` runs `scripts/run_python_cross_sdk_interop.sh` with `A2A_PYTHON_REF` (currently set to `main`) to validate deterministic cross-SDK compatibility signals.
 - gRPC parity is evidenced by both client and server transports in `include/a2a/client/grpc_transport.h` and `include/a2a/server/grpc_server_transport.h`, with integration coverage in `tests/integration/grpc_transport_integration_test.cpp`.
 - `GetExtendedAgentCard` is now implemented as a first-class SDK API surface; parity status is updated accordingly.
+
+### How `scripts/run_python_cross_sdk_interop.sh` works
+
+The script is intentionally split into deterministic phases so CI failures are easy to triage:
+
+1. **Fetch upstream SDK input**
+   - Clones `a2aproject/a2a-python` at the exact `A2A_PYTHON_REF` provided by CI.
+   - This keeps the Python-side input explicit and reproducible for a given run.
+2. **Prepare isolated Python environment**
+   - Creates a fresh virtual environment under `build-python-interop/venv`.
+   - Installs the checked-out Python SDK source into that venv.
+   - Executes an import/version smoke check to prove the expected package is what tests run against.
+3. **Build C++ side from clean interop build tree**
+   - Configures and builds `a2a-cpp` with CMake + Ninja in `build-python-interop/cpp`.
+   - This avoids cross-contamination with other local build directories.
+4. **Run protocol-level interop-focused integration tests**
+   - Executes `ctest` filtered to `GrpcTransportIntegrationTest.*`.
+   - These tests validate C++ client/server gRPC semantics that are critical for cross-SDK compatibility:
+     - core lifecycle RPCs + streaming round-trip,
+     - subscription event flow and completion behavior,
+     - unsupported-method error handling contract,
+     - unknown-task failure path behavior.
+
+This approach validates both *environment interoperability* (Python SDK dependency and runtime setup) and *protocol interoperability signals* (deterministic gRPC behavior checks on the C++ side).
