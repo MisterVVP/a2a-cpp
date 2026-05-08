@@ -14,7 +14,7 @@ jobs:
   github-release-artifacts:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Build release archives
         run: |
@@ -31,7 +31,7 @@ jobs:
 
       - name: Upload archive artifact (workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: github-release-archives
           path: out/release/
@@ -48,7 +48,7 @@ jobs:
   vcpkg-metadata-check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Validate vcpkg manifest presence
         run: test -f vcpkg.json
       - name: Prepare submission metadata artifact
@@ -61,7 +61,7 @@ jobs:
           3. Include upstream tag and SHA512 source hash.
           META
       - name: Upload vcpkg submission notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vcpkg-submission-notes
           path: out/vcpkg-submission.md

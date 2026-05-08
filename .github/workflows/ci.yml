@@ -10,7 +10,7 @@ jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           sudo apt-get update
@@ -22,7 +22,7 @@ jobs:
   examples-smoke:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           sudo apt-get update
@@ -33,7 +33,7 @@ jobs:
   coverage:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           sudo apt-get update
@@ -42,7 +42,7 @@ jobs:
       - name: Coverage gate
         run: ./scripts/run_coverage.sh
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report
           path: build-coverage/coverage
@@ -50,7 +50,7 @@ jobs:
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           sudo apt-get update
@@ -64,7 +64,7 @@ jobs:
   macos-build:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - run: |
           brew install cmake ninja protobuf grpc re2 abseil
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$(brew --prefix)"
@@ -80,10 +80,10 @@ jobs:
       VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
       VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Restore vcpkg source cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:/vcpkg
           key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
@@ -98,7 +98,7 @@ jobs:
 
 
       - name: Restore vcpkg downloads cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:/vcpkg/downloads
           key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
@@ -106,7 +106,7 @@ jobs:
             ${{ runner.os }}-vcpkg-downloads-
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:/vcpkg-binary-cache
           key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
