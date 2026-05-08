@@ -62,15 +62,15 @@ The package publishing workload is implemented in `.github/workflows/release-pac
 
 ### Required repository secrets
 
-- `CONAN_REMOTE_URL`: Conan remote endpoint (GitHub Packages Conan registry URL).
-- `CONAN_LOGIN_USERNAME`: account/owner used for Conan authentication.
-- `GITHUB_TOKEN`: provided by GitHub Actions runtime and used as Conan password in the workflow.
+- `GITHUB_TOKEN`: provided by GitHub Actions runtime and used to publish release assets on tag-triggered runs.
 
 ### What the workload does
 
-1. Builds and uploads Conan package `a2a-cpp/*` to the configured `github` remote.
-2. Verifies `vcpkg.json` exists.
-3. Publishes `vcpkg-submission-notes` artifact containing the public vcpkg registry submission checklist.
+1. Builds source release archives (`.tar.gz`, `.zip`) and `SHA256SUMS.txt`.
+2. For `workflow_dispatch`, uploads archive artifacts to the workflow run (`github-release-archives`).
+3. For tag pushes (`v*`), publishes those assets to the GitHub Release for that tag.
+4. Verifies `vcpkg.json` exists.
+5. Publishes `vcpkg-submission-notes` artifact containing the public vcpkg registry submission checklist.
 
 ### How to run it
 
@@ -82,6 +82,7 @@ The package publishing workload is implemented in `.github/workflows/release-pac
      - `git tag vX.Y.Z`
      - `git push origin vX.Y.Z`
 4. Validate success by checking:
-   - `conan-github-packages` job passed.
+   - `github-release-artifacts` job passed.
+   - On tag runs, the release contains `.tar.gz`, `.zip`, and `SHA256SUMS.txt` assets.
    - `vcpkg-metadata-check` job passed.
    - `vcpkg-submission-notes` artifact is attached to the run.
