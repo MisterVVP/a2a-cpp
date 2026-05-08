@@ -71,7 +71,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-venv git
       - name: Run pinned Python cross-SDK interop
         env:
-          A2A_PYTHON_REF: v0.3.0
+          A2A_PYTHON_REF: main
         run: ./scripts/run_python_cross_sdk_interop.sh
 
   macos-build:
