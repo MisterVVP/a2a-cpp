@@ -22,7 +22,10 @@ def main():
     get_resp = stub.GetTask(a2a_pb2.GetTaskRequest(id="py-interop-task"), timeout=5)
     assert get_resp.id == "py-interop-task"
 
-    stream = stub.SubscribeTask(a2a_pb2.GetTaskRequest(id="py-interop-task"), timeout=5)
+    stream_request = a2a_pb2.SendMessageRequest()
+    stream_request.message.role = "user"
+    stream_request.message.task_id = "py-interop-task"
+    stream = stub.SendStreamingMessage(stream_request, timeout=5)
     events = list(stream)
     assert events and events[0].task.id == "py-interop-task"
 
