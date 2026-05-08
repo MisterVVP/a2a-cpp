@@ -1,6 +1,28 @@
-# a2a-cpp
+# a2a-cpp — C++20 SDK for the Agent2Agent (A2A) Protocol
 
-C++ SDK for the Agent2Agent (A2A) Protocol.
+**a2a-cpp** is a modern C++ SDK for building **Agent2Agent (A2A) protocol** clients and servers.
+
+It provides C++20 APIs for:
+
+- A2A client implementations
+- A2A server implementations
+- Agent discovery with Agent Cards
+- REST transport
+- JSON-RPC transport
+- gRPC/protobuf integration
+- streaming/SSE-style A2A flows
+- authentication hooks for API keys, bearer tokens, custom headers, and mTLS integration
+- CMake, vcpkg, and Conan-based builds
+
+Use this repository if you are looking for:
+
+- C++ A2A SDK
+- Agent2Agent C++ SDK
+- A2A protocol C++ implementation
+- C++ client for Agent2Agent protocol
+- C++ server for Agent2Agent protocol
+- A2A JSON-RPC C++ library
+- A2A REST C++ library
 
 ## Repository layout
 
