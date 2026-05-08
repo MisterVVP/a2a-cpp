@@ -1,6 +1,6 @@
 # A2A C++ vs A2A Go/Python parity snapshot
 
-_Last updated: 2026-05-07._
+_Last updated: 2026-05-08._
 
 This matrix compares public `a2a-go` v2 and `a2a-python` SDK surfaces against current `a2a-cpp` repository state and backlog.
 
@@ -15,7 +15,7 @@ This matrix compares public `a2a-go` v2 and `a2a-python` SDK surfaces against cu
 | Client call interceptors / middleware | Present (`WithCallInterceptors`) | Present (middleware/extensibility hooks) | Present (`A2AClient` interceptor hooks) | ✅ parity |
 | Server interceptor chain | Present (`InterceptedHandler`) | Present (server middleware/extensibility) | Present (`Dispatcher` interceptor hooks) | ✅ parity |
 | `ListTasks` API | Present | Present | Present on public `A2AClient` and server transports | ✅ parity |
-| `GetExtendedAgentCard` API | Present | Present | Not part of A2A v1 profile for this SDK; agent-card discovery endpoint supported | ✅ parity (intentional non-goal documented) |
+| `GetExtendedAgentCard` API | Present | Present | Present as first-class API | ✅ parity |
 | Push-config lifecycle APIs (`ListTaskPushConfigs`, etc.) | Present | Present | Present across client transports | ✅ parity |
 | CLI workflow utility | Present (`cmd/a2a`) | Present (CLI package in repo) | Missing | ❌ gap |
 | Standard package registry signal | Present (`go get`, pkg.go.dev indexed) | Present (`pip install a2a-sdk`, PyPI) | Partial (Conan + vcpkg workflow exists; public-registry proof still incomplete) | ⚠️ partial |
@@ -28,7 +28,6 @@ Every non-parity row is mapped to one or more concrete tasks:
 | Gap / partial area | Mitigation task(s) |
 |---|---|
 | gRPC server/client transport parity completion | `docs/codex-mvp-tasks/13-grpc-transport-parity.md` |
-| `GetExtendedAgentCard` missing API | `docs/codex-mvp-tasks/14-client-server-api-parity-extended-rpcs-and-interceptors.md` |
 | Missing CLI utility workflows | `docs/codex-mvp-tasks/16-examples-expansion-and-local-runner-guide.md`, `docs/codex-mvp-tasks/20-cross-sdk-parity-vs-a2a-python.md` |
 | Registry publication evidence and release automation | `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`, `docs/codex-mvp-tasks/18-spec-conformance-and-sdk-application-readiness.md` |
 | Maintenance/governance readiness signals | `docs/codex-mvp-tasks/17-google-sdk-readiness-checklist.md`, `docs/codex-mvp-tasks/18-spec-conformance-and-sdk-application-readiness.md` |
@@ -92,4 +91,4 @@ The package publishing workload is implemented in `.github/workflows/release-pac
 
 - CI workflow job `python-cross-sdk-interop` in `.github/workflows/ci.yml` runs `scripts/run_python_cross_sdk_interop.sh` with a pinned `a2a-python` ref (`v0.3.0`) to validate deterministic cross-SDK compatibility signals.
 - gRPC parity is evidenced by both client and server transports in `include/a2a/client/grpc_transport.h` and `include/a2a/server/grpc_server_transport.h`, with integration coverage in `tests/integration/grpc_transport_integration_test.cpp`.
-- `GetExtendedAgentCard` is treated as intentional non-parity under the A2A v1 profile; discovery through `/.well-known/agent-card.json` remains the supported mechanism.
+- `GetExtendedAgentCard` is now implemented as a first-class SDK API surface; parity status is updated accordingly.
