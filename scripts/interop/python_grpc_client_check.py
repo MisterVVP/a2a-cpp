@@ -36,7 +36,12 @@ def main():
         stub.GetTask(a2a_pb2.GetTaskRequest(id="missing"), timeout=5)
         raise AssertionError("missing task should fail")
     except grpc.RpcError as exc:
-        assert exc.code() in (grpc.StatusCode.NOT_FOUND, grpc.StatusCode.INTERNAL)
+        assert exc.code() in (
+            grpc.StatusCode.INVALID_ARGUMENT,
+            grpc.StatusCode.NOT_FOUND,
+            grpc.StatusCode.INTERNAL,
+        )
+        assert "Task not found" in (exc.details() or "")
 
 if __name__ == "__main__":
     main()
