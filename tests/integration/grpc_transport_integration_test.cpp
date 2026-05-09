@@ -200,6 +200,84 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return std::make_unique<a2a::client::A2AClient>(std::move(transport));
 }
 
+[[nodiscard]] a2a::core::Result<void> VerifyMissingTaskReturnsNotFound(
+    a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
+  get_request.set_id("missing-task-id");
+  const auto get_response = client->GetTaskPushNotificationConfig(get_request);
+  if (get_response.ok()) {
+    return a2a::core::Error::Internal("Missing task lookup should fail");
+  }
+  if (get_response.error().message() != "Not implemented") {
+    return a2a::core::Error::Internal("Unexpected error for unsupported push-config request");
+  }
+
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifySubscribeTask(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  constexpr std::string_view kTaskId = "grpc-subscribe-1";
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_task_id(std::string(kTaskId));
+  const auto send_response = client->SendMessage(send_request);
+  if (!send_response.ok()) {
+    return send_response.error();
+  }
+
+  lf::a2a::v1::GetTaskRequest subscribe_request;
+  subscribe_request.set_id(std::string(kTaskId));
+
+  RecordingObserver observer;
+  const auto stream = client->SubscribeTask(subscribe_request, observer);
+  if (!stream.ok()) {
+    return stream.error();
+  }
+
+  while (stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  if (!observer.errors.empty()) {
+    return a2a::core::Error::Internal("SubscribeTask unexpectedly returned errors");
+  }
+  if (!observer.completed) {
+    return a2a::core::Error::Internal("SubscribeTask stream did not complete");
+  }
+  if (observer.events.empty()) {
+    return a2a::core::Error::Internal("SubscribeTask returned no events");
+  }
+  if (observer.events.front().task().id() != kTaskId) {
+    return a2a::core::Error::Internal("SubscribeTask returned unexpected task id");
+  }
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifyMissingTaskLookupFails(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("missing-grpc-task");
+  const auto response = client->GetTask(request);
+  if (response.ok()) {
+    return a2a::core::Error::Internal("Missing task lookup should fail");
+  }
+  if (response.error().message().empty()) {
+    return a2a::core::Error::Internal("Missing task failure should include an error message");
+  }
+  return {};
+}
+
 TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming) {
   auto harness = StartHarness();
   ASSERT_NE(harness->server, nullptr);
@@ -212,6 +290,42 @@ TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming)
 
   const auto streaming = VerifyStreamingMessage(client.get());
   ASSERT_TRUE(streaming.ok()) << streaming.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, UnsupportedPushConfigMethodReturnsNotImplemented) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto push_config = VerifyMissingTaskReturnsNotFound(client.get());
+  ASSERT_TRUE(push_config.ok()) << push_config.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, SubscribeTaskReturnsTaskEvents) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto subscribe = VerifySubscribeTask(client.get());
+  ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, GetTaskReturnsErrorForUnknownTaskId) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto missing_task = VerifyMissingTaskLookupFails(client.get());
+  ASSERT_TRUE(missing_task.ok()) << missing_task.error().message();
 
   harness->server->Shutdown();
 }

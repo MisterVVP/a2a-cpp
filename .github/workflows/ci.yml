@@ -61,6 +61,46 @@ jobs:
           cmake --build build-asan --parallel
           ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
 
+  python-cross-sdk-interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-grpcio python3-grpc-tools git
+      - name: Run pinned Python cross-SDK interop
+        env:
+          A2A_PYTHON_REF: main
+        run: ./scripts/run_python_cross_sdk_interop.sh
+
+
+  python-server-cpp-client-interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-grpcio python3-grpc-tools
+      - name: Run mixed-runtime interop (Python server -> C++ client)
+        env:
+          SCENARIO: python-server-cpp-client
+        run: ./scripts/run_mixed_runtime_interop.sh
+
+  cpp-server-python-client-interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-grpcio python3-grpc-tools
+      - name: Run mixed-runtime interop (C++ server -> Python client)
+        env:
+          SCENARIO: cpp-server-python-client
+        run: ./scripts/run_mixed_runtime_interop.sh
+
   macos-build:
     runs-on: macos-14
     steps:

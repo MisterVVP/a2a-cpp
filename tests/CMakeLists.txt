@@ -446,3 +446,23 @@ target_link_libraries(examples_interop_integration_test
 )
 
 gtest_discover_tests(examples_interop_integration_test)
+
+add_executable(cpp_grpc_interop_client
+  interop/cpp_grpc_interop_client.cpp
+)
+target_link_libraries(cpp_grpc_interop_client
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+)
+
+add_executable(cpp_grpc_interop_server
+  interop/cpp_grpc_interop_server.cpp
+)
+target_link_libraries(cpp_grpc_interop_server
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+)
