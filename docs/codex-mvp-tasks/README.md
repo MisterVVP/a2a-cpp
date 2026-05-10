@@ -15,28 +15,28 @@ This folder contains an ordered set of implementation tasks for building an **A2
 
 ## Suggested execution order
 
-1. `01-repo-bootstrap-and-codegen.md`
-2. `02-core-versioning-errors-protojson.md`
-3. `03-agent-card-discovery.md`
-4. `04-http-json-client-core-rpcs.md`
-5. `05-sse-streaming-client.md`
-6. `06-json-rpc-client.md`
-7. `07-server-core-executor-dispatcher-task-store.md`
-8. `08-rest-server-transport.md`
-9. `09-json-rpc-server-transport.md`
-10. `10-auth-security-hooks.md`
-11. `11-examples-interop-and-ci.md`
-12. `12-parity-gap-analysis-vs-a2a-go.md`
-13. `13-grpc-transport-parity.md`
-14. `14-client-server-api-parity-extended-rpcs-and-interceptors.md`
-15. `15-test-coverage-and-quality-gates.md`
-16. `16-examples-expansion-and-local-runner-guide.md`
-17. `17-google-sdk-readiness-checklist.md`
-18. `18-spec-conformance-and-sdk-application-readiness.md`
-19. `19-windows-build-dependency-acceleration.md`
-20. `20-cross-sdk-parity-vs-a2a-python.md`
-21. `21-python-cross-sdk-interop-ci.md`
-22. `22-python-cli-workflow-parity.md`
+1. `development/01-repo-bootstrap-and-codegen.md`
+2. `development/02-core-versioning-errors-protojson.md`
+3. `development/03-agent-card-discovery.md`
+4. `development/04-http-json-client-core-rpcs.md`
+5. `development/05-sse-streaming-client.md`
+6. `development/06-json-rpc-client.md`
+7. `development/07-server-core-executor-dispatcher-task-store.md`
+8. `development/08-rest-server-transport.md`
+9. `development/09-json-rpc-server-transport.md`
+10. `development/10-auth-security-hooks.md`
+11. `development/11-examples-interop-and-ci.md`
+12. `development/12-parity-gap-analysis-vs-a2a-go.md`
+13. `development/13-grpc-transport-parity.md`
+14. `development/14-client-server-api-parity-extended-rpcs-and-interceptors.md`
+15. `development/15-test-coverage-and-quality-gates.md`
+16. `development/16-examples-expansion-and-local-runner-guide.md`
+17. `development/17-google-sdk-readiness-checklist.md`
+18. `development/18-spec-conformance-and-sdk-application-readiness.md`
+19. `development/19-windows-build-dependency-acceleration.md`
+20. `development/20-cross-sdk-parity-vs-a2a-python.md`
+21. `development/21-python-cross-sdk-interop-ci.md`
+22. `development/22-python-cli-workflow-parity.md`
 
 ## Recommended repository layout
 
@@ -89,3 +89,8 @@ Each task file includes:
 - explicit out-of-scope items
 
 Work in order unless a task clearly states it can be parallelized.
+
+## Additional task tracks
+
+- Development tasks: `development/`
+- Documentation setup tasks (mdBook + GitHub Pages): `documentation/`
