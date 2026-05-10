@@ -1,5 +1,17 @@
-# Json Rpc
+# JSON-RPC Transport
 
-> Placeholder page for Task 1 mdBook bootstrap.
+JSON-RPC transport supports method-based request dispatch aligned with JSON-RPC 2.0.
 
-Content for **Json Rpc** will be added in subsequent documentation tasks.
+## Client side
+
+Use `JsonRpcTransport` with `A2AClient` for JSON-RPC integrations.
+
+## Server side
+
+Use `JsonRpcServerTransport` to decode method calls and route them to dispatcher operations.
+
+## Operational considerations
+
+- Validate protocol envelope fields (`jsonrpc`, `id`, `method`).
+- Return consistent JSON-RPC error structures.
+- Preserve metadata needed for auth and auditing.

@@ -3,7 +3,6 @@ title = "a2a-cpp Documentation"
 authors = ["a2a-cpp contributors"]
 description = "Documentation for the a2a-cpp C++20 SDK implementing the Agent2Agent (A2A) protocol."
 language = "en"
-multilingual = false
 src = "src"
 
 [build]
@@ -12,5 +11,5 @@ build-dir = "../book-build"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/example/a2a-cpp"
-edit-url-template = "https://github.com/example/a2a-cpp/edit/main/book/{path}"
+git-repository-url = "https://github.com/MisterVVP/a2a-cpp"
+edit-url-template = "https://github.com/MisterVVP/a2a-cpp/edit/main/book/{path}"
