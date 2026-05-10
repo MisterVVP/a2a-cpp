@@ -87,6 +87,7 @@ Before submitting changes:
 5. Functional/integration tests pass.
 6. Vulnerability/dependency checks pass.
 7. Documentation is updated when behavior or interfaces change.
+8. Documentation changes that affect mdBook content or structure must verify that `mdbook build book` succeeds locally.
 
 ## Mandatory contributor validation command
 Run this command before opening or updating a PR:
