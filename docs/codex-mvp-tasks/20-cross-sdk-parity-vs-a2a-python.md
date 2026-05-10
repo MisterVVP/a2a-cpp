@@ -40,7 +40,6 @@ Close remaining capability and ecosystem parity gaps between `a2a-cpp` and the p
 2. Add/verify an interop CI path that runs deterministic C++ client/server exchanges against Python sample agents.
 3. Capture deterministic evidence links (CI job name, workflow file, and pass criteria) in docs.
 4. Keep package publishing instructions current with `.github/workflows/release-packages.yml`:
-   - manual run via `workflow_dispatch`
    - release run via `v*` git tags
    - required secrets and expected outputs (GitHub release source archives/checksums + vcpkg submission notes artifact)
 5. Open/maintain explicit follow-up tasks for uncovered items:
