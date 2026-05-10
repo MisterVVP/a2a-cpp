@@ -1,6 +1,6 @@
 # Documentation Track — mdBook + GitHub Pages
 
-This folder contains the four-task implementation plan for setting up documentation with **mdBook + GitHub Pages**.
+This folder contains the documentation implementation plan for setting up and hardening docs with **mdBook + GitHub Pages**.
 
 ## Task order
 
@@ -8,6 +8,7 @@ This folder contains the four-task implementation plan for setting up documentat
 2. [Task 2: Migrate and Expand Existing Docs](task-2-migrate-expand-docs.md)
 3. [Task 3: Add GitHub Pages Workflow](task-3-github-pages-workflow.md)
 4. [Task 4: SEO and Release Hardening](task-4-seo-release-hardening.md)
+5. [Task 5: Publish Generated C++ API Reference](task-5-generated-api-reference-publication.md)
 
 ## Notes
 

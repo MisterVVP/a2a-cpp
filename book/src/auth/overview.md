@@ -1,6 +1,8 @@
-# Authentication Overview
+# Authentication Overview for A2A Client and Server Flows
 
 Client-side authentication hooks are provided in `include/a2a/client/auth.h`.
+
+For end-to-end request flow context, pair this guide with [Send Messages with A2AClient](../client/sending-messages.md), [Custom Executor Design and Implementation](../server/custom-executor.md), and transport docs for [REST](../transports/rest.md) or [JSON-RPC](../transports/json-rpc.md).
 
 ## Supported client auth patterns
 
