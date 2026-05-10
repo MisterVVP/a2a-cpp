@@ -2,9 +2,23 @@ name: CI
 
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'book/**'
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+      - 'LICENSE'
+      - '.gitignore'
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - 'book/**'
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+      - 'LICENSE'
+      - '.gitignore'
 
 jobs:
   build-lint-test:
