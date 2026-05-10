@@ -89,11 +89,21 @@ Before submitting changes:
 7. Documentation is updated when behavior or interfaces change.
 8. Documentation changes that affect mdBook content or structure must verify that `mdbook build book` succeeds locally.
 
+### Documentation-only and README-only exception for AI agents
+When a change set is limited to documentation and diagrams (for example files under `docs/**`, `book/**`, `README*`, and other `*.md` content) and does not modify production code, tests, build scripts, or dependency manifests, AI agents may skip checklist items **1 through 5** above.
+
+For these documentation-only/README-only changes, AI agents must validate only:
+- 6. Vulnerability/dependency checks pass.
+- 7. Documentation is updated when behavior or interfaces change.
+- 8. Documentation changes that affect mdBook content or structure verify `mdbook build book` succeeds locally.
+
 ## Mandatory contributor validation command
 Run this command before opening or updating a PR:
 
 ```bash
 ./scripts/verify_changes.sh
+
+Exception: for documentation-only/README-only changes covered by the rule above, AI agents are not required to run `./scripts/verify_changes.sh` and should run only the scoped documentation validation steps.
 ```
 
 ## AI agent pre-commit hygiene
