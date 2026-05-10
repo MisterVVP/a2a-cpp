@@ -1,6 +1,8 @@
-# Sending Messages
+# Send Messages with A2AClient
 
 This chapter covers the common happy path for sending a message request with `A2AClient`.
+
+If you have not built and run examples yet, start with the [Quickstart](../getting-started/quickstart.md).
 
 ## Happy path
 
@@ -31,3 +33,6 @@ This chapter covers the common happy path for sending a message request with `A2
 - [Get Task](get-task.md)
 - [Cancel Task](cancel-task.md)
 - [Authentication Overview](../auth/overview.md)
+- [Custom Executor Design and Implementation](../server/custom-executor.md)
+- [REST Transport](../transports/rest.md)
+- [JSON-RPC Transport](../transports/json-rpc.md)

@@ -1,6 +1,8 @@
-# Quickstart (REST End-to-End)
+# Quickstart: Build and Run an A2A REST Client End-to-End
 
 This quickstart gives a practical, copy/paste flow that goes from build to a runnable client example.
+
+Looking for the full docs map first? Start at the [Documentation Home](../README.md).
 
 ## 1) Configure and build with examples
 
@@ -46,3 +48,9 @@ ctest --test-dir build --output-on-failure
 - If configure fails, confirm the required tools from [Installation](installation.md) are installed.
 - If example binaries are missing, re-run CMake with `-DA2A_BUILD_EXAMPLES=ON`.
 - If `clang-tidy` reports issues, fix touched code and re-run `./scripts/verify_changes.sh`.
+
+## Next steps
+
+- Continue with [Send Messages with A2AClient](../client/sending-messages.md).
+- Review [REST Transport](../transports/rest.md) for endpoint and runtime guidance.
+- Add auth headers safely using [Authentication Overview](../auth/overview.md).

@@ -6,8 +6,9 @@ It supports core A2A workflows including client/server APIs, discovery, REST/JSO
 
 ## Documentation
 
-- Project docs: [`docs/`](docs/)
-- mdBook site source: [`book/`](book/)
+- Documentation website (GitHub Pages): `https://mistervvp.github.io/a2a-cpp/`
+- Documentation home source: [`book/src/README.md`](book/src/README.md)
+- Project docs and engineering notes: [`docs/`](docs/)
 - Build and validation guide: [`docs/build.md`](docs/build.md)
 
 ## Repository layout

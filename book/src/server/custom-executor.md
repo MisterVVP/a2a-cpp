@@ -1,6 +1,8 @@
-# Custom Executor
+# Custom Executor Design and Implementation
 
 Implement `a2a::server::AgentExecutor` to provide server-side task and message behavior.
+
+For a full user journey from build to request handling, see [Quickstart](../getting-started/quickstart.md) and [Send Messages with A2AClient](../client/sending-messages.md).
 
 ## Design guidance
 
@@ -20,3 +22,9 @@ Implement `a2a::server::AgentExecutor` to provide server-side task and message b
 - Unit-test executor logic in isolation.
 - Add integration tests through REST/JSON-RPC transport paths.
 - Cover happy path, validation failures, and cancellation semantics.
+
+## Related pages
+
+- [REST Transport](../transports/rest.md)
+- [JSON-RPC Transport](../transports/json-rpc.md)
+- [Authentication Overview](../auth/overview.md)
