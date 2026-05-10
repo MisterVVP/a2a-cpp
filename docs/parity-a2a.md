@@ -56,7 +56,6 @@ The package publishing workload is implemented in `.github/workflows/release-pac
 
 ### Triggers
 
-- Manual: GitHub Actions **Run workflow** (`workflow_dispatch`).
 - Automated release: push a tag matching `v*` (for example, `v0.2.0`).
 
 ### Required repository secrets
@@ -66,20 +65,17 @@ The package publishing workload is implemented in `.github/workflows/release-pac
 ### What the workload does
 
 1. Builds source release archives (`.tar.gz`, `.zip`) and `SHA256SUMS.txt`.
-2. For `workflow_dispatch`, uploads archive artifacts to the workflow run (`github-release-archives`).
-3. For tag pushes (`v*`), publishes those assets to the GitHub Release for that tag.
-4. Verifies `vcpkg.json` exists.
-5. Publishes `vcpkg-submission-notes` artifact containing the public vcpkg registry submission checklist.
+2. For tag pushes (`v*`), publishes those assets to the GitHub Release for that tag.
+3. Verifies `vcpkg.json` exists.
+4. Publishes `vcpkg-submission-notes` artifact containing the public vcpkg registry submission checklist.
 
 ### How to run it
 
 1. Ensure secrets are configured in the GitHub repository settings.
 2. Go to **Actions → Release Packages**.
-3. Choose one:
-   - Click **Run workflow** to execute immediately, or
-   - Create/push a release tag:
-     - `git tag vX.Y.Z`
-     - `git push origin vX.Y.Z`
+3. Create/push a release tag:
+   - `git tag vX.Y.Z`
+   - `git push origin vX.Y.Z`
 4. Validate success by checking:
    - `github-release-artifacts` job passed.
    - On tag runs, the release contains `.tar.gz`, `.zip`, and `SHA256SUMS.txt` assets.
