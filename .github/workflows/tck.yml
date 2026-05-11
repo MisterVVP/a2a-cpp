@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build clang-format clang-tidy \
             protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev \
-            git curl netcat-openbsd jq python3 python3-venv
+            git curl netcat-openbsd jq python3 python3-pip python3-venv nodejs npm
 
       - name: Start deterministic SUT
         run: ./scripts/run_tck_sut.sh
@@ -45,24 +45,63 @@ jobs:
       - name: Run mandatory TCK category
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
         run: |
           mkdir -p "${TCK_REPORT_DIR}" "${TCK_LOG_DIR}"
+          if [[ -n "${TCK_RUN_CMD}" ]]; then
+            pushd "${TCK_WORKDIR}" >/dev/null
+            bash -lc "${TCK_RUN_CMD}" | tee "../${TCK_LOG_DIR}/tck-run.log"
+            popd >/dev/null
+            exit 0
+          fi
+
           if [[ -x "${TCK_WORKDIR}/scripts/run_tck.sh" ]]; then
             "${TCK_WORKDIR}/scripts/run_tck.sh" \
               --category mandatory \
               --sut-endpoint "${TCK_SUT_ENDPOINT}" \
               --output-dir "${TCK_REPORT_DIR}" \
               | tee "${TCK_LOG_DIR}/tck-run.log"
-          elif [[ -f "${TCK_WORKDIR}/package.json" ]]; then
+            exit 0
+          fi
+
+          if [[ -x "${TCK_WORKDIR}/scripts/run_mandatory.sh" ]]; then
+            "${TCK_WORKDIR}/scripts/run_mandatory.sh" \
+              --sut-endpoint "${TCK_SUT_ENDPOINT}" \
+              --output-dir "${TCK_REPORT_DIR}" \
+              | tee "${TCK_LOG_DIR}/tck-run.log"
+            exit 0
+          fi
+
+          if [[ -f "${TCK_WORKDIR}/package.json" ]]; then
             pushd "${TCK_WORKDIR}" >/dev/null
             npm ci
-            npm run test:mandatory -- --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" \
-              | tee "../${TCK_LOG_DIR}/tck-run.log"
+            if npm run | grep -q "test:mandatory"; then
+              npm run test:mandatory -- --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" | tee "../${TCK_LOG_DIR}/tck-run.log"
+            elif npm run | grep -q "mandatory"; then
+              npm run mandatory -- --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" | tee "../${TCK_LOG_DIR}/tck-run.log"
+            else
+              npm test -- --category mandatory --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" | tee "../${TCK_LOG_DIR}/tck-run.log"
+            fi
             popd >/dev/null
-          else
-            echo "Unable to locate a supported TCK entrypoint in ${TCK_WORKDIR}."
-            exit 1
+            exit 0
           fi
+
+          if [[ -f "${TCK_WORKDIR}/pyproject.toml" || -f "${TCK_WORKDIR}/requirements.txt" ]]; then
+            python3 -m pip install --upgrade pip
+            if [[ -f "${TCK_WORKDIR}/requirements.txt" ]]; then
+              python3 -m pip install -r "${TCK_WORKDIR}/requirements.txt"
+            fi
+            if [[ -f "${TCK_WORKDIR}/pyproject.toml" ]]; then
+              python3 -m pip install -e "${TCK_WORKDIR}"
+            fi
+            pytest "${TCK_WORKDIR}" -m mandatory --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "${TCK_REPORT_DIR}" | tee "${TCK_LOG_DIR}/tck-run.log"
+            exit 0
+          fi
+
+          echo "Unable to locate a supported TCK entrypoint in ${TCK_WORKDIR}."
+          echo "Set repository variable TCK_RUN_CMD to the mandatory-suite command."
+          find "${TCK_WORKDIR}" -maxdepth 3 -type f | sort | tee "${TCK_LOG_DIR}/tck-workdir-files.txt"
+          exit 1
 
       - name: Stop deterministic SUT
         if: always()
