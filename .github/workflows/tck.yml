@@ -95,7 +95,11 @@ jobs:
             if [[ -f "${TCK_WORKDIR}/pyproject.toml" ]]; then
               python3 -m pip install -e "${TCK_WORKDIR}"
             fi
-            export PYTHONPATH="${TCK_WORKDIR}:${PYTHONPATH:-}"
+            touch "${TCK_WORKDIR}/tests/__init__.py"
+            if [[ -d "${TCK_WORKDIR}/tests/adapters" ]]; then
+              touch "${TCK_WORKDIR}/tests/adapters/__init__.py"
+            fi
+            export PYTHONPATH="${TCK_WORKDIR}:${TCK_WORKDIR}/tests:${PYTHONPATH:-}"
             export SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export TCK_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export A2A_TCK_SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
