@@ -7,6 +7,9 @@ on:
     paths:
       - 'book/**'
       - 'docs/**'
+      - 'include/a2a/**'
+      - 'scripts/generate_api_reference.sh'
+      - 'Doxyfile'
       - '.github/workflows/docs.yml'
       - 'mdbook-admonish.css'
       - 'mdbook-transparent.css'
@@ -15,6 +18,9 @@ on:
     paths:
       - 'book/**'
       - 'docs/**'
+      - 'include/a2a/**'
+      - 'scripts/generate_api_reference.sh'
+      - 'Doxyfile'
       - '.github/workflows/docs.yml'
       - 'mdbook-admonish.css'
       - 'mdbook-transparent.css'
@@ -58,8 +64,16 @@ jobs:
       - name: Build book
         run: mdbook build book
 
-      - name: Verify build output path
-        run: test -d book-build
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+
+      - name: Generate C++ API reference
+        run: ./scripts/generate_api_reference.sh
+
+      - name: Verify docs output paths
+        run: |
+          test -d book-build
+          test -f book-build/api/cpp/index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
