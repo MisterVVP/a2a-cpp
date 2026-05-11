@@ -1,0 +1,88 @@
+name: TCK Conformance
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  TCK_REPO: a2aproject/a2a-tck
+  TCK_REF: main
+  TCK_WORKDIR: tck-repo
+  TCK_REPORT_DIR: tck-artifacts/reports
+  TCK_LOG_DIR: tck-artifacts/logs
+  SUT_HOST: 127.0.0.1
+  SUT_PORT: "50061"
+
+jobs:
+  mandatory-conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang-format clang-tidy \
+            protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev \
+            git curl netcat-openbsd jq python3 python3-venv
+
+      - name: Start deterministic SUT
+        run: ./scripts/run_tck_sut.sh
+
+      - name: Checkout TCK
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.TCK_REPO }}
+          ref: ${{ env.TCK_REF }}
+          path: ${{ env.TCK_WORKDIR }}
+
+      - name: Run mandatory TCK category
+        env:
+          TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+        run: |
+          mkdir -p "${TCK_REPORT_DIR}" "${TCK_LOG_DIR}"
+          if [[ -x "${TCK_WORKDIR}/scripts/run_tck.sh" ]]; then
+            "${TCK_WORKDIR}/scripts/run_tck.sh" \
+              --category mandatory \
+              --sut-endpoint "${TCK_SUT_ENDPOINT}" \
+              --output-dir "${TCK_REPORT_DIR}" \
+              | tee "${TCK_LOG_DIR}/tck-run.log"
+          elif [[ -f "${TCK_WORKDIR}/package.json" ]]; then
+            pushd "${TCK_WORKDIR}" >/dev/null
+            npm ci
+            npm run test:mandatory -- --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" \
+              | tee "../${TCK_LOG_DIR}/tck-run.log"
+            popd >/dev/null
+          else
+            echo "Unable to locate a supported TCK entrypoint in ${TCK_WORKDIR}."
+            exit 1
+          fi
+
+      - name: Stop deterministic SUT
+        if: always()
+        run: ./scripts/stop_tck_sut.sh
+
+      - name: Capture runner diagnostics
+        if: always()
+        run: |
+          mkdir -p "${TCK_LOG_DIR}"
+          cp /etc/os-release "${TCK_LOG_DIR}/os-release.txt"
+          uname -a > "${TCK_LOG_DIR}/uname.txt"
+          cmake --version > "${TCK_LOG_DIR}/cmake-version.txt"
+
+      - name: Upload TCK artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tck-mandatory-artifacts
+          path: |
+            ${{ env.TCK_REPORT_DIR }}
+            ${{ env.TCK_LOG_DIR }}
+            build-tck/tck-sut.log
+          if-no-files-found: warn
