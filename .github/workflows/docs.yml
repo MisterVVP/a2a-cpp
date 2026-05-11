@@ -64,8 +64,8 @@ jobs:
       - name: Build book
         run: mdbook build book
 
-      - name: Install Doxygen
-        run: sudo apt-get update && sudo apt-get install -y doxygen
+      - name: Install Doxygen and Graphviz
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
 
       - name: Generate C++ API reference
         run: ./scripts/generate_api_reference.sh
