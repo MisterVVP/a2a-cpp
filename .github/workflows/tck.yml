@@ -95,15 +95,13 @@ jobs:
             if [[ -f "${TCK_WORKDIR}/pyproject.toml" ]]; then
               python3 -m pip install -e "${TCK_WORKDIR}"
             fi
+            export PYTHONPATH="${TCK_WORKDIR}:${PYTHONPATH:-}"
             export SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export TCK_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export A2A_TCK_SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export TCK_REPORT_DIR_ABS="${PWD}/${TCK_REPORT_DIR}"
             export A2A_TCK_REPORT_DIR="${PWD}/${TCK_REPORT_DIR}"
-            if command -v a2a-tck >/dev/null 2>&1; then
-              a2a-tck --help | tee "${TCK_LOG_DIR}/tck-run.log"
-            fi
-            pytest "${TCK_WORKDIR}" -m mandatory | tee -a "${TCK_LOG_DIR}/tck-run.log"
+            pytest "${TCK_WORKDIR}/tests" -m mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" | tee "${TCK_LOG_DIR}/tck-run.log"
             exit 0
           fi
 
