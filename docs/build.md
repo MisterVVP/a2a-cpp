@@ -58,6 +58,14 @@ clang-format --dry-run --Werror $(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
 - Generated outputs are written to `build/generated/a2a/v1/`.
 - Generation is wired through the `a2a::proto_generated` target and runs automatically when needed.
 
+## Generate API reference
+
+```bash
+./scripts/generate_api_reference.sh
+```
+
+This generates Doxygen documentation from public headers in `include/a2a/**` and publishes it locally at `book-build/api/cpp/index.html`.
+
 ## CI
 
 - `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
