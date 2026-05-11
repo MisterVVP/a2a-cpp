@@ -11,6 +11,7 @@ if ! command -v doxygen >/dev/null 2>&1; then
 fi
 
 rm -rf "${REPO_ROOT}/build/doxygen"
+mkdir -p "${REPO_ROOT}/build/doxygen"
 mkdir -p "${OUTPUT_DIR}"
 
 (
