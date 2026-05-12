@@ -80,6 +80,7 @@ jobs:
             if [[ -f "requirements.txt" ]]; then
               python3 -m pip install -r requirements.txt
             fi
+            python3 -m pip install python-dotenv pyopenssl
             python3 run_tck.py \
               --sut-url "${TCK_SUT_URL}" \
               --category mandatory \

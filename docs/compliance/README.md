@@ -30,6 +30,13 @@ Use the same deterministic workflow as `.github/workflows/tck.yml`:
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
 TCK_REF=${TCK_REF:-main}
 git clone --depth 1 --branch "${TCK_REF}" "https://github.com/${TCK_REPO}.git" tck-repo
+python3 -m venv tck-repo/.venv
+source tck-repo/.venv/bin/activate
+python3 -m pip install --upgrade pip
+if [[ -f tck-repo/requirements.txt ]]; then
+  python3 -m pip install -r tck-repo/requirements.txt
+fi
+python3 -m pip install python-dotenv pyopenssl
 
 # 3) Run mandatory category against the local SUT.
 mkdir -p tck-artifacts/reports tck-artifacts/logs
