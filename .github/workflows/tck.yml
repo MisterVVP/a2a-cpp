@@ -73,6 +73,24 @@ jobs:
             exit 0
           fi
 
+          if [[ -f "${TCK_WORKDIR}/run_tck.py" ]]; then
+            pushd "${TCK_WORKDIR}" >/dev/null
+            python3 -m pip install --upgrade pip
+            if [[ -f "requirements.txt" ]]; then
+              python3 -m pip install -r requirements.txt
+            fi
+            python3 run_tck.py \
+              --sut-url "http://${SUT_HOST}:${SUT_PORT}" \
+              --category mandatory \
+              --transports grpc \
+              --transport-strategy prefer_grpc \
+              --skip-agent-card \
+              --compliance-report "../${TCK_REPORT_DIR}/compliance.json" \
+              | tee "../${TCK_LOG_DIR}/tck-run.log"
+            popd >/dev/null
+            exit 0
+          fi
+
           if [[ -f "${TCK_WORKDIR}/package.json" ]]; then
             pushd "${TCK_WORKDIR}" >/dev/null
             npm ci
