@@ -102,7 +102,11 @@ jobs:
             export TCK_REPORT_DIR_ABS="${PWD}/${TCK_REPORT_DIR}"
             export A2A_TCK_REPORT_DIR="${PWD}/${TCK_REPORT_DIR}"
             pushd "${TCK_WORKDIR}" >/dev/null
-            python3 -m pytest tests -m mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend | tee "../${TCK_LOG_DIR}/tck-run.log"
+            if [[ -d tests/mandatory ]]; then
+              python3 -m pytest tests/mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend | tee "../${TCK_LOG_DIR}/tck-run.log"
+            else
+              python3 -m pytest tests -m mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend --ignore=tests/unit --ignore=tests/unit/adapters | tee "../${TCK_LOG_DIR}/tck-run.log"
+            fi
             popd >/dev/null
             exit 0
           fi
