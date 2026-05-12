@@ -45,6 +45,7 @@ jobs:
       - name: Run mandatory TCK category
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
         run: |
           set -euo pipefail
@@ -80,11 +81,10 @@ jobs:
               python3 -m pip install -r requirements.txt
             fi
             python3 run_tck.py \
-              --sut-url "http://${SUT_HOST}:${SUT_PORT}" \
+              --sut-url "${TCK_SUT_URL}" \
               --category mandatory \
               --transports grpc \
               --transport-strategy prefer_grpc \
-              --skip-agent-card \
               --compliance-report "../${TCK_REPORT_DIR}/compliance.json" \
               | tee "../${TCK_LOG_DIR}/tck-run.log"
             popd >/dev/null

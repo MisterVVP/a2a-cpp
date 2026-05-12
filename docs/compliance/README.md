@@ -39,6 +39,13 @@ if [[ -x tck-repo/scripts/run_tck.sh ]]; then
     --sut-endpoint "127.0.0.1:50061" \
     --output-dir tck-artifacts/reports \
     | tee tck-artifacts/logs/tck-run.log
+elif [[ -f tck-repo/run_tck.py ]]; then
+  python3 tck-repo/run_tck.py \
+    --sut-url "http://127.0.0.1:50061" \
+    --category mandatory \
+    --transports grpc \
+    --transport-strategy prefer_grpc \
+    | tee tck-artifacts/logs/tck-run.log
 else
   echo "Adjust this command to the pinned TCK entrypoint for your selected ref."
 fi
