@@ -95,17 +95,15 @@ jobs:
             if [[ -f "${TCK_WORKDIR}/pyproject.toml" ]]; then
               python3 -m pip install -e "${TCK_WORKDIR}"
             fi
-            touch "${TCK_WORKDIR}/tests/__init__.py"
-            if [[ -d "${TCK_WORKDIR}/tests/adapters" ]]; then
-              touch "${TCK_WORKDIR}/tests/adapters/__init__.py"
-            fi
-            export PYTHONPATH="${TCK_WORKDIR}:${TCK_WORKDIR}/tests:${PYTHONPATH:-}"
+            export PYTHONPATH="${PWD}/${TCK_WORKDIR}:${PYTHONPATH:-}"
             export SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export TCK_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export A2A_TCK_SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
             export TCK_REPORT_DIR_ABS="${PWD}/${TCK_REPORT_DIR}"
             export A2A_TCK_REPORT_DIR="${PWD}/${TCK_REPORT_DIR}"
-            pytest "${TCK_WORKDIR}/tests" -m mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" | tee "${TCK_LOG_DIR}/tck-run.log"
+            pushd "${TCK_WORKDIR}" >/dev/null
+            python3 -m pytest tests -m mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend | tee "../${TCK_LOG_DIR}/tck-run.log"
+            popd >/dev/null
             exit 0
           fi
 
