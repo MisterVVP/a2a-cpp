@@ -13,6 +13,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
@@ -100,11 +101,11 @@ int main(int argc, char** argv) {
   skill->add_output_modes("text/plain");
   skill->add_tags("conformance");
   auto* jsonrpc_interface = agent_card.add_supported_interfaces();
-  jsonrpc_interface->set_protocol_binding("JSONRPC");
+  jsonrpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kJsonRpc));
   jsonrpc_interface->set_protocol_version("1.0");
   jsonrpc_interface->set_url("http://localhost:50061/rpc");
   auto* rest_interface = agent_card.add_supported_interfaces();
-  rest_interface->set_protocol_binding("HTTP+JSON");
+  rest_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
   rest_interface->set_protocol_version("1.0");
   rest_interface->set_url("http://localhost:50061/a2a");
 

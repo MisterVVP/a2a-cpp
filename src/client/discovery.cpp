@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -45,25 +46,25 @@ bool HasHostPortShape(std::string_view endpoint) {
   return endpoint.find(':') != std::string_view::npos;
 }
 
-constexpr std::string_view kProtocolBindingHttpJson = "HTTP+JSON";
-constexpr std::string_view kProtocolBindingJsonRpc = "JSONRPC";
-constexpr std::string_view kProtocolBindingGrpc = "GRPC";
+using a2a::core::protocol_bindings::kGrpc;
+using a2a::core::protocol_bindings::kHttpJson;
+using a2a::core::protocol_bindings::kJsonRpc;
 
 bool IsValidInterfaceEndpoint(std::string_view protocol_binding, std::string_view endpoint) {
-  if (protocol_binding == kProtocolBindingHttpJson || protocol_binding == kProtocolBindingJsonRpc) {
+  if (protocol_binding == kHttpJson || protocol_binding == kJsonRpc) {
     return HasHttpScheme(endpoint);
   }
-  if (protocol_binding == kProtocolBindingGrpc) {
+  if (protocol_binding == kGrpc) {
     return HasGrpcScheme(endpoint) || HasHttpScheme(endpoint) || HasHostPortShape(endpoint);
   }
   return false;
 }
 
 PreferredTransport ToPreferredTransport(std::string_view protocol_binding) {
-  if (protocol_binding == kProtocolBindingHttpJson) {
+  if (protocol_binding == kHttpJson) {
     return PreferredTransport::kRest;
   }
-  if (protocol_binding == kProtocolBindingJsonRpc) {
+  if (protocol_binding == kJsonRpc) {
     return PreferredTransport::kJsonRpc;
   }
   return PreferredTransport::kGrpc;
@@ -72,11 +73,11 @@ PreferredTransport ToPreferredTransport(std::string_view protocol_binding) {
 std::optional<std::string_view> ToWireTransport(PreferredTransport transport) {
   switch (transport) {
     case PreferredTransport::kRest:
-      return kProtocolBindingHttpJson;
+      return kHttpJson;
     case PreferredTransport::kJsonRpc:
-      return kProtocolBindingJsonRpc;
+      return kJsonRpc;
     case PreferredTransport::kGrpc:
-      return kProtocolBindingGrpc;
+      return kGrpc;
   }
   return std::nullopt;
 }
@@ -232,17 +233,16 @@ core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
     return core::Error::Validation("Invalid preferred transport requested");
   }
 
-  std::array<std::string_view, 3> order = {preferred_wire.value(), kProtocolBindingHttpJson,
-                                           kProtocolBindingJsonRpc};
-  if (preferred_wire.value() == kProtocolBindingHttpJson) {
-    order[1] = kProtocolBindingJsonRpc;
-    order[2] = kProtocolBindingGrpc;
-  } else if (preferred_wire.value() == kProtocolBindingJsonRpc) {
-    order[1] = kProtocolBindingHttpJson;
-    order[2] = kProtocolBindingGrpc;
+  std::array<std::string_view, 3> order = {preferred_wire.value(), kHttpJson, kJsonRpc};
+  if (preferred_wire.value() == kHttpJson) {
+    order[1] = kJsonRpc;
+    order[2] = kGrpc;
+  } else if (preferred_wire.value() == kJsonRpc) {
+    order[1] = kHttpJson;
+    order[2] = kGrpc;
   } else {
-    order[1] = kProtocolBindingHttpJson;
-    order[2] = kProtocolBindingJsonRpc;
+    order[1] = kHttpJson;
+    order[2] = kJsonRpc;
   }
 
   for (const auto transport : order) {
