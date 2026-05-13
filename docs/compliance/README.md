@@ -40,19 +40,20 @@ python3 -m pip install python-dotenv pyopenssl
 
 # 3) Run mandatory category against the local SUT.
 mkdir -p tck-artifacts/reports tck-artifacts/logs
-if [[ -x tck-repo/scripts/run_tck.sh ]]; then
-  tck-repo/scripts/run_tck.sh \
+cd tck-repo
+if [[ -x ./scripts/run_tck.sh ]]; then
+    ./scripts/run_tck.sh \
     --category mandatory \
     --sut-endpoint "127.0.0.1:50061" \
-    --output-dir tck-artifacts/reports \
-    | tee tck-artifacts/logs/tck-run.log
-elif [[ -f tck-repo/run_tck.py ]]; then
-  python3 tck-repo/run_tck.py \
+    --output-dir ../tck-artifacts/reports \
+    | tee ../tck-artifacts/logs/tck-run.log
+elif [[ -f ./run_tck.py ]]; then
+  python3 ./run_tck.py \
     --sut-url "http://127.0.0.1:50061" \
     --category mandatory \
     --transports grpc \
     --transport-strategy prefer_grpc \
-    | tee tck-artifacts/logs/tck-run.log
+    | tee ../tck-artifacts/logs/tck-run.log
 else
   echo "Adjust this command to the pinned TCK entrypoint for your selected ref."
 fi
