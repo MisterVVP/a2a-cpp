@@ -121,7 +121,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
     return a2a::core::Error::Internal("Client must not be null");
   }
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("grpc-integration-1");
 
   auto send_response = client->SendMessage(send_request);
@@ -159,7 +159,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
     return a2a::core::Error::Internal("Client must not be null");
   }
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("grpc-integration-1");
 
   RecordingObserver observer;
@@ -226,7 +226,7 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
 
   constexpr std::string_view kTaskId = "grpc-subscribe-1";
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id(std::string(kTaskId));
   const auto send_response = client->SendMessage(send_request);
   if (!send_response.ok()) {

@@ -13,6 +13,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
@@ -84,7 +85,6 @@ int main(int argc, char** argv) {
   std::signal(SIGTERM, SignalHandler);
 
   lf::a2a::v1::AgentCard agent_card;
-  agent_card.set_protocol_version("1.0");
   agent_card.set_name("TCK HTTP SUT");
   agent_card.set_version("0.1.0");
   agent_card.set_description("Conformance-focused local SUT for A2A TCK");
@@ -93,7 +93,6 @@ int main(int argc, char** argv) {
   auto* capabilities = agent_card.mutable_capabilities();
   capabilities->set_streaming(true);
   capabilities->set_push_notifications(false);
-  capabilities->set_state_transition_history(true);
   auto* skill = agent_card.add_skills();
   skill->set_id("echo");
   skill->set_name("Echo Skill");
@@ -102,10 +101,12 @@ int main(int argc, char** argv) {
   skill->add_output_modes("text/plain");
   skill->add_tags("conformance");
   auto* jsonrpc_interface = agent_card.add_supported_interfaces();
-  jsonrpc_interface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC);
+  jsonrpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kJsonRpc));
+  jsonrpc_interface->set_protocol_version("1.0");
   jsonrpc_interface->set_url("http://localhost:50061/rpc");
   auto* rest_interface = agent_card.add_supported_interfaces();
-  rest_interface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_REST);
+  rest_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
+  rest_interface->set_protocol_version("1.0");
   rest_interface->set_url("http://localhost:50061/a2a");
 
   a2a::examples::ExampleExecutor executor;

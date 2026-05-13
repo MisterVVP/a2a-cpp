@@ -63,6 +63,9 @@ TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery
   a2a::client::A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_message_id("interop-rest-msg-1");
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send.mutable_message()->add_parts()->set_text("hello");
   send.mutable_message()->set_task_id("interop-rest-task");
   const auto send_result = client.SendMessage(send);
   ASSERT_TRUE(send_result.ok()) << send_result.error().message();

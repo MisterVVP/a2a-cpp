@@ -18,7 +18,7 @@ class FakeClientTransport final : public a2a::client::ClientTransport {
     (void)request;
     (void)options;
     lf::a2a::v1::SendMessageResponse response;
-    response.mutable_message()->set_role("assistant");
+    response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     return response;
   }
 
@@ -149,7 +149,7 @@ TEST(A2AClientTest, ReturnsInternalErrorWhenTransportNotConfigured) {
   } observer;
 
   lf::a2a::v1::SendMessageRequest stream_request;
-  stream_request.mutable_message()->set_role("user");
+  stream_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   const auto stream_response = client.SendStreamingMessage(stream_request, observer);
   ASSERT_FALSE(stream_response.ok());
   EXPECT_EQ(stream_response.error().code(), a2a::core::ErrorCode::kInternal);

@@ -116,7 +116,9 @@ TEST(RestServerTransportIntegrationTest, DiscoveryAndA2AClientRoundTripWorks) {
   a2a::client::A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_message_id("rest-msg-1");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send_request.mutable_message()->add_parts()->set_text("hello");
   send_request.mutable_message()->set_task_id("rest-integration-1");
 
   const auto send_response = client.SendMessage(send_request);
@@ -232,7 +234,7 @@ TEST(RestServerTransportIntegrationTest, AuthHeadersPropagateToServerContext) {
   a2a::client::A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   request.mutable_message()->set_task_id("auth-integration-1");
 
   a2a::client::CallOptions options;

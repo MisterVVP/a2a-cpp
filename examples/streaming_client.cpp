@@ -66,7 +66,7 @@ int main() {
   PrintingObserver observer;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   request.mutable_message()->set_task_id("stream-example-task");
 
   const auto handle = client.SendStreamingMessage(request, observer);

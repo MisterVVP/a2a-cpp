@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -45,45 +46,38 @@ bool HasHostPortShape(std::string_view endpoint) {
   return endpoint.find(':') != std::string_view::npos;
 }
 
-bool IsValidInterfaceEndpoint(lf::a2a::v1::TransportProtocol transport, std::string_view endpoint) {
-  switch (transport) {
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_REST:
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC:
-      return HasHttpScheme(endpoint);
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC:
-      return HasGrpcScheme(endpoint) || HasHttpScheme(endpoint) || HasHostPortShape(endpoint);
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_UNSPECIFIED:
-    case lf::a2a::v1::TransportProtocol_INT_MIN_SENTINEL_DO_NOT_USE_:
-    case lf::a2a::v1::TransportProtocol_INT_MAX_SENTINEL_DO_NOT_USE_:
-      return false;
+using a2a::core::protocol_bindings::kGrpc;
+using a2a::core::protocol_bindings::kHttpJson;
+using a2a::core::protocol_bindings::kJsonRpc;
+
+bool IsValidInterfaceEndpoint(std::string_view protocol_binding, std::string_view endpoint) {
+  if (protocol_binding == kHttpJson || protocol_binding == kJsonRpc) {
+    return HasHttpScheme(endpoint);
+  }
+  if (protocol_binding == kGrpc) {
+    return HasGrpcScheme(endpoint) || HasHttpScheme(endpoint) || HasHostPortShape(endpoint);
   }
   return false;
 }
 
-PreferredTransport ToPreferredTransport(lf::a2a::v1::TransportProtocol transport) {
-  switch (transport) {
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_REST:
-      return PreferredTransport::kRest;
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC:
-      return PreferredTransport::kJsonRpc;
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC:
-      return PreferredTransport::kGrpc;
-    case lf::a2a::v1::TRANSPORT_PROTOCOL_UNSPECIFIED:
-    case lf::a2a::v1::TransportProtocol_INT_MIN_SENTINEL_DO_NOT_USE_:
-    case lf::a2a::v1::TransportProtocol_INT_MAX_SENTINEL_DO_NOT_USE_:
-      break;
+PreferredTransport ToPreferredTransport(std::string_view protocol_binding) {
+  if (protocol_binding == kHttpJson) {
+    return PreferredTransport::kRest;
   }
-  return PreferredTransport::kRest;
+  if (protocol_binding == kJsonRpc) {
+    return PreferredTransport::kJsonRpc;
+  }
+  return PreferredTransport::kGrpc;
 }
 
-std::optional<lf::a2a::v1::TransportProtocol> ToWireTransport(PreferredTransport transport) {
+std::optional<std::string_view> ToWireTransport(PreferredTransport transport) {
   switch (transport) {
     case PreferredTransport::kRest:
-      return lf::a2a::v1::TRANSPORT_PROTOCOL_REST;
+      return kHttpJson;
     case PreferredTransport::kJsonRpc:
-      return lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC;
+      return kJsonRpc;
     case PreferredTransport::kGrpc:
-      return lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC;
+      return kGrpc;
   }
   return std::nullopt;
 }
@@ -197,38 +191,36 @@ core::Result<std::string> DiscoveryClient::BuildExtendedDiscoveryUrl(std::string
 }
 
 core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCard& card) {
-  if (card.protocol_version().empty()) {
-    return core::Error::Validation("Agent Card protocol_version is required");
-  }
-  if (!core::Version::IsSupported(card.protocol_version())) {
-    return core::Error::UnsupportedVersion("Only A2A protocol version 1.0 is supported");
-  }
   if (card.supported_interfaces().empty()) {
     return core::Error::Validation("Agent Card must include at least one supported interface");
   }
 
   for (const auto& iface : card.supported_interfaces()) {
-    if (iface.transport() == lf::a2a::v1::TRANSPORT_PROTOCOL_UNSPECIFIED) {
-      return core::Error::Validation("Agent Card contains an interface with unspecified transport");
+    if (iface.protocol_binding().empty()) {
+      return core::Error::Validation(
+          "Agent Card contains an interface with unspecified protocol binding");
+    }
+    if (iface.protocol_version().empty()) {
+      return core::Error::Validation("Agent Card contains an interface with no protocol version");
+    }
+    if (!core::Version::IsSupported(iface.protocol_version())) {
+      return core::Error::UnsupportedVersion("Only A2A protocol version 1.0 is supported");
     }
     if (iface.url().empty()) {
       return core::Error::Validation("Agent Card contains an interface without a URL");
     }
-    if (!IsValidInterfaceEndpoint(iface.transport(), iface.url())) {
-      return core::Error::Validation("Agent Card interface endpoint is invalid for its transport");
+    if (!IsValidInterfaceEndpoint(iface.protocol_binding(), iface.url())) {
+      return core::Error::Validation(
+          "Agent Card interface endpoint is invalid for its protocol binding");
     }
-    for (const auto& requirement : iface.security_requirements()) {
-      if (!card.security_schemes().contains(requirement)) {
-        return core::Error::Validation(
-            "Agent Card interface references an unknown security scheme: " + requirement);
+    for (const auto& requirement : card.security_requirements()) {
+      for (const auto& [scheme_name, _] : requirement.schemes()) {
+        if (!card.security_schemes().contains(scheme_name)) {
+          return core::Error::Validation(
+              "Agent Card security requirement references an unknown security scheme: " +
+              scheme_name);
+        }
       }
-    }
-  }
-
-  for (const auto& requirement : card.default_security_requirements()) {
-    if (!card.security_schemes().contains(requirement)) {
-      return core::Error::Validation("Agent Card default security requirement is not defined: " +
-                                     requirement);
     }
   }
   return {};
@@ -241,23 +233,21 @@ core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
     return core::Error::Validation("Invalid preferred transport requested");
   }
 
-  std::array<lf::a2a::v1::TransportProtocol, 3> order = {preferred_wire.value(),
-                                                         lf::a2a::v1::TRANSPORT_PROTOCOL_REST,
-                                                         lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC};
-  if (preferred_wire.value() == lf::a2a::v1::TRANSPORT_PROTOCOL_REST) {
-    order[1] = lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC;
-    order[2] = lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC;
-  } else if (preferred_wire.value() == lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC) {
-    order[1] = lf::a2a::v1::TRANSPORT_PROTOCOL_REST;
-    order[2] = lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC;
+  std::array<std::string_view, 3> order = {preferred_wire.value(), kHttpJson, kJsonRpc};
+  if (preferred_wire.value() == kHttpJson) {
+    order[1] = kJsonRpc;
+    order[2] = kGrpc;
+  } else if (preferred_wire.value() == kJsonRpc) {
+    order[1] = kHttpJson;
+    order[2] = kGrpc;
   } else {
-    order[1] = lf::a2a::v1::TRANSPORT_PROTOCOL_REST;
-    order[2] = lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC;
+    order[1] = kHttpJson;
+    order[2] = kJsonRpc;
   }
 
   for (const auto transport : order) {
     for (const auto& iface : card.supported_interfaces()) {
-      if (iface.transport() != transport) {
+      if (iface.protocol_binding() != transport) {
         continue;
       }
       const auto valid = ValidateInterface(iface);
@@ -266,16 +256,14 @@ core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
       }
 
       ResolvedInterface resolved;
-      resolved.transport = ToPreferredTransport(transport);
+      resolved.transport = ToPreferredTransport(iface.protocol_binding());
       resolved.url = iface.url();
-      if (iface.security_requirements().empty()) {
-        resolved.security_requirements.insert(resolved.security_requirements.end(),
-                                              card.default_security_requirements().begin(),
-                                              card.default_security_requirements().end());
-      } else {
-        resolved.security_requirements.insert(resolved.security_requirements.end(),
-                                              iface.security_requirements().begin(),
-                                              iface.security_requirements().end());
+      if (!card.security_requirements().empty()) {
+        for (const auto& requirement : card.security_requirements()) {
+          for (const auto& [scheme_name, _] : requirement.schemes()) {
+            resolved.security_requirements.push_back(scheme_name);
+          }
+        }
       }
       for (const auto& name : resolved.security_requirements) {
         const auto scheme = card.security_schemes().find(name);
@@ -291,14 +279,14 @@ core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
 }
 
 core::Result<void> AgentCardResolver::ValidateInterface(const lf::a2a::v1::AgentInterface& iface) {
-  if (iface.transport() == lf::a2a::v1::TRANSPORT_PROTOCOL_UNSPECIFIED) {
-    return core::Error::Validation("Unsupported transport");
+  if (iface.protocol_binding().empty()) {
+    return core::Error::Validation("Unsupported protocol binding");
   }
   if (iface.url().empty()) {
     return core::Error::Validation("Missing interface URL");
   }
-  if (!IsValidInterfaceEndpoint(iface.transport(), iface.url())) {
-    return core::Error::Validation("Interface endpoint is invalid for its transport");
+  if (!IsValidInterfaceEndpoint(iface.protocol_binding(), iface.url())) {
+    return core::Error::Validation("Interface endpoint is invalid for its protocol binding");
   }
   return {};
 }

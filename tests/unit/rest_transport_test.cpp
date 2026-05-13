@@ -16,7 +16,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     observed_request_id = context.request_id.value_or("missing");
     lf::a2a::v1::SendMessageResponse response;
     auto* message = response.mutable_message();
-    message->set_role("assistant");
+    message->set_role(lf::a2a::v1::ROLE_AGENT);
     message->set_task_id(request.message().task_id());
     return response;
   }
@@ -66,7 +66,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   std::string observed_request_id;
-  std::string observed_history_length;
+  int observed_history_length = -1;
   std::size_t observed_page_size = 0;
   std::string observed_page_token;
 };
@@ -90,13 +90,14 @@ TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
   a2a::server::RestRequest request;
   request.method = "POST";
   request.path = "/messages:send";
-  request.body = R"({"message":{"role":"user","taskId":"t-42"}})";
+  request.body =
+      R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-42"}})";
   request.context.request_id = "req-9";
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 200);
-  EXPECT_NE(response.value().body.find("assistant"), std::string::npos);
+  EXPECT_NE(response.value().body.find("ROLE_AGENT"), std::string::npos);
   EXPECT_EQ(executor.observed_request_id, "req-9");
 }
 
@@ -114,7 +115,7 @@ TEST(RestTransportTest, DispatchesGetTaskUsingPathAndQuery) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 200);
   EXPECT_NE(response.value().body.find("task-99"), std::string::npos);
-  EXPECT_EQ(executor.observed_history_length, "20");
+  EXPECT_EQ(executor.observed_history_length, 20);
 }
 
 TEST(RestTransportTest, DispatchesListTasksUsingQuery) {

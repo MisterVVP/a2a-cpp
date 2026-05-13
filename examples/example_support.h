@@ -53,8 +53,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     lf::a2a::v1::Task task;
     task.set_id(task_id);
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    task.mutable_status()->mutable_message()->set_role("agent");
-    task.mutable_status()->mutable_message()->add_parts()->mutable_text()->set_text("ack");
+    task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+    task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
     task_ = task;
 
     lf::a2a::v1::SendMessageResponse response;
@@ -77,7 +77,6 @@ class ExampleExecutor final : public server::AgentExecutor {
     completed.mutable_status_update()->set_task_id(request.message().task_id());
     completed.mutable_status_update()->mutable_status()->set_state(
         lf::a2a::v1::TASK_STATE_COMPLETED);
-    completed.mutable_status_update()->set_final(true);
 
     std::vector<lf::a2a::v1::StreamResponse> events;
     events.push_back(working);
@@ -124,21 +123,29 @@ class ExampleExecutor final : public server::AgentExecutor {
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {
   lf::a2a::v1::AgentCard card;
-  card.set_protocol_version("1.0");
   card.set_name(std::string(name));
+  card.set_description("example rest agent");
+  card.set_version("1.0.0");
+  card.add_default_input_modes("text/plain");
+  card.add_default_output_modes("text/plain");
   auto* iface = card.add_supported_interfaces();
-  iface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_REST);
   iface->set_url(std::string(url));
+  iface->set_protocol_binding("HTTP+JSON");
+  iface->set_protocol_version("1.0");
   return card;
 }
 
 inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::string_view url) {
   lf::a2a::v1::AgentCard card;
-  card.set_protocol_version("1.0");
   card.set_name(std::string(name));
+  card.set_description("example json-rpc agent");
+  card.set_version("1.0.0");
+  card.add_default_input_modes("text/plain");
+  card.add_default_output_modes("text/plain");
   auto* iface = card.add_supported_interfaces();
-  iface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC);
   iface->set_url(std::string(url));
+  iface->set_protocol_binding("JSONRPC");
+  iface->set_protocol_version("1.0");
   return card;
 }
 

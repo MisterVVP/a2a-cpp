@@ -34,7 +34,7 @@ int main() {
 
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest seed;
-  seed.mutable_message()->set_role("user");
+  seed.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   seed.mutable_message()->set_task_id("list-example-task");
   const auto send = client.SendMessage(seed);
   if (!send.ok()) {
