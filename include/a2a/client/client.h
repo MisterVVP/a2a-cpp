@@ -116,7 +116,7 @@ class ClientTransport {
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) = 0;
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-  SetTaskPushNotificationConfig(const lf::a2a::v1::TaskPushNotificationConfig& request,
+  CreateTaskPushNotificationConfig(const lf::a2a::v1::TaskPushNotificationConfig& request,
                                 const CallOptions& options) = 0;
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig>
@@ -161,7 +161,7 @@ class A2AClient final {
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options = {});
 
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options = {});
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(

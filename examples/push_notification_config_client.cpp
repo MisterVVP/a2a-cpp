@@ -38,7 +38,7 @@ int main() {
   cfg.set_id("cfg-1");
   cfg.set_task_id("task-1");
   cfg.set_endpoint("https://callback.example/notify");
-  const auto set_result = client.SetTaskPushNotificationConfig(cfg);
+  const auto set_result = client.CreateTaskPushNotificationConfig(cfg);
   if (!set_result.ok()) {
     std::cerr << "set failed: " << set_result.error().message() << '\n';
     return 1;

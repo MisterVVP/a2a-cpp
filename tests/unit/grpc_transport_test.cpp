@@ -72,7 +72,7 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     return cancel_status;
   }
 
-  grpc::Status SetTaskPushNotificationConfig(
+  grpc::Status CreateTaskPushNotificationConfig(
       grpc::ClientContext* context, const lf::a2a::v1::TaskPushNotificationConfig& request,
       lf::a2a::v1::TaskPushNotificationConfig* response) override {
     (void)context;

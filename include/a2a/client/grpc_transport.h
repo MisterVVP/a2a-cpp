@@ -49,7 +49,7 @@ class GrpcTransport final : public ClientTransport {
                                                     const lf::a2a::v1::CancelTaskRequest& request,
                                                     lf::a2a::v1::Task* response) = 0;
 
-    [[nodiscard]] virtual ::grpc::Status SetTaskPushNotificationConfig(
+    [[nodiscard]] virtual ::grpc::Status CreateTaskPushNotificationConfig(
         ::grpc::ClientContext* context, const lf::a2a::v1::TaskPushNotificationConfig& request,
         lf::a2a::v1::TaskPushNotificationConfig* response) = 0;
 
@@ -86,7 +86,7 @@ class GrpcTransport final : public ClientTransport {
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(

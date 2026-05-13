@@ -59,10 +59,10 @@ class StubRpcClient final : public GrpcTransport::RpcClient {
     return stub_->CancelTask(context, request, response);
   }
 
-  [[nodiscard]] ::grpc::Status SetTaskPushNotificationConfig(
+  [[nodiscard]] ::grpc::Status CreateTaskPushNotificationConfig(
       ::grpc::ClientContext* context, const lf::a2a::v1::TaskPushNotificationConfig& request,
       lf::a2a::v1::TaskPushNotificationConfig* response) override {
-    return stub_->SetTaskPushNotificationConfig(context, request, response);
+    return stub_->CreateTaskPushNotificationConfig(context, request, response);
   }
 
   [[nodiscard]] ::grpc::Status GetTaskPushNotificationConfig(
@@ -217,7 +217,7 @@ core::Result<lf::a2a::v1::Task> GrpcTransport::CancelTask(
   return response;
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::SetTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   auto context_result = BuildContext(options);
   if (!context_result.ok()) {
@@ -225,7 +225,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::SetTaskPush
   }
   auto context = std::move(context_result.value());
   lf::a2a::v1::TaskPushNotificationConfig response;
-  const auto status = rpc_client_->SetTaskPushNotificationConfig(context.get(), request, &response);
+  const auto status = rpc_client_->CreateTaskPushNotificationConfig(context.get(), request, &response);
   if (!status.ok()) {
     return BuildGrpcError(status);
   }

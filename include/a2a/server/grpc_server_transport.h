@@ -36,7 +36,7 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
   [[nodiscard]] static ::grpc::Status ToGrpcStatus(const core::Error& error,
                                                    ::grpc::ServerContext* context);
 
-  ::grpc::Status SetTaskPushNotificationConfig(
+  ::grpc::Status CreateTaskPushNotificationConfig(
       ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
       lf::a2a::v1::TaskPushNotificationConfig* response) override;
 

@@ -10,7 +10,7 @@ struct MethodNames final {
   static constexpr std::string_view kSendMessage = "a2a.sendMessage";
   static constexpr std::string_view kGetTask = "a2a.getTask";
   static constexpr std::string_view kCancelTask = "a2a.cancelTask";
-  static constexpr std::string_view kSetTaskPushNotificationConfig =
+  static constexpr std::string_view kCreateTaskPushNotificationConfig =
       "a2a.setTaskPushNotificationConfig";
   static constexpr std::string_view kGetTaskPushNotificationConfig =
       "a2a.getTaskPushNotificationConfig";

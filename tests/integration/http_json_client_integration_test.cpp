@@ -166,7 +166,7 @@ TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
   lf::a2a::v1::TaskPushNotificationConfig set_request;
   set_request.set_task_id("t-1");
   set_request.set_endpoint("https://cb");
-  const auto set_response = client.SetTaskPushNotificationConfig(set_request);
+  const auto set_response = client.CreateTaskPushNotificationConfig(set_request);
   ASSERT_TRUE(set_response.ok()) << set_response.error().message();
   EXPECT_EQ(set_response.value().id(), "pn-1");
 
