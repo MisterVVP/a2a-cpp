@@ -1,10 +1,12 @@
 #include "a2a/server/rest_server_transport.h"
 
 #include <cctype>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -82,6 +84,30 @@ google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::
     value.mutable_list_value();
   }
   return &value;
+}
+
+std::optional<std::string> FindInterfaceUrl(const google::protobuf::Struct& card,
+                                            std::string_view protocol_binding) {
+  const auto interfaces_it = card.fields().find("supportedInterfaces");
+  if (interfaces_it == card.fields().end() || !interfaces_it->second.has_list_value()) {
+    return std::nullopt;
+  }
+  for (const auto& entry : interfaces_it->second.list_value().values()) {
+    if (!entry.has_struct_value()) {
+      continue;
+    }
+    const auto& fields = entry.struct_value().fields();
+    const auto binding_it = fields.find("protocolBinding");
+    const auto url_it = fields.find("url");
+    if (binding_it == fields.end() || url_it == fields.end() ||
+        !binding_it->second.has_string_value() || !url_it->second.has_string_value()) {
+      continue;
+    }
+    if (binding_it->second.string_value() == protocol_binding) {
+      return url_it->second.string_value();
+    }
+  }
+  return std::nullopt;
 }
 
 HttpServerResponse BuildJsonErrorResponse(int status_code, const JsonError& error) {
@@ -202,7 +228,7 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(
                                     ? std::string_view(request.target)
                                     : std::string_view(request.target).substr(0, query_start);
 
-  if (path == kAgentCardPath) {
+  if (path == kAgentCardPath || path == kLegacyAgentCardPath) {
     return HandleAgentCard(request);
   }
 
@@ -330,6 +356,43 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
       EnsureListField(skill.mutable_struct_value(), "tags");
     }
   }
+
+  // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
+  if (fields->find("endpoint") == fields->end()) {
+    const auto jsonrpc_url =
+        FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kJsonRpc));
+    const auto rest_url =
+        FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kHttpJson));
+    if (jsonrpc_url.has_value()) {
+      (*fields)["endpoint"].set_string_value(jsonrpc_url.value());
+      (*fields)["preferredTransport"].set_string_value("jsonrpc");
+    } else if (rest_url.has_value()) {
+      (*fields)["endpoint"].set_string_value(rest_url.value());
+      (*fields)["preferredTransport"].set_string_value("rest");
+    }
+  }
+
+  if (fields->find("additionalInterfaces") == fields->end()) {
+    google::protobuf::Value additional;
+    auto* interfaces = additional.mutable_list_value()->mutable_values();
+    for (const auto& iface : agent_card_.supported_interfaces()) {
+      google::protobuf::Value interface_value;
+      auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
+      if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
+        (*interface_fields)["transport"].set_string_value("jsonrpc");
+      } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
+        (*interface_fields)["transport"].set_string_value("rest");
+      } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
+        (*interface_fields)["transport"].set_string_value("grpc");
+      } else {
+        continue;
+      }
+      (*interface_fields)["endpoint"].set_string_value(iface.url());
+      interfaces->Add(std::move(interface_value));
+    }
+    (*fields)["additionalInterfaces"] = std::move(additional);
+  }
+
   const auto normalized = core::MessageToJson(card);
   if (!normalized.ok()) {
     return normalized.error();
