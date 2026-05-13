@@ -68,6 +68,41 @@ std::string ErrorBody(const JsonError& error) {
   return R"({"error":{"message":"serialization failed"}})";
 }
 
+google::protobuf::Value* EnsureStructField(google::protobuf::Struct* object, std::string key) {
+  auto& value = (*object->mutable_fields())[std::move(key)];
+  if (!value.has_struct_value()) {
+    value.mutable_struct_value();
+  }
+  return &value;
+}
+
+google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::string key) {
+  auto& value = (*object->mutable_fields())[std::move(key)];
+  if (!value.has_list_value()) {
+    value.mutable_list_value();
+  }
+  return &value;
+}
+
+void NormalizeTransportStrings(google::protobuf::Struct* card) {
+  auto it = card->mutable_fields()->find("supportedInterfaces");
+  if (it == card->mutable_fields()->end() || !it->second.has_list_value()) return;
+  for (auto& iface : *it->second.mutable_list_value()->mutable_values()) {
+    if (!iface.has_struct_value()) continue;
+    auto* fields = iface.mutable_struct_value()->mutable_fields();
+    auto fit = fields->find("transport");
+    if (fit == fields->end() || !fit->second.has_string_value()) continue;
+    const auto& transport = fit->second.string_value();
+    if (transport == "TRANSPORT_PROTOCOL_JSON_RPC") {
+      fit->second.set_string_value("jsonrpc");
+    } else if (transport == "TRANSPORT_PROTOCOL_REST") {
+      fit->second.set_string_value("rest");
+    } else if (transport == "TRANSPORT_PROTOCOL_GRPC") {
+      fit->second.set_string_value("grpc");
+    }
+  }
+}
+
 HttpServerResponse BuildJsonErrorResponse(int status_code, const JsonError& error) {
   HttpServerResponse response;
   response.status_code = status_code;
@@ -274,11 +309,58 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
     return body.error();
   }
 
+  google::protobuf::Struct card;
+  const auto parsed = core::JsonToMessage(body.value(), &card, {.ignore_unknown_fields = false});
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  auto* fields = card.mutable_fields();
+  if (fields->find("version") == fields->end()) {
+    (*fields)["version"].set_string_value("0.1.0");
+  }
+  if (fields->find("description") == fields->end()) {
+    (*fields)["description"].set_string_value("");
+  }
+  auto* capabilities = EnsureStructField(&card, "capabilities")->mutable_struct_value();
+  auto* cap_fields = capabilities->mutable_fields();
+  if (cap_fields->find("streaming") == cap_fields->end()) {
+    (*cap_fields)["streaming"].set_bool_value(false);
+  }
+  if (cap_fields->find("pushNotifications") == cap_fields->end()) {
+    (*cap_fields)["pushNotifications"].set_bool_value(false);
+  }
+  if (cap_fields->find("stateTransitionHistory") == cap_fields->end()) {
+    (*cap_fields)["stateTransitionHistory"].set_bool_value(false);
+  }
+  if (fields->find("defaultInputModes") == fields->end()) {
+    auto* modes = EnsureListField(&card, "defaultInputModes")->mutable_list_value();
+    modes->add_values()->set_string_value("text/plain");
+  }
+  if (fields->find("defaultOutputModes") == fields->end()) {
+    auto* modes = EnsureListField(&card, "defaultOutputModes")->mutable_list_value();
+    modes->add_values()->set_string_value("text/plain");
+  }
+  if (fields->find("skills") == fields->end()) {
+    EnsureListField(&card, "skills");
+  }
+  auto skills_it = fields->find("skills");
+  if (skills_it != fields->end() && skills_it->second.has_list_value()) {
+    for (auto& skill : *skills_it->second.mutable_list_value()->mutable_values()) {
+      if (!skill.has_struct_value()) continue;
+      EnsureListField(skill.mutable_struct_value(), "tags");
+    }
+  }
+  NormalizeTransportStrings(&card);
+  const auto normalized = core::MessageToJson(card);
+  if (!normalized.ok()) {
+    return normalized.error();
+  }
+
   HttpServerResponse response;
   response.status_code = kHttpOk;
   response.headers["Content-Type"] = "application/json";
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  response.body = body.value();
+  response.body = normalized.value();
   return response;
 }
 

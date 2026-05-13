@@ -214,6 +214,7 @@ message AgentCard {
   repeated AgentSkill skills = 8;
   repeated string default_input_modes = 9;
   repeated string default_output_modes = 10;
+  string version = 11;
 }
 
 message AgentCapabilities {
@@ -228,4 +229,5 @@ message AgentSkill {
   string description = 3;
   repeated string input_modes = 4;
   repeated string output_modes = 5;
+  repeated string tags = 6;
 }

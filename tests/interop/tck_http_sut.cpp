@@ -71,14 +71,6 @@ void WriteResponse(int fd, const a2a::server::HttpServerResponse& response) {
   (void)::send(fd, payload.data(), payload.size(), 0);
 }
 
-void ReplaceAll(std::string& value, std::string_view from, std::string_view to) {
-  std::size_t pos = 0;
-  while ((pos = value.find(from, pos)) != std::string::npos) {
-    value.replace(pos, from.size(), to);
-    pos += to.size();
-  }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -94,6 +86,7 @@ int main(int argc, char** argv) {
   lf::a2a::v1::AgentCard agent_card;
   agent_card.set_protocol_version("1.0");
   agent_card.set_name("TCK HTTP SUT");
+  agent_card.set_version("0.1.0");
   agent_card.set_description("Conformance-focused local SUT for A2A TCK");
   agent_card.add_default_input_modes("text/plain");
   agent_card.add_default_output_modes("text/plain");
@@ -107,6 +100,7 @@ int main(int argc, char** argv) {
   skill->set_description("Echoes incoming text for conformance testing");
   skill->add_input_modes("text/plain");
   skill->add_output_modes("text/plain");
+  skill->add_tags("conformance");
   auto* jsonrpc_interface = agent_card.add_supported_interfaces();
   jsonrpc_interface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC);
   jsonrpc_interface->set_url("http://localhost:50061/rpc");
@@ -163,12 +157,6 @@ int main(int argc, char** argv) {
                                            .body = body,
                                            .remote_address = "127.0.0.1"};
     auto response = rest.Handle(request);
-    if (method == "GET" && target == "/.well-known/agent-card.json" && response.ok()) {
-      auto body = response.value().body;
-      ReplaceAll(body, "\"TRANSPORT_PROTOCOL_JSON_RPC\"", "\"jsonrpc\"");
-      ReplaceAll(body, "\"TRANSPORT_PROTOCOL_REST\"", "\"rest\"");
-      response.value().body = std::move(body);
-    }
     if (target == "/rpc" || target == "/") {
       request.target = "/rpc";
       response = jsonrpc.Handle(request);
