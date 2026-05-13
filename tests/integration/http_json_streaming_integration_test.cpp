@@ -103,7 +103,7 @@ class RecordingObserver final : public StreamObserver {
 TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEventsInOrder) {
   const std::vector<std::string> chunks = {
       "event: message\ndata: {\"task\":{\"id\":\"t-1\"}}\n\n",
-      "event: message\ndata: {\"statusUpdate\":{\"taskId\":\"t-1\",\"final\":false,",
+      "event: message\ndata: {\"statusUpdate\":{\"taskId\":\"t-1\",",
       "\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n",
       "data: {\"artifactUpdate\":{\"taskId\":\"t-1\",\"artifact\":{\"artifactId\":\"a-1\"}}}\n\n"};
 
@@ -126,7 +126,7 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
   RecordingObserver observer;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   auto stream = client.SendStreamingMessage(request, observer, CallOptions{});
   ASSERT_TRUE(stream.ok()) << stream.error().message();
@@ -152,7 +152,7 @@ TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
   A2AClient client(std::move(transport));
   RecordingObserver observer;
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
@@ -187,7 +187,7 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
   RecordingObserver observer;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
@@ -238,7 +238,7 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolErr
   RecordingObserver observer;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
@@ -265,7 +265,7 @@ TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) 
   A2AClient client(std::move(transport));
   RecordingObserver observer;
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
@@ -302,7 +302,7 @@ TEST(HttpJsonStreamingIntegrationTest, MissingStreamRequesterReturnsInternalErro
   RecordingObserver observer;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   const auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_FALSE(stream.ok());

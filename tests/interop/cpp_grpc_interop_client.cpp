@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
   a2a::client::A2AClient client(std::make_unique<a2a::client::GrpcTransport>(iface, channel));
 
   lf::a2a::v1::SendMessageRequest send;
-  send.mutable_message()->set_role("user");
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send.mutable_message()->set_task_id("interop-task-1");
   if (auto r = client.SendMessage(send); !r.ok()) {
     return 1;

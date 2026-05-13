@@ -35,9 +35,7 @@ class JsonRpcIntegrationHarness final {
         dispatcher_(&executor_),
         card_(a2a::tests::support::BuildJsonRpcAgentCard("Integration JSON-RPC Agent",
                                                          "http://agent.local/rpc")),
-        server_(&dispatcher_, {.rpc_path = "/rpc"}) {
-    card_.set_protocol_version("1.0");
-  }
+        server_(&dispatcher_, {.rpc_path = "/rpc"}) {}
 
   a2a::client::DiscoveryClient CreateDiscoveryClient() {
     return a2a::client::DiscoveryClient(
@@ -99,7 +97,7 @@ TEST(JsonRpcServerTransportIntegrationTest, DiscoveryAndClientRoundTripWorks) {
   a2a::client::A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("jsonrpc-integration-1");
 
   const auto send_response = client.SendMessage(send_request);

@@ -33,11 +33,11 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
       const lf::a2a::v1::SendMessageRequest& request,
       a2a::server::RequestContext& context) override {
     last_request_id = context.request_id.value_or("missing");
-    if (request.message().role().empty()) {
+    if (request.message().role() == lf::a2a::v1::ROLE_UNSPECIFIED) {
       return a2a::core::Error::Validation("message role is required");
     }
     lf::a2a::v1::SendMessageResponse response;
-    response.mutable_message()->set_role("assistant");
+    response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     return response;
   }
 
@@ -47,7 +47,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     (void)request;
     (void)context;
     lf::a2a::v1::StreamResponse event;
-    event.mutable_message()->set_role("assistant");
+    event.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     return std::unique_ptr<a2a::server::ServerStreamSession>(
         std::make_unique<SingleEventSession>(std::move(event)));
   }
@@ -126,7 +126,7 @@ TEST(ServerDispatcherTest, DispatchesAllSupportedOperations) {
   context.request_id = "req-123";
 
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   const a2a::server::DispatchRequest send_dispatch{
       .operation = a2a::server::DispatcherOperation::kSendMessage, .payload = send_request};
   const auto send_result = dispatcher.Dispatch(send_dispatch, context);
@@ -204,7 +204,7 @@ TEST(ServerDispatcherTest, ReturnsInternalErrorWithoutExecutor) {
   a2a::server::RequestContext context;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   const a2a::server::DispatchRequest dispatch{
       .operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request};
@@ -222,7 +222,7 @@ TEST(ServerDispatcherTest, InterceptorsObserveOrderingAndCanMutateContext) {
   dispatcher.AddInterceptor(std::make_shared<RecordingServerInterceptor>(&events, "i2"));
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   a2a::server::RequestContext context;
 
   const auto result = dispatcher.Dispatch(
@@ -243,7 +243,7 @@ TEST(ServerDispatcherTest, InterceptorFailureShortCircuitsDispatchAndTriggersAft
   dispatcher.AddInterceptor(std::make_shared<RecordingServerInterceptor>(&events, "i2", true));
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   a2a::server::RequestContext context;
 
   const auto result = dispatcher.Dispatch(

@@ -312,9 +312,6 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
   if (cap_fields->find("pushNotifications") == cap_fields->end()) {
     (*cap_fields)["pushNotifications"].set_bool_value(false);
   }
-  if (cap_fields->find("stateTransitionHistory") == cap_fields->end()) {
-    (*cap_fields)["stateTransitionHistory"].set_bool_value(false);
-  }
   if (fields->find("defaultInputModes") == fields->end()) {
     auto* modes = EnsureListField(&card, "defaultInputModes")->mutable_list_value();
     modes->add_values()->set_string_value("text/plain");

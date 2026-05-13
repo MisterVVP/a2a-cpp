@@ -20,7 +20,7 @@ TEST(JsonRpcServerTransportFunctionalTest, SupportsTaskLifecycleMethodsOverJsonR
 
   const auto send_response = server.Handle(a2a::tests::support::MakeHttpRequest(
       "POST", "/rpc", {{"A2A-Version", "1.0"}},
-      R"({"jsonrpc":"2.0","id":"send-1","method":"a2a.sendMessage","params":{"message":{"role":"user","taskId":"task-jsonrpc-functional-1"}}})"));
+      R"({"jsonrpc":"2.0","id":"send-1","method":"a2a.sendMessage","params":{"message":{"role":"ROLE_USER","taskId":"task-jsonrpc-functional-1"}}})"));
   ASSERT_TRUE(send_response.ok());
   EXPECT_EQ(send_response.value().status_code, kHttpOk);
 
@@ -54,7 +54,7 @@ TEST(JsonRpcServerTransportFunctionalTest, RejectsMissingVersionHeaderWhenRequir
 
   const auto response = server.Handle(a2a::tests::support::MakeHttpRequest(
       "POST", "/rpc", {},
-      R"({"jsonrpc":"2.0","id":"send-no-version","method":"a2a.sendMessage","params":{"message":{"role":"user","taskId":"task-a"}}})"));
+      R"({"jsonrpc":"2.0","id":"send-no-version","method":"a2a.sendMessage","params":{"message":{"role":"ROLE_USER","taskId":"task-a"}}})"));
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpUpgradeRequired);

@@ -71,7 +71,7 @@ TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
        .target = "/rpc",
        .headers = {{"A2A-Version", "1.0"}},
        .body =
-           R"({"jsonrpc":"2.0","id":"req-1","method":"a2a.sendMessage","params":{"message":{"role":"user","taskId":"task-1"}}})",
+           R"({"jsonrpc":"2.0","id":"req-1","method":"a2a.sendMessage","params":{"message":{"role":"ROLE_USER","taskId":"task-1"}}})",
        .remote_address = "127.0.0.1"});
 
   ASSERT_TRUE(response.ok());
@@ -182,7 +182,7 @@ TEST(JsonRpcServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
        .target = "/rpc",
        .headers = {{"A2A-Version", "1.0"}, {"Authorization", "Bearer token-rpc"}},
        .body =
-           R"({"jsonrpc":"2.0","id":"req-auth","method":"a2a.sendMessage","params":{"message":{"role":"user","taskId":"task-auth"}}})",
+           R"({"jsonrpc":"2.0","id":"req-auth","method":"a2a.sendMessage","params":{"message":{"role":"ROLE_USER","taskId":"task-auth"}}})",
        .remote_address = "127.0.0.1"});
 
   ASSERT_TRUE(response.ok());

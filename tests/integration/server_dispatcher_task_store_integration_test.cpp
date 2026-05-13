@@ -92,7 +92,7 @@ TEST(ServerDispatcherTaskStoreIntegrationTest, ExecutesTaskLifecycleThroughDispa
   a2a::server::RequestContext context;
 
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("integration-task-1");
 
   const auto send_result = dispatcher.Dispatch(
@@ -137,7 +137,7 @@ TEST(ServerDispatcherTaskStoreIntegrationTest, InterceptorsObserveRequestLifecyc
   a2a::server::RequestContext context;
 
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("integration-task-2");
 
   const auto send_result = dispatcher.Dispatch(

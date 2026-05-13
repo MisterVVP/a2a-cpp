@@ -42,12 +42,12 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
         captured = request;
         return HttpClientResponse{.status_code = kHttpOk,
                                   .headers = {{"A2A-Version", "1.0"}},
-                                  .body = R"({"message":{"role":"agent"}})"};
+                                  .body = R"({"message":{"role":"ROLE_AGENT"}})"};
       });
   A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   CallOptions options;
   options.timeout = std::chrono::milliseconds(kCustomTimeoutMs);
@@ -58,7 +58,7 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
   const auto response = client.SendMessage(request, options);
   ASSERT_TRUE(response.ok()) << response.error().message();
   ASSERT_TRUE(response.value().has_message());
-  EXPECT_EQ(response.value().message().role(), "agent");
+  EXPECT_EQ(response.value().message().role(), lf::a2a::v1::ROLE_AGENT);
 
   EXPECT_EQ(captured.method, "POST");
   EXPECT_EQ(captured.url, "https://agent.example.com/a2a/messages:send");
@@ -69,7 +69,7 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
   EXPECT_EQ(captured.headers.at("X-Request-Id"), "abc123");
   EXPECT_EQ(captured.headers.at("Authorization"), "Bearer token");
   EXPECT_EQ(captured.headers.at("A2A-Extensions"), "ext.alpha,ext.beta");
-  EXPECT_NE(captured.body.find("\"role\":\"user\""), std::string::npos);
+  EXPECT_NE(captured.body.find("\"role\":\"ROLE_USER\""), std::string::npos);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
@@ -98,7 +98,7 @@ TEST(HttpJsonClientIntegrationTest, GetTaskAndCancelTaskHappyPath) {
 
   lf::a2a::v1::GetTaskRequest get_request;
   get_request.set_id("t-1");
-  get_request.set_history_length("2");
+  get_request.set_history_length(2);
   const auto get_response = client.GetTask(get_request);
   ASSERT_TRUE(get_response.ok()) << get_response.error().message();
   EXPECT_EQ(get_response.value().id(), "t-1");
@@ -137,16 +137,14 @@ TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         if (request.method == "POST" && request.url.ends_with("/pushNotificationConfigs")) {
-          return HttpClientResponse{
-              .status_code = kHttpOk,
-              .headers = {{"A2A-Version", "1.0"}},
-              .body = R"({"id":"pn-1","taskId":"t-1","endpoint":"https://cb"})"};
+          return HttpClientResponse{.status_code = kHttpOk,
+                                    .headers = {{"A2A-Version", "1.0"}},
+                                    .body = R"({"id":"pn-1","taskId":"t-1","url":"https://cb"})"};
         }
         if (request.method == "GET" && request.url.ends_with("/pushNotificationConfigs/pn-1")) {
-          return HttpClientResponse{
-              .status_code = kHttpOk,
-              .headers = {{"A2A-Version", "1.0"}},
-              .body = R"({"id":"pn-1","taskId":"t-1","endpoint":"https://cb"})"};
+          return HttpClientResponse{.status_code = kHttpOk,
+                                    .headers = {{"A2A-Version", "1.0"}},
+                                    .body = R"({"id":"pn-1","taskId":"t-1","url":"https://cb"})"};
         }
         if (request.method == "GET" &&
             request.url.find("/pushNotificationConfigs?taskId=t-1&pageSize=25") !=
@@ -165,12 +163,13 @@ TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
 
   lf::a2a::v1::TaskPushNotificationConfig set_request;
   set_request.set_task_id("t-1");
-  set_request.set_endpoint("https://cb");
+  set_request.set_url("https://cb");
   const auto set_response = client.CreateTaskPushNotificationConfig(set_request);
   ASSERT_TRUE(set_response.ok()) << set_response.error().message();
   EXPECT_EQ(set_response.value().id(), "pn-1");
 
   lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
+  get_request.set_task_id("t-1");
   get_request.set_id("pn-1");
   const auto get_response = client.GetTaskPushNotificationConfig(get_request);
   ASSERT_TRUE(get_response.ok()) << get_response.error().message();
@@ -185,6 +184,7 @@ TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
   EXPECT_EQ(list_response.value().configs(0).id(), "pn-1");
 
   lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
+  delete_request.set_task_id("t-1");
   delete_request.set_id("pn-1");
   const auto delete_response = client.DeleteTaskPushNotificationConfig(delete_request);
   EXPECT_TRUE(delete_response.ok()) << delete_response.error().message();

@@ -57,9 +57,10 @@ a2a::core::Result<HttpClientResponse> HandleFunctionalRequest(const HttpRequest&
   const std::string id = ExtractFieldOrDefault(envelope, "id");
   const std::string method = ExtractFieldOrDefault(envelope, "method");
   if (method == "a2a.sendMessage") {
-    return HttpClientResponse{.status_code = kHttpOk,
-                              .headers = {{"A2A-Version", "1.0"}},
-                              .body = BuildResultEnvelope(id, R"({"message":{"role":"agent"}})")};
+    return HttpClientResponse{
+        .status_code = kHttpOk,
+        .headers = {{"A2A-Version", "1.0"}},
+        .body = BuildResultEnvelope(id, R"({"message":{"role":"ROLE_AGENT"}})")};
   }
   if (method == "a2a.getTask") {
     return HttpClientResponse{.status_code = kHttpOk,
@@ -90,12 +91,12 @@ TEST(JsonRpcClientFunctionalTest, SendMessageRoundTripsThroughTransportContract)
   A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
   const auto response = client.SendMessage(request);
   ASSERT_TRUE(response.ok()) << response.error().message();
   ASSERT_TRUE(response.value().has_message());
-  EXPECT_EQ(response.value().message().role(), "agent");
+  EXPECT_EQ(response.value().message().role(), lf::a2a::v1::ROLE_AGENT);
 }
 
 TEST(JsonRpcClientFunctionalTest, GetTaskRoundTripsThroughTransportContract) {
