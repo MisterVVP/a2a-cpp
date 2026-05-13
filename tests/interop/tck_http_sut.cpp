@@ -94,11 +94,19 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
+  lf::a2a::v1::AgentCard agent_card;
+  agent_card.set_protocol_version("1.0");
+  agent_card.set_name("TCK HTTP SUT");
+  auto* jsonrpc_interface = agent_card.add_supported_interfaces();
+  jsonrpc_interface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC);
+  jsonrpc_interface->set_url("http://localhost:50061/rpc");
+  auto* rest_interface = agent_card.add_supported_interfaces();
+  rest_interface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_REST);
+  rest_interface->set_url("http://localhost:50061/a2a");
+
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport rest(
-      &dispatcher, a2a::examples::BuildRestAgentCard("TCK HTTP SUT", "http://127.0.0.1:50061/a2a"),
-      {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport rest(&dispatcher, agent_card, {.rest_api_base_path = "/a2a"});
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc"});
 
   int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -145,44 +153,12 @@ int main(int argc, char** argv) {
                                            .body = body,
                                            .remote_address = "127.0.0.1"};
     if (method == "GET" && target == "/.well-known/agent-card.json") {
-      constexpr std::string_view kAgentCard = R"({
-  "protocolVersion": "1.0",
-  "name": "TCK HTTP SUT",
-  "description": "Conformance-focused local SUT for A2A TCK",
-  "version": "0.1.0",
-  "capabilities": {
-    "streaming": true,
-    "pushNotifications": false,
-    "stateTransitionHistory": true
-  },
-  "defaultInputModes": ["text/plain"],
-  "defaultOutputModes": ["text/plain"],
-  "skills": [
-    {
-      "id": "echo",
-      "name": "Echo Skill",
-      "description": "Echoes incoming text for conformance testing",
-      "inputModes": ["text/plain"],
-      "outputModes": ["text/plain"],
-      "tags": ["conformance"]
-    }
-  ],
-  "supportedInterfaces": [
-    {
-      "transport": "jsonrpc",
-      "url": "http://localhost:50061/rpc"
-    },
-    {
-      "transport": "rest",
-      "url": "http://localhost:50061/a2a"
-    }
-  ]
-})";
-      WriteRawJsonResponse(fd, 200, kAgentCard);
+      const std::string card =
+          R"({"protocolVersion":"1.0","name":"TCK HTTP SUT","description":"Conformance-focused local SUT for A2A TCK","capabilities":{"streaming":true,"pushNotifications":false,"stateTransitionHistory":true},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[{"id":"echo","name":"Echo Skill","description":"Echoes incoming text for conformance testing","inputModes":["text/plain"],"outputModes":["text/plain"]}],"supportedInterfaces":[{"transport":"jsonrpc","url":"http://localhost:50061/rpc"},{"transport":"rest","url":"http://localhost:50061/a2a"}]})";
+      WriteRawJsonResponse(fd, 200, card);
       close(fd);
       continue;
     }
-
     auto response = rest.Handle(request);
     if (target == "/rpc" || target == "/") {
       request.target = "/rpc";
