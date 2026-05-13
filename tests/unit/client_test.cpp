@@ -50,7 +50,7 @@ class FakeClientTransport final : public a2a::client::ClientTransport {
     return task;
   }
 
-  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request,
       const a2a::client::CallOptions& options) override {
     (void)options;

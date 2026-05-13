@@ -409,7 +409,7 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-HttpJsonTransport::SetTaskPushNotificationConfig(
+HttpJsonTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   const auto body = core::MessageToJson(request);
   if (!body.ok()) {

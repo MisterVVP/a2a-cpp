@@ -401,10 +401,10 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-JsonRpcTransport::SetTaskPushNotificationConfig(
+JsonRpcTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   const auto result = InvokeForResultValue(
-      core::json_rpc::MethodNames::kSetTaskPushNotificationConfig, request, options);
+      core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }

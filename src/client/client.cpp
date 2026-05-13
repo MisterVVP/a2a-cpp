@@ -93,15 +93,15 @@ core::Result<lf::a2a::v1::Task> A2AClient::CancelTask(const lf::a2a::v1::CancelT
   return result;
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::SetTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "SetTaskPushNotificationConfig",
+  const ClientCallContext context{.operation = "CreateTaskPushNotificationConfig",
                                   .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->SetTaskPushNotificationConfig(request, options);
+  const auto result = transport_->CreateTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context, result.ok()
                                     ? ClientCallResult{}
                                     : ClientCallResult{.ok = false, .error = result.error()});

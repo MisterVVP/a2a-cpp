@@ -204,7 +204,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return ::grpc::Status::OK;
 }
 
-::grpc::Status GrpcServerTransport::SetTaskPushNotificationConfig(
+::grpc::Status GrpcServerTransport::CreateTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
   (void)context;
