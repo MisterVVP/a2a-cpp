@@ -184,8 +184,10 @@ RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::Ag
                                          RestServerTransportOptions options)
     : transport_(dispatcher), agent_card_(std::move(agent_card)), options_(std::move(options)) {
   options_.rest_api_base_path = NormalizeBasePath(options_.rest_api_base_path);
-  if (agent_card_.protocol_version().empty()) {
-    agent_card_.set_protocol_version(core::Version::HeaderValue());
+  for (auto& iface : *agent_card_.mutable_supported_interfaces()) {
+    if (iface.protocol_version().empty()) {
+      iface.set_protocol_version(core::Version::HeaderValue());
+    }
   }
 }
 

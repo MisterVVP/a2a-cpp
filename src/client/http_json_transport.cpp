@@ -356,8 +356,8 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(
   }
 
   std::string endpoint = BuildTaskPath(request.id());
-  if (!request.history_length().empty()) {
-    endpoint += "?historyLength=" + request.history_length();
+  if (request.has_history_length()) {
+    endpoint += "?historyLength=" + std::to_string(request.history_length());
   }
 
   const auto response = SendRequest({.method = "GET", .endpoint = endpoint}, {}, options);
@@ -528,8 +528,8 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(
   }
 
   std::string endpoint = BuildTaskPath(request.id()) + ":subscribe";
-  if (!request.history_length().empty()) {
-    endpoint += "?historyLength=" + request.history_length();
+  if (request.has_history_length()) {
+    endpoint += "?historyLength=" + std::to_string(request.history_length());
   }
 
   return StartSseStream({.method = "GET", .endpoint = endpoint}, {}, observer, options);

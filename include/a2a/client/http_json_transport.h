@@ -60,8 +60,9 @@ class HttpJsonTransport final : public ClientTransport {
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
       const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
-      const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig>
+  CreateTaskPushNotificationConfig(const lf::a2a::v1::TaskPushNotificationConfig& request,
+                                   const CallOptions& options) override;
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
       const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,

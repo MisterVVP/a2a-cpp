@@ -217,7 +217,8 @@ core::Result<lf::a2a::v1::Task> GrpcTransport::CancelTask(
   return response;
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::CreateTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig>
+GrpcTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   auto context_result = BuildContext(options);
   if (!context_result.ok()) {
@@ -225,7 +226,8 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::CreateTaskP
   }
   auto context = std::move(context_result.value());
   lf::a2a::v1::TaskPushNotificationConfig response;
-  const auto status = rpc_client_->CreateTaskPushNotificationConfig(context.get(), request, &response);
+  const auto status =
+      rpc_client_->CreateTaskPushNotificationConfig(context.get(), request, &response);
   if (!status.ok()) {
     return BuildGrpcError(status);
   }

@@ -201,7 +201,11 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
       payload.set_id(task_id.value());
       if (const auto history_length = LookupQuery(request, "historyLength");
           history_length.has_value()) {
-        payload.set_history_length(*history_length);
+        const int parsed_history_length = ParsePageSize(*history_length);
+        if (parsed_history_length < 0) {
+          return std::nullopt;
+        }
+        payload.set_history_length(parsed_history_length);
       }
       return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
     }
