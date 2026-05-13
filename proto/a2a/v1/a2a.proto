@@ -209,4 +209,23 @@ message AgentCard {
   repeated AgentInterface supported_interfaces = 3;
   map<string, SecurityScheme> security_schemes = 4;
   repeated string default_security_requirements = 5;
+  string description = 6;
+  AgentCapabilities capabilities = 7;
+  repeated AgentSkill skills = 8;
+  repeated string default_input_modes = 9;
+  repeated string default_output_modes = 10;
+}
+
+message AgentCapabilities {
+  bool streaming = 1;
+  bool push_notifications = 2;
+  bool state_transition_history = 3;
+}
+
+message AgentSkill {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string input_modes = 4;
+  repeated string output_modes = 5;
 }
