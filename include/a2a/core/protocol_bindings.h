@@ -9,4 +9,3 @@ inline constexpr std::string_view kJsonRpc = "JSONRPC";
 inline constexpr std::string_view kGrpc = "GRPC";
 
 }  // namespace a2a::core::protocol_bindings
-
