@@ -71,17 +71,6 @@ void WriteResponse(int fd, const a2a::server::HttpServerResponse& response) {
   (void)::send(fd, payload.data(), payload.size(), 0);
 }
 
-void WriteRawJsonResponse(int fd, int status_code, std::string_view body) {
-  std::ostringstream out;
-  out << "HTTP/1.1 " << status_code << " OK\r\n";
-  out << "Content-Type: application/json\r\n";
-  out << "Content-Length: " << body.size() << "\r\n";
-  out << "Connection: close\r\n\r\n";
-  out << body;
-  const auto payload = out.str();
-  (void)::send(fd, payload.data(), payload.size(), 0);
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -152,13 +141,6 @@ int main(int argc, char** argv) {
                                            .headers = headers,
                                            .body = body,
                                            .remote_address = "127.0.0.1"};
-    if (method == "GET" && target == "/.well-known/agent-card.json") {
-      const std::string card =
-          R"({"protocolVersion":"1.0","name":"TCK HTTP SUT","description":"Conformance-focused local SUT for A2A TCK","capabilities":{"streaming":true,"pushNotifications":false,"stateTransitionHistory":true},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[{"id":"echo","name":"Echo Skill","description":"Echoes incoming text for conformance testing","inputModes":["text/plain"],"outputModes":["text/plain"]}],"supportedInterfaces":[{"transport":"jsonrpc","url":"http://localhost:50061/rpc"},{"transport":"rest","url":"http://localhost:50061/a2a"}]})";
-      WriteRawJsonResponse(fd, 200, card);
-      close(fd);
-      continue;
-    }
     auto response = rest.Handle(request);
     if (target == "/rpc" || target == "/") {
       request.target = "/rpc";
