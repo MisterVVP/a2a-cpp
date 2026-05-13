@@ -84,25 +84,6 @@ google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::
   return &value;
 }
 
-void NormalizeTransportStrings(google::protobuf::Struct* card) {
-  auto it = card->mutable_fields()->find("supportedInterfaces");
-  if (it == card->mutable_fields()->end() || !it->second.has_list_value()) return;
-  for (auto& iface : *it->second.mutable_list_value()->mutable_values()) {
-    if (!iface.has_struct_value()) continue;
-    auto* fields = iface.mutable_struct_value()->mutable_fields();
-    auto fit = fields->find("transport");
-    if (fit == fields->end() || !fit->second.has_string_value()) continue;
-    const auto& transport = fit->second.string_value();
-    if (transport == "TRANSPORT_PROTOCOL_JSON_RPC") {
-      fit->second.set_string_value("jsonrpc");
-    } else if (transport == "TRANSPORT_PROTOCOL_REST") {
-      fit->second.set_string_value("rest");
-    } else if (transport == "TRANSPORT_PROTOCOL_GRPC") {
-      fit->second.set_string_value("grpc");
-    }
-  }
-}
-
 HttpServerResponse BuildJsonErrorResponse(int status_code, const JsonError& error) {
   HttpServerResponse response;
   response.status_code = status_code;
@@ -350,7 +331,6 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
       EnsureListField(skill.mutable_struct_value(), "tags");
     }
   }
-  NormalizeTransportStrings(&card);
   const auto normalized = core::MessageToJson(card);
   if (!normalized.ok()) {
     return normalized.error();

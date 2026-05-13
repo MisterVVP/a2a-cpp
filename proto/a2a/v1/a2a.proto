@@ -183,7 +183,11 @@ message Metadata {
 }
 
 enum TransportProtocol {
+  option allow_alias = true;
   TRANSPORT_PROTOCOL_UNSPECIFIED = 0;
+  rest = 1;
+  jsonrpc = 2;
+  grpc = 3;
   TRANSPORT_PROTOCOL_REST = 1;
   TRANSPORT_PROTOCOL_JSON_RPC = 2;
   TRANSPORT_PROTOCOL_GRPC = 3;
