@@ -24,6 +24,8 @@ fi
 
 protoc \
   -I "${ROOT}/proto" \
+  -I "${ROOT}/third_party/googleapis" \
+  --experimental_allow_proto3_optional \
   --python_out="${BUILD_DIR}" \
   --grpc_python_out="${BUILD_DIR}" \
   --plugin=protoc-gen-grpc_python="$(command -v grpc_python_plugin)" \
