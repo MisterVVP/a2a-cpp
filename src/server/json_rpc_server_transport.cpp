@@ -302,7 +302,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
 
   if (request.method != "POST" || request.target != options_.rpc_path) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{},
-                              std::nullopt, kHttpBadRequest);
+                              std::nullopt, kHttpOk);
   }
 
   const auto version = ValidateVersionHeader(request);
@@ -317,7 +317,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
                                ? kJsonRpcParseError
                                : kJsonRpcInvalidRequest;
     return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
-                              kHttpBadRequest);
+                              kHttpOk);
   }
 
   RequestContext context;

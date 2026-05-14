@@ -92,7 +92,7 @@ TEST(JsonRpcServerTransportTest, RejectsMalformedEnvelope) {
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpBadRequest);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("-32700"), std::string::npos);
 }
 
@@ -108,7 +108,7 @@ TEST(JsonRpcServerTransportTest, RejectsMissingMethod) {
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpBadRequest);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("method must be a non-empty string"), std::string::npos);
 }
 
@@ -125,7 +125,7 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidParamsShape) {
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpBadRequest);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("params must be an object"), std::string::npos);
 }
 
@@ -143,7 +143,7 @@ TEST(JsonRpcServerTransportTest, ReturnsMethodNotFoundError) {
   });
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpBadRequest);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("-32601"), std::string::npos);
 }
 
