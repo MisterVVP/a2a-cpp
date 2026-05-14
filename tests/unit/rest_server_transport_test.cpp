@@ -91,7 +91,9 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
 
   lf::a2a::v1::AgentCard parsed;
-  ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &parsed).ok());
+  ASSERT_TRUE(
+      a2a::core::JsonToMessage(response.value().body, &parsed, {.ignore_unknown_fields = true})
+          .ok());
   ASSERT_FALSE(parsed.supported_interfaces().empty());
   EXPECT_EQ(parsed.supported_interfaces(0).protocol_version(), "1.0");
   ASSERT_EQ(parsed.supported_interfaces_size(), 1);

@@ -357,8 +357,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
     }
   }
 
-  const bool is_legacy_card_request = request.target.starts_with(std::string(kLegacyAgentCardPath));
-  if (is_legacy_card_request) {
+  {
     // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
     if (fields->find("endpoint") == fields->end()) {
       const auto jsonrpc_url =

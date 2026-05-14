@@ -116,7 +116,8 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
   }
 
   lf::a2a::v1::AgentCard card;
-  const auto parse = core::JsonToMessage(response.value().body, &card);
+  const auto parse =
+      core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
     return parse.error();
   }
@@ -154,7 +155,8 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(
   }
 
   lf::a2a::v1::AgentCard card;
-  const auto parse = core::JsonToMessage(response.value().body, &card);
+  const auto parse =
+      core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
     return parse.error();
   }
