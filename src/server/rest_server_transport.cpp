@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "a2a/core/error.h"
+#include "a2a/core/legacy_transport_names.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -346,54 +347,69 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
           continue;
         }
         if (binding_it->second.string_value() == a2a::core::protocol_bindings::kJsonRpc) {
-          (*interface_fields)["transport"].set_string_value("jsonrpc");
+          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kJsonRpc));
         } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kHttpJson) {
-          (*interface_fields)["transport"].set_string_value("rest");
+          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kRest));
         } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kGrpc) {
-          (*interface_fields)["transport"].set_string_value("grpc");
+          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kGrpc));
         }
       }
     }
 
     // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
-    if (fields->find("endpoint") == fields->end()) {
+    if (fields->find(std::string(a2a::core::legacy_transport_names::kEndpointField)) ==
+        fields->end()) {
       for (const auto& iface : agent_card_.supported_interfaces()) {
         if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
-          (*fields)["endpoint"].set_string_value(iface.url());
-          (*fields)["preferredTransport"].set_string_value("jsonrpc");
+          (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
+              .set_string_value(iface.url());
+          (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kJsonRpc));
           break;
         }
       }
-      if (fields->find("endpoint") == fields->end()) {
+      if (fields->find(std::string(a2a::core::legacy_transport_names::kEndpointField)) ==
+          fields->end()) {
         for (const auto& iface : agent_card_.supported_interfaces()) {
           if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-            (*fields)["endpoint"].set_string_value(iface.url());
-            (*fields)["preferredTransport"].set_string_value("rest");
+            (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
+                .set_string_value(iface.url());
+            (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
+                .set_string_value(std::string(a2a::core::legacy_transport_names::kRest));
             break;
           }
         }
       }
     }
 
-    if (fields->find("additionalInterfaces") == fields->end()) {
+    if (fields->find(std::string(a2a::core::legacy_transport_names::kAdditionalInterfacesField)) ==
+        fields->end()) {
       google::protobuf::Value additional;
       auto* interfaces = additional.mutable_list_value()->mutable_values();
       for (const auto& iface : agent_card_.supported_interfaces()) {
         google::protobuf::Value interface_value;
         auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
         if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
-          (*interface_fields)["transport"].set_string_value("jsonrpc");
+          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kJsonRpc));
         } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-          (*interface_fields)["transport"].set_string_value("rest");
+          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kRest));
         } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
-          (*interface_fields)["transport"].set_string_value("grpc");
+          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kGrpc));
         } else {
           continue;
         }
-        (*interface_fields)["endpoint"].set_string_value(iface.url());
+        (*interface_fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
+            .set_string_value(iface.url());
         interfaces->Add(std::move(interface_value));
       }
-      (*fields)["additionalInterfaces"] = std::move(additional);
+      (*fields)[std::string(a2a::core::legacy_transport_names::kAdditionalInterfacesField)] =
+          std::move(additional);
     }
   }
 
