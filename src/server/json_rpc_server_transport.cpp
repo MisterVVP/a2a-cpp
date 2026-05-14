@@ -22,7 +22,7 @@ constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpInternalServerError = 500;
 
 constexpr int kJsonRpcParseError = -32700;
-constexpr int kJsonRpcInvalidRequest = -32600;
+constexpr int kJsonRpcInvalidRequest = -32601;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
