@@ -91,11 +91,51 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
 
   lf::a2a::v1::AgentCard parsed;
-  ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &parsed).ok());
+  ASSERT_TRUE(
+      a2a::core::JsonToMessage(response.value().body, &parsed, {.ignore_unknown_fields = true})
+          .ok());
   ASSERT_FALSE(parsed.supported_interfaces().empty());
   EXPECT_EQ(parsed.supported_interfaces(0).protocol_version(), "1.0");
   ASSERT_EQ(parsed.supported_interfaces_size(), 1);
   EXPECT_EQ(parsed.supported_interfaces(0).url(), "http://localhost:8080/a2a");
+}
+
+TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/.well-known/agent.json",
+                                       .headers = {},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+}
+
+TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/.well-known/agent.json",
+                                       .headers = {},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  google::protobuf::Struct parsed;
+  ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &parsed).ok());
+  const auto& fields = parsed.fields();
+  ASSERT_TRUE(fields.contains("endpoint"));
+  EXPECT_EQ(fields.at("endpoint").string_value(), "http://localhost:8080/a2a");
+  ASSERT_TRUE(fields.contains("preferredTransport"));
+  EXPECT_EQ(fields.at("preferredTransport").string_value(), "rest");
+  ASSERT_TRUE(fields.contains("additionalInterfaces"));
+  EXPECT_TRUE(fields.at("additionalInterfaces").has_list_value());
 }
 
 TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {

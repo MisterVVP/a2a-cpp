@@ -249,6 +249,10 @@ core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksRespon
 }
 
 int HttpStatusFromError(const core::Error& error) {
+  (void)error;
+  return kHttpOk;
+
+  // Kept for future explicit transport-level failures.
   const auto http_status = error.http_status();
   if (http_status.has_value()) {
     return *http_status;

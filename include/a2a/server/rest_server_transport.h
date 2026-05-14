@@ -33,6 +33,7 @@ struct RestServerTransportOptions final {
 class RestServerTransport final {
  public:
   static constexpr std::string_view kAgentCardPath = "/.well-known/agent-card.json";
+  static constexpr std::string_view kLegacyAgentCardPath = "/.well-known/agent.json";
 
   RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                       RestServerTransportOptions options = {});
