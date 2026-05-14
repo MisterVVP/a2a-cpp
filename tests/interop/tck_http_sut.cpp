@@ -103,11 +103,11 @@ int main(int argc, char** argv) {
   auto* jsonrpc_interface = agent_card.add_supported_interfaces();
   jsonrpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kJsonRpc));
   jsonrpc_interface->set_protocol_version("1.0");
-  jsonrpc_interface->set_url("http://127.0.0.1:50061/rpc");
+  jsonrpc_interface->set_url("http://localhost:50061/rpc");
   auto* rest_interface = agent_card.add_supported_interfaces();
   rest_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
   rest_interface->set_protocol_version("1.0");
-  rest_interface->set_url("http://127.0.0.1:50061/a2a");
+  rest_interface->set_url("http://localhost:50061/a2a");
 
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);

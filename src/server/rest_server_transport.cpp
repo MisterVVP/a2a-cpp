@@ -334,6 +334,27 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
   }
 
   {
+    auto interfaces_it = fields->find("supportedInterfaces");
+    if (interfaces_it != fields->end() && interfaces_it->second.has_list_value()) {
+      for (auto& interface_value : *interfaces_it->second.mutable_list_value()->mutable_values()) {
+        if (!interface_value.has_struct_value()) {
+          continue;
+        }
+        auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
+        const auto binding_it = interface_fields->find("protocolBinding");
+        if (binding_it == interface_fields->end() || !binding_it->second.has_string_value()) {
+          continue;
+        }
+        if (binding_it->second.string_value() == a2a::core::protocol_bindings::kJsonRpc) {
+          (*interface_fields)["transport"].set_string_value("jsonrpc");
+        } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kHttpJson) {
+          (*interface_fields)["transport"].set_string_value("rest");
+        } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kGrpc) {
+          (*interface_fields)["transport"].set_string_value("grpc");
+        }
+      }
+    }
+
     // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
     if (fields->find("endpoint") == fields->end()) {
       for (const auto& iface : agent_card_.supported_interfaces()) {
