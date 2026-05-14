@@ -1,3 +1,7 @@
+#include <google/api/annotations.pb.h>
+#include <google/api/client.pb.h>
+#include <google/api/field_behavior.pb.h>
+#include <google/api/http.pb.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
 
@@ -8,10 +12,6 @@
 #include <thread>
 #include <vector>
 
-#include <google/api/annotations.pb.h>
-#include <google/api/client.pb.h>
-#include <google/api/field_behavior.pb.h>
-#include <google/api/http.pb.h>
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/grpc_transport.h"
