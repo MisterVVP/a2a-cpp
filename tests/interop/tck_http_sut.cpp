@@ -13,10 +13,6 @@
 #include <string_view>
 #include <unordered_map>
 
-#include <google/api/annotations.pb.h>
-#include <google/api/client.pb.h>
-#include <google/api/field_behavior.pb.h>
-#include <google/api/http.pb.h>
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"

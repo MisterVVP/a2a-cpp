@@ -24,6 +24,18 @@ fi
 
 protoc \
   -I "${ROOT}/proto" \
+  -I "${ROOT}/third_party/googleapis" \
+  --experimental_allow_proto3_optional \
+  --python_out="${BUILD_DIR}" \
+  "${ROOT}/third_party/googleapis/google/api/annotations.proto" \
+  "${ROOT}/third_party/googleapis/google/api/client.proto" \
+  "${ROOT}/third_party/googleapis/google/api/field_behavior.proto" \
+  "${ROOT}/third_party/googleapis/google/api/http.proto"
+
+protoc \
+  -I "${ROOT}/proto" \
+  -I "${ROOT}/third_party/googleapis" \
+  --experimental_allow_proto3_optional \
   --python_out="${BUILD_DIR}" \
   --grpc_python_out="${BUILD_DIR}" \
   --plugin=protoc-gen-grpc_python="$(command -v grpc_python_plugin)" \

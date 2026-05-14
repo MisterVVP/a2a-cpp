@@ -14,7 +14,7 @@ def main():
     stub = a2a_pb2_grpc.A2AServiceStub(channel)
 
     send = a2a_pb2.SendMessageRequest()
-    send.message.role = "user"
+    send.message.role = a2a_pb2.ROLE_USER
     send.message.task_id = "py-interop-task"
     send_resp = stub.SendMessage(send, timeout=5)
     assert send_resp.task.id == "py-interop-task"
@@ -23,7 +23,7 @@ def main():
     assert get_resp.id == "py-interop-task"
 
     stream_request = a2a_pb2.SendMessageRequest()
-    stream_request.message.role = "user"
+    stream_request.message.role = a2a_pb2.ROLE_USER
     stream_request.message.task_id = "py-interop-task"
     stream = stub.SendStreamingMessage(stream_request, timeout=5)
     events = list(stream)

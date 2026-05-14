@@ -35,6 +35,7 @@ add_custom_command(
     --proto_path=${A2A_PROTO_ROOT}
     --proto_path=${A2A_GOOGLEAPIS_PROTO_ROOT}
     --proto_path=${Protobuf_INCLUDE_DIRS}
+    --experimental_allow_proto3_optional
     --cpp_out=${A2A_GENERATED_DIR}
     ${A2A_PROTO_FILE}
     ${A2A_GOOGLE_API_PROTO_FILES}
@@ -53,6 +54,7 @@ add_custom_command(
     --proto_path=${A2A_PROTO_ROOT}
     --proto_path=${A2A_GOOGLEAPIS_PROTO_ROOT}
     --proto_path=${Protobuf_INCLUDE_DIRS}
+    --experimental_allow_proto3_optional
     --grpc_out=${A2A_GENERATED_DIR}
     --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
     ${A2A_PROTO_FILE}
