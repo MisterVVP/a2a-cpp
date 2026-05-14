@@ -357,40 +357,43 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
     }
   }
 
-  // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
-  if (fields->find("endpoint") == fields->end()) {
-    const auto jsonrpc_url =
-        FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kJsonRpc));
-    const auto rest_url =
-        FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kHttpJson));
-    if (jsonrpc_url.has_value()) {
-      (*fields)["endpoint"].set_string_value(jsonrpc_url.value());
-      (*fields)["preferredTransport"].set_string_value("jsonrpc");
-    } else if (rest_url.has_value()) {
-      (*fields)["endpoint"].set_string_value(rest_url.value());
-      (*fields)["preferredTransport"].set_string_value("rest");
-    }
-  }
-
-  if (fields->find("additionalInterfaces") == fields->end()) {
-    google::protobuf::Value additional;
-    auto* interfaces = additional.mutable_list_value()->mutable_values();
-    for (const auto& iface : agent_card_.supported_interfaces()) {
-      google::protobuf::Value interface_value;
-      auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
-      if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
-        (*interface_fields)["transport"].set_string_value("jsonrpc");
-      } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-        (*interface_fields)["transport"].set_string_value("rest");
-      } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
-        (*interface_fields)["transport"].set_string_value("grpc");
-      } else {
-        continue;
+  const bool is_legacy_card_request = request.target.starts_with(std::string(kLegacyAgentCardPath));
+  if (is_legacy_card_request) {
+    // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
+    if (fields->find("endpoint") == fields->end()) {
+      const auto jsonrpc_url =
+          FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kJsonRpc));
+      const auto rest_url =
+          FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kHttpJson));
+      if (jsonrpc_url.has_value()) {
+        (*fields)["endpoint"].set_string_value(jsonrpc_url.value());
+        (*fields)["preferredTransport"].set_string_value("jsonrpc");
+      } else if (rest_url.has_value()) {
+        (*fields)["endpoint"].set_string_value(rest_url.value());
+        (*fields)["preferredTransport"].set_string_value("rest");
       }
-      (*interface_fields)["endpoint"].set_string_value(iface.url());
-      interfaces->Add(std::move(interface_value));
     }
-    (*fields)["additionalInterfaces"] = std::move(additional);
+
+    if (fields->find("additionalInterfaces") == fields->end()) {
+      google::protobuf::Value additional;
+      auto* interfaces = additional.mutable_list_value()->mutable_values();
+      for (const auto& iface : agent_card_.supported_interfaces()) {
+        google::protobuf::Value interface_value;
+        auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
+        if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
+          (*interface_fields)["transport"].set_string_value("jsonrpc");
+        } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
+          (*interface_fields)["transport"].set_string_value("rest");
+        } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
+          (*interface_fields)["transport"].set_string_value("grpc");
+        } else {
+          continue;
+        }
+        (*interface_fields)["endpoint"].set_string_value(iface.url());
+        interfaces->Add(std::move(interface_value));
+      }
+      (*fields)["additionalInterfaces"] = std::move(additional);
+    }
   }
 
   const auto normalized = core::MessageToJson(card);

@@ -119,7 +119,7 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
   const auto response = server.Handle({.method = "GET",
-                                       .target = "/.well-known/agent-card.json",
+                                       .target = "/.well-known/agent.json",
                                        .headers = {},
                                        .body = {},
                                        .remote_address = {}});
