@@ -351,7 +351,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
               .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
         } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kHttpJson) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kRest));
+              .set_string_value(std::string(a2a::core::protocol_bindings::kHttpJson));
         } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kGrpc) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
               .set_string_value(std::string(a2a::core::protocol_bindings::kGrpc));
@@ -378,7 +378,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
             (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
                 .set_string_value(iface.url());
             (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
-                .set_string_value(std::string(a2a::core::protocol_bindings::kRest));
+                .set_string_value(std::string(a2a::core::protocol_bindings::kHttpJson));
             break;
           }
         }
@@ -397,7 +397,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
               .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
         } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kRest));
+              .set_string_value(std::string(a2a::core::protocol_bindings::kHttpJson));
         } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
               .set_string_value(std::string(a2a::core::protocol_bindings::kGrpc));

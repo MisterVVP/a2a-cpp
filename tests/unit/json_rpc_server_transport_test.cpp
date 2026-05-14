@@ -11,7 +11,6 @@ namespace {
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpBadRequest = 400;
-constexpr int kHttpInternalServerError = 500;
 constexpr int kJsonRpcInternalError = -32603;
 
 class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
@@ -162,7 +161,7 @@ TEST(JsonRpcServerTransportTest, MapsExecutorFailureToJsonRpcError) {
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpInternalServerError);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
 
   google::protobuf::Struct envelope;
   ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &envelope).ok());

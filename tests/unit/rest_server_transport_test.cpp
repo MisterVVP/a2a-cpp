@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 
 namespace {
@@ -69,7 +70,7 @@ lf::a2a::v1::AgentCard BuildCard() {
   card.add_default_input_modes("text/plain");
   card.add_default_output_modes("text/plain");
   auto* iface = card.add_supported_interfaces();
-  iface->set_protocol_binding("HTTP+JSON");
+  iface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
   iface->set_protocol_version("1.0");
   iface->set_url("http://localhost:8080/a2a");
   return card;
@@ -133,7 +134,8 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   ASSERT_TRUE(fields.contains("endpoint"));
   EXPECT_EQ(fields.at("endpoint").string_value(), "http://localhost:8080/a2a");
   ASSERT_TRUE(fields.contains("preferredTransport"));
-  EXPECT_EQ(fields.at("preferredTransport").string_value(), "rest");
+  EXPECT_EQ(fields.at("preferredTransport").string_value(),
+            std::string(a2a::core::protocol_bindings::kHttpJson));
   ASSERT_TRUE(fields.contains("additionalInterfaces"));
   EXPECT_TRUE(fields.at("additionalInterfaces").has_list_value());
 }
