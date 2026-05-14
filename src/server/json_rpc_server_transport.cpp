@@ -300,9 +300,10 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
     return core::Error::Internal("JSON-RPC server dispatcher is not configured");
   }
 
-  if (request.method != "POST" || request.target != options_.rpc_path) {
+  const bool is_rpc_target = request.target == options_.rpc_path || request.target == "/";
+  if (request.method != "POST" || !is_rpc_target) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{},
-                              std::nullopt, kHttpBadRequest);
+                              std::nullopt, kHttpOk);
   }
 
   const auto version = ValidateVersionHeader(request);
@@ -317,7 +318,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
                                ? kJsonRpcParseError
                                : kJsonRpcInvalidRequest;
     return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
-                              kHttpBadRequest);
+                              kHttpOk);
   }
 
   RequestContext context;
