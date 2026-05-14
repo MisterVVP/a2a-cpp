@@ -22,7 +22,7 @@ constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpInternalServerError = 500;
 
 constexpr int kJsonRpcParseError = -32700;
-constexpr int kJsonRpcInvalidRequest = -32600;
+constexpr int kJsonRpcInvalidRequest = -32601;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
@@ -302,7 +302,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
 
   if (request.method != "POST" || request.target != options_.rpc_path) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{},
-                              std::nullopt, kHttpBadRequest);
+                              std::nullopt, kHttpOk);
   }
 
   const auto version = ValidateVersionHeader(request);
@@ -317,7 +317,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
                                ? kJsonRpcParseError
                                : kJsonRpcInvalidRequest;
     return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
-                              kHttpBadRequest);
+                              kHttpOk);
   }
 
   RequestContext context;

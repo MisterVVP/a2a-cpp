@@ -348,13 +348,13 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
         }
         if (binding_it->second.string_value() == a2a::core::protocol_bindings::kJsonRpc) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyJsonRpcTransport));
         } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kHttpJson) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kRest));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyRestTransport));
         } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kGrpc) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kGrpc));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyGrpcTransport));
         }
       }
     }
@@ -367,7 +367,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
           (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
               .set_string_value(iface.url());
           (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyJsonRpcTransport));
           break;
         }
       }
@@ -378,7 +378,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
             (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
                 .set_string_value(iface.url());
             (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
-                .set_string_value(std::string(a2a::core::protocol_bindings::kRest));
+                .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyRestTransport));
             break;
           }
         }
@@ -394,13 +394,13 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
         auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
         if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyJsonRpcTransport));
         } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kRest));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyRestTransport));
         } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
           (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kGrpc));
+              .set_string_value(std::string(a2a::core::legacy_transport_names::kLegacyGrpcTransport));
         } else {
           continue;
         }
