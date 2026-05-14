@@ -86,30 +86,6 @@ google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::
   return &value;
 }
 
-std::optional<std::string> FindInterfaceUrl(const google::protobuf::Struct& card,
-                                            std::string_view protocol_binding) {
-  const auto interfaces_it = card.fields().find("supportedInterfaces");
-  if (interfaces_it == card.fields().end() || !interfaces_it->second.has_list_value()) {
-    return std::nullopt;
-  }
-  for (const auto& entry : interfaces_it->second.list_value().values()) {
-    if (!entry.has_struct_value()) {
-      continue;
-    }
-    const auto& fields = entry.struct_value().fields();
-    const auto binding_it = fields.find("protocolBinding");
-    const auto url_it = fields.find("url");
-    if (binding_it == fields.end() || url_it == fields.end() ||
-        !binding_it->second.has_string_value() || !url_it->second.has_string_value()) {
-      continue;
-    }
-    if (binding_it->second.string_value() == protocol_binding) {
-      return url_it->second.string_value();
-    }
-  }
-  return std::nullopt;
-}
-
 HttpServerResponse BuildJsonErrorResponse(int status_code, const JsonError& error) {
   HttpServerResponse response;
   response.status_code = status_code;
@@ -360,16 +336,21 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
   {
     // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
     if (fields->find("endpoint") == fields->end()) {
-      const auto jsonrpc_url =
-          FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kJsonRpc));
-      const auto rest_url =
-          FindInterfaceUrl(card, std::string(a2a::core::protocol_bindings::kHttpJson));
-      if (jsonrpc_url.has_value()) {
-        (*fields)["endpoint"].set_string_value(jsonrpc_url.value());
-        (*fields)["preferredTransport"].set_string_value("jsonrpc");
-      } else if (rest_url.has_value()) {
-        (*fields)["endpoint"].set_string_value(rest_url.value());
-        (*fields)["preferredTransport"].set_string_value("rest");
+      for (const auto& iface : agent_card_.supported_interfaces()) {
+        if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
+          (*fields)["endpoint"].set_string_value(iface.url());
+          (*fields)["preferredTransport"].set_string_value("jsonrpc");
+          break;
+        }
+      }
+      if (fields->find("endpoint") == fields->end()) {
+        for (const auto& iface : agent_card_.supported_interfaces()) {
+          if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
+            (*fields)["endpoint"].set_string_value(iface.url());
+            (*fields)["preferredTransport"].set_string_value("rest");
+            break;
+          }
+        }
       }
     }
 
