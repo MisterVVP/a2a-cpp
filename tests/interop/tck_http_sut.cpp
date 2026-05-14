@@ -1,8 +1,4 @@
 #include <arpa/inet.h>
-#include <google/api/annotations.pb.h>
-#include <google/api/client.pb.h>
-#include <google/api/field_behavior.pb.h>
-#include <google/api/http.pb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>

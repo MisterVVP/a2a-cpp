@@ -1,7 +1,3 @@
-#include <google/api/annotations.pb.h>
-#include <google/api/client.pb.h>
-#include <google/api/field_behavior.pb.h>
-#include <google/api/http.pb.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
 
