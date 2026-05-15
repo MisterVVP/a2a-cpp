@@ -55,13 +55,6 @@ bool IsValidIdType(const google::protobuf::Value& value) {
 }
 
 std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
-  while (!method.empty() && std::isspace(static_cast<unsigned char>(method.front()))) {
-    method.remove_prefix(1);
-  }
-  while (!method.empty() && std::isspace(static_cast<unsigned char>(method.back()))) {
-    method.remove_suffix(1);
-  }
-
   if (method == core::json_rpc::MethodNames::kSendMessage) {
     return DispatcherOperation::kSendMessage;
   }
