@@ -23,6 +23,10 @@ struct MethodNames final {
   static constexpr std::string_view kLegacyGetTask = "tasks/get";
   static constexpr std::string_view kLegacyCancelTask = "tasks/cancel";
   static constexpr std::string_view kLegacyListTasks = "tasks/list";
+  static constexpr std::string_view kLegacySendMessageDot = "tasks.send";
+  static constexpr std::string_view kLegacyGetTaskDot = "tasks.get";
+  static constexpr std::string_view kLegacyCancelTaskDot = "tasks.cancel";
+  static constexpr std::string_view kLegacyListTasksDot = "tasks.list";
 };
 
 }  // namespace a2a::core::json_rpc

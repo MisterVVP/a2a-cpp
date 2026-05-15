@@ -207,6 +207,24 @@ TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
   EXPECT_NE(response.value().body.find("\"result\""), std::string::npos);
 }
 
+TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListDotMethodAlias) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body =
+           R"({"jsonrpc":"2.0","id":"req-list-dot","method":"tasks.list","params":{"pageSize":10}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("\"result\""), std::string::npos);
+}
+
 TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);

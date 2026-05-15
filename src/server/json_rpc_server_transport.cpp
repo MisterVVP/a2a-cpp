@@ -68,16 +68,20 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
     return DispatcherOperation::kListTasks;
   }
   // Backward-compatible A2A v0.3.x JSON-RPC method aliases.
-  if (method == core::json_rpc::MethodNames::kLegacySendMessage) {
+  if (method == core::json_rpc::MethodNames::kLegacySendMessage ||
+      method == core::json_rpc::MethodNames::kLegacySendMessageDot) {
     return DispatcherOperation::kSendMessage;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyGetTask) {
+  if (method == core::json_rpc::MethodNames::kLegacyGetTask ||
+      method == core::json_rpc::MethodNames::kLegacyGetTaskDot) {
     return DispatcherOperation::kGetTask;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
+  if (method == core::json_rpc::MethodNames::kLegacyCancelTask ||
+      method == core::json_rpc::MethodNames::kLegacyCancelTaskDot) {
     return DispatcherOperation::kCancelTask;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyListTasks) {
+  if (method == core::json_rpc::MethodNames::kLegacyListTasks ||
+      method == core::json_rpc::MethodNames::kLegacyListTasksDot) {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;
