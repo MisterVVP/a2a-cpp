@@ -326,9 +326,21 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
 
   const auto parsed = ParseRequest(request.body);
   if (!parsed.ok()) {
-    const int parse_code = parsed.error().code() == core::ErrorCode::kSerialization
-                               ? kJsonRpcParseError
-                               : kJsonRpcInvalidRequest;
+    int parse_code = kJsonRpcInvalidRequest;
+    switch (parsed.error().code()) {
+      case core::ErrorCode::kValidation:
+        parse_code = kJsonRpcInvalidParams;
+        break;
+      case core::ErrorCode::kSerialization:
+        parse_code = kJsonRpcParseError;
+        break;
+      case core::ErrorCode::kUnsupportedVersion:
+      case core::ErrorCode::kNetwork:
+      case core::ErrorCode::kRemoteProtocol:
+      case core::ErrorCode::kInternal:
+        parse_code = kJsonRpcInvalidRequest;
+        break;
+    }
     return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
                               kHttpOk);
   }
