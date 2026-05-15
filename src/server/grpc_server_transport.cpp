@@ -204,6 +204,48 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return ::grpc::Status::OK;
 }
 
+::grpc::Status GrpcServerTransport::ListTasks(::grpc::ServerContext* context,
+                                              const lf::a2a::v1::ListTasksRequest* request,
+                                              lf::a2a::v1::ListTasksResponse* response) {
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+
+  ListTasksRequest list_request;
+  if (request->has_page_size()) {
+    const int32_t page_size = request->page_size();
+    if (page_size < 0) {
+      return ToGrpcStatus(
+          core::Error::Validation("ListTasksRequest.page_size must be non-negative"), context);
+    }
+    list_request.page_size = static_cast<std::size_t>(page_size);
+  }
+  list_request.page_token = request->page_token();
+
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
+                            request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+
+  const auto* payload = std::get_if<ListTasksResponse>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for ListTasks"};
+  }
+
+  for (const auto& task : payload->tasks) {
+    *response->add_tasks() = task;
+  }
+  response->set_next_page_token(payload->next_page_token);
+  return ::grpc::Status::OK;
+}
+
 ::grpc::Status GrpcServerTransport::CreateTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {

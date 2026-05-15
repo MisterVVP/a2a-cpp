@@ -30,6 +30,10 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
                             const lf::a2a::v1::CancelTaskRequest* request,
                             lf::a2a::v1::Task* response) override;
 
+  ::grpc::Status ListTasks(::grpc::ServerContext* context,
+                           const lf::a2a::v1::ListTasksRequest* request,
+                           lf::a2a::v1::ListTasksResponse* response) override;
+
  private:
   [[nodiscard]] core::Result<RequestContext> BuildRequestContext(
       const ::grpc::ServerContext& context) const;
