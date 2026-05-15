@@ -67,6 +67,19 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   if (method == core::json_rpc::MethodNames::kListTasks) {
     return DispatcherOperation::kListTasks;
   }
+  // Backward-compatible A2A v0.3.x JSON-RPC method aliases.
+  if (method == "tasks/send") {
+    return DispatcherOperation::kSendMessage;
+  }
+  if (method == "tasks/get") {
+    return DispatcherOperation::kGetTask;
+  }
+  if (method == "tasks/cancel") {
+    return DispatcherOperation::kCancelTask;
+  }
+  if (method == "tasks/list") {
+    return DispatcherOperation::kListTasks;
+  }
   return std::nullopt;
 }
 
@@ -134,14 +147,20 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
 }
 
 core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params) {
+  constexpr std::size_t kMinPageSize = 1;
+  constexpr std::size_t kMaxPageSize = 100;
   ListTasksRequest payload;
   const auto page_size_it = params.fields().find("pageSize");
   if (page_size_it != params.fields().end()) {
-    if (page_size_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
-        page_size_it->second.number_value() < 0) {
-      return core::Error::Validation("ListTasksRequest.pageSize must be a non-negative number");
+    if (page_size_it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
+      return core::Error::Validation("ListTasksRequest.pageSize must be a number");
     }
-    payload.page_size = static_cast<std::size_t>(page_size_it->second.number_value());
+    const double page_size = page_size_it->second.number_value();
+    if (page_size < static_cast<double>(kMinPageSize) ||
+        page_size > static_cast<double>(kMaxPageSize)) {
+      return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and 100");
+    }
+    payload.page_size = static_cast<std::size_t>(page_size);
   }
 
   const auto page_token_it = params.fields().find("pageToken");
@@ -150,6 +169,23 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
       return core::Error::Validation("ListTasksRequest.pageToken must be a string");
     }
     payload.page_token = page_token_it->second.string_value();
+    if (!payload.page_token.empty()) {
+      std::uint64_t parsed_offset = 0;
+      const auto* begin = payload.page_token.data();
+      const auto* end = begin + payload.page_token.size();
+      const auto parsed = std::from_chars(begin, end, parsed_offset);
+      if (parsed.ec != std::errc() || parsed.ptr != end) {
+        return core::Error::Validation("ListTasksRequest.pageToken must be a valid offset");
+      }
+    }
+  }
+
+  const auto history_length_it = params.fields().find("historyLength");
+  if (history_length_it != params.fields().end()) {
+    if (history_length_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
+        history_length_it->second.number_value() < 0) {
+      return core::Error::Validation("ListTasksRequest.historyLength must be non-negative");
+    }
   }
 
   return payload;
