@@ -207,6 +207,41 @@ TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
   EXPECT_NE(response.value().body.find("\"result\""), std::string::npos);
 }
 
+TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(
+      &dispatcher, {.rpc_path = "/rpc", .default_list_tasks_page_size = 50});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-list-default","method":"tasks/list","params":{}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("\"nextPageToken\":\"50\""), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, UnknownRouteUsesInvalidRequestCode) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/not-rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-route","method":"a2a.listTasks","params":{}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("-32600"), std::string::npos);
+}
+
 TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
