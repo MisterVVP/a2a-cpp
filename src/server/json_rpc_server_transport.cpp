@@ -3,6 +3,7 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -64,6 +65,19 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
     return DispatcherOperation::kCancelTask;
   }
   if (method == core::json_rpc::MethodNames::kListTasks) {
+    return DispatcherOperation::kListTasks;
+  }
+  // Backward-compatible A2A v0.3.x JSON-RPC method aliases.
+  if (method == core::json_rpc::MethodNames::kLegacySendMessage) {
+    return DispatcherOperation::kSendMessage;
+  }
+  if (method == core::json_rpc::MethodNames::kLegacyGetTask) {
+    return DispatcherOperation::kGetTask;
+  }
+  if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
+    return DispatcherOperation::kCancelTask;
+  }
+  if (method == core::json_rpc::MethodNames::kLegacyListTasks) {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;
@@ -133,14 +147,20 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
 }
 
 core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params) {
+  constexpr std::size_t kMinPageSize = 1;
+  constexpr std::size_t kMaxPageSize = 100;
   ListTasksRequest payload;
   const auto page_size_it = params.fields().find("pageSize");
   if (page_size_it != params.fields().end()) {
-    if (page_size_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
-        page_size_it->second.number_value() < 0) {
-      return core::Error::Validation("ListTasksRequest.pageSize must be a non-negative number");
+    if (page_size_it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
+      return core::Error::Validation("ListTasksRequest.pageSize must be a number");
     }
-    payload.page_size = static_cast<std::size_t>(page_size_it->second.number_value());
+    const double page_size = page_size_it->second.number_value();
+    if (page_size < static_cast<double>(kMinPageSize) ||
+        page_size > static_cast<double>(kMaxPageSize)) {
+      return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and 100");
+    }
+    payload.page_size = static_cast<std::size_t>(page_size);
   }
 
   const auto page_token_it = params.fields().find("pageToken");
@@ -149,6 +169,23 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
       return core::Error::Validation("ListTasksRequest.pageToken must be a string");
     }
     payload.page_token = page_token_it->second.string_value();
+    if (!payload.page_token.empty()) {
+      std::uint64_t parsed_offset = 0;
+      const auto* begin = payload.page_token.data();
+      const auto* end = begin + payload.page_token.size();
+      const auto parsed = std::from_chars(begin, end, parsed_offset);
+      if (parsed.ec != std::errc() || parsed.ptr != end) {
+        return core::Error::Validation("ListTasksRequest.pageToken must be a valid offset");
+      }
+    }
+  }
+
+  const auto history_length_it = params.fields().find("historyLength");
+  if (history_length_it != params.fields().end()) {
+    if (history_length_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
+        history_length_it->second.number_value() < 0) {
+      return core::Error::Validation("ListTasksRequest.historyLength must be non-negative");
+    }
   }
 
   return payload;
@@ -156,6 +193,15 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
 
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
     std::string_view method_name, const google::protobuf::Struct& params) {
+  if (method_name == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
+      method_name == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
+      method_name == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
+      method_name == core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig) {
+    (void)params;
+    return core::Error::RemoteProtocol("Task push notifications are not supported")
+        .WithProtocolCode("-32003");
+  }
+
   const auto operation = MethodToOperation(method_name);
   if (!operation.has_value()) {
     return core::Error::RemoteProtocol("JSON-RPC method is not supported")
@@ -277,8 +323,20 @@ int JsonRpcCodeFromError(const core::Error& error) {
       return kJsonRpcInvalidParams;
     case core::ErrorCode::kUnsupportedVersion:
       return kJsonRpcInvalidRequest;
+    case core::ErrorCode::kRemoteProtocol: {
+      const auto protocol_code = error.protocol_code();
+      if (protocol_code.has_value()) {
+        int parsed_code = 0;
+        const auto* begin = protocol_code->data();
+        const auto* end = begin + protocol_code->size();
+        const auto parse = std::from_chars(begin, end, parsed_code);
+        if (parse.ec == std::errc() && parse.ptr == end && parsed_code <= -32000) {
+          return parsed_code;
+        }
+      }
+      return kJsonRpcInternalError;
+    }
     case core::ErrorCode::kNetwork:
-    case core::ErrorCode::kRemoteProtocol:
     case core::ErrorCode::kSerialization:
     case core::ErrorCode::kInternal:
       return kJsonRpcInternalError;
@@ -313,9 +371,21 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
 
   const auto parsed = ParseRequest(request.body);
   if (!parsed.ok()) {
-    const int parse_code = parsed.error().code() == core::ErrorCode::kSerialization
-                               ? kJsonRpcParseError
-                               : kJsonRpcInvalidRequest;
+    int parse_code = kJsonRpcInvalidRequest;
+    switch (parsed.error().code()) {
+      case core::ErrorCode::kValidation:
+        parse_code = kJsonRpcInvalidParams;
+        break;
+      case core::ErrorCode::kSerialization:
+        parse_code = kJsonRpcParseError;
+        break;
+      case core::ErrorCode::kUnsupportedVersion:
+      case core::ErrorCode::kNetwork:
+      case core::ErrorCode::kRemoteProtocol:
+      case core::ErrorCode::kInternal:
+        parse_code = kJsonRpcInvalidRequest;
+        break;
+    }
     return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
                               kHttpOk);
   }

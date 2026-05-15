@@ -189,4 +189,40 @@ TEST(JsonRpcServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
   EXPECT_EQ(executor.last_bearer_token, "token-rpc");
 }
 
+TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body =
+           R"({"jsonrpc":"2.0","id":"req-list","method":"tasks/list","params":{"pageSize":10}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("\"result\""), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body =
+           R"({"jsonrpc":"2.0","id":"req-list-invalid","method":"tasks/list","params":{"pageSize":0}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("-32602"), std::string::npos);
+}
+
 }  // namespace

@@ -1,4 +1,7 @@
 #include <arpa/inet.h>
+#include <grpcpp/security/server_credentials.h>
+#include <grpcpp/server.h>
+#include <grpcpp/server_builder.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -14,6 +17,7 @@
 #include <unordered_map>
 
 #include "a2a/core/protocol_bindings.h"
+#include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
@@ -80,6 +84,7 @@ int main(int argc, char** argv) {
   if (pos == std::string::npos) return 1;
   const std::string host = endpoint.substr(0, pos);
   const int port = std::stoi(endpoint.substr(pos + 1));
+  const int grpc_port = port + 1;
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
@@ -103,14 +108,19 @@ int main(int argc, char** argv) {
   auto* jsonrpc_interface = agent_card.add_supported_interfaces();
   jsonrpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kJsonRpc));
   jsonrpc_interface->set_protocol_version("1.0");
-  jsonrpc_interface->set_url("http://localhost:50061/rpc");
+  jsonrpc_interface->set_url("http://localhost:" + std::to_string(port) + "/rpc");
   auto* rest_interface = agent_card.add_supported_interfaces();
   rest_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
   rest_interface->set_protocol_version("1.0");
-  rest_interface->set_url("http://localhost:50061/a2a");
+  rest_interface->set_url("http://localhost:" + std::to_string(port) + "/a2a");
+  auto* grpc_interface = agent_card.add_supported_interfaces();
+  grpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kGrpc));
+  grpc_interface->set_protocol_version("1.0");
+  grpc_interface->set_url("grpc://localhost:" + std::to_string(grpc_port));
 
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport grpc(&dispatcher);
   a2a::server::RestServerTransport rest(&dispatcher, agent_card, {.rest_api_base_path = "/a2a"});
   a2a::server::JsonRpcServerTransport jsonrpc(
       &dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
@@ -124,6 +134,15 @@ int main(int argc, char** argv) {
   inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
   if (bind(server_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) return 1;
   if (listen(server_fd, 128) != 0) return 1;
+
+  grpc::ServerBuilder grpc_builder;
+  grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port),
+                                grpc::InsecureServerCredentials());
+  grpc_builder.RegisterService(&grpc);
+  std::unique_ptr<grpc::Server> grpc_server = grpc_builder.BuildAndStart();
+  if (!grpc_server) {
+    return 1;
+  }
 
   while (kKeepRunning != 0) {
     sockaddr_in client{};
@@ -157,7 +176,7 @@ int main(int argc, char** argv) {
                                            .target = target,
                                            .headers = headers,
                                            .body = body,
-                                           .remote_address = "127.0.0.1"};
+                                           .remote_address = "localhost"};
     auto response = rest.Handle(request);
     if (target == "/rpc" || target == "/") {
       request.target = "/rpc";
@@ -168,6 +187,7 @@ int main(int argc, char** argv) {
     }
     close(fd);
   }
+  grpc_server->Shutdown();
   close(server_fd);
   return 0;
 }

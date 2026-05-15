@@ -44,6 +44,12 @@ These instructions apply to the entire repository. Follow them for all changes u
 - Treat warnings as actionable; keep warning count at zero for touched code.
 - Keep diffs small and reviewable.
 - Document non-obvious decisions with short comments near the code.
+- **Magic strings are forbidden** in production and test code. Use named `constexpr` constants (or equivalent strongly typed constants) and centralize protocol literals in shared headers where possible.
+- Prioritize performance and algorithmic efficiency:
+  - Analyze asymptotic complexity for hot paths and prefer lower-complexity algorithms/data structures (`O(1)`/`O(log n)` over repeated linear scans where feasible).
+  - Avoid avoidable allocations, copies, and parsing overhead in request/response critical paths.
+  - Benchmark or profile non-trivial changes that may impact latency/throughput.
+- Plain C-style code is allowed when cross-platform, safe, and measurably more efficient than a higher-level abstraction. Focus on runtime performance over stylistic patterns/idioms when there is a trade-off.
 - Test code must satisfy `clang-tidy` readability checks in this repository:
   - Keep each test body and helper function below the cognitive complexity threshold (currently 25).
   - Prefer extracting fixture helpers/builders over large inline lambdas inside `TEST(...)`.
