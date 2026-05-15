@@ -193,6 +193,15 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
 
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
     std::string_view method_name, const google::protobuf::Struct& params) {
+  if (method_name == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
+      method_name == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
+      method_name == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
+      method_name == core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig) {
+    (void)params;
+    return core::Error::RemoteProtocol("Task push notifications are not supported")
+        .WithProtocolCode("-32003");
+  }
+
   const auto operation = MethodToOperation(method_name);
   if (!operation.has_value()) {
     return core::Error::RemoteProtocol("JSON-RPC method is not supported")

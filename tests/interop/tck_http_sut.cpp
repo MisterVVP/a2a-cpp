@@ -108,15 +108,15 @@ int main(int argc, char** argv) {
   auto* jsonrpc_interface = agent_card.add_supported_interfaces();
   jsonrpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kJsonRpc));
   jsonrpc_interface->set_protocol_version("1.0");
-  jsonrpc_interface->set_url("http://localhost:50061/rpc");
+  jsonrpc_interface->set_url("http://localhost:" + std::to_string(port) + "/rpc");
   auto* rest_interface = agent_card.add_supported_interfaces();
   rest_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
   rest_interface->set_protocol_version("1.0");
-  rest_interface->set_url("http://localhost:50061/a2a");
+  rest_interface->set_url("http://localhost:" + std::to_string(port) + "/a2a");
   auto* grpc_interface = agent_card.add_supported_interfaces();
   grpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kGrpc));
   grpc_interface->set_protocol_version("1.0");
-  grpc_interface->set_url("grpc://127.0.0.1:" + std::to_string(grpc_port));
+  grpc_interface->set_url("grpc://localhost:" + std::to_string(grpc_port));
 
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
                                            .target = target,
                                            .headers = headers,
                                            .body = body,
-                                           .remote_address = "127.0.0.1"};
+                                           .remote_address = "localhost"};
     auto response = rest.Handle(request);
     if (target == "/rpc" || target == "/") {
       request.target = "/rpc";

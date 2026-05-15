@@ -47,11 +47,16 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
     (void)context;
+    if (!request.has_message() || request.message().parts_size() == 0) {
+      return core::Error::Validation("message with at least one part is required");
+    }
     const std::string task_id =
         request.message().task_id().empty() ? "example-task" : request.message().task_id();
 
-    lf::a2a::v1::Task task;
+    lf::a2a::v1::Task task =
+        task_.has_value() && task_->id() == task_id ? *task_ : lf::a2a::v1::Task{};
     task.set_id(task_id);
+    *task.add_history() = request.message();
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
@@ -91,7 +96,9 @@ class ExampleExecutor final : public server::AgentExecutor {
                                           server::RequestContext& context) override {
     (void)context;
     if (!task_.has_value() || request.id() != task_->id()) {
-      return core::Error::RemoteProtocol("task not found").WithHttpStatus(404);
+      return core::Error::RemoteProtocol("task not found")
+          .WithHttpStatus(404)
+          .WithProtocolCode("-32001");
     }
     return *task_;
   }
@@ -111,7 +118,9 @@ class ExampleExecutor final : public server::AgentExecutor {
                                              server::RequestContext& context) override {
     (void)context;
     if (!task_.has_value() || request.id() != task_->id()) {
-      return core::Error::RemoteProtocol("task not found").WithHttpStatus(404);
+      return core::Error::RemoteProtocol("task not found")
+          .WithHttpStatus(404)
+          .WithProtocolCode("-32001");
     }
     task_->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
     return *task_;
