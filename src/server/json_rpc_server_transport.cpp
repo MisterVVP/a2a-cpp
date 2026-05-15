@@ -3,8 +3,8 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <cctype>
+#include <charconv>
 #include <cstdint>
-#include <exception>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -273,26 +273,25 @@ int HttpStatusFromError(const core::Error& error) {
 }
 
 int JsonRpcCodeFromError(const core::Error& error) {
-  if (error.code() == core::ErrorCode::kRemoteProtocol) {
-    const auto protocol_code = error.protocol_code();
-    if (protocol_code.has_value()) {
-      try {
-        const int parsed_code = std::stoi(*protocol_code);
-        if (parsed_code <= -32000) {
-          return parsed_code;
-        }
-      } catch (const std::exception&) {
-      }
-    }
-  }
-
   switch (error.code()) {
     case core::ErrorCode::kValidation:
       return kJsonRpcInvalidParams;
     case core::ErrorCode::kUnsupportedVersion:
       return kJsonRpcInvalidRequest;
+    case core::ErrorCode::kRemoteProtocol: {
+      const auto protocol_code = error.protocol_code();
+      if (protocol_code.has_value()) {
+        int parsed_code = 0;
+        const auto* begin = protocol_code->data();
+        const auto* end = begin + protocol_code->size();
+        const auto parse = std::from_chars(begin, end, parsed_code);
+        if (parse.ec == std::errc() && parse.ptr == end && parsed_code <= -32000) {
+          return parsed_code;
+        }
+      }
+      return kJsonRpcInternalError;
+    }
     case core::ErrorCode::kNetwork:
-    case core::ErrorCode::kRemoteProtocol:
     case core::ErrorCode::kSerialization:
     case core::ErrorCode::kInternal:
       return kJsonRpcInternalError;
