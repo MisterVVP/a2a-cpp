@@ -214,7 +214,9 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
-    return core::Error::Validation("Task not found");
+    return core::Error::RemoteProtocol("Task not found")
+        .WithProtocolCode("-32001")
+        .WithHttpStatus(404);
   }
   return it->second;
 }
@@ -273,7 +275,9 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
-    return core::Error::Validation("Task not found");
+    return core::Error::RemoteProtocol("Task not found")
+        .WithProtocolCode("-32001")
+        .WithHttpStatus(404);
   }
 
   auto* mutable_status = it->second.mutable_status();

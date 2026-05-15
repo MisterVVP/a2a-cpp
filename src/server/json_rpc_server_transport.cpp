@@ -77,7 +77,8 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
     return DispatcherOperation::kCancelTask;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyListTasks || method == "tasks.list") {
+  if (method == core::json_rpc::MethodNames::kLegacyListTasks ||
+      method == core::json_rpc::MethodNames::kLegacyListTasksDot) {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;

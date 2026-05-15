@@ -50,6 +50,11 @@ TEST(ServerTaskStoreFunctionalTest, ValidatesInputs) {
 
   const auto missing_get = store.Get("unknown");
   ASSERT_FALSE(missing_get.ok());
+  EXPECT_EQ(missing_get.error().protocol_code().value_or(""), "-32001");
+
+  const auto missing_cancel = store.Cancel("unknown");
+  ASSERT_FALSE(missing_cancel.ok());
+  EXPECT_EQ(missing_cancel.error().protocol_code().value_or(""), "-32001");
 
   const auto invalid_page = store.List(a2a::server::ListTasksRequest{1, "not-a-number"});
   ASSERT_FALSE(invalid_page.ok());
