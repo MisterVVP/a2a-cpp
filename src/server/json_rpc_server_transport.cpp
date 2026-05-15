@@ -23,7 +23,7 @@ constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpInternalServerError = 500;
 
 constexpr int kJsonRpcParseError = -32700;
-constexpr int kJsonRpcInvalidRequest = -32601;
+constexpr int kJsonRpcInvalidRequest = -32600;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
@@ -146,9 +146,13 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
   return payload;
 }
 
-core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params) {
+core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params,
+                                                     const JsonRpcServerTransportOptions& options) {
   constexpr std::size_t kMinPageSize = 1;
-  constexpr std::size_t kMaxPageSize = 100;
+  if (options.max_list_tasks_page_size < kMinPageSize) {
+    return core::Error::Internal("JSON-RPC max_list_tasks_page_size must be at least 1");
+  }
+
   ListTasksRequest payload;
   const auto page_size_it = params.fields().find("pageSize");
   if (page_size_it != params.fields().end()) {
@@ -157,8 +161,9 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     }
     const double page_size = page_size_it->second.number_value();
     if (page_size < static_cast<double>(kMinPageSize) ||
-        page_size > static_cast<double>(kMaxPageSize)) {
-      return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and 100");
+        page_size > static_cast<double>(options.max_list_tasks_page_size)) {
+      return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and " +
+                                     std::to_string(options.max_list_tasks_page_size));
     }
     payload.page_size = static_cast<std::size_t>(page_size);
   }
@@ -188,11 +193,16 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     }
   }
 
+  if (payload.page_size == 0) {
+    payload.page_size = options.default_list_tasks_page_size;
+  }
+
   return payload;
 }
 
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
-    std::string_view method_name, const google::protobuf::Struct& params) {
+    std::string_view method_name, const google::protobuf::Struct& params,
+    const JsonRpcServerTransportOptions& options) {
   if (method_name == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
       method_name == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
       method_name == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
@@ -237,7 +247,7 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
       return dispatch_request;
     }
     case DispatcherOperation::kListTasks: {
-      auto payload = ParseListTasksPayload(params);
+      auto payload = ParseListTasksPayload(params, options);
       if (!payload.ok()) {
         return payload.error();
       }
@@ -369,7 +379,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
                               version.error(), kHttpUpgradeRequired);
   }
 
-  const auto parsed = ParseRequest(request.body);
+  const auto parsed = ParseRequest(request.body, options_);
   if (!parsed.ok()) {
     int parse_code = kJsonRpcInvalidRequest;
     switch (parsed.error().code()) {
@@ -434,7 +444,7 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
-    std::string_view body) {
+    std::string_view body, const JsonRpcServerTransportOptions& options) {
   const auto envelope = ParseJsonObject(body);
   if (!envelope.ok()) {
     return envelope.error();
@@ -460,7 +470,7 @@ core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::Par
     return params.error();
   }
 
-  const auto dispatch = BuildDispatchRequestFromMethod(method.value(), params.value());
+  const auto dispatch = BuildDispatchRequestFromMethod(method.value(), params.value(), options);
   if (!dispatch.ok()) {
     return dispatch.error();
   }
