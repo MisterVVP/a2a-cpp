@@ -55,6 +55,13 @@ bool IsValidIdType(const google::protobuf::Value& value) {
 }
 
 std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
+  while (!method.empty() && std::isspace(static_cast<unsigned char>(method.front()))) {
+    method.remove_prefix(1);
+  }
+  while (!method.empty() && std::isspace(static_cast<unsigned char>(method.back()))) {
+    method.remove_suffix(1);
+  }
+
   if (method == core::json_rpc::MethodNames::kSendMessage) {
     return DispatcherOperation::kSendMessage;
   }
@@ -68,20 +75,16 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
     return DispatcherOperation::kListTasks;
   }
   // Backward-compatible A2A v0.3.x JSON-RPC method aliases.
-  if (method == core::json_rpc::MethodNames::kLegacySendMessage ||
-      method == core::json_rpc::MethodNames::kLegacySendMessageDot) {
+  if (method == core::json_rpc::MethodNames::kLegacySendMessage) {
     return DispatcherOperation::kSendMessage;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyGetTask ||
-      method == core::json_rpc::MethodNames::kLegacyGetTaskDot) {
+  if (method == core::json_rpc::MethodNames::kLegacyGetTask) {
     return DispatcherOperation::kGetTask;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyCancelTask ||
-      method == core::json_rpc::MethodNames::kLegacyCancelTaskDot) {
+  if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
     return DispatcherOperation::kCancelTask;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyListTasks ||
-      method == core::json_rpc::MethodNames::kLegacyListTasksDot) {
+  if (method == core::json_rpc::MethodNames::kLegacyListTasks) {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;
