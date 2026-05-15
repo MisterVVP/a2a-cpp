@@ -19,6 +19,10 @@ struct MethodNames final {
   static constexpr std::string_view kDeleteTaskPushNotificationConfig =
       "a2a.deleteTaskPushNotificationConfig";
   static constexpr std::string_view kListTasks = "a2a.listTasks";
+  static constexpr std::string_view kLegacySendMessage = "tasks/send";
+  static constexpr std::string_view kLegacyGetTask = "tasks/get";
+  static constexpr std::string_view kLegacyCancelTask = "tasks/cancel";
+  static constexpr std::string_view kLegacyListTasks = "tasks/list";
 };
 
 }  // namespace a2a::core::json_rpc

@@ -44,6 +44,7 @@ These instructions apply to the entire repository. Follow them for all changes u
 - Treat warnings as actionable; keep warning count at zero for touched code.
 - Keep diffs small and reviewable.
 - Document non-obvious decisions with short comments near the code.
+- **Magic strings are forbidden** in production and test code. Use named `constexpr` constants (or equivalent strongly typed constants) and centralize protocol literals in shared headers where possible.
 - Test code must satisfy `clang-tidy` readability checks in this repository:
   - Keep each test body and helper function below the cognitive complexity threshold (currently 25).
   - Prefer extracting fixture helpers/builders over large inline lambdas inside `TEST(...)`.

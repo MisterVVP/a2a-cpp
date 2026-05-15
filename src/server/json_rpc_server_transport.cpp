@@ -68,16 +68,16 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
     return DispatcherOperation::kListTasks;
   }
   // Backward-compatible A2A v0.3.x JSON-RPC method aliases.
-  if (method == "tasks/send") {
+  if (method == core::json_rpc::MethodNames::kLegacySendMessage) {
     return DispatcherOperation::kSendMessage;
   }
-  if (method == "tasks/get") {
+  if (method == core::json_rpc::MethodNames::kLegacyGetTask) {
     return DispatcherOperation::kGetTask;
   }
-  if (method == "tasks/cancel") {
+  if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
     return DispatcherOperation::kCancelTask;
   }
-  if (method == "tasks/list") {
+  if (method == core::json_rpc::MethodNames::kLegacyListTasks) {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;
