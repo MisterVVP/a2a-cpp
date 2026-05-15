@@ -17,6 +17,7 @@ TEST(ExampleSupportTest, ExampleExecutorHandlesSendAndCancelFlow) {
 
   lf::a2a::v1::SendMessageRequest send;
   send.mutable_message()->set_task_id("unit-example-task");
+  send.mutable_message()->add_parts()->set_text("hello");
   const auto send_result = executor.SendMessage(send, context);
   ASSERT_TRUE(send_result.ok());
   EXPECT_EQ(send_result.value().task().id(), "unit-example-task");
