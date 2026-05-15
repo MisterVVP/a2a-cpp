@@ -225,7 +225,7 @@ TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   EXPECT_NE(response.value().body.find("\"nextPageToken\":\"50\""), std::string::npos);
 }
 
-TEST(JsonRpcServerTransportTest, UnknownRouteUsesInvalidRequestCode) {
+TEST(JsonRpcServerTransportTest, UnknownRouteUsesMethodNotFoundCode) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
@@ -239,7 +239,7 @@ TEST(JsonRpcServerTransportTest, UnknownRouteUsesInvalidRequestCode) {
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_NE(response.value().body.find("-32600"), std::string::npos);
+  EXPECT_NE(response.value().body.find("-32601"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {

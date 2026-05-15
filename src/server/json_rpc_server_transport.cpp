@@ -23,7 +23,7 @@ constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpInternalServerError = 500;
 
 constexpr int kJsonRpcParseError = -32700;
-constexpr int kJsonRpcInvalidRequest = -32600;
+constexpr int kJsonRpcInvalidRequest = -32601;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
@@ -77,7 +77,7 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
     return DispatcherOperation::kCancelTask;
   }
-  if (method == core::json_rpc::MethodNames::kLegacyListTasks) {
+  if (method == core::json_rpc::MethodNames::kLegacyListTasks || method == "tasks.list") {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;
@@ -368,7 +368,8 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
     return core::Error::Internal("JSON-RPC server dispatcher is not configured");
   }
 
-  if (request.method != "POST" || request.target != options_.rpc_path) {
+  const std::string normalized_target = NormalizePath(request.target);
+  if (request.method != "POST" || normalized_target != options_.rpc_path) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{},
                               std::nullopt, kHttpOk);
   }
