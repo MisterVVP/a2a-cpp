@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -272,6 +273,19 @@ int HttpStatusFromError(const core::Error& error) {
 }
 
 int JsonRpcCodeFromError(const core::Error& error) {
+  if (error.code() == core::ErrorCode::kRemoteProtocol) {
+    const auto protocol_code = error.protocol_code();
+    if (protocol_code.has_value()) {
+      try {
+        const int parsed_code = std::stoi(*protocol_code);
+        if (parsed_code <= -32000) {
+          return parsed_code;
+        }
+      } catch (const std::exception&) {
+      }
+    }
+  }
+
   switch (error.code()) {
     case core::ErrorCode::kValidation:
       return kJsonRpcInvalidParams;
