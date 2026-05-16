@@ -83,10 +83,8 @@ jobs:
             python3 -m pip install python-dotenv pyopenssl
             python3 run_tck.py \
               --sut-host "${TCK_SUT_URL}" \
-              --category mandatory \
-              --transports grpc \
-              --transport-strategy prefer_grpc \
-              --compliance-report "../${TCK_REPORT_DIR}/compliance.json" \
+              --transport grpc \
+              --level must \
               | tee "../${TCK_LOG_DIR}/tck-run.log"
             popd >/dev/null
             exit 0
