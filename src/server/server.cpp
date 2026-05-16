@@ -244,24 +244,51 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
 
   std::lock_guard<std::mutex> lock(mutex_);
 
-  if (offset.value() > ordered_ids_.size()) {
+  std::vector<const lf::a2a::v1::Task*> filtered;
+  filtered.reserve(ordered_ids_.size());
+  for (const auto& id : ordered_ids_) {
+    const auto it = tasks_.find(id);
+    if (it == tasks_.end()) {
+      continue;
+    }
+    const auto& task = it->second;
+    if (!request.context_id.empty() && task.context_id() != request.context_id) {
+      continue;
+    }
+    if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
+      continue;
+    }
+    filtered.push_back(&task);
+  }
+
+  if (offset.value() > filtered.size()) {
     return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
   }
 
-  const std::size_t max_items = request.page_size == 0
-                                    ? ordered_ids_.size()
-                                    : std::min(request.page_size, ordered_ids_.size());
-
+  const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
   ListTasksResponse response;
-  for (std::size_t idx = offset.value(); idx < ordered_ids_.size(); ++idx) {
-    if (response.tasks.size() >= max_items) {
+  response.page_size = std::min(effective_page_size, filtered.size() - offset.value());
+  response.total_size = filtered.size();
+
+  for (std::size_t idx = offset.value(); idx < filtered.size(); ++idx) {
+    if (response.tasks.size() >= effective_page_size) {
       response.next_page_token = std::to_string(idx);
       break;
     }
-    const auto task_it = tasks_.find(ordered_ids_[idx]);
-    if (task_it != tasks_.end()) {
-      response.tasks.push_back(task_it->second);
+    lf::a2a::v1::Task task = *filtered[idx];
+    if (!request.include_artifacts) {
+      task.clear_artifacts();
     }
+    if (request.history_length.has_value()) {
+      const std::size_t keep = *request.history_length;
+      if (keep == 0) {
+        task.clear_history();
+      } else if (static_cast<std::size_t>(task.history_size()) > keep) {
+        const int remove_count = static_cast<int>(task.history_size() - keep);
+        task.mutable_history()->DeleteSubrange(0, remove_count);
+      }
+    }
+    response.tasks.push_back(std::move(task));
   }
 
   return response;

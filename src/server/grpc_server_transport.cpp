@@ -242,6 +242,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   for (const auto& task : payload->tasks) {
     *response->add_tasks() = task;
   }
+  response->set_page_size(static_cast<int32_t>(payload->page_size));
+  response->set_total_size(static_cast<int32_t>(payload->total_size));
   response->set_next_page_token(payload->next_page_token);
   return ::grpc::Status::OK;
 }
