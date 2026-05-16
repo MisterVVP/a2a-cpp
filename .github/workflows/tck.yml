@@ -15,6 +15,7 @@ env:
   TCK_LOG_DIR: tck-artifacts/logs
   SUT_HOST: 127.0.0.1
   SUT_PORT: "50061"
+  TCK_TRANSPORT: http_json
 
 jobs:
   mandatory-conformance:
@@ -89,7 +90,7 @@ jobs:
             fi
             python3 run_tck.py \
               --sut-host "${TCK_SUT_URL}" \
-              --transport grpc \
+              --transport "${TCK_TRANSPORT}" \
               --level must \
               | tee "../${TCK_LOG_DIR}/tck-run.log"
             popd >/dev/null
