@@ -28,7 +28,7 @@ Use the same deterministic workflow as `.github/workflows/tck.yml`:
 
 # 2) Clone the pinned TCK ref (override TCK_REF as needed).
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
-TCK_REF=${TCK_REF:-0.3.0.beta4}
+TCK_REF=${TCK_REF:-main}
 git clone --depth 1 --branch "${TCK_REF}" "https://github.com/${TCK_REPO}.git" tck-repo
 python3 -m venv tck-repo/.venv
 source tck-repo/.venv/bin/activate
