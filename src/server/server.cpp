@@ -258,6 +258,17 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
     if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
       continue;
     }
+    if (request.status_timestamp_after.has_value()) {
+      if (!task.status().has_timestamp()) {
+        continue;
+      }
+      const auto& cutoff = *request.status_timestamp_after;
+      const auto& ts = task.status().timestamp();
+      if (ts.seconds() < cutoff.seconds() ||
+          (ts.seconds() == cutoff.seconds() && ts.nanos() < cutoff.nanos())) {
+        continue;
+      }
+    }
     filtered.push_back(&task);
   }
 
@@ -265,7 +276,8 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
     return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
   }
 
-  const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
+  const std::size_t effective_page_size =
+      request.page_size == 0 ? filtered.size() : request.page_size;
   ListTasksResponse response;
   response.page_size = std::min(effective_page_size, filtered.size() - offset.value());
   response.total_size = filtered.size();

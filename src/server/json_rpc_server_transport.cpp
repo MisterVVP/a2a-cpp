@@ -211,7 +211,14 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     if (timestamp_after_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be a string");
     }
-    payload.status_timestamp_after = timestamp_after_it->second.string_value();
+    google::protobuf::Timestamp ts;
+    const auto parsed_ts =
+        core::JsonToMessage("\"" + timestamp_after_it->second.string_value() + "\"", &ts);
+    if (!parsed_ts.ok()) {
+      return core::Error::Validation(
+          "ListTasksRequest.statusTimestampAfter must be an RFC3339 timestamp");
+    }
+    payload.status_timestamp_after = ts;
   }
 
   const auto history_length_it = params.fields().find("historyLength");
