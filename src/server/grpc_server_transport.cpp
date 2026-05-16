@@ -9,6 +9,8 @@
 namespace a2a::server {
 namespace {
 
+::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
+
 ::grpc::StatusCode ToStatusCode(const core::Error& error) {
   switch (error.code()) {
     case core::ErrorCode::kValidation:
@@ -18,12 +20,20 @@ namespace {
     case core::ErrorCode::kNetwork:
       return ::grpc::StatusCode::UNAVAILABLE;
     case core::ErrorCode::kRemoteProtocol:
-      return ::grpc::StatusCode::FAILED_PRECONDITION;
+      return RemoteProtocolStatusCode(error);
     case core::ErrorCode::kSerialization:
     case core::ErrorCode::kInternal:
       return ::grpc::StatusCode::INTERNAL;
   }
   return ::grpc::StatusCode::INTERNAL;
+}
+
+::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
+  const auto protocol_code = error.protocol_code();
+  if (protocol_code.has_value() && *protocol_code == "-32001") {
+    return ::grpc::StatusCode::NOT_FOUND;
+  }
+  return ::grpc::StatusCode::FAILED_PRECONDITION;
 }
 
 std::string ErrorCodeName(core::ErrorCode code) {

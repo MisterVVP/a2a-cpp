@@ -53,8 +53,16 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
-    const std::string task_id =
-        request.message().task_id().empty() ? "example-task" : request.message().task_id();
+    std::string task_id = request.message().task_id();
+    if (task_id.empty()) {
+      if (!request.message().context_id().empty()) {
+        task_id = "task-" + request.message().context_id();
+      } else if (!request.message().message_id().empty()) {
+        task_id = "task-" + request.message().message_id();
+      } else {
+        task_id = "example-task-" + std::to_string(ordered_ids_.size() + 1);
+      }
+    }
 
     lf::a2a::v1::Task task = tasks_.contains(task_id) ? tasks_.at(task_id) : lf::a2a::v1::Task{};
     if (!tasks_.contains(task_id)) {
