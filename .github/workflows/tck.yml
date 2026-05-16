@@ -9,7 +9,7 @@ on:
 
 env:
   TCK_REPO: a2aproject/a2a-tck
-  TCK_REF: main
+  TCK_REF: 0.3.0.beta4
   TCK_WORKDIR: tck-repo
   TCK_REPORT_DIR: tck-artifacts/reports
   TCK_LOG_DIR: tck-artifacts/logs
