@@ -63,9 +63,12 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
 
   a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
       const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
-    (void)request;
     (void)context;
-    return a2a::server::ListTasksResponse{};
+    observed_list_request = request;
+    a2a::server::ListTasksResponse response;
+    response.page_size = request.page_size;
+    response.total_size = 1;
+    return response;
   }
 
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
@@ -77,6 +80,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   std::string observed_remote_address;
+  a2a::server::ListTasksRequest observed_list_request;
 };
 
 TEST(GrpcServerTransportTest, SendMessageDispatchesAndExtractsAuthMetadata) {
@@ -153,6 +157,38 @@ TEST(GrpcServerTransportTest, MapsDispatcherErrorToGrpcStatusAndMetadata) {
 
   const auto status = transport.SendMessage(&context, &request, &response);
   EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(GrpcServerTransportTest, ListTasksMapsAllSupportedFields) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::ListTasksRequest request;
+  request.set_context_id("ctx-1");
+  request.set_status(lf::a2a::v1::TASK_STATE_WORKING);
+  request.set_page_token("2");
+  request.set_page_size(3);
+  request.set_history_length(2);
+  request.set_include_artifacts(true);
+  request.mutable_status_timestamp_after()->set_seconds(10);
+  request.mutable_status_timestamp_after()->set_nanos(5);
+
+  lf::a2a::v1::ListTasksResponse response;
+  const auto status = transport.ListTasks(&context, &request, &response);
+  ASSERT_TRUE(status.ok()) << status.error_message();
+  EXPECT_EQ(executor.observed_list_request.context_id, "ctx-1");
+  ASSERT_TRUE(executor.observed_list_request.status_filter.has_value());
+  EXPECT_EQ(*executor.observed_list_request.status_filter, lf::a2a::v1::TASK_STATE_WORKING);
+  EXPECT_EQ(executor.observed_list_request.page_token, "2");
+  EXPECT_EQ(executor.observed_list_request.page_size, 3U);
+  ASSERT_TRUE(executor.observed_list_request.history_length.has_value());
+  EXPECT_EQ(*executor.observed_list_request.history_length, 2U);
+  EXPECT_TRUE(executor.observed_list_request.include_artifacts);
+  ASSERT_TRUE(executor.observed_list_request.status_timestamp_after.has_value());
+  EXPECT_EQ(executor.observed_list_request.status_timestamp_after->seconds(), 10);
+  EXPECT_EQ(executor.observed_list_request.status_timestamp_after->nanos(), 5);
 }
 
 }  // namespace

@@ -1,8 +1,12 @@
 #pragma once
 
+#include <algorithm>
+#include <charconv>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -50,17 +54,37 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
-    const std::string task_id =
-        request.message().task_id().empty() ? "example-task" : request.message().task_id();
+    std::string task_id = request.message().task_id();
+    if (task_id.empty()) {
+      if (!request.message().message_id().empty()) {
+        task_id = "task-" + request.message().message_id();
+      } else {
+        ++generated_task_counter_;
+        task_id = "example-task-" + std::to_string(generated_task_counter_);
+      }
+    }
 
-    lf::a2a::v1::Task task =
-        task_.has_value() && task_->id() == task_id ? *task_ : lf::a2a::v1::Task{};
+    lf::a2a::v1::Task task = tasks_.contains(task_id) ? tasks_.at(task_id) : lf::a2a::v1::Task{};
+    if (!tasks_.contains(task_id)) {
+      ordered_ids_.push_back(task_id);
+    }
     task.set_id(task_id);
+    if (task.context_id().empty()) {
+      if (!request.message().context_id().empty()) {
+        task.set_context_id(request.message().context_id());
+      } else {
+        task.set_context_id("ctx-" + task_id);
+      }
+    }
     *task.add_history() = request.message();
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
-    task_ = task;
+    ++status_timestamp_counter_;
+    task.mutable_status()->mutable_timestamp()->set_seconds(
+        static_cast<int64_t>(status_timestamp_counter_));
+
+    tasks_[task_id] = task;
 
     lf::a2a::v1::SendMessageResponse response;
     *response.mutable_task() = task;
@@ -95,39 +119,106 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                           server::RequestContext& context) override {
     (void)context;
-    if (!task_.has_value() || request.id() != task_->id()) {
+    if (!tasks_.contains(request.id())) {
       return core::Error::RemoteProtocol("task not found")
           .WithHttpStatus(404)
           .WithProtocolCode("-32001");
     }
-    return *task_;
+    lf::a2a::v1::Task task = tasks_.at(request.id());
+    if (request.has_history_length()) {
+      const int keep = request.history_length();
+      if (keep <= 0) {
+        task.clear_history();
+      } else if (task.history_size() > keep) {
+        task.mutable_history()->DeleteSubrange(0, task.history_size() - keep);
+      }
+    }
+    return task;
   }
 
   core::Result<server::ListTasksResponse> ListTasks(const server::ListTasksRequest& request,
                                                     server::RequestContext& context) override {
     (void)context;
-    (void)request;
-    server::ListTasksResponse response;
-    if (task_.has_value()) {
-      response.tasks.push_back(*task_);
+    std::vector<lf::a2a::v1::Task> filtered;
+    for (const auto& id : ordered_ids_) {
+      const auto it = tasks_.find(id);
+      if (it == tasks_.end()) continue;
+      const auto& task = it->second;
+      if (!request.context_id.empty() && task.context_id() != request.context_id) continue;
+      if (request.status_filter.has_value() && task.status().state() != *request.status_filter)
+        continue;
+      filtered.push_back(task);
     }
+
+    std::stable_sort(
+        filtered.begin(), filtered.end(),
+        [](const lf::a2a::v1::Task& lhs, const lf::a2a::v1::Task& rhs) {
+          const auto lhs_s = lhs.status().has_timestamp() ? lhs.status().timestamp().seconds() : 0;
+          const auto rhs_s = rhs.status().has_timestamp() ? rhs.status().timestamp().seconds() : 0;
+          return lhs_s > rhs_s;
+        });
+
+    std::size_t offset = 0;
+    if (!request.page_token.empty()) {
+      const auto* b = request.page_token.data();
+      const auto* e = b + request.page_token.size();
+      const auto p = std::from_chars(b, e, offset);
+      if (p.ec != std::errc() || p.ptr != e) {
+        return core::Error::Validation(
+            "ListTasksRequest.page_token must be a non-negative integer");
+      }
+    }
+    if (offset > filtered.size()) {
+      return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
+    }
+
+    const std::size_t page_size = request.page_size == 0 ? 50U : request.page_size;
+    server::ListTasksResponse response;
+    response.total_size = filtered.size();
+
+    for (std::size_t i = offset; i < filtered.size(); ++i) {
+      if (response.tasks.size() >= page_size) {
+        response.next_page_token = std::to_string(i);
+        break;
+      }
+      auto task = filtered[i];
+      if (!request.include_artifacts) {
+        task.clear_artifacts();
+      }
+      if (request.history_length.has_value()) {
+        const auto keep = *request.history_length;
+        if (keep == 0) {
+          task.clear_history();
+        } else if (static_cast<std::size_t>(task.history_size()) > keep) {
+          task.mutable_history()->DeleteSubrange(
+              0, static_cast<int>(static_cast<std::size_t>(task.history_size()) - keep));
+        }
+      }
+      response.tasks.push_back(std::move(task));
+    }
+    response.page_size = response.tasks.size();
     return response;
   }
 
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                              server::RequestContext& context) override {
     (void)context;
-    if (!task_.has_value() || request.id() != task_->id()) {
+    if (!tasks_.contains(request.id())) {
       return core::Error::RemoteProtocol("task not found")
           .WithHttpStatus(404)
           .WithProtocolCode("-32001");
     }
-    task_->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
-    return *task_;
+    auto task = tasks_.at(request.id());
+    task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
+    tasks_[request.id()] = task;
+    return task;
   }
 
  private:
-  std::optional<lf::a2a::v1::Task> task_;
+  std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
+  std::vector<std::string> ordered_ids_;
+  std::uint64_t generated_task_counter_ = 0;
+  std::uint64_t status_timestamp_counter_ = 0;
 };
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {

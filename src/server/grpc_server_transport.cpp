@@ -9,6 +9,8 @@
 namespace a2a::server {
 namespace {
 
+::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
+
 ::grpc::StatusCode ToStatusCode(const core::Error& error) {
   switch (error.code()) {
     case core::ErrorCode::kValidation:
@@ -18,12 +20,20 @@ namespace {
     case core::ErrorCode::kNetwork:
       return ::grpc::StatusCode::UNAVAILABLE;
     case core::ErrorCode::kRemoteProtocol:
-      return ::grpc::StatusCode::FAILED_PRECONDITION;
+      return RemoteProtocolStatusCode(error);
     case core::ErrorCode::kSerialization:
     case core::ErrorCode::kInternal:
       return ::grpc::StatusCode::INTERNAL;
   }
   return ::grpc::StatusCode::INTERNAL;
+}
+
+::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
+  const auto protocol_code = error.protocol_code();
+  if (protocol_code.has_value() && *protocol_code == "-32001") {
+    return ::grpc::StatusCode::NOT_FOUND;
+  }
+  return ::grpc::StatusCode::FAILED_PRECONDITION;
 }
 
 std::string ErrorCodeName(core::ErrorCode code) {
@@ -204,6 +214,67 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return ::grpc::Status::OK;
 }
 
+::grpc::Status GrpcServerTransport::ListTasks(::grpc::ServerContext* context,
+                                              const lf::a2a::v1::ListTasksRequest* request,
+                                              lf::a2a::v1::ListTasksResponse* response) {
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+
+  ListTasksRequest list_request;
+  if (request->has_page_size()) {
+    const int32_t page_size = request->page_size();
+    if (page_size <= 0 || page_size > 100) {
+      return ToGrpcStatus(
+          core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
+    }
+    list_request.page_size = static_cast<std::size_t>(page_size);
+  }
+  list_request.page_token = request->page_token();
+  list_request.context_id = request->context_id();
+  if (request->status() != lf::a2a::v1::TASK_STATE_UNSPECIFIED) {
+    list_request.status_filter = request->status();
+  }
+  if (request->has_history_length()) {
+    if (request->history_length() < 0) {
+      return ToGrpcStatus(
+          core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context);
+    }
+    list_request.history_length = static_cast<std::size_t>(request->history_length());
+  }
+  if (request->has_include_artifacts()) {
+    list_request.include_artifacts = request->include_artifacts();
+  }
+  if (request->has_status_timestamp_after()) {
+    list_request.status_timestamp_after = request->status_timestamp_after();
+  }
+
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
+                            request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+
+  const auto* payload = std::get_if<ListTasksResponse>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for ListTasks"};
+  }
+
+  for (const auto& task : payload->tasks) {
+    *response->add_tasks() = task;
+  }
+  response->set_page_size(static_cast<int32_t>(payload->page_size));
+  response->set_total_size(static_cast<int32_t>(payload->total_size));
+  response->set_next_page_token(payload->next_page_token);
+  return ::grpc::Status::OK;
+}
+
 ::grpc::Status GrpcServerTransport::CreateTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
@@ -241,6 +312,25 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   (void)request;
   (void)response;
   return {::grpc::StatusCode::UNIMPLEMENTED, "Not implemented"};
+}
+
+::grpc::Status GrpcServerTransport::GetExtendedAgentCard(
+    ::grpc::ServerContext* context, const lf::a2a::v1::GetExtendedAgentCardRequest* request,
+    lf::a2a::v1::AgentCard* response) {
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+  (void)request;
+  (void)context;
+
+  response->set_name("A2A C++ SDK Agent");
+  response->set_description("Default agent card for compatibility checks");
+  response->set_version("1.0.0");
+  response->add_default_input_modes("text/plain");
+  response->add_default_output_modes("text/plain");
+  response->mutable_capabilities()->set_push_notifications(false);
+  response->mutable_capabilities()->set_streaming(true);
+  return ::grpc::Status::OK;
 }
 
 }  // namespace a2a::server

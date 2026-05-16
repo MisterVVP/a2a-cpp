@@ -102,6 +102,9 @@ TEST(ExamplesInteropIntegrationTest, JsonRpcExampleServerRoundTripWorks) {
 
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_task_id("interop-json-rpc-task");
+  request.mutable_message()->set_message_id("interop-json-rpc-msg-1");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  request.mutable_message()->add_parts()->set_text("hello");
   const auto send = client.SendMessage(request);
   ASSERT_TRUE(send.ok()) << send.error().message();
 
