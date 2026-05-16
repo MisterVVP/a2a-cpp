@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -55,12 +56,11 @@ class ExampleExecutor final : public server::AgentExecutor {
     }
     std::string task_id = request.message().task_id();
     if (task_id.empty()) {
-      if (!request.message().context_id().empty()) {
-        task_id = "task-" + request.message().context_id();
-      } else if (!request.message().message_id().empty()) {
+      if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        task_id = "example-task-" + std::to_string(ordered_ids_.size() + 1);
+        ++generated_task_counter_;
+        task_id = "example-task-" + std::to_string(generated_task_counter_);
       }
     }
 
@@ -80,6 +80,9 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
+    ++status_timestamp_counter_;
+    task.mutable_status()->mutable_timestamp()->set_seconds(
+        static_cast<int64_t>(status_timestamp_counter_));
 
     tasks_[task_id] = task;
 
@@ -147,6 +150,14 @@ class ExampleExecutor final : public server::AgentExecutor {
       filtered.push_back(task);
     }
 
+    std::stable_sort(
+        filtered.begin(), filtered.end(),
+        [](const lf::a2a::v1::Task& lhs, const lf::a2a::v1::Task& rhs) {
+          const auto lhs_s = lhs.status().has_timestamp() ? lhs.status().timestamp().seconds() : 0;
+          const auto rhs_s = rhs.status().has_timestamp() ? rhs.status().timestamp().seconds() : 0;
+          return lhs_s > rhs_s;
+        });
+
     std::size_t offset = 0;
     if (!request.page_token.empty()) {
       const auto* b = request.page_token.data();
@@ -206,6 +217,8 @@ class ExampleExecutor final : public server::AgentExecutor {
  private:
   std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
   std::vector<std::string> ordered_ids_;
+  std::uint64_t generated_task_counter_ = 0;
+  std::uint64_t status_timestamp_counter_ = 0;
 };
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {

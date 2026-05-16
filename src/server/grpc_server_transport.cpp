@@ -229,9 +229,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   ListTasksRequest list_request;
   if (request->has_page_size()) {
     const int32_t page_size = request->page_size();
-    if (page_size < 0) {
+    if (page_size <= 0 || page_size > 100) {
       return ToGrpcStatus(
-          core::Error::Validation("ListTasksRequest.page_size must be non-negative"), context);
+          core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
     }
     list_request.page_size = static_cast<std::size_t>(page_size);
   }
