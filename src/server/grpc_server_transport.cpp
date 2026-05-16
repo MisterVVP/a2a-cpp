@@ -314,4 +314,23 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return {::grpc::StatusCode::UNIMPLEMENTED, "Not implemented"};
 }
 
+::grpc::Status GrpcServerTransport::GetExtendedAgentCard(
+    ::grpc::ServerContext* context, const lf::a2a::v1::GetExtendedAgentCardRequest* request,
+    lf::a2a::v1::AgentCard* response) {
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+  (void)request;
+  (void)context;
+
+  response->set_name("A2A C++ SDK Agent");
+  response->set_description("Default agent card for compatibility checks");
+  response->set_version("1.0.0");
+  response->add_default_input_modes("text/plain");
+  response->add_default_output_modes("text/plain");
+  response->mutable_capabilities()->set_push_notifications(false);
+  response->mutable_capabilities()->set_streaming(true);
+  return ::grpc::Status::OK;
+}
+
 }  // namespace a2a::server
