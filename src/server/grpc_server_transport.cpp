@@ -226,6 +226,23 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     list_request.page_size = static_cast<std::size_t>(page_size);
   }
   list_request.page_token = request->page_token();
+  list_request.context_id = request->context_id();
+  if (request->status() != lf::a2a::v1::TASK_STATE_UNSPECIFIED) {
+    list_request.status_filter = request->status();
+  }
+  if (request->has_history_length()) {
+    if (request->history_length() < 0) {
+      return ToGrpcStatus(
+          core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context);
+    }
+    list_request.history_length = static_cast<std::size_t>(request->history_length());
+  }
+  if (request->has_include_artifacts()) {
+    list_request.include_artifacts = request->include_artifacts();
+  }
+  if (request->has_status_timestamp_after()) {
+    list_request.status_timestamp_after = request->status_timestamp_after();
+  }
 
   const auto dispatch =
       dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
