@@ -82,7 +82,7 @@ jobs:
             fi
             python3 -m pip install python-dotenv pyopenssl
             python3 run_tck.py \
-              --sut-url "${TCK_SUT_URL}" \
+              --sut-host "${TCK_SUT_URL}" \
               --category mandatory \
               --transports grpc \
               --transport-strategy prefer_grpc \
@@ -122,9 +122,9 @@ jobs:
             export A2A_TCK_REPORT_DIR="${PWD}/${TCK_REPORT_DIR}"
             pushd "${TCK_WORKDIR}" >/dev/null
             if [[ -d tests/mandatory ]]; then
-              python3 -m pytest tests/mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend | tee "../${TCK_LOG_DIR}/tck-run.log"
+              python3 -m pytest tests/mandatory --sut-host "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend | tee "../${TCK_LOG_DIR}/tck-run.log"
             else
-              python3 -m pytest tests -m mandatory --sut-url "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend --ignore=tests/unit --ignore=tests/unit/adapters | tee "../${TCK_LOG_DIR}/tck-run.log"
+              python3 -m pytest tests -m mandatory --sut-host "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend --ignore=tests/unit --ignore=tests/unit/adapters | tee "../${TCK_LOG_DIR}/tck-run.log"
             fi
             popd >/dev/null
             exit 0

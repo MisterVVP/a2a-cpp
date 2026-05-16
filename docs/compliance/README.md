@@ -49,7 +49,7 @@ if [[ -x ./scripts/run_tck.sh ]]; then
     | tee ../tck-artifacts/logs/tck-run.log
 elif [[ -f ./run_tck.py ]]; then
   python3 ./run_tck.py \
-    --sut-url "http://127.0.0.1:50061" \
+    --sut-host "http://127.0.0.1:50061" \
     --category mandatory \
     --transports grpc \
     --transport-strategy prefer_grpc \
