@@ -12,10 +12,11 @@
 #include <vector>
 
 #include "a2a/core/error.h"
-#include "a2a/core/protocol_codes.h"
-#include "a2a/examples/example_constants.h"
+#include "a2a/core/protocol_errors.h"
+#include "a2a/core/task_states.h"
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
+#include "example_constants.h"
 
 namespace a2a::examples {
 
@@ -30,41 +31,6 @@ inline std::string UrlToTarget(std::string_view url) {
     return "/";
   }
   return std::string(url.substr(path_start));
-}
-
-inline bool IsTerminalTaskState(lf::a2a::v1::TaskState state) {
-  switch (state) {
-    case lf::a2a::v1::TASK_STATE_COMPLETED:
-    case lf::a2a::v1::TASK_STATE_FAILED:
-    case lf::a2a::v1::TASK_STATE_CANCELED:
-    case lf::a2a::v1::TASK_STATE_REJECTED:
-      return true;
-    case lf::a2a::v1::TASK_STATE_UNSPECIFIED:
-    case lf::a2a::v1::TASK_STATE_SUBMITTED:
-    case lf::a2a::v1::TASK_STATE_WORKING:
-    case lf::a2a::v1::TASK_STATE_INPUT_REQUIRED:
-    case lf::a2a::v1::TASK_STATE_AUTH_REQUIRED:
-      return false;
-  }
-  return false;
-}
-
-inline core::Error TaskNotFoundError() {
-  return core::Error::RemoteProtocol("task not found")
-      .WithHttpStatus(404)
-      .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound));
-}
-
-inline core::Error TaskNotCancelableError() {
-  return core::Error::RemoteProtocol("task is already terminal")
-      .WithHttpStatus(409)
-      .WithProtocolCode(std::string(core::protocol_codes::kTaskNotCancelable));
-}
-
-inline core::Error UnsupportedOperationError(std::string message) {
-  return core::Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(400)
-      .WithProtocolCode(std::string(core::protocol_codes::kUnsupportedOperation));
 }
 
 class SequenceStreamSession final : public server::ServerStreamSession {
@@ -103,17 +69,17 @@ class ExampleExecutor final : public server::AgentExecutor {
       }
     }
     if (has_explicit_task_id && !tasks_.contains(task_id)) {
-      return TaskNotFoundError();
+      return core::protocol_errors::TaskNotFound();
     }
     if (has_explicit_task_id) {
       const auto existing_task = tasks_.find(task_id);
       if (existing_task != tasks_.end()) {
         if (!request.message().context_id().empty() && !existing_task->second.context_id().empty() &&
             request.message().context_id() != existing_task->second.context_id()) {
-          return UnsupportedOperationError("contextId does not match task");
+          return core::protocol_errors::UnsupportedOperation("contextId does not match task");
         }
-        if (IsTerminalTaskState(existing_task->second.status().state())) {
-          return UnsupportedOperationError("task is already terminal");
+        if (core::IsTerminalTaskState(existing_task->second.status().state())) {
+          return core::protocol_errors::UnsupportedOperation("task is already terminal");
         }
       }
     }
@@ -318,7 +284,7 @@ class ExampleExecutor final : public server::AgentExecutor {
                                           server::RequestContext& context) override {
     (void)context;
     if (!tasks_.contains(request.id())) {
-      return TaskNotFoundError();
+      return core::protocol_errors::TaskNotFound();
     }
     lf::a2a::v1::Task task = tasks_.at(request.id());
     if (request.has_history_length()) {
@@ -400,11 +366,11 @@ class ExampleExecutor final : public server::AgentExecutor {
                                              server::RequestContext& context) override {
     (void)context;
     if (!tasks_.contains(request.id())) {
-      return TaskNotFoundError();
+      return core::protocol_errors::TaskNotFound();
     }
     auto task = tasks_.at(request.id());
-    if (IsTerminalTaskState(task.status().state())) {
-      return TaskNotCancelableError();
+    if (core::IsTerminalTaskState(task.status().state())) {
+      return core::protocol_errors::TaskNotCancelable();
     }
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
     tasks_[request.id()] = task;
