@@ -13,6 +13,10 @@ namespace a2a::server {
 
 class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
  public:
+  static constexpr std::string_view kVersionMetadataKey = "a2a-version";
+  static constexpr std::string_view kTransportName = "grpc";
+  static constexpr std::string_view kProtocolCodeMetadataKey = "a2a-protocol-code";
+
   explicit GrpcServerTransport(Dispatcher* dispatcher);
 
   ::grpc::Status SendMessage(::grpc::ServerContext* context,

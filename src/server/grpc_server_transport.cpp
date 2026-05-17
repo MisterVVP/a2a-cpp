@@ -10,10 +10,6 @@
 
 namespace a2a::server {
 namespace {
-constexpr std::string_view kGrpcVersionMetadataKey = "a2a-version";
-constexpr std::string_view kGrpcTransportName = "grpc";
-constexpr std::string_view kA2AProtocolCodeMetadataKey = "a2a-protocol-code";
-
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
 
 ::grpc::StatusCode ToStatusCode(const core::Error& error) {
@@ -78,14 +74,15 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     request_context.client_headers[key] = value;
   }
   request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
-  const auto version_it = request_context.client_headers.find(std::string(kGrpcVersionMetadataKey));
+  const auto version_it =
+      request_context.client_headers.find(std::string(GrpcServerTransport::kVersionMetadataKey));
   if (version_it == request_context.client_headers.end()) {
     return core::Error::UnsupportedVersion("Missing required A2A-Version header")
-        .WithTransport(std::string(kGrpcTransportName));
+        .WithTransport(std::string(GrpcServerTransport::kTransportName));
   }
   if (version_it->second != core::Version::HeaderValue()) {
     return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
-        .WithTransport(std::string(kGrpcTransportName));
+        .WithTransport(std::string(GrpcServerTransport::kTransportName));
   }
   return request_context;
 }
@@ -96,7 +93,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
     const auto& protocol_code = error.protocol_code();
     if (protocol_code.has_value()) {
-      context->AddTrailingMetadata(std::string(kA2AProtocolCodeMetadataKey), *protocol_code);
+      context->AddTrailingMetadata(std::string(GrpcServerTransport::kProtocolCodeMetadataKey),
+                                   *protocol_code);
     }
   }
 
