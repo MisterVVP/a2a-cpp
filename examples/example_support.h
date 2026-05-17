@@ -12,15 +12,11 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/examples/example_constants.h"
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::examples {
-namespace {
-constexpr std::string_view kGeneratedTextContent = "Generated text content";
-constexpr std::string_view kOutputFilename = "output.txt";
-constexpr std::string_view kTextPlainMediaType = "text/plain";
-}  // namespace
 
 inline std::string UrlToTarget(std::string_view url) {
   const std::size_t scheme = url.find("://");
@@ -101,23 +97,23 @@ class ExampleExecutor final : public server::AgentExecutor {
     auto* text_artifact = task.add_artifacts();
     text_artifact->set_artifact_id("artifact-text-" + task_id);
     text_artifact->set_name("text-artifact");
-    text_artifact->add_parts()->set_text(std::string(kGeneratedTextContent));
+    text_artifact->add_parts()->set_text(std::string(constants::kGeneratedTextContent));
 
     auto* file_artifact = task.add_artifacts();
     file_artifact->set_artifact_id("artifact-file-" + task_id);
     file_artifact->set_name("file-artifact");
     auto* file_part = file_artifact->add_parts();
     file_part->set_raw("generated file content");
-    file_part->set_filename(std::string(kOutputFilename));
-    file_part->set_media_type(std::string(kTextPlainMediaType));
+    file_part->set_filename(std::string(constants::kOutputFilename));
+    file_part->set_media_type(std::string(constants::kTextPlainMediaType));
 
     auto* file_url_artifact = task.add_artifacts();
     file_url_artifact->set_artifact_id("artifact-file-url-" + task_id);
     file_url_artifact->set_name("file-url-artifact");
     auto* file_url_part = file_url_artifact->add_parts();
     file_url_part->set_url("https://example.test/output.txt");
-    file_url_part->set_filename(std::string(kOutputFilename));
-    file_url_part->set_media_type(std::string(kTextPlainMediaType));
+    file_url_part->set_filename(std::string(constants::kOutputFilename));
+    file_url_part->set_media_type(std::string(constants::kTextPlainMediaType));
 
     auto* data_artifact = task.add_artifacts();
     data_artifact->set_artifact_id("artifact-data-" + task_id);
