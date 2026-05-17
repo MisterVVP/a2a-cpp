@@ -9,7 +9,8 @@
 #include <utility>
 
 #include "a2a/core/error.h"
-#include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_errors.h"
+#include "a2a/core/task_states.h"
 
 namespace a2a::server {
 
@@ -215,9 +216,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
-    return core::Error::RemoteProtocol("Task not found")
-        .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound))
-        .WithHttpStatus(404);
+    return core::protocol_errors::TaskNotFound("Task not found");
   }
   return it->second;
 }
@@ -315,9 +314,10 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
-    return core::Error::RemoteProtocol("Task not found")
-        .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound))
-        .WithHttpStatus(404);
+    return core::protocol_errors::TaskNotFound("Task not found");
+  }
+  if (core::IsTerminalTaskState(it->second.status().state())) {
+    return core::protocol_errors::TaskNotCancelable();
   }
 
   auto* mutable_status = it->second.mutable_status();
