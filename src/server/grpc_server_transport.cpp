@@ -1,5 +1,6 @@
 #include "a2a/server/grpc_server_transport.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -55,6 +56,113 @@ std::string ErrorCodeName(core::ErrorCode code) {
   return "internal";
 }
 
+std::string ErrorInfoReason(const core::Error& error) {
+  const auto protocol_code = error.protocol_code();
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
+    return "TASK_NOT_FOUND";
+  }
+  switch (error.code()) {
+    case core::ErrorCode::kValidation:
+      return "VALIDATION_ERROR";
+    case core::ErrorCode::kUnsupportedVersion:
+      return "UNSUPPORTED_VERSION";
+    case core::ErrorCode::kNetwork:
+      return "NETWORK_ERROR";
+    case core::ErrorCode::kRemoteProtocol:
+      return "REMOTE_PROTOCOL_ERROR";
+    case core::ErrorCode::kSerialization:
+      return "SERIALIZATION_ERROR";
+    case core::ErrorCode::kInternal:
+      return "INTERNAL_ERROR";
+  }
+  return "INTERNAL_ERROR";
+}
+
+int GrpcStatusCodeNumber(::grpc::StatusCode code) {
+  switch (code) {
+    case ::grpc::StatusCode::OK:
+      return 0;
+    case ::grpc::StatusCode::CANCELLED:
+      return 1;
+    case ::grpc::StatusCode::UNKNOWN:
+      return 2;
+    case ::grpc::StatusCode::INVALID_ARGUMENT:
+      return 3;
+    case ::grpc::StatusCode::DEADLINE_EXCEEDED:
+      return 4;
+    case ::grpc::StatusCode::NOT_FOUND:
+      return 5;
+    case ::grpc::StatusCode::ALREADY_EXISTS:
+      return 6;
+    case ::grpc::StatusCode::PERMISSION_DENIED:
+      return 7;
+    case ::grpc::StatusCode::RESOURCE_EXHAUSTED:
+      return 8;
+    case ::grpc::StatusCode::FAILED_PRECONDITION:
+      return 9;
+    case ::grpc::StatusCode::ABORTED:
+      return 10;
+    case ::grpc::StatusCode::OUT_OF_RANGE:
+      return 11;
+    case ::grpc::StatusCode::UNIMPLEMENTED:
+      return 12;
+    case ::grpc::StatusCode::INTERNAL:
+      return 13;
+    case ::grpc::StatusCode::UNAVAILABLE:
+      return 14;
+    case ::grpc::StatusCode::DATA_LOSS:
+      return 15;
+    case ::grpc::StatusCode::UNAUTHENTICATED:
+      return 16;
+    case ::grpc::StatusCode::DO_NOT_USE:
+      break;
+  }
+  return 2;
+}
+
+void AppendVarint(std::string& out, std::uint64_t value) {
+  while (value >= 0x80U) {
+    out.push_back(static_cast<char>((value & 0x7FU) | 0x80U));
+    value >>= 7U;
+  }
+  out.push_back(static_cast<char>(value));
+}
+
+void AppendTag(std::string& out, std::uint32_t field_number, std::uint32_t wire_type) {
+  AppendVarint(out, (static_cast<std::uint64_t>(field_number) << 3U) | wire_type);
+}
+
+void AppendLengthDelimited(std::string& out, std::uint32_t field_number, const std::string& value) {
+  AppendTag(out, field_number, 2U);
+  AppendVarint(out, static_cast<std::uint64_t>(value.size()));
+  out.append(value);
+}
+
+std::string SerializeErrorInfo(const core::Error& error) {
+  std::string message;
+  AppendLengthDelimited(message, 1U, ErrorInfoReason(error));
+  AppendLengthDelimited(message, 2U, "a2a-protocol.org");
+  return message;
+}
+
+std::string SerializeAny(std::string type_url, const std::string& value) {
+  std::string message;
+  AppendLengthDelimited(message, 1U, type_url);
+  AppendLengthDelimited(message, 2U, value);
+  return message;
+}
+
+std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Error& error) {
+  std::string message;
+  AppendTag(message, 1U, 0U);
+  AppendVarint(message, static_cast<std::uint64_t>(GrpcStatusCodeNumber(code)));
+  AppendLengthDelimited(message, 2U, std::string(error.message()));
+  AppendLengthDelimited(
+      message, 3U,
+      SerializeAny("type.googleapis.com/google.rpc.ErrorInfo", SerializeErrorInfo(error)));
+  return message;
+}
+
 }  // namespace
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
@@ -89,8 +197,11 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
 
 ::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error,
                                                  ::grpc::ServerContext* context) {
+  const auto status_code = ToStatusCode(error);
   if (context != nullptr) {
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
+    context->AddTrailingMetadata("grpc-status-details-bin",
+                                 SerializeGrpcStatusDetails(status_code, error));
     const auto& protocol_code = error.protocol_code();
     if (protocol_code.has_value()) {
       context->AddTrailingMetadata(std::string(GrpcServerTransport::kProtocolCodeMetadataKey),
@@ -98,7 +209,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     }
   }
 
-  return {ToStatusCode(error), std::string(error.message())};
+  return {status_code, std::string(error.message())};
 }
 
 ::grpc::Status GrpcServerTransport::SendMessage(::grpc::ServerContext* context,
