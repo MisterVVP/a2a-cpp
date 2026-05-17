@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <optional>
@@ -96,18 +97,32 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.clear_artifacts();
     const std::string request_text =
         request.message().parts(0).has_text() ? request.message().parts(0).text() : std::string{};
+    std::string normalized_request_text;
+    normalized_request_text.reserve(request_text.size());
+    for (const char ch : request_text) {
+      normalized_request_text.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
     const bool wants_file_url_artifact =
-        request_text.find("file_url_artifact") != std::string::npos ||
-        request_text.find("file url artifact") != std::string::npos ||
-        request_text.find("file_url") != std::string::npos;
-    const bool wants_file_artifact = request_text.find("file_artifact") != std::string::npos ||
-                                     request_text.find("file artifact") != std::string::npos;
-    const bool wants_data_artifact = request_text.find("data_artifact") != std::string::npos ||
-                                     request_text.find("data artifact") != std::string::npos;
+        normalized_request_text.find("file_url_artifact") != std::string::npos ||
+        normalized_request_text.find("file url artifact") != std::string::npos ||
+        normalized_request_text.find("file_url") != std::string::npos ||
+        (normalized_request_text.find("file") != std::string::npos &&
+         normalized_request_text.find("url") != std::string::npos);
+    const bool wants_file_artifact =
+        normalized_request_text.find("file_artifact") != std::string::npos ||
+        normalized_request_text.find("file artifact") != std::string::npos ||
+        normalized_request_text.find("output.txt") != std::string::npos;
+    const bool wants_data_artifact =
+        normalized_request_text.find("data_artifact") != std::string::npos ||
+        normalized_request_text.find("data artifact") != std::string::npos ||
+        normalized_request_text.find("json") != std::string::npos ||
+        normalized_request_text.find("structured data") != std::string::npos;
     const bool wants_message_response =
-        request_text.find("message response") != std::string::npos ||
-        request_text.find("return a message") != std::string::npos ||
-        request_text.find("respond with message") != std::string::npos;
+        normalized_request_text.find("message response") != std::string::npos ||
+        normalized_request_text.find("return a message") != std::string::npos ||
+        normalized_request_text.find("respond with message") != std::string::npos ||
+        normalized_request_text.find("message with text") != std::string::npos;
 
     auto* text_artifact = task.add_artifacts();
     text_artifact->set_artifact_id("artifact-text-" + task_id);
