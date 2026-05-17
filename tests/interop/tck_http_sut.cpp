@@ -116,12 +116,14 @@ int main(int argc, char** argv) {
   auto* grpc_interface = agent_card.add_supported_interfaces();
   grpc_interface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kGrpc));
   grpc_interface->set_protocol_version("1.0");
-  grpc_interface->set_url("grpc://localhost:" + std::to_string(grpc_port));
+  grpc_interface->set_url("localhost:" + std::to_string(grpc_port));
 
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport grpc(&dispatcher);
-  a2a::server::RestServerTransport rest(&dispatcher, agent_card, {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport rest(
+      &dispatcher, agent_card,
+      {.rest_api_base_path = "/a2a", .include_legacy_transport_fields = false});
   a2a::server::JsonRpcServerTransport jsonrpc(
       &dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
 

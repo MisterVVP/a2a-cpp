@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdint>
 #include <optional>
@@ -11,6 +12,8 @@
 #include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
+#include "a2a/examples/example_constants.h"
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -27,6 +30,41 @@ inline std::string UrlToTarget(std::string_view url) {
     return "/";
   }
   return std::string(url.substr(path_start));
+}
+
+inline bool IsTerminalTaskState(lf::a2a::v1::TaskState state) {
+  switch (state) {
+    case lf::a2a::v1::TASK_STATE_COMPLETED:
+    case lf::a2a::v1::TASK_STATE_FAILED:
+    case lf::a2a::v1::TASK_STATE_CANCELED:
+    case lf::a2a::v1::TASK_STATE_REJECTED:
+      return true;
+    case lf::a2a::v1::TASK_STATE_UNSPECIFIED:
+    case lf::a2a::v1::TASK_STATE_SUBMITTED:
+    case lf::a2a::v1::TASK_STATE_WORKING:
+    case lf::a2a::v1::TASK_STATE_INPUT_REQUIRED:
+    case lf::a2a::v1::TASK_STATE_AUTH_REQUIRED:
+      return false;
+  }
+  return false;
+}
+
+inline core::Error TaskNotFoundError() {
+  return core::Error::RemoteProtocol("task not found")
+      .WithHttpStatus(404)
+      .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound));
+}
+
+inline core::Error TaskNotCancelableError() {
+  return core::Error::RemoteProtocol("task is already terminal")
+      .WithHttpStatus(409)
+      .WithProtocolCode(std::string(core::protocol_codes::kTaskNotCancelable));
+}
+
+inline core::Error UnsupportedOperationError(std::string message) {
+  return core::Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(400)
+      .WithProtocolCode(std::string(core::protocol_codes::kUnsupportedOperation));
 }
 
 class SequenceStreamSession final : public server::ServerStreamSession {
@@ -54,6 +92,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
+    const bool has_explicit_task_id = !request.message().task_id().empty();
     std::string task_id = request.message().task_id();
     if (task_id.empty()) {
       if (!request.message().message_id().empty()) {
@@ -61,6 +100,21 @@ class ExampleExecutor final : public server::AgentExecutor {
       } else {
         ++generated_task_counter_;
         task_id = "example-task-" + std::to_string(generated_task_counter_);
+      }
+    }
+    if (has_explicit_task_id && !tasks_.contains(task_id)) {
+      return TaskNotFoundError();
+    }
+    if (has_explicit_task_id) {
+      const auto existing_task = tasks_.find(task_id);
+      if (existing_task != tasks_.end()) {
+        if (!request.message().context_id().empty() && !existing_task->second.context_id().empty() &&
+            request.message().context_id() != existing_task->second.context_id()) {
+          return UnsupportedOperationError("contextId does not match task");
+        }
+        if (IsTerminalTaskState(existing_task->second.status().state())) {
+          return UnsupportedOperationError("task is already terminal");
+        }
       }
     }
 
@@ -79,31 +133,175 @@ class ExampleExecutor final : public server::AgentExecutor {
     *task.add_history() = request.message();
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+    task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
     ++status_timestamp_counter_;
     task.mutable_status()->mutable_timestamp()->set_seconds(
         static_cast<int64_t>(status_timestamp_counter_));
 
+    task.clear_artifacts();
+    const std::string request_text =
+        request.message().parts(0).has_text() ? request.message().parts(0).text() : std::string{};
+    std::string normalized_request_text;
+    normalized_request_text.reserve(request_text.size());
+    for (const char ch : request_text) {
+      normalized_request_text.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    const std::string request_message_id = request.message().message_id();
+    std::string normalized_message_id;
+    normalized_message_id.reserve(request_message_id.size());
+    for (const char ch : request_message_id) {
+      normalized_message_id.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    std::string normalized_task_id;
+    normalized_task_id.reserve(task_id.size());
+    for (const char ch : task_id) {
+      normalized_task_id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+
+    const bool wants_file_url_artifact =
+        normalized_request_text.find("file_url_artifact") != std::string::npos ||
+        normalized_request_text.find("file-url-artifact") != std::string::npos ||
+        normalized_request_text.find("file url artifact") != std::string::npos ||
+        normalized_request_text.find("file_url") != std::string::npos ||
+        normalized_request_text.find("file-url") != std::string::npos ||
+        normalized_message_id.find("file_url") != std::string::npos ||
+        normalized_message_id.find("file-url") != std::string::npos ||
+        normalized_task_id.find("file_url") != std::string::npos ||
+        normalized_task_id.find("file-url") != std::string::npos ||
+        (normalized_request_text.find("file") != std::string::npos &&
+         normalized_request_text.find("url") != std::string::npos);
+    const bool wants_file_artifact =
+        normalized_request_text.find("file_artifact") != std::string::npos ||
+        normalized_request_text.find("file-artifact") != std::string::npos ||
+        normalized_request_text.find("file artifact") != std::string::npos ||
+        normalized_message_id.find("file") != std::string::npos ||
+        normalized_task_id.find("file") != std::string::npos ||
+        normalized_request_text.find("output.txt") != std::string::npos;
+    const bool wants_data_artifact =
+        normalized_request_text.find("data_artifact") != std::string::npos ||
+        normalized_request_text.find("data-artifact") != std::string::npos ||
+        normalized_request_text.find("data artifact") != std::string::npos ||
+        normalized_message_id.find("data") != std::string::npos ||
+        normalized_task_id.find("data") != std::string::npos ||
+        normalized_request_text.find("json") != std::string::npos ||
+        normalized_request_text.find("structured data") != std::string::npos;
+    const bool wants_message_response =
+        normalized_request_text.find("message response") != std::string::npos ||
+        normalized_request_text.find("return a message") != std::string::npos ||
+        normalized_request_text.find("respond with message") != std::string::npos ||
+        normalized_message_id.find("message-response") != std::string::npos ||
+        normalized_message_id.find("message_response") != std::string::npos ||
+        normalized_message_id.find("message") != std::string::npos ||
+        normalized_task_id.find("message-response") != std::string::npos ||
+        normalized_task_id.find("message_response") != std::string::npos ||
+        normalized_task_id.find("message") != std::string::npos ||
+        normalized_request_text.find("message with text") != std::string::npos;
+    const bool wants_completed_task =
+        normalized_message_id.find("complete-task") != std::string::npos ||
+        normalized_message_id.find("complete_task") != std::string::npos ||
+        normalized_task_id.find("complete-task") != std::string::npos ||
+        normalized_task_id.find("complete_task") != std::string::npos ||
+        normalized_request_text.find("complete task") != std::string::npos ||
+        normalized_request_text.find("complete after history") != std::string::npos;
+    const bool wants_input_required_task =
+        normalized_message_id.find("input-required") != std::string::npos ||
+        normalized_message_id.find("input_required") != std::string::npos ||
+        normalized_task_id.find("input-required") != std::string::npos ||
+        normalized_task_id.find("input_required") != std::string::npos ||
+        normalized_request_text.find("input required") != std::string::npos;
+
+    if (wants_completed_task) {
+      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
+    } else if (wants_input_required_task) {
+      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+    }
+
+    auto* text_artifact = task.add_artifacts();
+    text_artifact->set_artifact_id("artifact-text-" + task_id);
+    text_artifact->set_name("text-artifact");
+    text_artifact->add_parts()->set_text(std::string(constants::kGeneratedTextContent));
+
+    auto* file_artifact = task.add_artifacts();
+    file_artifact->set_artifact_id("artifact-file-" + task_id);
+    file_artifact->set_name("file-artifact");
+    auto* file_part = file_artifact->add_parts();
+    file_part->set_raw("generated file content");
+    file_part->set_filename(std::string(constants::kOutputFilename));
+    file_part->set_media_type(std::string(constants::kTextPlainMediaType));
+
+    auto* file_url_artifact = task.add_artifacts();
+    file_url_artifact->set_artifact_id("artifact-file-url-" + task_id);
+    file_url_artifact->set_name("file-url-artifact");
+    auto* file_url_part = file_url_artifact->add_parts();
+    file_url_part->set_url("https://example.test/output.txt");
+    file_url_part->set_filename(std::string(constants::kOutputFilename));
+    file_url_part->set_media_type(std::string(constants::kTextPlainMediaType));
+
+    auto* data_artifact = task.add_artifacts();
+    data_artifact->set_artifact_id("artifact-data-" + task_id);
+    data_artifact->set_name("data-artifact");
+    auto* data_part = data_artifact->add_parts();
+    auto* data_fields = data_part->mutable_data()->mutable_struct_value()->mutable_fields();
+    (*data_fields)["key"].set_string_value("value");
+    (*data_fields)["count"].set_number_value(42);
+    if (wants_file_url_artifact) {
+      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[2]);
+    } else if (wants_file_artifact) {
+      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[1]);
+    } else if (wants_data_artifact) {
+      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[3]);
+    }
+
     tasks_[task_id] = task;
 
     lf::a2a::v1::SendMessageResponse response;
-    *response.mutable_task() = task;
+    response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+    response.mutable_message()->set_message_id("response-" + task_id);
+    response.mutable_message()->set_task_id(task_id);
+    response.mutable_message()->set_context_id(task.context_id());
+    response.mutable_message()->add_parts()->set_text(
+        wants_message_response ? "Direct message response" : "ack");
+    if (wants_message_response) {
+      // Keep message payload set.
+    } else {
+      *response.mutable_task() = task;
+    }
     return response;
   }
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
     (void)context;
-    if (request.message().task_id().empty()) {
-      return core::Error::Validation("message.task_id is required");
+    std::string task_id = request.message().task_id();
+    if (task_id.empty()) {
+      if (!request.message().message_id().empty()) {
+        task_id = "task-" + request.message().message_id();
+      } else {
+        ++generated_task_counter_;
+        task_id = "example-task-" + std::to_string(generated_task_counter_);
+      }
+    }
+
+    if (!tasks_.contains(task_id)) {
+      lf::a2a::v1::Task task;
+      task.set_id(task_id);
+      task.set_context_id("ctx-" + task_id);
+      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+      tasks_[task_id] = task;
+      ordered_ids_.push_back(task_id);
     }
 
     lf::a2a::v1::StreamResponse working;
-    working.mutable_status_update()->set_task_id(request.message().task_id());
+    working.mutable_status_update()->set_task_id(task_id);
+    working.mutable_status_update()->set_context_id(tasks_.at(task_id).context_id());
     working.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
 
     lf::a2a::v1::StreamResponse completed;
-    completed.mutable_status_update()->set_task_id(request.message().task_id());
+    completed.mutable_status_update()->set_task_id(task_id);
+    completed.mutable_status_update()->set_context_id(tasks_.at(task_id).context_id());
     completed.mutable_status_update()->mutable_status()->set_state(
         lf::a2a::v1::TASK_STATE_COMPLETED);
 
@@ -120,9 +318,7 @@ class ExampleExecutor final : public server::AgentExecutor {
                                           server::RequestContext& context) override {
     (void)context;
     if (!tasks_.contains(request.id())) {
-      return core::Error::RemoteProtocol("task not found")
-          .WithHttpStatus(404)
-          .WithProtocolCode("-32001");
+      return TaskNotFoundError();
     }
     lf::a2a::v1::Task task = tasks_.at(request.id());
     if (request.has_history_length()) {
@@ -204,11 +400,12 @@ class ExampleExecutor final : public server::AgentExecutor {
                                              server::RequestContext& context) override {
     (void)context;
     if (!tasks_.contains(request.id())) {
-      return core::Error::RemoteProtocol("task not found")
-          .WithHttpStatus(404)
-          .WithProtocolCode("-32001");
+      return TaskNotFoundError();
     }
     auto task = tasks_.at(request.id());
+    if (IsTerminalTaskState(task.status().state())) {
+      return TaskNotCancelableError();
+    }
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
     tasks_[request.id()] = task;
     return task;

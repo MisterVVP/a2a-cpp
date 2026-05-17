@@ -18,6 +18,17 @@ env:
 
 jobs:
   mandatory-conformance:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job_name: http-json
+            tck_transport: http_json
+          - job_name: jsonrpc
+            tck_transport: jsonrpc
+          - job_name: grpc
+            tck_transport: grpc
+    name: mandatory-conformance (${{ matrix.job_name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -47,6 +58,7 @@ jobs:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
+          TCK_TRANSPORT: ${{ matrix.tck_transport }}
         run: |
           set -euo pipefail
           mkdir -p "${TCK_REPORT_DIR}" "${TCK_LOG_DIR}"
@@ -80,13 +92,17 @@ jobs:
             if [[ -f "requirements.txt" ]]; then
               python3 -m pip install -r requirements.txt
             fi
+            if [[ -f "pyproject.toml" ]]; then
+              python3 -m pip install -e .
+            fi
             python3 -m pip install python-dotenv pyopenssl
+            if ! python3 -c "import pytest" >/dev/null 2>&1; then
+              python3 -m pip install pytest pytest-html
+            fi
             python3 run_tck.py \
               --sut-host "${TCK_SUT_URL}" \
-              --category mandatory \
-              --transports grpc \
-              --transport-strategy prefer_grpc \
-              --compliance-report "../${TCK_REPORT_DIR}/compliance.json" \
+              --transport "${TCK_TRANSPORT}" \
+              --level must \
               | tee "../${TCK_LOG_DIR}/tck-run.log"
             popd >/dev/null
             exit 0

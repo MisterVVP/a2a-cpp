@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 
 namespace a2a::server {
 
@@ -215,7 +216,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
     return core::Error::RemoteProtocol("Task not found")
-        .WithProtocolCode("-32001")
+        .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound))
         .WithHttpStatus(404);
   }
   return it->second;
@@ -315,7 +316,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
     return core::Error::RemoteProtocol("Task not found")
-        .WithProtocolCode("-32001")
+        .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound))
         .WithHttpStatus(404);
   }
 

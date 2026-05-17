@@ -13,6 +13,10 @@ namespace a2a::server {
 
 class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
  public:
+  static constexpr std::string_view kVersionMetadataKey = "a2a-version";
+  static constexpr std::string_view kTransportName = "grpc";
+  static constexpr std::string_view kProtocolCodeMetadataKey = "a2a-protocol-code";
+
   explicit GrpcServerTransport(Dispatcher* dispatcher);
 
   ::grpc::Status SendMessage(::grpc::ServerContext* context,
@@ -33,6 +37,9 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
   ::grpc::Status ListTasks(::grpc::ServerContext* context,
                            const lf::a2a::v1::ListTasksRequest* request,
                            lf::a2a::v1::ListTasksResponse* response) override;
+  ::grpc::Status SubscribeToTask(
+      ::grpc::ServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request,
+      ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) override;
 
  private:
   [[nodiscard]] core::Result<RequestContext> BuildRequestContext(

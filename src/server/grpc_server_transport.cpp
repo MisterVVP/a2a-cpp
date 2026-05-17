@@ -1,22 +1,47 @@
 #include "a2a/server/grpc_server_transport.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
+#include "a2a/core/version.h"
 
 namespace a2a::server {
 namespace {
-
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
+
+bool IsTerminalTaskState(lf::a2a::v1::TaskState state) {
+  switch (state) {
+    case lf::a2a::v1::TASK_STATE_COMPLETED:
+    case lf::a2a::v1::TASK_STATE_FAILED:
+    case lf::a2a::v1::TASK_STATE_CANCELED:
+    case lf::a2a::v1::TASK_STATE_REJECTED:
+      return true;
+    case lf::a2a::v1::TASK_STATE_UNSPECIFIED:
+    case lf::a2a::v1::TASK_STATE_SUBMITTED:
+    case lf::a2a::v1::TASK_STATE_WORKING:
+    case lf::a2a::v1::TASK_STATE_INPUT_REQUIRED:
+    case lf::a2a::v1::TASK_STATE_AUTH_REQUIRED:
+      return false;
+  }
+  return false;
+}
+
+core::Error UnsupportedOperationError(std::string message) {
+  return core::Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(400)
+      .WithProtocolCode(std::string(core::protocol_codes::kUnsupportedOperation));
+}
 
 ::grpc::StatusCode ToStatusCode(const core::Error& error) {
   switch (error.code()) {
     case core::ErrorCode::kValidation:
       return ::grpc::StatusCode::INVALID_ARGUMENT;
     case core::ErrorCode::kUnsupportedVersion:
-      return ::grpc::StatusCode::FAILED_PRECONDITION;
+      return ::grpc::StatusCode::UNIMPLEMENTED;
     case core::ErrorCode::kNetwork:
       return ::grpc::StatusCode::UNAVAILABLE;
     case core::ErrorCode::kRemoteProtocol:
@@ -30,8 +55,11 @@ namespace {
 
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
   const auto protocol_code = error.protocol_code();
-  if (protocol_code.has_value() && *protocol_code == "-32001") {
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
+    return ::grpc::StatusCode::UNIMPLEMENTED;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
 }
@@ -54,6 +82,119 @@ std::string ErrorCodeName(core::ErrorCode code) {
   return "internal";
 }
 
+std::string ErrorInfoReason(const core::Error& error) {
+  const auto protocol_code = error.protocol_code();
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
+    return "TASK_NOT_FOUND";
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotCancelable) {
+    return "TASK_NOT_CANCELABLE";
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
+    return "UNSUPPORTED_OPERATION";
+  }
+  switch (error.code()) {
+    case core::ErrorCode::kValidation:
+      return "VALIDATION_ERROR";
+    case core::ErrorCode::kUnsupportedVersion:
+      return "VERSION_NOT_SUPPORTED";
+    case core::ErrorCode::kNetwork:
+      return "NETWORK_ERROR";
+    case core::ErrorCode::kRemoteProtocol:
+      return "REMOTE_PROTOCOL_ERROR";
+    case core::ErrorCode::kSerialization:
+      return "SERIALIZATION_ERROR";
+    case core::ErrorCode::kInternal:
+      return "INTERNAL_ERROR";
+  }
+  return "INTERNAL_ERROR";
+}
+
+int GrpcStatusCodeNumber(::grpc::StatusCode code) {
+  switch (code) {
+    case ::grpc::StatusCode::OK:
+      return 0;
+    case ::grpc::StatusCode::CANCELLED:
+      return 1;
+    case ::grpc::StatusCode::UNKNOWN:
+      return 2;
+    case ::grpc::StatusCode::INVALID_ARGUMENT:
+      return 3;
+    case ::grpc::StatusCode::DEADLINE_EXCEEDED:
+      return 4;
+    case ::grpc::StatusCode::NOT_FOUND:
+      return 5;
+    case ::grpc::StatusCode::ALREADY_EXISTS:
+      return 6;
+    case ::grpc::StatusCode::PERMISSION_DENIED:
+      return 7;
+    case ::grpc::StatusCode::RESOURCE_EXHAUSTED:
+      return 8;
+    case ::grpc::StatusCode::FAILED_PRECONDITION:
+      return 9;
+    case ::grpc::StatusCode::ABORTED:
+      return 10;
+    case ::grpc::StatusCode::OUT_OF_RANGE:
+      return 11;
+    case ::grpc::StatusCode::UNIMPLEMENTED:
+      return 12;
+    case ::grpc::StatusCode::INTERNAL:
+      return 13;
+    case ::grpc::StatusCode::UNAVAILABLE:
+      return 14;
+    case ::grpc::StatusCode::DATA_LOSS:
+      return 15;
+    case ::grpc::StatusCode::UNAUTHENTICATED:
+      return 16;
+    case ::grpc::StatusCode::DO_NOT_USE:
+      break;
+  }
+  return 2;
+}
+
+void AppendVarint(std::string& out, std::uint64_t value) {
+  while (value >= 0x80U) {
+    out.push_back(static_cast<char>((value & 0x7FU) | 0x80U));
+    value >>= 7U;
+  }
+  out.push_back(static_cast<char>(value));
+}
+
+void AppendTag(std::string& out, std::uint32_t field_number, std::uint32_t wire_type) {
+  AppendVarint(out, (static_cast<std::uint64_t>(field_number) << 3U) | wire_type);
+}
+
+void AppendLengthDelimited(std::string& out, std::uint32_t field_number, const std::string& value) {
+  AppendTag(out, field_number, 2U);
+  AppendVarint(out, static_cast<std::uint64_t>(value.size()));
+  out.append(value);
+}
+
+std::string SerializeErrorInfo(const core::Error& error) {
+  std::string message;
+  AppendLengthDelimited(message, 1U, ErrorInfoReason(error));
+  AppendLengthDelimited(message, 2U, "a2a-protocol.org");
+  return message;
+}
+
+std::string SerializeAny(std::string type_url, const std::string& value) {
+  std::string message;
+  AppendLengthDelimited(message, 1U, type_url);
+  AppendLengthDelimited(message, 2U, value);
+  return message;
+}
+
+std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Error& error) {
+  std::string message;
+  AppendTag(message, 1U, 0U);
+  AppendVarint(message, static_cast<std::uint64_t>(GrpcStatusCodeNumber(code)));
+  AppendLengthDelimited(message, 2U, std::string(error.message()));
+  AppendLengthDelimited(
+      message, 3U,
+      SerializeAny("type.googleapis.com/google.rpc.ErrorInfo", SerializeErrorInfo(error)));
+  return message;
+}
+
 }  // namespace
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
@@ -73,20 +214,34 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     request_context.client_headers[key] = value;
   }
   request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
+  const auto version_it =
+      request_context.client_headers.find(std::string(GrpcServerTransport::kVersionMetadataKey));
+  if (version_it == request_context.client_headers.end()) {
+    return core::Error::UnsupportedVersion("Missing required A2A-Version header")
+        .WithTransport(std::string(GrpcServerTransport::kTransportName));
+  }
+  if (version_it->second != core::Version::HeaderValue()) {
+    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
+        .WithTransport(std::string(GrpcServerTransport::kTransportName));
+  }
   return request_context;
 }
 
 ::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error,
                                                  ::grpc::ServerContext* context) {
+  const auto status_code = ToStatusCode(error);
   if (context != nullptr) {
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
+    context->AddTrailingMetadata("grpc-status-details-bin",
+                                 SerializeGrpcStatusDetails(status_code, error));
     const auto& protocol_code = error.protocol_code();
     if (protocol_code.has_value()) {
-      context->AddTrailingMetadata("a2a-protocol-code", *protocol_code);
+      context->AddTrailingMetadata(std::string(GrpcServerTransport::kProtocolCodeMetadataKey),
+                                   *protocol_code);
     }
   }
 
-  return {ToStatusCode(error), std::string(error.message())};
+  return {status_code, std::string(error.message())};
 }
 
 ::grpc::Status GrpcServerTransport::SendMessage(::grpc::ServerContext* context,
@@ -272,6 +427,53 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   response->set_page_size(static_cast<int32_t>(payload->page_size));
   response->set_total_size(static_cast<int32_t>(payload->total_size));
   response->set_next_page_token(payload->next_page_token);
+  return ::grpc::Status::OK;
+}
+
+::grpc::Status GrpcServerTransport::SubscribeToTask(
+    ::grpc::ServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request,
+    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+  if (request == nullptr || writer == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
+  }
+
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+
+  lf::a2a::v1::GetTaskRequest get_task_request;
+  get_task_request.set_id(request->id());
+  const auto dispatch = dispatcher_->Dispatch(
+      {.operation = DispatcherOperation::kGetTask, .payload = get_task_request},
+      request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+
+  const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
+  if (task == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SubscribeToTask"};
+  }
+  if (IsTerminalTaskState(task->status().state())) {
+    return ToGrpcStatus(UnsupportedOperationError("task is already terminal"), context);
+  }
+
+  lf::a2a::v1::StreamResponse current_event;
+  *current_event.mutable_task() = *task;
+  if (!writer->Write(current_event)) {
+    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+  }
+
+  lf::a2a::v1::StreamResponse terminal_event;
+  terminal_event.mutable_status_update()->set_task_id(task->id());
+  terminal_event.mutable_status_update()->set_context_id(task->context_id());
+  terminal_event.mutable_status_update()->mutable_status()->set_state(
+      lf::a2a::v1::TASK_STATE_COMPLETED);
+  if (!writer->Write(terminal_event)) {
+    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+  }
+
   return ::grpc::Status::OK;
 }
 
