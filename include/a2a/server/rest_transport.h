@@ -12,7 +12,8 @@
 namespace a2a::server {
 
 struct RestEndpointPaths final {
-  static constexpr std::string_view kSendMessage = "/messages:send";
+  static constexpr std::string_view kSendMessage = "/message:send";
+  static constexpr std::string_view kSendStreamingMessage = "/message:stream";
   static constexpr std::string_view kTaskCollection = "/tasks";
   static constexpr std::string_view kTaskResourcePrefix = "/tasks/";
   static constexpr std::string_view kTaskCancelSuffix = ":cancel";
