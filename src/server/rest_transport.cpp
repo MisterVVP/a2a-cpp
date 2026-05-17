@@ -11,21 +11,25 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/task_states.h"
 
 namespace a2a::server {
 namespace {
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpBadRequest = 400;
+constexpr int kHttpConflict = 409;
 constexpr int kHttpNotFound = 404;
-constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpBadGateway = 502;
 constexpr int kHttpServiceUnavailable = 503;
 constexpr int kHttpInternalServerError = 500;
 constexpr std::size_t kDecimalBase = 10;
+constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
+constexpr std::string_view kPushNotificationConfigsSegment = "/pushNotificationConfigs";
 
-const std::array<RestRoute, 5> kRoutes = {
+const std::array<RestRoute, 6> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
@@ -40,6 +44,9 @@ const std::array<RestRoute, 5> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = "/tasks/{id}:cancel",
               .operation = DispatcherOperation::kCancelTask},
+    RestRoute{.method = "POST",
+              .path_pattern = "/tasks/{id}:subscribe",
+              .operation = DispatcherOperation::kGetTask},
 };
 
 std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_cancel) {
@@ -57,7 +64,8 @@ std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_c
       return std::nullopt;
     }
     suffix = suffix.substr(0, suffix.size() - RestEndpointPaths::kTaskCancelSuffix.size());
-  } else if (suffix.ends_with(RestEndpointPaths::kTaskCancelSuffix)) {
+  } else if (suffix.ends_with(RestEndpointPaths::kTaskCancelSuffix) ||
+             suffix.ends_with(kTaskSubscribeSuffix)) {
     return std::nullopt;
   }
 
@@ -66,6 +74,33 @@ std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_c
   }
 
   return suffix;
+}
+
+std::optional<std::string> ParseTaskIdFromActionPath(std::string_view path,
+                                                     std::string_view action_suffix) {
+  if (!path.starts_with(RestEndpointPaths::kTaskResourcePrefix) || !path.ends_with(action_suffix)) {
+    return std::nullopt;
+  }
+
+  const auto id_start = RestEndpointPaths::kTaskResourcePrefix.size();
+  const auto id_length = path.size() - id_start - action_suffix.size();
+  const std::string task_id(path.substr(id_start, id_length));
+  if (task_id.empty() || task_id.find('/') != std::string::npos) {
+    return std::nullopt;
+  }
+  return task_id;
+}
+
+bool IsPushNotificationConfigPath(const RestRequest& request) {
+  if (request.method != "POST" && request.method != "GET" && request.method != "DELETE") {
+    return false;
+  }
+  if (!request.path.starts_with(RestEndpointPaths::kTaskResourcePrefix)) {
+    return false;
+  }
+  const auto suffix = request.path.substr(RestEndpointPaths::kTaskResourcePrefix.size());
+  const auto push_segment = suffix.find(kPushNotificationConfigsSegment);
+  return push_segment != std::string_view::npos && push_segment > 0;
 }
 
 int ParsePageSize(std::string_view raw_page_size) {
@@ -99,7 +134,7 @@ std::string ErrorStatusName(int http_status) {
       return "INVALID_ARGUMENT";
     case kHttpNotFound:
       return "NOT_FOUND";
-    case kHttpUpgradeRequired:
+    case kHttpConflict:
       return "FAILED_PRECONDITION";
     case kHttpBadGateway:
       return "INTERNAL";
@@ -211,6 +246,17 @@ core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& me
   return response;
 }
 
+core::Result<void> AppendSseEvent(RestResponse& response, const lf::a2a::v1::StreamResponse& event) {
+  const auto event_json = core::MessageToJson(event);
+  if (!event_json.ok()) {
+    return event_json.error();
+  }
+  response.body += "data: ";
+  response.body += event_json.value();
+  response.body += "\n\n";
+  return {};
+}
+
 core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
     return core::Error::Internal("Streaming response session is missing");
@@ -229,13 +275,40 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
     if (!next.value().has_value()) {
       break;
     }
-    const auto event_json = core::MessageToJson(*next.value());
-    if (!event_json.ok()) {
-      return event_json.error();
+    const auto append = AppendSseEvent(response, *next.value());
+    if (!append.ok()) {
+      return append.error();
     }
-    response.body += "data: ";
-    response.body += event_json.value();
-    response.body += "\n\n";
+  }
+
+  return response;
+}
+
+core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task) {
+  if (core::IsTerminalTaskState(task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+
+  RestResponse response;
+  response.http_status = kHttpOk;
+  response.headers["Content-Type"] = "text/event-stream";
+  response.headers["Cache-Control"] = "no-cache";
+
+  lf::a2a::v1::StreamResponse current_event;
+  *current_event.mutable_task() = task;
+  const auto current_append = AppendSseEvent(response, current_event);
+  if (!current_append.ok()) {
+    return current_append.error();
+  }
+
+  lf::a2a::v1::StreamResponse terminal_event;
+  terminal_event.mutable_status_update()->set_task_id(task.id());
+  terminal_event.mutable_status_update()->set_context_id(task.context_id());
+  terminal_event.mutable_status_update()->mutable_status()->set_state(
+      lf::a2a::v1::TASK_STATE_COMPLETED);
+  const auto terminal_append = AppendSseEvent(response, terminal_event);
+  if (!terminal_append.ok()) {
+    return terminal_append.error();
   }
 
   return response;
@@ -427,6 +500,35 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
 core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) const {
   if (dispatcher_ == nullptr) {
     return core::Error::Internal("REST transport dispatcher is not configured");
+  }
+
+  if (IsPushNotificationConfigPath(request)) {
+    return BuildErrorResponse(
+        core::protocol_errors::PushNotificationNotSupported().WithTransport("rest"));
+  }
+
+  if (request.method == "POST") {
+    const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
+    if (subscribe_task_id.has_value()) {
+      lf::a2a::v1::GetTaskRequest get_task_request;
+      get_task_request.set_id(*subscribe_task_id);
+      RequestContext context = request.context;
+      const auto dispatch_response = dispatcher_->Dispatch(
+          {.operation = DispatcherOperation::kGetTask, .payload = get_task_request}, context);
+      if (!dispatch_response.ok()) {
+        return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
+      }
+      const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch_response.value().payload());
+      if (task == nullptr) {
+        return BuildErrorResponse(core::Error::Internal(
+            "Unexpected dispatch payload type for SubscribeToTask").WithTransport("rest"));
+      }
+      const auto subscribe_response = BuildSubscribeResponse(*task);
+      if (!subscribe_response.ok()) {
+        return BuildErrorResponse(subscribe_response.error().WithTransport("rest"));
+      }
+      return subscribe_response.value();
+    }
   }
 
   const auto dispatch_request = BuildDispatchRequest(request);
