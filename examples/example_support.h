@@ -97,10 +97,17 @@ class ExampleExecutor final : public server::AgentExecutor {
     const std::string request_text =
         request.message().parts(0).has_text() ? request.message().parts(0).text() : std::string{};
     const bool wants_file_url_artifact =
-        request_text.find("file_url_artifact") != std::string::npos;
-    const bool wants_file_artifact = request_text.find("file_artifact") != std::string::npos;
-    const bool wants_data_artifact = request_text.find("data_artifact") != std::string::npos;
-    const bool wants_message_response = request_text.find("message") != std::string::npos;
+        request_text.find("file_url_artifact") != std::string::npos ||
+        request_text.find("file url artifact") != std::string::npos ||
+        request_text.find("file_url") != std::string::npos;
+    const bool wants_file_artifact = request_text.find("file_artifact") != std::string::npos ||
+                                     request_text.find("file artifact") != std::string::npos;
+    const bool wants_data_artifact = request_text.find("data_artifact") != std::string::npos ||
+                                     request_text.find("data artifact") != std::string::npos;
+    const bool wants_message_response =
+        request_text.find("message response") != std::string::npos ||
+        request_text.find("return a message") != std::string::npos ||
+        request_text.find("respond with message") != std::string::npos;
 
     auto* text_artifact = task.add_artifacts();
     text_artifact->set_artifact_id("artifact-text-" + task_id);
@@ -130,10 +137,10 @@ class ExampleExecutor final : public server::AgentExecutor {
     auto* data_fields = data_part->mutable_data()->mutable_struct_value()->mutable_fields();
     (*data_fields)["key"].set_string_value("value");
     (*data_fields)["count"].set_number_value(42);
-    if (wants_file_artifact) {
-      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[1]);
-    } else if (wants_file_url_artifact) {
+    if (wants_file_url_artifact) {
       std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[2]);
+    } else if (wants_file_artifact) {
+      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[1]);
     } else if (wants_data_artifact) {
       std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[3]);
     }
@@ -146,7 +153,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     response.mutable_message()->set_task_id(task_id);
     response.mutable_message()->set_context_id(task.context_id());
     response.mutable_message()->add_parts()->set_text("ack");
-    if (wants_message_response) {
+    if (wants_message_response || wants_file_artifact || wants_file_url_artifact ||
+        wants_data_artifact) {
       // Keep message payload set.
     } else {
       *response.mutable_task() = task;
