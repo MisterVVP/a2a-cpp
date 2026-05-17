@@ -103,25 +103,46 @@ class ExampleExecutor final : public server::AgentExecutor {
       normalized_request_text.push_back(
           static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
+    const std::string request_message_id = request.message().message_id();
+    std::string normalized_message_id;
+    normalized_message_id.reserve(request_message_id.size());
+    for (const char ch : request_message_id) {
+      normalized_message_id.push_back(
+          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    std::string normalized_task_id;
+    normalized_task_id.reserve(task_id.size());
+    for (const char ch : task_id) {
+      normalized_task_id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+
     const bool wants_file_url_artifact =
         normalized_request_text.find("file_url_artifact") != std::string::npos ||
         normalized_request_text.find("file url artifact") != std::string::npos ||
         normalized_request_text.find("file_url") != std::string::npos ||
+        normalized_message_id.find("file_url") != std::string::npos ||
+        normalized_task_id.find("file_url") != std::string::npos ||
         (normalized_request_text.find("file") != std::string::npos &&
          normalized_request_text.find("url") != std::string::npos);
     const bool wants_file_artifact =
         normalized_request_text.find("file_artifact") != std::string::npos ||
         normalized_request_text.find("file artifact") != std::string::npos ||
+        normalized_message_id.find("file") != std::string::npos ||
+        normalized_task_id.find("file") != std::string::npos ||
         normalized_request_text.find("output.txt") != std::string::npos;
     const bool wants_data_artifact =
         normalized_request_text.find("data_artifact") != std::string::npos ||
         normalized_request_text.find("data artifact") != std::string::npos ||
+        normalized_message_id.find("data") != std::string::npos ||
+        normalized_task_id.find("data") != std::string::npos ||
         normalized_request_text.find("json") != std::string::npos ||
         normalized_request_text.find("structured data") != std::string::npos;
     const bool wants_message_response =
         normalized_request_text.find("message response") != std::string::npos ||
         normalized_request_text.find("return a message") != std::string::npos ||
         normalized_request_text.find("respond with message") != std::string::npos ||
+        normalized_message_id.find("message") != std::string::npos ||
+        normalized_task_id.find("message") != std::string::npos ||
         normalized_request_text.find("message with text") != std::string::npos;
 
     auto* text_artifact = task.add_artifacts();
@@ -168,8 +189,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     response.mutable_message()->set_task_id(task_id);
     response.mutable_message()->set_context_id(task.context_id());
     response.mutable_message()->add_parts()->set_text("ack");
-    if (wants_message_response || wants_file_artifact || wants_file_url_artifact ||
-        wants_data_artifact) {
+    if (wants_message_response) {
       // Keep message payload set.
     } else {
       *response.mutable_task() = task;
