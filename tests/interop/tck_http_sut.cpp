@@ -121,7 +121,9 @@ int main(int argc, char** argv) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport grpc(&dispatcher);
-  a2a::server::RestServerTransport rest(&dispatcher, agent_card, {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport rest(
+      &dispatcher, agent_card,
+      {.rest_api_base_path = "/a2a", .include_legacy_transport_fields = false});
   a2a::server::JsonRpcServerTransport jsonrpc(
       &dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
 

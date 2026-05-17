@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/version.h"
 
 namespace a2a::server {
 namespace {
@@ -16,7 +17,7 @@ namespace {
     case core::ErrorCode::kValidation:
       return ::grpc::StatusCode::INVALID_ARGUMENT;
     case core::ErrorCode::kUnsupportedVersion:
-      return ::grpc::StatusCode::FAILED_PRECONDITION;
+      return ::grpc::StatusCode::UNIMPLEMENTED;
     case core::ErrorCode::kNetwork:
       return ::grpc::StatusCode::UNAVAILABLE;
     case core::ErrorCode::kRemoteProtocol:
@@ -73,6 +74,15 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     request_context.client_headers[key] = value;
   }
   request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
+  const auto version_it = request_context.client_headers.find("a2a-version");
+  if (version_it == request_context.client_headers.end()) {
+    return core::Error::UnsupportedVersion("Missing required A2A-Version header")
+        .WithTransport("grpc");
+  }
+  if (version_it->second != core::Version::HeaderValue()) {
+    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
+        .WithTransport("grpc");
+  }
   return request_context;
 }
 

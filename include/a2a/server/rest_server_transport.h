@@ -28,6 +28,7 @@ struct HttpServerResponse final {
 struct RestServerTransportOptions final {
   std::string rest_api_base_path = "/";
   bool require_version_header = true;
+  bool include_legacy_transport_fields = true;
 };
 
 class RestServerTransport final {

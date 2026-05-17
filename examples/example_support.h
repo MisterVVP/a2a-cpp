@@ -54,6 +54,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
+    const bool has_explicit_task_id = !request.message().task_id().empty();
     std::string task_id = request.message().task_id();
     if (task_id.empty()) {
       if (!request.message().message_id().empty()) {
@@ -62,6 +63,11 @@ class ExampleExecutor final : public server::AgentExecutor {
         ++generated_task_counter_;
         task_id = "example-task-" + std::to_string(generated_task_counter_);
       }
+    }
+    if (has_explicit_task_id && !tasks_.contains(task_id)) {
+      return core::Error::RemoteProtocol("task not found")
+          .WithHttpStatus(404)
+          .WithProtocolCode("-32001");
     }
 
     lf::a2a::v1::Task task = tasks_.contains(task_id) ? tasks_.at(task_id) : lf::a2a::v1::Task{};
@@ -79,14 +85,26 @@ class ExampleExecutor final : public server::AgentExecutor {
     *task.add_history() = request.message();
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+    task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
     ++status_timestamp_counter_;
     task.mutable_status()->mutable_timestamp()->set_seconds(
         static_cast<int64_t>(status_timestamp_counter_));
 
+    auto* artifact = task.add_artifacts();
+    artifact->set_artifact_id("artifact-" + task_id);
+    artifact->set_name("sample-artifact");
+    artifact->set_description("Conformance artifact");
+    artifact->add_parts()->set_text("artifact payload");
+
     tasks_[task_id] = task;
 
     lf::a2a::v1::SendMessageResponse response;
+    response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+    response.mutable_message()->set_message_id("response-" + task_id);
+    response.mutable_message()->set_task_id(task_id);
+    response.mutable_message()->set_context_id(task.context_id());
+    response.mutable_message()->add_parts()->set_text("ack");
     *response.mutable_task() = task;
     return response;
   }
@@ -94,16 +112,28 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
     (void)context;
-    if (request.message().task_id().empty()) {
-      return core::Error::Validation("message.task_id is required");
+    std::string task_id = request.message().task_id();
+    if (task_id.empty()) {
+      if (!request.message().message_id().empty()) {
+        task_id = "task-" + request.message().message_id();
+      } else {
+        ++generated_task_counter_;
+        task_id = "example-task-" + std::to_string(generated_task_counter_);
+      }
+    }
+
+    if (!tasks_.contains(task_id)) {
+      return core::Error::RemoteProtocol("task not found")
+          .WithHttpStatus(404)
+          .WithProtocolCode("-32001");
     }
 
     lf::a2a::v1::StreamResponse working;
-    working.mutable_status_update()->set_task_id(request.message().task_id());
+    working.mutable_status_update()->set_task_id(task_id);
     working.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
 
     lf::a2a::v1::StreamResponse completed;
-    completed.mutable_status_update()->set_task_id(request.message().task_id());
+    completed.mutable_status_update()->set_task_id(task_id);
     completed.mutable_status_update()->mutable_status()->set_state(
         lf::a2a::v1::TASK_STATE_COMPLETED);
 

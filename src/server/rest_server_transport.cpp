@@ -334,7 +334,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
     }
   }
 
-  {
+  if (options_.include_legacy_transport_fields) {
     auto interfaces_it = fields->find("supportedInterfaces");
     if (interfaces_it != fields->end() && interfaces_it->second.has_list_value()) {
       for (auto& interface_value : *interfaces_it->second.mutable_list_value()->mutable_values()) {
