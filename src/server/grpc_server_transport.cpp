@@ -7,34 +7,13 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_errors.h"
+#include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 
 namespace a2a::server {
 namespace {
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
-
-bool IsTerminalTaskState(lf::a2a::v1::TaskState state) {
-  switch (state) {
-    case lf::a2a::v1::TASK_STATE_COMPLETED:
-    case lf::a2a::v1::TASK_STATE_FAILED:
-    case lf::a2a::v1::TASK_STATE_CANCELED:
-    case lf::a2a::v1::TASK_STATE_REJECTED:
-      return true;
-    case lf::a2a::v1::TASK_STATE_UNSPECIFIED:
-    case lf::a2a::v1::TASK_STATE_SUBMITTED:
-    case lf::a2a::v1::TASK_STATE_WORKING:
-    case lf::a2a::v1::TASK_STATE_INPUT_REQUIRED:
-    case lf::a2a::v1::TASK_STATE_AUTH_REQUIRED:
-      return false;
-  }
-  return false;
-}
-
-core::Error UnsupportedOperationError(std::string message) {
-  return core::Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(400)
-      .WithProtocolCode(std::string(core::protocol_codes::kUnsupportedOperation));
-}
 
 ::grpc::StatusCode ToStatusCode(const core::Error& error) {
   switch (error.code()) {
@@ -58,7 +37,9 @@ core::Error UnsupportedOperationError(std::string message) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
   }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
+  if (protocol_code.has_value() &&
+      (*protocol_code == core::protocol_codes::kPushNotificationNotSupported ||
+       *protocol_code == core::protocol_codes::kUnsupportedOperation)) {
     return ::grpc::StatusCode::UNIMPLEMENTED;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
@@ -89,6 +70,10 @@ std::string ErrorInfoReason(const core::Error& error) {
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotCancelable) {
     return "TASK_NOT_CANCELABLE";
+  }
+  if (protocol_code.has_value() &&
+      *protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
+    return "PUSH_NOTIFICATION_NOT_SUPPORTED";
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
     return "UNSUPPORTED_OPERATION";
@@ -455,8 +440,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   if (task == nullptr) {
     return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SubscribeToTask"};
   }
-  if (IsTerminalTaskState(task->status().state())) {
-    return ToGrpcStatus(UnsupportedOperationError("task is already terminal"), context);
+  if (core::IsTerminalTaskState(task->status().state())) {
+    return ToGrpcStatus(core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
   }
 
   lf::a2a::v1::StreamResponse current_event;
@@ -480,40 +465,36 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
 ::grpc::Status GrpcServerTransport::CreateTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
-  (void)context;
   (void)request;
   (void)response;
-  return {::grpc::StatusCode::UNIMPLEMENTED, "Not implemented"};
+  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
 }
 
 ::grpc::Status GrpcServerTransport::GetTaskPushNotificationConfig(
     ::grpc::ServerContext* context,
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
-  (void)context;
   (void)request;
   (void)response;
-  return {::grpc::StatusCode::UNIMPLEMENTED, "Not implemented"};
+  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
 }
 
 ::grpc::Status GrpcServerTransport::ListTaskPushNotificationConfigs(
     ::grpc::ServerContext* context,
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest* request,
     lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response) {
-  (void)context;
   (void)request;
   (void)response;
-  return {::grpc::StatusCode::UNIMPLEMENTED, "Not implemented"};
+  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
 }
 
 ::grpc::Status GrpcServerTransport::DeleteTaskPushNotificationConfig(
     ::grpc::ServerContext* context,
     const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest* request,
     google::protobuf::Empty* response) {
-  (void)context;
   (void)request;
   (void)response;
-  return {::grpc::StatusCode::UNIMPLEMENTED, "Not implemented"};
+  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
 }
 
 ::grpc::Status GrpcServerTransport::GetExtendedAgentCard(
