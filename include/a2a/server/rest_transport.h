@@ -50,8 +50,8 @@ class RestTransport final {
  private:
   [[nodiscard]] static std::optional<DispatchRequest> BuildDispatchRequest(
       const RestRequest& request);
-  [[nodiscard]] static core::Result<std::string> SerializeDispatchResponse(
-      DispatcherOperation operation, const DispatchResponse& response);
+  [[nodiscard]] static core::Result<RestResponse> SerializeDispatchResponse(
+      DispatcherOperation operation, DispatchResponse& response);
   [[nodiscard]] static RestResponse BuildErrorResponse(const core::Error& error);
 
   Dispatcher* dispatcher_ = nullptr;
