@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "a2a/core/error.h"
 #include "a2a/core/legacy_transport_names.h"
@@ -14,15 +15,10 @@
 namespace a2a::server {
 namespace {
 
+constexpr int kHttpBadRequest = 400;
 constexpr int kHttpNotFound = 404;
-constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpOk = 200;
 constexpr int kHexAlphabetOffset = 10;
-
-struct JsonError final {
-  std::string_view message;
-  std::string_view code;
-};
 
 std::string ToLower(std::string_view value) {
   std::string lowered;
@@ -44,23 +40,39 @@ std::string FindHeader(const std::unordered_map<std::string, std::string>& heade
   return {};
 }
 
-std::string ErrorBody(const JsonError& error) {
+std::string HttpStatusName(int status_code) {
+  switch (status_code) {
+    case kHttpBadRequest:
+      return "INVALID_ARGUMENT";
+    case kHttpNotFound:
+      return "NOT_FOUND";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+std::string ErrorBody(int status_code, std::string_view message, std::string_view reason) {
+  google::protobuf::Struct error_info;
+  auto* error_info_fields = error_info.mutable_fields();
+  (*error_info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
+  (*error_info_fields)["reason"].set_string_value(std::string(reason));
+  (*error_info_fields)["domain"].set_string_value("a2a-protocol.org");
+
   google::protobuf::Struct envelope;
   auto* envelope_fields = envelope.mutable_fields();
-
   google::protobuf::Value error_value;
   auto* error_fields = error_value.mutable_struct_value()->mutable_fields();
 
-  google::protobuf::Value message_value;
-  message_value.set_string_value(std::string(error.message));
-  (*error_fields)["message"] = std::move(message_value);
+  (*error_fields)["code"].set_number_value(status_code);
+  (*error_fields)["status"].set_string_value(HttpStatusName(status_code));
+  (*error_fields)["message"].set_string_value(std::string(message));
 
-  google::protobuf::Value details_value;
-  auto* details_fields = details_value.mutable_struct_value()->mutable_fields();
-  google::protobuf::Value code_value;
-  code_value.set_string_value(std::string(error.code));
-  (*details_fields)["code"] = std::move(code_value);
-  (*error_fields)["details"] = std::move(details_value);
+  google::protobuf::Value details;
+  auto* details_values = details.mutable_list_value()->mutable_values();
+  google::protobuf::Value error_info_value;
+  *error_info_value.mutable_struct_value() = std::move(error_info);
+  details_values->Add(std::move(error_info_value));
+  (*error_fields)["details"] = std::move(details);
 
   (*envelope_fields)["error"] = std::move(error_value);
 
@@ -68,7 +80,17 @@ std::string ErrorBody(const JsonError& error) {
   if (serialized.ok()) {
     return serialized.value();
   }
-  return R"({"error":{"message":"serialization failed"}})";
+  return R"({"error":{"code":500,"status":"INTERNAL","message":"serialization failed"}})";
+}
+
+HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message,
+                                          std::string_view reason) {
+  HttpServerResponse response;
+  response.status_code = status_code;
+  response.headers["Content-Type"] = "application/json";
+  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  response.body = ErrorBody(status_code, message, reason);
+  return response;
 }
 
 google::protobuf::Value* EnsureStructField(google::protobuf::Struct* object, std::string key) {
@@ -85,15 +107,6 @@ google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::
     value.mutable_list_value();
   }
   return &value;
-}
-
-HttpServerResponse BuildJsonErrorResponse(int status_code, const JsonError& error) {
-  HttpServerResponse response;
-  response.status_code = status_code;
-  response.headers["Content-Type"] = "application/json";
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  response.body = ErrorBody(error);
-  return response;
 }
 
 core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
@@ -181,6 +194,43 @@ core::Result<void> ParseQueryString(std::string_view raw,
   return {};
 }
 
+void AddLegacyTransportFields(google::protobuf::Struct* card,
+                              const lf::a2a::v1::AgentCard& agent_card) {
+  if (card == nullptr) {
+    return;
+  }
+
+  auto* fields = card->mutable_fields();
+  auto interfaces_it = fields->find("supportedInterfaces");
+  if (interfaces_it != fields->end() && interfaces_it->second.has_list_value()) {
+    for (auto& interface_value : *interfaces_it->second.mutable_list_value()->mutable_values()) {
+      if (!interface_value.has_struct_value()) {
+        continue;
+      }
+      auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
+      const auto binding_it = interface_fields->find("protocolBinding");
+      if (binding_it == interface_fields->end() || !binding_it->second.has_string_value()) {
+        continue;
+      }
+      (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
+          .set_string_value(binding_it->second.string_value());
+    }
+  }
+
+  if (fields->find(std::string(a2a::core::legacy_transport_names::kEndpointField)) == fields->end()) {
+    for (const auto& iface : agent_card.supported_interfaces()) {
+      if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc ||
+          iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
+        (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
+            .set_string_value(iface.url());
+        (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
+            .set_string_value(iface.protocol_binding());
+        break;
+      }
+    }
+  }
+}
+
 }  // namespace
 
 RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
@@ -211,15 +261,14 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(
 
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(kHttpUpgradeRequired, {.message = version.error().message(),
-                                                         .code = "unsupported_version"});
+    return BuildJsonErrorResponse(kHttpBadRequest, version.error().message(),
+                                  "VERSION_NOT_SUPPORTED");
   }
 
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildJsonErrorResponse(
-        kHttpNotFound,
-        {.message = "No matching route or request was malformed", .code = "validation_error"});
+    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed",
+                                  "UNSUPPORTED_OPERATION");
   }
 
   const auto rest_response = transport_.Handle(rest_request.value());
@@ -285,9 +334,8 @@ core::Result<void> RestServerTransport::ValidateVersionHeader(
 core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
     const HttpServerRequest& request) const {
   if (request.method != "GET") {
-    return BuildJsonErrorResponse(
-        kHttpNotFound,
-        {.message = "No matching route or request was malformed", .code = "validation_error"});
+    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed",
+                                  "UNSUPPORTED_OPERATION");
   }
 
   const auto body = core::MessageToJson(agent_card_);
@@ -335,82 +383,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
   }
 
   if (options_.include_legacy_transport_fields) {
-    auto interfaces_it = fields->find("supportedInterfaces");
-    if (interfaces_it != fields->end() && interfaces_it->second.has_list_value()) {
-      for (auto& interface_value : *interfaces_it->second.mutable_list_value()->mutable_values()) {
-        if (!interface_value.has_struct_value()) {
-          continue;
-        }
-        auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
-        const auto binding_it = interface_fields->find("protocolBinding");
-        if (binding_it == interface_fields->end() || !binding_it->second.has_string_value()) {
-          continue;
-        }
-        if (binding_it->second.string_value() == a2a::core::protocol_bindings::kJsonRpc) {
-          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
-        } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kHttpJson) {
-          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kHttpJson));
-        } else if (binding_it->second.string_value() == a2a::core::protocol_bindings::kGrpc) {
-          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kGrpc));
-        }
-      }
-    }
-
-    // Backward-compatible fields for A2A v0.3.0 transport discovery helpers.
-    if (fields->find(std::string(a2a::core::legacy_transport_names::kEndpointField)) ==
-        fields->end()) {
-      for (const auto& iface : agent_card_.supported_interfaces()) {
-        if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
-          (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
-              .set_string_value(iface.url());
-          (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
-          break;
-        }
-      }
-      if (fields->find(std::string(a2a::core::legacy_transport_names::kEndpointField)) ==
-          fields->end()) {
-        for (const auto& iface : agent_card_.supported_interfaces()) {
-          if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-            (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
-                .set_string_value(iface.url());
-            (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
-                .set_string_value(std::string(a2a::core::protocol_bindings::kHttpJson));
-            break;
-          }
-        }
-      }
-    }
-
-    if (fields->find(std::string(a2a::core::legacy_transport_names::kAdditionalInterfacesField)) ==
-        fields->end()) {
-      google::protobuf::Value additional;
-      auto* interfaces = additional.mutable_list_value()->mutable_values();
-      for (const auto& iface : agent_card_.supported_interfaces()) {
-        google::protobuf::Value interface_value;
-        auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
-        if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc) {
-          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kJsonRpc));
-        } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kHttpJson));
-        } else if (iface.protocol_binding() == a2a::core::protocol_bindings::kGrpc) {
-          (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-              .set_string_value(std::string(a2a::core::protocol_bindings::kGrpc));
-        } else {
-          continue;
-        }
-        (*interface_fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
-            .set_string_value(iface.url());
-        interfaces->Add(std::move(interface_value));
-      }
-      (*fields)[std::string(a2a::core::legacy_transport_names::kAdditionalInterfacesField)] =
-          std::move(additional);
-    }
+    AddLegacyTransportFields(&card, agent_card_);
   }
 
   const auto normalized = core::MessageToJson(card);
