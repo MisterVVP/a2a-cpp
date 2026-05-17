@@ -13,6 +13,29 @@ namespace a2a::server {
 namespace {
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
 
+bool IsTerminalTaskState(lf::a2a::v1::TaskState state) {
+  switch (state) {
+    case lf::a2a::v1::TASK_STATE_COMPLETED:
+    case lf::a2a::v1::TASK_STATE_FAILED:
+    case lf::a2a::v1::TASK_STATE_CANCELED:
+    case lf::a2a::v1::TASK_STATE_REJECTED:
+      return true;
+    case lf::a2a::v1::TASK_STATE_UNSPECIFIED:
+    case lf::a2a::v1::TASK_STATE_SUBMITTED:
+    case lf::a2a::v1::TASK_STATE_WORKING:
+    case lf::a2a::v1::TASK_STATE_INPUT_REQUIRED:
+    case lf::a2a::v1::TASK_STATE_AUTH_REQUIRED:
+      return false;
+  }
+  return false;
+}
+
+core::Error UnsupportedOperationError(std::string message) {
+  return core::Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(400)
+      .WithProtocolCode(std::string(core::protocol_codes::kUnsupportedOperation));
+}
+
 ::grpc::StatusCode ToStatusCode(const core::Error& error) {
   switch (error.code()) {
     case core::ErrorCode::kValidation:
@@ -34,6 +57,9 @@ namespace {
   const auto protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
+    return ::grpc::StatusCode::UNIMPLEMENTED;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
 }
@@ -61,11 +87,17 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return "TASK_NOT_FOUND";
   }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotCancelable) {
+    return "TASK_NOT_CANCELABLE";
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
+    return "UNSUPPORTED_OPERATION";
+  }
   switch (error.code()) {
     case core::ErrorCode::kValidation:
       return "VALIDATION_ERROR";
     case core::ErrorCode::kUnsupportedVersion:
-      return "UNSUPPORTED_VERSION";
+      return "VERSION_NOT_SUPPORTED";
     case core::ErrorCode::kNetwork:
       return "NETWORK_ERROR";
     case core::ErrorCode::kRemoteProtocol:
@@ -423,11 +455,25 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   if (task == nullptr) {
     return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SubscribeToTask"};
   }
-  lf::a2a::v1::StreamResponse event;
-  *event.mutable_task() = *task;
-  if (!writer->Write(event)) {
+  if (IsTerminalTaskState(task->status().state())) {
+    return ToGrpcStatus(UnsupportedOperationError("task is already terminal"), context);
+  }
+
+  lf::a2a::v1::StreamResponse current_event;
+  *current_event.mutable_task() = *task;
+  if (!writer->Write(current_event)) {
     return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
   }
+
+  lf::a2a::v1::StreamResponse terminal_event;
+  terminal_event.mutable_status_update()->set_task_id(task->id());
+  terminal_event.mutable_status_update()->set_context_id(task->context_id());
+  terminal_event.mutable_status_update()->mutable_status()->set_state(
+      lf::a2a::v1::TASK_STATE_COMPLETED);
+  if (!writer->Write(terminal_event)) {
+    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+  }
+
   return ::grpc::Status::OK;
 }
 
