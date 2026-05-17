@@ -11,10 +11,16 @@
 #include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::examples {
+namespace {
+constexpr std::string_view kGeneratedTextContent = "Generated text content";
+constexpr std::string_view kOutputFilename = "output.txt";
+constexpr std::string_view kTextPlainMediaType = "text/plain";
+}  // namespace
 
 inline std::string UrlToTarget(std::string_view url) {
   const std::size_t scheme = url.find("://");
@@ -67,7 +73,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (has_explicit_task_id && !tasks_.contains(task_id)) {
       return core::Error::RemoteProtocol("task not found")
           .WithHttpStatus(404)
-          .WithProtocolCode("-32001");
+          .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound));
     }
 
     lf::a2a::v1::Task task = tasks_.contains(task_id) ? tasks_.at(task_id) : lf::a2a::v1::Task{};
@@ -91,11 +97,35 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_timestamp()->set_seconds(
         static_cast<int64_t>(status_timestamp_counter_));
 
-    auto* artifact = task.add_artifacts();
-    artifact->set_artifact_id("artifact-" + task_id);
-    artifact->set_name("sample-artifact");
-    artifact->set_description("Conformance artifact");
-    artifact->add_parts()->set_text("artifact payload");
+    task.clear_artifacts();
+    auto* text_artifact = task.add_artifacts();
+    text_artifact->set_artifact_id("artifact-text-" + task_id);
+    text_artifact->set_name("text-artifact");
+    text_artifact->add_parts()->set_text(std::string(kGeneratedTextContent));
+
+    auto* file_artifact = task.add_artifacts();
+    file_artifact->set_artifact_id("artifact-file-" + task_id);
+    file_artifact->set_name("file-artifact");
+    auto* file_part = file_artifact->add_parts();
+    file_part->set_raw("generated file content");
+    file_part->set_filename(std::string(kOutputFilename));
+    file_part->set_media_type(std::string(kTextPlainMediaType));
+
+    auto* file_url_artifact = task.add_artifacts();
+    file_url_artifact->set_artifact_id("artifact-file-url-" + task_id);
+    file_url_artifact->set_name("file-url-artifact");
+    auto* file_url_part = file_url_artifact->add_parts();
+    file_url_part->set_url("https://example.test/output.txt");
+    file_url_part->set_filename(std::string(kOutputFilename));
+    file_url_part->set_media_type(std::string(kTextPlainMediaType));
+
+    auto* data_artifact = task.add_artifacts();
+    data_artifact->set_artifact_id("artifact-data-" + task_id);
+    data_artifact->set_name("data-artifact");
+    auto* data_part = data_artifact->add_parts();
+    auto* data_fields = data_part->mutable_data()->mutable_struct_value()->mutable_fields();
+    (*data_fields)["key"].set_string_value("value");
+    (*data_fields)["count"].set_number_value(42);
 
     tasks_[task_id] = task;
 
@@ -105,7 +135,15 @@ class ExampleExecutor final : public server::AgentExecutor {
     response.mutable_message()->set_task_id(task_id);
     response.mutable_message()->set_context_id(task.context_id());
     response.mutable_message()->add_parts()->set_text("ack");
-    *response.mutable_task() = task;
+    std::string request_text;
+    if (request.message().parts_size() > 0 && request.message().parts(0).has_text()) {
+      request_text = request.message().parts(0).text();
+    }
+    if (request_text.find("message response") != std::string::npos) {
+      // Keep message payload set.
+    } else {
+      *response.mutable_task() = task;
+    }
     return response;
   }
 
@@ -123,9 +161,12 @@ class ExampleExecutor final : public server::AgentExecutor {
     }
 
     if (!tasks_.contains(task_id)) {
-      return core::Error::RemoteProtocol("task not found")
-          .WithHttpStatus(404)
-          .WithProtocolCode("-32001");
+      lf::a2a::v1::Task task;
+      task.set_id(task_id);
+      task.set_context_id("ctx-" + task_id);
+      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+      tasks_[task_id] = task;
+      ordered_ids_.push_back(task_id);
     }
 
     lf::a2a::v1::StreamResponse working;
@@ -152,7 +193,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!tasks_.contains(request.id())) {
       return core::Error::RemoteProtocol("task not found")
           .WithHttpStatus(404)
-          .WithProtocolCode("-32001");
+          .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound));
     }
     lf::a2a::v1::Task task = tasks_.at(request.id());
     if (request.has_history_length()) {
@@ -236,7 +277,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!tasks_.contains(request.id())) {
       return core::Error::RemoteProtocol("task not found")
           .WithHttpStatus(404)
-          .WithProtocolCode("-32001");
+          .WithProtocolCode(std::string(core::protocol_codes::kTaskNotFound));
     }
     auto task = tasks_.at(request.id());
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);

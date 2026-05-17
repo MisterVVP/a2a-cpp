@@ -33,6 +33,9 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
   ::grpc::Status ListTasks(::grpc::ServerContext* context,
                            const lf::a2a::v1::ListTasksRequest* request,
                            lf::a2a::v1::ListTasksResponse* response) override;
+  ::grpc::Status SubscribeToTask(
+      ::grpc::ServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request,
+      ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) override;
 
  private:
   [[nodiscard]] core::Result<RequestContext> BuildRequestContext(

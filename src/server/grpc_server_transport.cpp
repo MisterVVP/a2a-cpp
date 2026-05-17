@@ -5,10 +5,14 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/core/version.h"
 
 namespace a2a::server {
 namespace {
+constexpr std::string_view kGrpcVersionMetadataKey = "a2a-version";
+constexpr std::string_view kGrpcTransportName = "grpc";
+constexpr std::string_view kA2AProtocolCodeMetadataKey = "a2a-protocol-code";
 
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
 
@@ -31,7 +35,7 @@ namespace {
 
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
   const auto protocol_code = error.protocol_code();
-  if (protocol_code.has_value() && *protocol_code == "-32001") {
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
@@ -74,14 +78,14 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     request_context.client_headers[key] = value;
   }
   request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
-  const auto version_it = request_context.client_headers.find("a2a-version");
+  const auto version_it = request_context.client_headers.find(std::string(kGrpcVersionMetadataKey));
   if (version_it == request_context.client_headers.end()) {
     return core::Error::UnsupportedVersion("Missing required A2A-Version header")
-        .WithTransport("grpc");
+        .WithTransport(std::string(kGrpcTransportName));
   }
   if (version_it->second != core::Version::HeaderValue()) {
     return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
-        .WithTransport("grpc");
+        .WithTransport(std::string(kGrpcTransportName));
   }
   return request_context;
 }
@@ -92,7 +96,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
     const auto& protocol_code = error.protocol_code();
     if (protocol_code.has_value()) {
-      context->AddTrailingMetadata("a2a-protocol-code", *protocol_code);
+      context->AddTrailingMetadata(std::string(kA2AProtocolCodeMetadataKey), *protocol_code);
     }
   }
 
@@ -282,6 +286,39 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   response->set_page_size(static_cast<int32_t>(payload->page_size));
   response->set_total_size(static_cast<int32_t>(payload->total_size));
   response->set_next_page_token(payload->next_page_token);
+  return ::grpc::Status::OK;
+}
+
+::grpc::Status GrpcServerTransport::SubscribeToTask(
+    ::grpc::ServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request,
+    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+  if (request == nullptr || writer == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
+  }
+
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+
+  lf::a2a::v1::GetTaskRequest get_task_request;
+  get_task_request.set_id(request->id());
+  const auto dispatch = dispatcher_->Dispatch(
+      {.operation = DispatcherOperation::kGetTask, .payload = get_task_request},
+      request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+
+  const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
+  if (task == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SubscribeToTask"};
+  }
+  lf::a2a::v1::StreamResponse event;
+  *event.mutable_task() = *task;
+  if (!writer->Write(event)) {
+    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+  }
   return ::grpc::Status::OK;
 }
 
