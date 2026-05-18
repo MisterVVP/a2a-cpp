@@ -17,13 +17,16 @@ int main() {
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kRest,
-                                     .url = "http://agent.local/a2a"},
+                                     .url = "http://agent.local/a2a",
+                                     .security_requirements = {},
+                                     .security_schemes = {}},
       [&server](const a2a::client::HttpRequest& request)
           -> a2a::core::Result<a2a::client::HttpClientResponse> {
         const auto response = server.Handle({.method = request.method,
                                              .target = a2a::examples::UrlToTarget(request.url),
                                              .headers = request.headers,
-                                             .body = request.body});
+                                             .body = request.body,
+                                             .remote_address = {}});
         if (!response.ok()) {
           return response.error();
         }
@@ -35,7 +38,7 @@ int main() {
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest send_request;
   send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-  send_request.mutable_message()->set_task_id("cancel-example-task");
+  *send_request.mutable_message()->add_parts()->mutable_text() = "input-required";
   const auto send = client.SendMessage(send_request);
   if (!send.ok()) {
     std::cerr << "send failed: " << send.error().message() << '\n';
@@ -43,7 +46,7 @@ int main() {
   }
 
   lf::a2a::v1::CancelTaskRequest cancel_request;
-  cancel_request.set_id("cancel-example-task");
+  cancel_request.set_id(send.value().task().id());
   const auto canceled = client.CancelTask(cancel_request);
   if (!canceled.ok()) {
     std::cerr << "cancel failed: " << canceled.error().message() << '\n';
