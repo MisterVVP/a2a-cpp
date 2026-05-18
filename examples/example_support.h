@@ -103,9 +103,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp_counter_));
 
     task.clear_artifacts();
-    const std::string request_text = request.message().parts(0).kind_case() == lf::a2a::v1::Part::kText
-                                         ? request.message().parts(0).text()
-                                         : std::string{};
+    const std::string request_text = request.message().parts(0).text();
     std::string normalized_request_text;
     normalized_request_text.reserve(request_text.size());
     for (const char ch : request_text) {
