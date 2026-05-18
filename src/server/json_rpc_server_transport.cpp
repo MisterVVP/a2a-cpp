@@ -5,13 +5,17 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "a2a/core/error.h"
 #include "a2a/core/json_rpc.h"
+#include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 
 namespace a2a::server {
@@ -19,11 +23,10 @@ namespace {
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpBadRequest = 400;
-constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpInternalServerError = 500;
 
 constexpr int kJsonRpcParseError = -32700;
-constexpr int kJsonRpcInvalidRequest = -32601;
+constexpr int kJsonRpcInvalidRequest = -32600;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
@@ -48,37 +51,75 @@ std::string FindHeader(const std::unordered_map<std::string, std::string>& heade
   return {};
 }
 
+bool HasJsonContentType(const HttpServerRequest& request) {
+  const std::string content_type = ToLower(FindHeader(request.headers, "Content-Type"));
+  return content_type.empty() || content_type.find("application/json") != std::string::npos;
+}
+
 bool IsValidIdType(const google::protobuf::Value& value) {
   return value.kind_case() == ::google::protobuf::Value::kNullValue ||
          value.kind_case() == ::google::protobuf::Value::kStringValue ||
          value.kind_case() == ::google::protobuf::Value::kNumberValue;
 }
 
+bool IsMethod(std::string_view actual, std::string_view canonical, std::string_view legacy) {
+  return actual == canonical || actual == legacy;
+}
+
+bool IsSendMessageMethod(std::string_view method) {
+  return IsMethod(method, "SendMessage", core::json_rpc::MethodNames::kSendMessage) ||
+         method == core::json_rpc::MethodNames::kLegacySendMessage;
+}
+
+bool IsSendStreamingMessageMethod(std::string_view method) {
+  return IsMethod(method, "SendStreamingMessage", "a2a.sendStreamingMessage");
+}
+
+bool IsGetTaskMethod(std::string_view method) {
+  return IsMethod(method, "GetTask", core::json_rpc::MethodNames::kGetTask) ||
+         method == core::json_rpc::MethodNames::kLegacyGetTask;
+}
+
+bool IsCancelTaskMethod(std::string_view method) {
+  return IsMethod(method, "CancelTask", core::json_rpc::MethodNames::kCancelTask) ||
+         method == core::json_rpc::MethodNames::kLegacyCancelTask;
+}
+
+bool IsListTasksMethod(std::string_view method) {
+  return IsMethod(method, "ListTasks", core::json_rpc::MethodNames::kListTasks) ||
+         method == core::json_rpc::MethodNames::kLegacyListTasks ||
+         method == core::json_rpc::MethodNames::kLegacyListTasksDot;
+}
+
+bool IsSubscribeToTaskMethod(std::string_view method) {
+  return IsMethod(method, "SubscribeToTask", "a2a.subscribeToTask");
+}
+
+bool IsPushConfigMethod(std::string_view method) {
+  return method == "CreateTaskPushNotificationConfig" ||
+         method == "GetTaskPushNotificationConfig" ||
+         method == "ListTaskPushNotificationConfigs" ||
+         method == "DeleteTaskPushNotificationConfig" ||
+         method == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
+         method == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
+         method == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
+         method == core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig;
+}
+
 std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
-  if (method == core::json_rpc::MethodNames::kSendMessage) {
+  if (IsSendMessageMethod(method)) {
     return DispatcherOperation::kSendMessage;
   }
-  if (method == core::json_rpc::MethodNames::kGetTask) {
+  if (IsSendStreamingMessageMethod(method)) {
+    return DispatcherOperation::kSendStreamingMessage;
+  }
+  if (IsGetTaskMethod(method) || IsSubscribeToTaskMethod(method)) {
     return DispatcherOperation::kGetTask;
   }
-  if (method == core::json_rpc::MethodNames::kCancelTask) {
+  if (IsCancelTaskMethod(method)) {
     return DispatcherOperation::kCancelTask;
   }
-  if (method == core::json_rpc::MethodNames::kListTasks) {
-    return DispatcherOperation::kListTasks;
-  }
-  // Backward-compatible A2A v0.3.x JSON-RPC method aliases.
-  if (method == core::json_rpc::MethodNames::kLegacySendMessage) {
-    return DispatcherOperation::kSendMessage;
-  }
-  if (method == core::json_rpc::MethodNames::kLegacyGetTask) {
-    return DispatcherOperation::kGetTask;
-  }
-  if (method == core::json_rpc::MethodNames::kLegacyCancelTask) {
-    return DispatcherOperation::kCancelTask;
-  }
-  if (method == core::json_rpc::MethodNames::kLegacyListTasks ||
-      method == core::json_rpc::MethodNames::kLegacyListTasksDot) {
+  if (IsListTasksMethod(method)) {
     return DispatcherOperation::kListTasks;
   }
   return std::nullopt;
@@ -113,10 +154,21 @@ core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelo
   return method_it->second.string_value();
 }
 
+core::Result<std::string> FindMethodField(std::string_view body) {
+  const auto envelope = ParseJsonObject(body);
+  if (!envelope.ok()) {
+    return envelope.error();
+  }
+  return FindMethodField(envelope.value());
+}
+
 core::Result<google::protobuf::Struct> FindParamsField(const google::protobuf::Struct& envelope) {
   const auto& fields = envelope.fields();
   const auto params_it = fields.find("params");
-  if (params_it == fields.end() || !params_it->second.has_struct_value()) {
+  if (params_it == fields.end()) {
+    return google::protobuf::Struct{};
+  }
+  if (!params_it->second.has_struct_value()) {
     return core::Error::Validation("JSON-RPC request params must be an object");
   }
   return params_it->second.struct_value();
@@ -194,6 +246,14 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     payload.context_id = context_id_it->second.string_value();
   }
 
+  const auto snake_context_id_it = params.fields().find("context_id");
+  if (payload.context_id.empty() && snake_context_id_it != params.fields().end()) {
+    if (snake_context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+      return core::Error::Validation("ListTasksRequest.context_id must be a string");
+    }
+    payload.context_id = snake_context_id_it->second.string_value();
+  }
+
   const auto status_it = params.fields().find("status");
   if (status_it != params.fields().end()) {
     if (status_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
@@ -248,13 +308,9 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
     std::string_view method_name, const google::protobuf::Struct& params,
     const JsonRpcServerTransportOptions& options) {
-  if (method_name == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
-      method_name == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
-      method_name == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
-      method_name == core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig) {
+  if (IsPushConfigMethod(method_name)) {
     (void)params;
-    return core::Error::RemoteProtocol("Task push notifications are not supported")
-        .WithProtocolCode("-32003");
+    return core::protocol_errors::PushNotificationNotSupported();
   }
 
   const auto operation = MethodToOperation(method_name);
@@ -267,7 +323,8 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
   dispatch_request.operation = operation.value();
 
   switch (dispatch_request.operation) {
-    case DispatcherOperation::kSendMessage: {
+    case DispatcherOperation::kSendMessage:
+    case DispatcherOperation::kSendStreamingMessage: {
       auto payload = ParseProtoPayload<lf::a2a::v1::SendMessageRequest>(params);
       if (!payload.ok()) {
         return payload.error();
@@ -300,8 +357,6 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
       dispatch_request.payload = parsed_payload;
       return dispatch_request;
     }
-    case DispatcherOperation::kSendStreamingMessage:
-      return core::Error::Validation("Streaming JSON-RPC route is not supported");
   }
 
   return core::Error::Internal("Unsupported JSON-RPC dispatcher operation");
@@ -345,11 +400,9 @@ core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksRespon
   total_size_value.set_number_value(static_cast<double>(list_response.total_size));
   (*fields)["totalSize"] = std::move(total_size_value);
 
-  if (!list_response.next_page_token.empty()) {
-    google::protobuf::Value token;
-    token.set_string_value(list_response.next_page_token);
-    (*fields)["nextPageToken"] = std::move(token);
-  }
+  google::protobuf::Value token;
+  token.set_string_value(list_response.next_page_token);
+  (*fields)["nextPageToken"] = std::move(token);
 
   google::protobuf::Value wrapper;
   *wrapper.mutable_struct_value() = std::move(result);
@@ -359,24 +412,36 @@ core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksRespon
 int HttpStatusFromError(const core::Error& error) {
   (void)error;
   return kHttpOk;
+}
 
-  // Kept for future explicit transport-level failures.
-  const auto http_status = error.http_status();
-  if (http_status.has_value()) {
-    return *http_status;
+std::string ErrorInfoReason(const core::Error& error) {
+  const auto protocol_code = error.protocol_code();
+  if (protocol_code.has_value()) {
+    if (*protocol_code == core::protocol_codes::kTaskNotFound) return "TASK_NOT_FOUND";
+    if (*protocol_code == core::protocol_codes::kTaskNotCancelable) return "TASK_NOT_CANCELABLE";
+    if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported)
+      return "PUSH_NOTIFICATION_NOT_SUPPORTED";
+    if (*protocol_code == core::protocol_codes::kUnsupportedOperation) return "UNSUPPORTED_OPERATION";
+    if (*protocol_code == core::protocol_codes::kContentTypeNotSupported)
+      return "CONTENT_TYPE_NOT_SUPPORTED";
+    if (*protocol_code == core::protocol_codes::kInvalidAgentResponse)
+      return "INVALID_AGENT_RESPONSE";
+    if (*protocol_code == core::protocol_codes::kVersionNotSupported) return "VERSION_NOT_SUPPORTED";
   }
+
   switch (error.code()) {
     case core::ErrorCode::kValidation:
-      return kHttpBadRequest;
+      return "INVALID_PARAMS";
     case core::ErrorCode::kUnsupportedVersion:
-      return kHttpUpgradeRequired;
-    case core::ErrorCode::kNetwork:
+      return "VERSION_NOT_SUPPORTED";
     case core::ErrorCode::kRemoteProtocol:
+      return "UNSUPPORTED_OPERATION";
+    case core::ErrorCode::kNetwork:
     case core::ErrorCode::kSerialization:
     case core::ErrorCode::kInternal:
-      return kHttpInternalServerError;
+      return "INVALID_AGENT_RESPONSE";
   }
-  return kHttpInternalServerError;
+  return "INVALID_AGENT_RESPONSE";
 }
 
 int JsonRpcCodeFromError(const core::Error& error) {
@@ -384,7 +449,7 @@ int JsonRpcCodeFromError(const core::Error& error) {
     case core::ErrorCode::kValidation:
       return kJsonRpcInvalidParams;
     case core::ErrorCode::kUnsupportedVersion:
-      return kJsonRpcInvalidRequest;
+      return static_cast<int>(std::strtol(core::protocol_codes::kVersionNotSupported.data(), nullptr, 10));
     case core::ErrorCode::kRemoteProtocol: {
       const auto protocol_code = error.protocol_code();
       if (protocol_code.has_value()) {
@@ -404,6 +469,88 @@ int JsonRpcCodeFromError(const core::Error& error) {
       return kJsonRpcInternalError;
   }
   return kJsonRpcInternalError;
+}
+
+core::Result<void> AppendSseJsonRpcEvent(std::string& body, const JsonRpcServerTransport::ResponseId& id,
+                                         const lf::a2a::v1::StreamResponse& event) {
+  const auto event_value = BuildJsonValueFromMessage(event);
+  if (!event_value.ok()) {
+    return event_value.error();
+  }
+
+  google::protobuf::Struct envelope;
+  auto* fields = envelope.mutable_fields();
+  (*fields)["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
+  (*fields)["id"] = id.value();
+  (*fields)["result"] = event_value.value();
+
+  const auto serialized = core::MessageToJson(envelope);
+  if (!serialized.ok()) {
+    return serialized.error();
+  }
+  body += "data: ";
+  body += serialized.value();
+  body += "\n\n";
+  return {};
+}
+
+core::Result<HttpServerResponse> BuildSseResponse(const JsonRpcServerTransport::ResponseId& id,
+                                                  std::unique_ptr<ServerStreamSession>& session) {
+  if (session == nullptr) {
+    return core::Error::Internal("JSON-RPC streaming session is missing");
+  }
+
+  HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers["Content-Type"] = "text/event-stream";
+  response.headers["Cache-Control"] = "no-cache";
+  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+
+  while (true) {
+    auto next = session->Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    if (!next.value().has_value()) {
+      break;
+    }
+    const auto append = AppendSseJsonRpcEvent(response.body, id, *next.value());
+    if (!append.ok()) {
+      return append.error();
+    }
+  }
+  return response;
+}
+
+core::Result<HttpServerResponse> BuildSubscribeSseResponse(
+    const JsonRpcServerTransport::ResponseId& id, const lf::a2a::v1::Task& task) {
+  if (core::IsTerminalTaskState(task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+
+  HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers["Content-Type"] = "text/event-stream";
+  response.headers["Cache-Control"] = "no-cache";
+  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+
+  lf::a2a::v1::StreamResponse current_event;
+  *current_event.mutable_task() = task;
+  const auto current_append = AppendSseJsonRpcEvent(response.body, id, current_event);
+  if (!current_append.ok()) {
+    return current_append.error();
+  }
+
+  lf::a2a::v1::StreamResponse terminal_event;
+  terminal_event.mutable_status_update()->set_task_id(task.id());
+  terminal_event.mutable_status_update()->set_context_id(task.context_id());
+  terminal_event.mutable_status_update()->mutable_status()->set_state(
+      lf::a2a::v1::TASK_STATE_COMPLETED);
+  const auto terminal_append = AppendSseJsonRpcEvent(response.body, id, terminal_event);
+  if (!terminal_append.ok()) {
+    return terminal_append.error();
+  }
+  return response;
 }
 
 }  // namespace
@@ -426,15 +573,22 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
                               std::nullopt, kHttpOk);
   }
 
+  if (!HasJsonContentType(request)) {
+    const auto error = core::protocol_errors::ContentTypeNotSupported().WithTransport("jsonrpc");
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error,
+                              kHttpOk);
+  }
+
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
-    return BuildErrorResponse(kJsonRpcInvalidRequest, version.error().message(), ResponseId{},
-                              version.error(), kHttpUpgradeRequired);
+    const auto error = version.error().WithTransport("jsonrpc");
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error,
+                              kHttpOk);
   }
 
   const auto parsed = ParseRequest(request.body, options_);
   if (!parsed.ok()) {
-    int parse_code = kJsonRpcInvalidRequest;
+    int parse_code = JsonRpcCodeFromError(parsed.error());
     switch (parsed.error().code()) {
       case core::ErrorCode::kValidation:
         parse_code = kJsonRpcInvalidParams;
@@ -446,12 +600,15 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
       case core::ErrorCode::kNetwork:
       case core::ErrorCode::kRemoteProtocol:
       case core::ErrorCode::kInternal:
-        parse_code = kJsonRpcInvalidRequest;
         break;
     }
     return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
                               kHttpOk);
   }
+
+  const auto method = FindMethodField(request.body);
+  const bool is_streaming = method.ok() && IsSendStreamingMessageMethod(method.value());
+  const bool is_subscribe = method.ok() && IsSubscribeToTaskMethod(method.value());
 
   RequestContext context;
   context.remote_address = request.remote_address.empty()
@@ -466,6 +623,42 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
     return BuildErrorResponse(JsonRpcCodeFromError(dispatch.error()), dispatch.error().message(),
                               parsed.value().id, dispatch.error().WithTransport("jsonrpc"),
                               http_status);
+  }
+
+  if (is_streaming) {
+    auto* session = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
+    if (session == nullptr) {
+      const auto error = core::protocol_errors::InvalidAgentResponse(
+                             "JSON-RPC streaming response payload mismatch")
+                             .WithTransport("jsonrpc");
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
+                                error, HttpStatusFromError(error));
+    }
+    const auto sse = BuildSseResponse(parsed.value().id, *session);
+    if (!sse.ok()) {
+      const auto error = sse.error().WithTransport("jsonrpc");
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
+                                error, HttpStatusFromError(error));
+    }
+    return sse.value();
+  }
+
+  if (is_subscribe) {
+    const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
+    if (task == nullptr) {
+      const auto error = core::protocol_errors::InvalidAgentResponse(
+                             "JSON-RPC subscribe response payload mismatch")
+                             .WithTransport("jsonrpc");
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
+                                error, HttpStatusFromError(error));
+    }
+    const auto sse = BuildSubscribeSseResponse(parsed.value().id, *task);
+    if (!sse.ok()) {
+      const auto error = sse.error().WithTransport("jsonrpc");
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
+                                error, HttpStatusFromError(error));
+    }
+    return sse.value();
   }
 
   const auto result = SerializeDispatchResult(parsed.value().dispatch, dispatch.value());
@@ -483,14 +676,13 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(
   const std::string version = FindHeader(request.headers, core::Version::kHeaderName);
   if (version.empty()) {
     if (options_.require_version_header) {
-      return core::Error::UnsupportedVersion("Missing required A2A-Version header");
+      return core::protocol_errors::VersionNotSupported("Missing required A2A-Version header");
     }
     return {};
   }
 
   if (!core::Version::IsSupported(version)) {
-    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
-        .WithProtocolCode(version);
+    return core::protocol_errors::VersionNotSupported("Unsupported A2A-Version header value");
   }
 
   return {};
@@ -537,7 +729,8 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("JSON-RPC SendMessage response payload mismatch");
+        return core::protocol_errors::InvalidAgentResponse(
+            "JSON-RPC SendMessage response payload mismatch");
       }
       return BuildJsonValueFromMessage(*payload);
     }
@@ -545,22 +738,24 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::Task>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("JSON-RPC Task response payload mismatch");
+        return core::protocol_errors::InvalidAgentResponse("JSON-RPC Task response payload mismatch");
       }
       return BuildJsonValueFromMessage(*payload);
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("JSON-RPC ListTasks response payload mismatch");
+        return core::protocol_errors::InvalidAgentResponse(
+            "JSON-RPC ListTasks response payload mismatch");
       }
       return BuildListTasksResult(*payload);
     }
     case DispatcherOperation::kSendStreamingMessage:
-      return core::Error::Validation("Streaming JSON-RPC route is not supported");
+      return core::protocol_errors::InvalidAgentResponse(
+          "Streaming JSON-RPC responses must be serialized as SSE");
   }
 
-  return core::Error::Internal("Unsupported JSON-RPC dispatcher operation");
+  return core::protocol_errors::InvalidAgentResponse("Unsupported JSON-RPC dispatcher operation");
 }
 
 HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(
@@ -602,20 +797,29 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(
   (*error_fields)["code"].set_number_value(json_rpc_code);
   (*error_fields)["message"].set_string_value(std::string(message));
 
-  if (error.has_value()) {
+  if (error.has_value() && json_rpc_code >= -32099 && json_rpc_code <= -32000) {
+    google::protobuf::Value data;
+    auto* data_values = data.mutable_list_value()->mutable_values();
+    google::protobuf::Value error_info;
+    auto* info_fields = error_info.mutable_struct_value()->mutable_fields();
+    (*info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
+    (*info_fields)["reason"].set_string_value(ErrorInfoReason(*error));
+    (*info_fields)["domain"].set_string_value("a2a-protocol.org");
+
     const auto protocol_code = error->protocol_code();
     const auto transport = error->transport();
-
-    google::protobuf::Value data;
-    auto* data_fields = data.mutable_struct_value()->mutable_fields();
-    (*data_fields)["a2aCode"].set_string_value(
-        std::to_string(static_cast<std::int32_t>(error->code())));
-    if (protocol_code.has_value()) {
-      (*data_fields)["protocolCode"].set_string_value(*protocol_code);
+    if (protocol_code.has_value() || transport.has_value()) {
+      google::protobuf::Value metadata;
+      auto* metadata_fields = metadata.mutable_struct_value()->mutable_fields();
+      if (protocol_code.has_value()) {
+        (*metadata_fields)["protocolCode"].set_string_value(*protocol_code);
+      }
+      if (transport.has_value()) {
+        (*metadata_fields)["transport"].set_string_value(*transport);
+      }
+      (*info_fields)["metadata"] = std::move(metadata);
     }
-    if (transport.has_value()) {
-      (*data_fields)["transport"].set_string_value(*transport);
-    }
+    data_values->Add(std::move(error_info));
     (*error_fields)["data"] = std::move(data);
   }
 
