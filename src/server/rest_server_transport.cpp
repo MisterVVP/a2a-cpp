@@ -209,7 +209,8 @@ void AddLegacyTransportFields(google::protobuf::Struct* card,
       }
       auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
       const auto binding_it = interface_fields->find("protocolBinding");
-      if (binding_it == interface_fields->end() || !binding_it->second.has_string_value()) {
+      if (binding_it == interface_fields->end() ||
+          binding_it->second.kind_case() != google::protobuf::Value::kStringValue) {
         continue;
       }
       (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
