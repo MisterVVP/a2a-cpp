@@ -618,7 +618,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
   context.client_headers = request.headers;
   context.auth_metadata = ExtractAuthMetadata(request.headers);
 
-  const auto dispatch = dispatcher_->Dispatch(parsed.value().dispatch, context);
+  auto dispatch = dispatcher_->Dispatch(parsed.value().dispatch, context);
   if (!dispatch.ok()) {
     const int http_status = HttpStatusFromError(dispatch.error());
     return BuildErrorResponse(JsonRpcCodeFromError(dispatch.error()), dispatch.error().message(),
