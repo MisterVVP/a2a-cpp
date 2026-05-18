@@ -63,8 +63,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        ++generated_task_counter_;
-        task_id = "example-task-" + std::to_string(generated_task_counter_);
+        task_id = "example-task-default";
       }
     }
     if (has_explicit_task_id && !tasks_.contains(task_id)) {
@@ -104,8 +103,9 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp_counter_));
 
     task.clear_artifacts();
-    const std::string request_text =
-        request.message().parts(0).has_text() ? request.message().parts(0).text() : std::string{};
+    const std::string request_text = request.message().parts(0).kind_case() == lf::a2a::v1::Part::kText
+                                         ? request.message().parts(0).text()
+                                         : std::string{};
     std::string normalized_request_text;
     normalized_request_text.reserve(request_text.size());
     for (const char ch : request_text) {
@@ -235,8 +235,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        ++generated_task_counter_;
-        task_id = "example-task-" + std::to_string(generated_task_counter_);
+        task_id = "example-task-default";
       }
     }
 
