@@ -23,8 +23,7 @@ constexpr int kHttpStatusNotFound = 404;
 
 std::string Trim(std::string_view input) {
   std::string value(input);
-  const auto begin =
-      std::ranges::find_if_not(value, [](unsigned char ch) { return std::isspace(ch) != 0; });
+  const auto begin = std::ranges::find_if_not(value, [](unsigned char ch) { return std::isspace(ch) != 0; });
   const auto end = std::ranges::find_if_not(std::ranges::reverse_view(value), [](unsigned char ch) {
                      return std::isspace(ch) != 0;
                    }).base();
@@ -34,17 +33,13 @@ std::string Trim(std::string_view input) {
   return {begin, end};
 }
 
-bool HasHttpScheme(std::string_view url) {
-  return url.starts_with("http://") || url.starts_with("https://");
-}
+bool HasHttpScheme(std::string_view url) { return url.starts_with("http://") || url.starts_with("https://"); }
 
 bool HasGrpcScheme(std::string_view url) {
   return url.starts_with("grpc://") || url.starts_with("grpcs://") || url.starts_with("dns:///");
 }
 
-bool HasHostPortShape(std::string_view endpoint) {
-  return endpoint.find(':') != std::string_view::npos;
-}
+bool HasHostPortShape(std::string_view endpoint) { return endpoint.find(':') != std::string_view::npos; }
 
 using a2a::core::protocol_bindings::kGrpc;
 using a2a::core::protocol_bindings::kHttpJson;
@@ -108,16 +103,14 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
         .WithTransport("http")
         .WithHttpStatus(kHttpStatusNotFound);
   }
-  if (response.value().status_code < kHttpStatusOkMin ||
-      response.value().status_code > kHttpStatusOkMax) {
+  if (response.value().status_code < kHttpStatusOkMin || response.value().status_code > kHttpStatusOkMax) {
     return core::Error::RemoteProtocol("Agent Card discovery failed")
         .WithTransport("http")
         .WithHttpStatus(response.value().status_code);
   }
 
   lf::a2a::v1::AgentCard card;
-  const auto parse =
-      core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
+  const auto parse = core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
     return parse.error();
   }
@@ -131,8 +124,7 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
   return card;
 }
 
-core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(
-    std::string_view base_url) {
+core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(std::string_view base_url) {
   const auto discovery_url = BuildExtendedDiscoveryUrl(base_url);
   if (!discovery_url.ok()) {
     return discovery_url.error();
@@ -147,16 +139,14 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(
         .WithTransport("http")
         .WithHttpStatus(kHttpStatusNotFound);
   }
-  if (response.value().status_code < kHttpStatusOkMin ||
-      response.value().status_code > kHttpStatusOkMax) {
+  if (response.value().status_code < kHttpStatusOkMin || response.value().status_code > kHttpStatusOkMax) {
     return core::Error::RemoteProtocol("Extended Agent Card discovery failed")
         .WithTransport("http")
         .WithHttpStatus(response.value().status_code);
   }
 
   lf::a2a::v1::AgentCard card;
-  const auto parse =
-      core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
+  const auto parse = core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
     return parse.error();
   }
@@ -199,8 +189,7 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
 
   for (const auto& iface : card.supported_interfaces()) {
     if (iface.protocol_binding().empty()) {
-      return core::Error::Validation(
-          "Agent Card contains an interface with unspecified protocol binding");
+      return core::Error::Validation("Agent Card contains an interface with unspecified protocol binding");
     }
     if (iface.protocol_version().empty()) {
       return core::Error::Validation("Agent Card contains an interface with no protocol version");
@@ -212,15 +201,13 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
       return core::Error::Validation("Agent Card contains an interface without a URL");
     }
     if (!IsValidInterfaceEndpoint(iface.protocol_binding(), iface.url())) {
-      return core::Error::Validation(
-          "Agent Card interface endpoint is invalid for its protocol binding");
+      return core::Error::Validation("Agent Card interface endpoint is invalid for its protocol binding");
     }
     for (const auto& requirement : card.security_requirements()) {
       for (const auto& [scheme_name, _] : requirement.schemes()) {
         if (!card.security_schemes().contains(scheme_name)) {
-          return core::Error::Validation(
-              "Agent Card security requirement references an unknown security scheme: " +
-              scheme_name);
+          return core::Error::Validation("Agent Card security requirement references an unknown security scheme: " +
+                                         scheme_name);
         }
       }
     }
@@ -228,8 +215,8 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
   return {};
 }
 
-core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
-    const lf::a2a::v1::AgentCard& card, PreferredTransport preferred) {
+core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(const lf::a2a::v1::AgentCard& card,
+                                                                            PreferredTransport preferred) {
   const auto preferred_wire = ToWireTransport(preferred);
   if (!preferred_wire.has_value()) {
     return core::Error::Validation("Invalid preferred transport requested");

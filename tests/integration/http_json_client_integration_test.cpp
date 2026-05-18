@@ -37,8 +37,7 @@ ResolvedInterface MakeResolvedRest() {
 TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResponse) {
   HttpRequest captured;
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(),
-      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(), [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
         return HttpClientResponse{.status_code = kHttpOk,
                                   .headers = {{"A2A-Version", "1.0"}},
@@ -61,7 +60,7 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
   EXPECT_EQ(response.value().message().role(), lf::a2a::v1::ROLE_AGENT);
 
   EXPECT_EQ(captured.method, "POST");
-  EXPECT_EQ(captured.url, "https://agent.example.com/a2a/messages:send");
+  EXPECT_EQ(captured.url, "https://agent.example.com/a2a/message:send");
   EXPECT_EQ(captured.timeout, std::chrono::milliseconds(kCustomTimeoutMs));
   EXPECT_EQ(captured.headers.at("A2A-Version"), "1.0");
   EXPECT_EQ(captured.headers.at("Content-Type"), "application/json");
@@ -76,23 +75,20 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
 TEST(HttpJsonClientIntegrationTest, GetTaskAndCancelTaskHappyPath) {
   int call = 0;
   auto transport = std::make_unique<HttpJsonTransport>(
-      MakeResolvedRest(),
-      [&call](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedRest(), [&call](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         ++call;
         if (call == 1) {
           EXPECT_EQ(request.method, "GET");
           EXPECT_EQ(request.url, "https://agent.example.com/a2a/tasks/t-1?historyLength=2");
-          return HttpClientResponse{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}},
-                                    .body = R"({"id":"t-1"})"};
+          return HttpClientResponse{
+              .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"id":"t-1"})"};
         }
         EXPECT_EQ(request.method, "POST");
         EXPECT_EQ(request.url, "https://agent.example.com/a2a/tasks/t-1:cancel");
         EXPECT_EQ(request.body, "{}");
-        return HttpClientResponse{
-            .status_code = kHttpOk,
-            .headers = {{"A2A-Version", "1.0"}},
-            .body = R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})"};
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})"};
       });
   A2AClient client(std::move(transport));
 
@@ -115,12 +111,10 @@ TEST(HttpJsonClientIntegrationTest, ListTasksBuildsQueryAndParsesTasks) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         EXPECT_EQ(request.method, "GET");
-        EXPECT_EQ(request.url,
-                  "https://agent.example.com/a2a/tasks?pageSize=25&pageToken=cursor-1");
-        return HttpClientResponse{
-            .status_code = kHttpOk,
-            .headers = {{"A2A-Version", "1.0"}},
-            .body = R"({"tasks":[{"id":"t-1"},{"id":"t-2"}],"nextPageToken":"cursor-2"})"};
+        EXPECT_EQ(request.url, "https://agent.example.com/a2a/tasks?pageSize=25&pageToken=cursor-1");
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"tasks":[{"id":"t-1"},{"id":"t-2"}],"nextPageToken":"cursor-2"})"};
       });
   A2AClient client(std::move(transport));
 
@@ -147,15 +141,13 @@ TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
                                     .body = R"({"id":"pn-1","taskId":"t-1","url":"https://cb"})"};
         }
         if (request.method == "GET" &&
-            request.url.find("/pushNotificationConfigs?taskId=t-1&pageSize=25") !=
-                std::string::npos) {
+            request.url.find("/pushNotificationConfigs?taskId=t-1&pageSize=25") != std::string::npos) {
           return HttpClientResponse{.status_code = kHttpOk,
                                     .headers = {{"A2A-Version", "1.0"}},
                                     .body = R"({"configs":[{"id":"pn-1","taskId":"t-1"}]})"};
         }
         if (request.method == "DELETE" && request.url.ends_with("/pushNotificationConfigs/pn-1")) {
-          return HttpClientResponse{
-              .status_code = kHttpNoContent, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+          return HttpClientResponse{.status_code = kHttpNoContent, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
         }
         return a2a::core::Error::Internal("unexpected request");
       });
@@ -213,8 +205,7 @@ TEST(HttpJsonClientIntegrationTest, MapsRemote4xxAnd5xxIntoProtocolErrors) {
 TEST(HttpJsonClientIntegrationTest, InvalidJsonBodyMapsToSerializationError) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{
-            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = "{broken json"};
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = "{broken json"};
       });
   A2AClient client(std::move(transport));
 
@@ -245,8 +236,8 @@ TEST(HttpJsonClientIntegrationTest, MissingEndpointMappingFromAgentCardReturnsVa
   ResolvedInterface resolved = MakeResolvedRest();
   resolved.url.clear();
 
-  auto transport = std::make_unique<HttpJsonTransport>(
-      resolved, [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+  auto transport =
+      std::make_unique<HttpJsonTransport>(resolved, [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return HttpClientResponse{.status_code = kHttpOk, .headers = {}, .body = R"({"id":"t-1"})"};
       });
   A2AClient client(std::move(transport));

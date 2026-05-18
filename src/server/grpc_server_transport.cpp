@@ -37,9 +37,8 @@ namespace {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
   }
-  if (protocol_code.has_value() &&
-      (*protocol_code == core::protocol_codes::kPushNotificationNotSupported ||
-       *protocol_code == core::protocol_codes::kUnsupportedOperation)) {
+  if (protocol_code.has_value() && (*protocol_code == core::protocol_codes::kPushNotificationNotSupported ||
+                                    *protocol_code == core::protocol_codes::kUnsupportedOperation)) {
     return ::grpc::StatusCode::UNIMPLEMENTED;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
@@ -71,8 +70,7 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotCancelable) {
     return "TASK_NOT_CANCELABLE";
   }
-  if (protocol_code.has_value() &&
-      *protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
     return "PUSH_NOTIFICATION_NOT_SUPPORTED";
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
@@ -174,9 +172,8 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
   AppendTag(message, 1U, 0U);
   AppendVarint(message, static_cast<std::uint64_t>(GrpcStatusCodeNumber(code)));
   AppendLengthDelimited(message, 2U, std::string(error.message()));
-  AppendLengthDelimited(
-      message, 3U,
-      SerializeAny("type.googleapis.com/google.rpc.ErrorInfo", SerializeErrorInfo(error)));
+  AppendLengthDelimited(message, 3U,
+                        SerializeAny("type.googleapis.com/google.rpc.ErrorInfo", SerializeErrorInfo(error)));
   return message;
 }
 
@@ -184,8 +181,7 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
 
-core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
-    const ::grpc::ServerContext& context) const {
+core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::grpc::ServerContext& context) const {
   if (dispatcher_ == nullptr) {
     return core::Error::Internal("Server dispatcher is not configured");
   }
@@ -199,8 +195,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     request_context.client_headers[key] = value;
   }
   request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
-  const auto version_it =
-      request_context.client_headers.find(std::string(GrpcServerTransport::kVersionMetadataKey));
+  const auto version_it = request_context.client_headers.find(std::string(GrpcServerTransport::kVersionMetadataKey));
   if (version_it == request_context.client_headers.end()) {
     return core::Error::UnsupportedVersion("Missing required A2A-Version header")
         .WithTransport(std::string(GrpcServerTransport::kTransportName));
@@ -212,17 +207,14 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return request_context;
 }
 
-::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error,
-                                                 ::grpc::ServerContext* context) {
+::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context) {
   const auto status_code = ToStatusCode(error);
   if (context != nullptr) {
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
-    context->AddTrailingMetadata("grpc-status-details-bin",
-                                 SerializeGrpcStatusDetails(status_code, error));
+    context->AddTrailingMetadata("grpc-status-details-bin", SerializeGrpcStatusDetails(status_code, error));
     const auto& protocol_code = error.protocol_code();
     if (protocol_code.has_value()) {
-      context->AddTrailingMetadata(std::string(GrpcServerTransport::kProtocolCodeMetadataKey),
-                                   *protocol_code);
+      context->AddTrailingMetadata(std::string(GrpcServerTransport::kProtocolCodeMetadataKey), *protocol_code);
     }
   }
 
@@ -241,9 +233,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = *request},
-                            request_context.value());
+  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = *request},
+                                              request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -257,9 +248,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return ::grpc::Status::OK;
 }
 
-::grpc::Status GrpcServerTransport::SendStreamingMessage(
-    ::grpc::ServerContext* context, const lf::a2a::v1::SendMessageRequest* request,
-    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+::grpc::Status GrpcServerTransport::SendStreamingMessage(::grpc::ServerContext* context,
+                                                         const lf::a2a::v1::SendMessageRequest* request,
+                                                         ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
   if (request == nullptr || writer == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
   }
@@ -269,17 +260,15 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kSendStreamingMessage, .payload = *request},
-      request_context.value());
+  auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendStreamingMessage, .payload = *request},
+                                        request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
 
   auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
   if (stream == nullptr || !(*stream)) {
-    return {::grpc::StatusCode::INTERNAL,
-            "Unexpected dispatch payload type for SendStreamingMessage"};
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SendStreamingMessage"};
   }
 
   while (!context->IsCancelled()) {
@@ -299,8 +288,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return ::grpc::Status::OK;
 }
 
-::grpc::Status GrpcServerTransport::GetTask(::grpc::ServerContext* context,
-                                            const lf::a2a::v1::GetTaskRequest* request,
+::grpc::Status GrpcServerTransport::GetTask(::grpc::ServerContext* context, const lf::a2a::v1::GetTaskRequest* request,
                                             lf::a2a::v1::Task* response) {
   if (request == nullptr || response == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
@@ -311,8 +299,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kGetTask, .payload = *request}, request_context.value());
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = *request}, request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -338,9 +326,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kCancelTask, .payload = *request},
-                            request_context.value());
+  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kCancelTask, .payload = *request},
+                                              request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -370,8 +357,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   if (request->has_page_size()) {
     const int32_t page_size = request->page_size();
     if (page_size <= 0 || page_size > 100) {
-      return ToGrpcStatus(
-          core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
+      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
     }
     list_request.page_size = static_cast<std::size_t>(page_size);
   }
@@ -382,8 +368,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   }
   if (request->has_history_length()) {
     if (request->history_length() < 0) {
-      return ToGrpcStatus(
-          core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context);
+      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context);
     }
     list_request.history_length = static_cast<std::size_t>(request->history_length());
   }
@@ -394,9 +379,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     list_request.status_timestamp_after = request->status_timestamp_after();
   }
 
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
-                            request_context.value());
+  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
+                                              request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -415,9 +399,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   return ::grpc::Status::OK;
 }
 
-::grpc::Status GrpcServerTransport::SubscribeToTask(
-    ::grpc::ServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request,
-    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+::grpc::Status GrpcServerTransport::SubscribeToTask(::grpc::ServerContext* context,
+                                                    const lf::a2a::v1::SubscribeToTaskRequest* request,
+                                                    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
   if (request == nullptr || writer == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
   }
@@ -429,9 +413,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
 
   lf::a2a::v1::GetTaskRequest get_task_request;
   get_task_request.set_id(request->id());
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kGetTask, .payload = get_task_request},
-      request_context.value());
+  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get_task_request},
+                                              request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -441,8 +424,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SubscribeToTask"};
   }
   if (core::IsTerminalTaskState(task->status().state())) {
-    return ToGrpcStatus(
-        core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
+    return ToGrpcStatus(core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
   }
 
   lf::a2a::v1::StreamResponse current_event;
@@ -454,8 +436,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
   lf::a2a::v1::StreamResponse terminal_event;
   terminal_event.mutable_status_update()->set_task_id(task->id());
   terminal_event.mutable_status_update()->set_context_id(task->context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(
-      lf::a2a::v1::TASK_STATE_COMPLETED);
+  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
   if (!writer->Write(terminal_event)) {
     return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
   }
@@ -472,8 +453,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
 }
 
 ::grpc::Status GrpcServerTransport::GetTaskPushNotificationConfig(
-    ::grpc::ServerContext* context,
-    const lf::a2a::v1::GetTaskPushNotificationConfigRequest* request,
+    ::grpc::ServerContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
   (void)request;
   (void)response;
@@ -481,8 +461,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
 }
 
 ::grpc::Status GrpcServerTransport::ListTaskPushNotificationConfigs(
-    ::grpc::ServerContext* context,
-    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest* request,
+    ::grpc::ServerContext* context, const lf::a2a::v1::ListTaskPushNotificationConfigsRequest* request,
     lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response) {
   (void)request;
   (void)response;
@@ -490,17 +469,16 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
 }
 
 ::grpc::Status GrpcServerTransport::DeleteTaskPushNotificationConfig(
-    ::grpc::ServerContext* context,
-    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest* request,
+    ::grpc::ServerContext* context, const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest* request,
     google::protobuf::Empty* response) {
   (void)request;
   (void)response;
   return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
 }
 
-::grpc::Status GrpcServerTransport::GetExtendedAgentCard(
-    ::grpc::ServerContext* context, const lf::a2a::v1::GetExtendedAgentCardRequest* request,
-    lf::a2a::v1::AgentCard* response) {
+::grpc::Status GrpcServerTransport::GetExtendedAgentCard(::grpc::ServerContext* context,
+                                                         const lf::a2a::v1::GetExtendedAgentCardRequest* request,
+                                                         lf::a2a::v1::AgentCard* response) {
   if (request == nullptr || response == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
   }

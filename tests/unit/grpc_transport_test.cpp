@@ -39,8 +39,7 @@ class FakeStreamReader final : public a2a::client::GrpcTransport::StreamReader {
 
 class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
  public:
-  grpc::Status SendMessage(grpc::ClientContext* context,
-                           const lf::a2a::v1::SendMessageRequest& request,
+  grpc::Status SendMessage(grpc::ClientContext* context, const lf::a2a::v1::SendMessageRequest& request,
                            lf::a2a::v1::SendMessageResponse* response) override {
     (void)context;
     last_task_id = request.message().task_id();
@@ -63,8 +62,7 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     return task_status;
   }
 
-  grpc::Status CancelTask(grpc::ClientContext* context,
-                          const lf::a2a::v1::CancelTaskRequest& request,
+  grpc::Status CancelTask(grpc::ClientContext* context, const lf::a2a::v1::CancelTaskRequest& request,
                           lf::a2a::v1::Task* response) override {
     (void)context;
     response->set_id(request.id());
@@ -72,36 +70,33 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     return cancel_status;
   }
 
-  grpc::Status CreateTaskPushNotificationConfig(
-      grpc::ClientContext* context, const lf::a2a::v1::TaskPushNotificationConfig& request,
-      lf::a2a::v1::TaskPushNotificationConfig* response) override {
+  grpc::Status CreateTaskPushNotificationConfig(grpc::ClientContext* context,
+                                                const lf::a2a::v1::TaskPushNotificationConfig& request,
+                                                lf::a2a::v1::TaskPushNotificationConfig* response) override {
     (void)context;
     *response = request;
     return grpc::Status::OK;
   }
 
-  grpc::Status GetTaskPushNotificationConfig(
-      grpc::ClientContext* context,
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-      lf::a2a::v1::TaskPushNotificationConfig* response) override {
+  grpc::Status GetTaskPushNotificationConfig(grpc::ClientContext* context,
+                                             const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
+                                             lf::a2a::v1::TaskPushNotificationConfig* response) override {
     (void)context;
     response->set_id(request.id());
     return grpc::Status::OK;
   }
 
   grpc::Status ListTaskPushNotificationConfigs(
-      grpc::ClientContext* context,
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+      grpc::ClientContext* context, const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
       lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response) override {
     (void)context;
     response->set_next_page_token(request.page_token());
     return grpc::Status::OK;
   }
 
-  grpc::Status DeleteTaskPushNotificationConfig(
-      grpc::ClientContext* context,
-      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-      google::protobuf::Empty* response) override {
+  grpc::Status DeleteTaskPushNotificationConfig(grpc::ClientContext* context,
+                                                const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+                                                google::protobuf::Empty* response) override {
     (void)context;
     (void)request;
     (void)response;

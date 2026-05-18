@@ -29,8 +29,7 @@ std::string ToLower(std::string_view value) {
   return lowered;
 }
 
-std::string FindHeader(const std::unordered_map<std::string, std::string>& headers,
-                       std::string_view name) {
+std::string FindHeader(const std::unordered_map<std::string, std::string>& headers, std::string_view name) {
   const std::string lowered_name = ToLower(name);
   for (const auto& [header_name, value] : headers) {
     if (ToLower(header_name) == lowered_name) {
@@ -83,8 +82,7 @@ std::string ErrorBody(int status_code, std::string_view message, std::string_vie
   return R"({"error":{"code":500,"status":"INTERNAL","message":"serialization failed"}})";
 }
 
-HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message,
-                                          std::string_view reason) {
+HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message, std::string_view reason) {
   HttpServerResponse response;
   response.status_code = status_code;
   response.headers["Content-Type"] = "application/json";
@@ -153,8 +151,7 @@ core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
   return decoded;
 }
 
-core::Result<void> ParseQueryString(std::string_view raw,
-                                    std::unordered_map<std::string, std::string>* out) {
+core::Result<void> ParseQueryString(std::string_view raw, std::unordered_map<std::string, std::string>* out) {
   if (out == nullptr) {
     return core::Error::Internal("Query output map is required");
   }
@@ -166,13 +163,11 @@ core::Result<void> ParseQueryString(std::string_view raw,
   std::size_t start = 0;
   while (start <= raw.size()) {
     const std::size_t end = raw.find('&', start);
-    const auto part =
-        raw.substr(start, end == std::string_view::npos ? raw.size() - start : end - start);
+    const auto part = raw.substr(start, end == std::string_view::npos ? raw.size() - start : end - start);
     if (!part.empty()) {
       const std::size_t split = part.find('=');
       const auto key_raw = part.substr(0, split);
-      const auto value_raw =
-          split == std::string_view::npos ? std::string_view{} : part.substr(split + 1);
+      const auto value_raw = split == std::string_view::npos ? std::string_view{} : part.substr(split + 1);
 
       const auto key = DecodeUrlComponent(key_raw);
       if (!key.ok()) {
@@ -194,8 +189,7 @@ core::Result<void> ParseQueryString(std::string_view raw,
   return {};
 }
 
-void AddLegacyTransportFields(google::protobuf::Struct* card,
-                              const lf::a2a::v1::AgentCard& agent_card) {
+void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1::AgentCard& agent_card) {
   if (card == nullptr) {
     return;
   }
@@ -213,8 +207,8 @@ void AddLegacyTransportFields(google::protobuf::Struct* card,
           binding_it->second.kind_case() != google::protobuf::Value::kStringValue) {
         continue;
       }
-      (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)]
-          .set_string_value(binding_it->second.string_value());
+      (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)].set_string_value(
+          binding_it->second.string_value());
     }
   }
 
@@ -222,10 +216,9 @@ void AddLegacyTransportFields(google::protobuf::Struct* card,
     for (const auto& iface : agent_card.supported_interfaces()) {
       if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc ||
           iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-        (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)]
-            .set_string_value(iface.url());
-        (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)]
-            .set_string_value(iface.protocol_binding());
+        (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)].set_string_value(iface.url());
+        (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)].set_string_value(
+            iface.protocol_binding());
         break;
       }
     }
@@ -245,8 +238,7 @@ RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::Ag
   }
 }
 
-core::Result<HttpServerResponse> RestServerTransport::Handle(
-    const HttpServerRequest& request) const {
+core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerRequest& request) const {
   if (request.target.empty() || request.target.front() != '/') {
     return core::Error::Validation("HTTP request target must start with '/'");
   }
@@ -262,14 +254,12 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(
 
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(kHttpBadRequest, version.error().message(),
-                                  "VERSION_NOT_SUPPORTED");
+    return BuildJsonErrorResponse(kHttpBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
 
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed",
-                                  "UNSUPPORTED_OPERATION");
+    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed", "UNSUPPORTED_OPERATION");
   }
 
   const auto rest_response = transport_.Handle(rest_request.value());
@@ -279,11 +269,9 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(
   return ToHttpResponse(rest_response.value());
 }
 
-core::Result<RestRequest> RestServerTransport::BuildRestRequest(
-    const HttpServerRequest& request) const {
+core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {
   const auto query_start = request.target.find('?');
-  std::string path =
-      query_start == std::string::npos ? request.target : request.target.substr(0, query_start);
+  std::string path = query_start == std::string::npos ? request.target : request.target.substr(0, query_start);
 
   if (!options_.rest_api_base_path.empty() && options_.rest_api_base_path != "/") {
     if (!path.starts_with(options_.rest_api_base_path)) {
@@ -306,8 +294,8 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(
   rest_request.context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   if (query_start != std::string::npos) {
-    const auto parsed = ParseQueryString(std::string_view(request.target).substr(query_start + 1),
-                                         &rest_request.query_params);
+    const auto parsed =
+        ParseQueryString(std::string_view(request.target).substr(query_start + 1), &rest_request.query_params);
     if (!parsed.ok()) {
       return parsed.error();
     }
@@ -316,8 +304,7 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(
   return rest_request;
 }
 
-core::Result<void> RestServerTransport::ValidateVersionHeader(
-    const HttpServerRequest& request) const {
+core::Result<void> RestServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
   const std::string version = FindHeader(request.headers, core::Version::kHeaderName);
   if (version.empty()) {
     if (options_.require_version_header) {
@@ -326,17 +313,14 @@ core::Result<void> RestServerTransport::ValidateVersionHeader(
     return {};
   }
   if (!core::Version::IsSupported(version)) {
-    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
-        .WithProtocolCode(version);
+    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value").WithProtocolCode(version);
   }
   return {};
 }
 
-core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(
-    const HttpServerRequest& request) const {
+core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const HttpServerRequest& request) const {
   if (request.method != "GET") {
-    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed",
-                                  "UNSUPPORTED_OPERATION");
+    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed", "UNSUPPORTED_OPERATION");
   }
 
   const auto body = core::MessageToJson(agent_card_);

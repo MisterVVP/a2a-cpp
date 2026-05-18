@@ -69,8 +69,7 @@ class CustomHeaderCredentialProvider final : public CredentialProvider {
 class OAuth2TokenProvider {
  public:
   virtual ~OAuth2TokenProvider() = default;
-  [[nodiscard]] virtual core::Result<std::string> GetAccessToken(
-      const AuthContext& context) const = 0;
+  [[nodiscard]] virtual core::Result<std::string> GetAccessToken(const AuthContext& context) const = 0;
 };
 
 class OAuth2BearerCredentialProvider final : public CredentialProvider {
@@ -83,8 +82,7 @@ class OAuth2BearerCredentialProvider final : public CredentialProvider {
   std::shared_ptr<OAuth2TokenProvider> token_provider_;
 };
 
-[[nodiscard]] core::Result<void> ApplyCredentialProvider(const CredentialProvider& provider,
-                                                         const AuthContext& context,
+[[nodiscard]] core::Result<void> ApplyCredentialProvider(const CredentialProvider& provider, const AuthContext& context,
                                                          HeaderMap* headers);
 
 }  // namespace a2a::client

@@ -33,9 +33,8 @@ struct EndpointMap final {
 
 std::string ToLower(std::string_view value) {
   std::string lowered(value);
-  std::ranges::transform(lowered, lowered.begin(), [](const unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
+  std::ranges::transform(lowered, lowered.begin(),
+                         [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return lowered;
 }
 
@@ -77,8 +76,7 @@ core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
   return {};
 }
 
-core::Error BuildHttpError(std::string_view method, std::string_view endpoint,
-                           const HttpClientResponse& response) {
+core::Error BuildHttpError(std::string_view method, std::string_view endpoint, const HttpClientResponse& response) {
   std::ostringstream stream;
   stream << "HTTP request failed for " << method << " " << endpoint;
   if (!response.body.empty()) {
@@ -126,24 +124,20 @@ std::string BuildPushConfigPath(std::string_view id) {
 
 core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
   google::protobuf::Struct payload;
-  const auto parse =
-      core::JsonToMessage(std::string(payload_json), &payload, {.ignore_unknown_fields = true});
+  const auto parse = core::JsonToMessage(std::string(payload_json), &payload, {.ignore_unknown_fields = true});
 
-  core::Error error =
-      core::Error::RemoteProtocol("Remote stream reported error event").WithTransport("http");
+  core::Error error = core::Error::RemoteProtocol("Remote stream reported error event").WithTransport("http");
   if (!parse.ok()) {
     return error;
   }
 
   const auto code = payload.fields().find("code");
-  if (code != payload.fields().end() &&
-      code->second.kind_case() == ::google::protobuf::Value::kStringValue) {
+  if (code != payload.fields().end() && code->second.kind_case() == ::google::protobuf::Value::kStringValue) {
     error = error.WithProtocolCode(code->second.string_value());
   }
 
   const auto message = payload.fields().find("message");
-  if (message != payload.fields().end() &&
-      message->second.kind_case() == ::google::protobuf::Value::kStringValue) {
+  if (message != payload.fields().end() && message->second.kind_case() == ::google::protobuf::Value::kStringValue) {
     error = core::Error::RemoteProtocol(message->second.string_value())
                 .WithTransport("http")
                 .WithProtocolCode(error.protocol_code().value_or(""));
@@ -196,8 +190,7 @@ core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientRe
         return task_json.error().WithTransport("http").WithHttpStatus(response.status_code);
       }
       lf::a2a::v1::Task task;
-      const auto task_parse =
-          core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
+      const auto task_parse = core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
       if (!task_parse.ok()) {
         return task_parse.error().WithTransport("http").WithHttpStatus(response.status_code);
       }
@@ -220,15 +213,13 @@ core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientRe
 
 void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
 
-void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer,
-                        const core::Error& error) {
+void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer, const core::Error& error) {
   observer.OnError(error);
   MarkInactive(state);
 }
 
-core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolved_interface,
-                                                HttpOperation operation, std::string body,
-                                                const CallOptions& options,
+core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolved_interface, HttpOperation operation,
+                                                std::string body, const CallOptions& options,
                                                 std::chrono::milliseconds default_timeout) {
   if (resolved_interface.transport != PreferredTransport::kRest) {
     return core::Error::Validation("HttpJsonTransport requires a REST interface");
@@ -249,15 +240,13 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
   request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
-    request.headers[std::string(core::Extensions::kHeaderName)] =
-        core::Extensions::Format(options.extensions);
+    request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
   }
   if (options.auth_hook) {
     options.auth_hook(request.headers);
   }
   if (options.credential_provider != nullptr) {
-    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context,
-                                                 &request.headers);
+    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context, &request.headers);
     if (!applied.ok()) {
       return applied.error();
     }
@@ -268,8 +257,7 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
 }  // namespace
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
-                                     HttpStreamRequester stream_requester,
-                                     std::chrono::milliseconds default_timeout)
+                                     HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
@@ -279,8 +267,7 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
                                      std::chrono::milliseconds default_timeout)
     : HttpJsonTransport(std::move(resolved_interface), std::move(requester), {}, default_timeout) {}
 
-core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation,
-                                                                std::string body,
+core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation, std::string body,
                                                                 const CallOptions& options) const {
   if (resolved_interface_.transport != PreferredTransport::kRest) {
     return core::Error::Validation("HttpJsonTransport requires a REST interface");
@@ -305,16 +292,14 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
   request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
-    request.headers[std::string(core::Extensions::kHeaderName)] =
-        core::Extensions::Format(options.extensions);
+    request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
   }
 
   if (options.auth_hook) {
     options.auth_hook(request.headers);
   }
   if (options.credential_provider != nullptr) {
-    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context,
-                                                 &request.headers);
+    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context, &request.headers);
     if (!applied.ok()) {
       return applied.error();
     }
@@ -340,8 +325,7 @@ core::Result<lf::a2a::v1::SendMessageResponse> HttpJsonTransport::SendMessage(
   }
 
   const std::string endpoint(EndpointMap::kSendMessage);
-  const auto response =
-      SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
+  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
   }
@@ -349,8 +333,8 @@ core::Result<lf::a2a::v1::SendMessageResponse> HttpJsonTransport::SendMessage(
   return ParseBodyOrMapError<lf::a2a::v1::SendMessageResponse>("POST", endpoint, response.value());
 }
 
-core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(
-    const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options) {
+core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                           const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskRequest.id is required");
   }
@@ -394,8 +378,8 @@ core::Result<ListTasksResponse> HttpJsonTransport::ListTasks(const ListTasksRequ
   return ParseListTasksResponsePayload(response.value(), endpoint_path);
 }
 
-core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(
-    const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) {
+core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                              const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("CancelTaskRequest.id is required");
   }
@@ -408,8 +392,7 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(
   return ParseBodyOrMapError<lf::a2a::v1::Task>("POST", endpoint, response.value());
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-HttpJsonTransport::CreateTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   const auto body = core::MessageToJson(request);
   if (!body.ok()) {
@@ -417,17 +400,14 @@ HttpJsonTransport::CreateTaskPushNotificationConfig(
   }
 
   const std::string endpoint(EndpointMap::kPushConfigCollection);
-  const auto response =
-      SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
+  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("POST", endpoint,
-                                                                      response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("POST", endpoint, response.value());
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-HttpJsonTransport::GetTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
@@ -438,14 +418,11 @@ HttpJsonTransport::GetTaskPushNotificationConfig(
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("GET", endpoint,
-                                                                      response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("GET", endpoint, response.value());
 }
 
-core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-HttpJsonTransport::ListTaskPushNotificationConfigs(
-    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-    const CallOptions& options) {
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> HttpJsonTransport::ListTaskPushNotificationConfigs(
+    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
   std::ostringstream endpoint;
   endpoint << EndpointMap::kPushConfigCollection;
   if (!request.task_id().empty() || request.page_size() > 0 || !request.page_token().empty()) {
@@ -475,13 +452,11 @@ HttpJsonTransport::ListTaskPushNotificationConfigs(
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(
-      "GET", path, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>("GET", path, response.value());
 }
 
 core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
-    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-    const CallOptions& options) {
+    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
   }
@@ -509,20 +484,19 @@ core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
 }
 
 core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SendStreamingMessage(
-    const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
-    const CallOptions& options) {
+    const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) {
   const auto body = core::MessageToJson(request);
   if (!body.ok()) {
     return body.error();
   }
 
-  return StartSseStream({.method = "POST", .endpoint = EndpointMap::kSendStreamingMessage},
-                        body.value(), observer, options);
+  return StartSseStream({.method = "POST", .endpoint = EndpointMap::kSendStreamingMessage}, body.value(), observer,
+                        options);
 }
 
-core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(
-    const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
-    const CallOptions& options) {
+core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                             StreamObserver& observer,
+                                                                             const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskRequest.id is required");
   }
@@ -535,22 +509,21 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(
   return StartSseStream({.method = "GET", .endpoint = endpoint}, {}, observer, options);
 }
 
-core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(
-    HttpOperation operation, std::string body, StreamObserver& observer,
-    const CallOptions& options) const {
+core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(HttpOperation operation, std::string body,
+                                                                              StreamObserver& observer,
+                                                                              const CallOptions& options) const {
   if (stream_requester_ == nullptr) {
     return core::Error::Internal("HTTP stream requester is not configured");
   }
 
-  auto request = BuildStreamingRequest(resolved_interface_, operation, std::move(body), options,
-                                       default_timeout_);
+  auto request = BuildStreamingRequest(resolved_interface_, operation, std::move(body), options, default_timeout_);
   if (!request.ok()) {
     return request.error();
   }
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto worker = StreamHandle::WorkerThread([this, request = std::move(request.value()), state,
-                                            &observer, method = std::string(operation.method),
+  auto worker = StreamHandle::WorkerThread([this, request = std::move(request.value()), state, &observer,
+                                            method = std::string(operation.method),
                                             endpoint = std::string(operation.endpoint)]() mutable {
     SseParser parser;
 
@@ -560,9 +533,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(
           if (state->cancel_requested.load()) {
             return {};
           }
-          return parser.Feed(chunk, [&observer](const SseEvent& event) {
-            return DispatchSseEvent(event, observer);
-          });
+          return parser.Feed(chunk, [&observer](const SseEvent& event) { return DispatchSseEvent(event, observer); });
         },
         [state]() { return state->cancel_requested.load(); });
 
@@ -582,15 +553,12 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(
       return;
     }
 
-    if (stream_response.value().status_code < kHttpOkMin ||
-        stream_response.value().status_code > kHttpOkMax) {
-      NotifyErrorAndStop(*state, observer,
-                         BuildHttpError(method, endpoint, stream_response.value()));
+    if (stream_response.value().status_code < kHttpOkMin || stream_response.value().status_code > kHttpOkMax) {
+      NotifyErrorAndStop(*state, observer, BuildHttpError(method, endpoint, stream_response.value()));
       return;
     }
 
-    const auto finish = parser.Finish(
-        [&observer](const SseEvent& event) { return DispatchSseEvent(event, observer); });
+    const auto finish = parser.Finish([&observer](const SseEvent& event) { return DispatchSseEvent(event, observer); });
     if (!finish.ok()) {
       NotifyErrorAndStop(*state, observer, finish.error());
       return;

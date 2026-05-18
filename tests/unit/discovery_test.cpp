@@ -22,8 +22,7 @@ constexpr int kHttpNotFound = 404;
 constexpr int kHttpOk = 200;
 
 TEST(DiscoveryClientTest, RejectsMalformedBaseUrl) {
-  DiscoveryClient client(
-      [](std::string_view) -> a2a::core::Result<HttpResponse> { return HttpResponse{}; });
+  DiscoveryClient client([](std::string_view) -> a2a::core::Result<HttpResponse> { return HttpResponse{}; });
 
   const auto result = client.Fetch("ftp://example.com");
   ASSERT_FALSE(result.ok());
@@ -133,8 +132,7 @@ TEST(AgentCardResolverTest, SelectsPreferredThenFallsBack) {
   grpc->set_protocol_version("1.0");
   grpc->set_url("https://agent.example.com/grpc");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   EXPECT_EQ(resolved.value().transport, PreferredTransport::kJsonRpc);
   EXPECT_EQ(resolved.value().url, "https://agent.example.com/rpc");
@@ -147,8 +145,7 @@ TEST(AgentCardResolverTest, SelectsGrpcInterfaceWhenPreferred) {
   grpc->set_protocol_version("1.0");
   grpc->set_url("dns:///agent.example.com:50051");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kGrpc);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kGrpc);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   EXPECT_EQ(resolved.value().transport, PreferredTransport::kGrpc);
   EXPECT_EQ(resolved.value().url, "dns:///agent.example.com:50051");
@@ -164,8 +161,7 @@ TEST(AgentCardResolverTest, UsesDefaultSecurityRequirementsWhenInterfaceSpecific
   rest->set_protocol_version("1.0");
   rest->set_url("https://agent.example.com/a2a");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   ASSERT_EQ(resolved.value().security_requirements.size(), 1U);
   EXPECT_EQ(resolved.value().security_requirements[0], "oauth2");
@@ -178,8 +174,7 @@ TEST(AgentCardResolverTest, ReturnsValidationErrorWhenNoUsableInterfaceExists) {
   iface->set_protocol_binding("");
   iface->set_url("");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
   ASSERT_FALSE(resolved.ok());
   EXPECT_EQ(resolved.error().code(), a2a::core::ErrorCode::kValidation);
 }
@@ -195,8 +190,7 @@ TEST(DiscoveryIntegrationFixtureTest, LoadsValidFixtureAndResolvesSecurityMetada
   const auto fetched = client.Fetch("https://agent.example.com");
   ASSERT_TRUE(fetched.ok()) << fetched.error().message();
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(fetched.value(), PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(fetched.value(), PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   EXPECT_EQ(resolved.value().url, "https://agent.example.com/a2a");
   EXPECT_TRUE(resolved.value().security_schemes.contains("oauth2"));

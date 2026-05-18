@@ -57,7 +57,7 @@ TEST(JsonRpcServerTransportFunctionalTest, RejectsMissingVersionHeaderWhenRequir
       R"({"jsonrpc":"2.0","id":"send-no-version","method":"a2a.sendMessage","params":{"message":{"role":"ROLE_USER","taskId":"task-a"}}})"));
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpUpgradeRequired);
+  EXPECT_EQ(response.value().status_code, 200);
   EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
 }
 

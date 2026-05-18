@@ -29,9 +29,8 @@ class SingleEventSession final : public a2a::server::ServerStreamSession {
 
 class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     last_request_id = context.request_id.value_or("missing");
     if (request.message().role() == lf::a2a::v1::ROLE_UNSPECIFIED) {
       return a2a::core::Error::Validation("message role is required");
@@ -42,14 +41,12 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
-    return std::unique_ptr<a2a::server::ServerStreamSession>(
-        std::make_unique<SingleEventSession>(std::move(event)));
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(std::move(event)));
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -64,8 +61,8 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     return task;
   }
 
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     a2a::server::ListTasksResponse response;
@@ -89,8 +86,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
 
 class RecordingServerInterceptor final : public a2a::server::ServerInterceptor {
  public:
-  RecordingServerInterceptor(std::vector<std::string>* events, std::string tag,
-                             bool fail_before = false)
+  RecordingServerInterceptor(std::vector<std::string>* events, std::string tag, bool fail_before = false)
       : events_(events), tag_(std::move(tag)), fail_before_(fail_before) {}
 
   a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& request,
@@ -105,12 +101,11 @@ class RecordingServerInterceptor final : public a2a::server::ServerInterceptor {
     return {};
   }
 
-  void AfterDispatch(const a2a::server::DispatchRequest& request,
-                     a2a::server::RequestContext& context,
+  void AfterDispatch(const a2a::server::DispatchRequest& request, a2a::server::RequestContext& context,
                      const a2a::core::Result<a2a::server::DispatchResponse>& result) override {
     (void)context;
-    events_->push_back(tag_ + ":after:" + std::to_string(static_cast<int>(request.operation)) +
-                       ":" + (result.ok() ? "ok" : "error"));
+    events_->push_back(tag_ + ":after:" + std::to_string(static_cast<int>(request.operation)) + ":" +
+                       (result.ok() ? "ok" : "error"));
   }
 
  private:
@@ -127,42 +122,38 @@ TEST(ServerDispatcherTest, DispatchesAllSupportedOperations) {
 
   lf::a2a::v1::SendMessageRequest send_request;
   send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-  const a2a::server::DispatchRequest send_dispatch{
-      .operation = a2a::server::DispatcherOperation::kSendMessage, .payload = send_request};
+  const a2a::server::DispatchRequest send_dispatch{.operation = a2a::server::DispatcherOperation::kSendMessage,
+                                                   .payload = send_request};
   const auto send_result = dispatcher.Dispatch(send_dispatch, context);
   ASSERT_TRUE(send_result.ok());
-  EXPECT_TRUE(
-      std::holds_alternative<lf::a2a::v1::SendMessageResponse>(send_result.value().payload()));
+  EXPECT_TRUE(std::holds_alternative<lf::a2a::v1::SendMessageResponse>(send_result.value().payload()));
   EXPECT_EQ(executor.last_request_id, "req-123");
 
   const a2a::server::DispatchRequest stream_dispatch{
-      .operation = a2a::server::DispatcherOperation::kSendStreamingMessage,
-      .payload = send_request};
+      .operation = a2a::server::DispatcherOperation::kSendStreamingMessage, .payload = send_request};
   const auto stream_result = dispatcher.Dispatch(stream_dispatch, context);
   ASSERT_TRUE(stream_result.ok());
-  ASSERT_TRUE(std::holds_alternative<std::unique_ptr<a2a::server::ServerStreamSession>>(
-      stream_result.value().payload()));
+  ASSERT_TRUE(
+      std::holds_alternative<std::unique_ptr<a2a::server::ServerStreamSession>>(stream_result.value().payload()));
 
   lf::a2a::v1::GetTaskRequest get_request;
   get_request.set_id("task-7");
-  const a2a::server::DispatchRequest get_dispatch{
-      .operation = a2a::server::DispatcherOperation::kGetTask, .payload = get_request};
+  const a2a::server::DispatchRequest get_dispatch{.operation = a2a::server::DispatcherOperation::kGetTask,
+                                                  .payload = get_request};
   const auto get_result = dispatcher.Dispatch(get_dispatch, context);
   ASSERT_TRUE(get_result.ok());
   ASSERT_TRUE(std::holds_alternative<lf::a2a::v1::Task>(get_result.value().payload()));
 
-  const a2a::server::DispatchRequest list_dispatch{
-      .operation = a2a::server::DispatcherOperation::kListTasks,
-      .payload = a2a::server::ListTasksRequest{10, ""}};
+  const a2a::server::DispatchRequest list_dispatch{.operation = a2a::server::DispatcherOperation::kListTasks,
+                                                   .payload = a2a::server::ListTasksRequest{10, ""}};
   const auto list_result = dispatcher.Dispatch(list_dispatch, context);
   ASSERT_TRUE(list_result.ok());
-  ASSERT_TRUE(
-      std::holds_alternative<a2a::server::ListTasksResponse>(list_result.value().payload()));
+  ASSERT_TRUE(std::holds_alternative<a2a::server::ListTasksResponse>(list_result.value().payload()));
 
   lf::a2a::v1::CancelTaskRequest cancel_request;
   cancel_request.set_id("task-7");
-  const a2a::server::DispatchRequest cancel_dispatch{
-      .operation = a2a::server::DispatcherOperation::kCancelTask, .payload = cancel_request};
+  const a2a::server::DispatchRequest cancel_dispatch{.operation = a2a::server::DispatcherOperation::kCancelTask,
+                                                     .payload = cancel_request};
   const auto cancel_result = dispatcher.Dispatch(cancel_dispatch, context);
   ASSERT_TRUE(cancel_result.ok());
   ASSERT_TRUE(std::holds_alternative<lf::a2a::v1::Task>(cancel_result.value().payload()));
@@ -176,8 +167,8 @@ TEST(ServerDispatcherTest, ReturnsValidationErrorForPayloadMismatch) {
   lf::a2a::v1::GetTaskRequest get_request;
   get_request.set_id("task-7");
 
-  const a2a::server::DispatchRequest dispatch{
-      .operation = a2a::server::DispatcherOperation::kSendMessage, .payload = get_request};
+  const a2a::server::DispatchRequest dispatch{.operation = a2a::server::DispatcherOperation::kSendMessage,
+                                              .payload = get_request};
   const auto response = dispatcher.Dispatch(dispatch, context);
 
   ASSERT_FALSE(response.ok());
@@ -191,8 +182,8 @@ TEST(ServerDispatcherTest, PropagatesExecutorErrors) {
 
   lf::a2a::v1::GetTaskRequest request;
   request.set_id("missing");
-  const a2a::server::DispatchRequest dispatch{
-      .operation = a2a::server::DispatcherOperation::kGetTask, .payload = request};
+  const a2a::server::DispatchRequest dispatch{.operation = a2a::server::DispatcherOperation::kGetTask,
+                                              .payload = request};
 
   const auto response = dispatcher.Dispatch(dispatch, context);
   ASSERT_FALSE(response.ok());
@@ -206,8 +197,8 @@ TEST(ServerDispatcherTest, ReturnsInternalErrorWithoutExecutor) {
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
 
-  const a2a::server::DispatchRequest dispatch{
-      .operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request};
+  const a2a::server::DispatchRequest dispatch{.operation = a2a::server::DispatcherOperation::kSendMessage,
+                                              .payload = request};
 
   const auto response = dispatcher.Dispatch(dispatch, context);
   ASSERT_FALSE(response.ok());
@@ -225,13 +216,12 @@ TEST(ServerDispatcherTest, InterceptorsObserveOrderingAndCanMutateContext) {
   request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   a2a::server::RequestContext context;
 
-  const auto result = dispatcher.Dispatch(
-      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request}, context);
+  const auto result =
+      dispatcher.Dispatch({.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request}, context);
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(executor.last_request_id, "set-by-i1");
 
-  const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:ok",
-                                             "i1:after:0:ok"};
+  const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:ok", "i1:after:0:ok"};
   EXPECT_EQ(events, expected);
 }
 
@@ -246,13 +236,12 @@ TEST(ServerDispatcherTest, InterceptorFailureShortCircuitsDispatchAndTriggersAft
   request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   a2a::server::RequestContext context;
 
-  const auto result = dispatcher.Dispatch(
-      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request}, context);
+  const auto result =
+      dispatcher.Dispatch({.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = request}, context);
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
 
-  const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:error",
-                                             "i1:after:0:error"};
+  const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:error", "i1:after:0:error"};
   EXPECT_EQ(events, expected);
 }
 

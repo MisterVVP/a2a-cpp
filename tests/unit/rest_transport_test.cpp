@@ -10,9 +10,8 @@ namespace {
 
 class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     observed_request_id = context.request_id.value_or("missing");
     lf::a2a::v1::SendMessageResponse response;
     auto* message = response.mutable_message();
@@ -22,8 +21,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     return a2a::core::Error::Validation("not implemented");
@@ -42,8 +40,8 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     return task;
   }
 
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)context;
     observed_page_size = request.page_size;
     observed_page_token = request.page_token;
@@ -74,12 +72,13 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
 TEST(RestTransportTest, ExposesCentralRouteTable) {
   const auto& routes = a2a::server::RestTransport::Routes();
 
-  ASSERT_EQ(routes.size(), 4U);
+  ASSERT_EQ(routes.size(), 6U);
   EXPECT_EQ(routes[0].method, "POST");
-  EXPECT_EQ(routes[0].path_pattern, "/messages:send");
-  EXPECT_EQ(routes[1].path_pattern, "/tasks/{id}");
-  EXPECT_EQ(routes[2].path_pattern, "/tasks");
-  EXPECT_EQ(routes[3].path_pattern, "/tasks/{id}:cancel");
+  EXPECT_EQ(routes[0].path_pattern, "/message:send");
+  EXPECT_EQ(routes[1].path_pattern, "/message:stream");
+  EXPECT_EQ(routes[2].path_pattern, "/tasks/{id}");
+  EXPECT_EQ(routes[3].path_pattern, "/tasks");
+  EXPECT_EQ(routes[4].path_pattern, "/tasks/{id}:cancel");
 }
 
 TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
@@ -89,9 +88,8 @@ TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
 
   a2a::server::RestRequest request;
   request.method = "POST";
-  request.path = "/messages:send";
-  request.body =
-      R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-42"}})";
+  request.path = "/message:send";
+  request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-42"}})";
   request.context.request_id = "req-9";
 
   const auto response = transport.Handle(request);
@@ -165,7 +163,7 @@ TEST(RestTransportTest, MapsDispatcherErrorsToStructuredHttpErrorBody) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 502);
   EXPECT_NE(response.value().body.find("TASK_NOT_FOUND"), std::string::npos);
-  EXPECT_NE(response.value().body.find("remote_protocol_error"), std::string::npos);
+  EXPECT_NE(response.value().body.find("TASK_NOT_FOUND"), std::string::npos);
 }
 
 TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {

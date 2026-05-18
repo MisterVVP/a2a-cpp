@@ -17,8 +17,7 @@ int main() {
                                      .url = "http://agent.local/rpc",
                                      .security_requirements = {},
                                      .security_schemes = {}},
-      [&server](const a2a::client::HttpRequest& request)
-          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [&server](const a2a::client::HttpRequest& request) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         const auto response = server.Handle({.method = request.method,
                                              .target = a2a::examples::UrlToTarget(request.url),
                                              .headers = request.headers,

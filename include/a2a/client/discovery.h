@@ -37,12 +37,10 @@ struct ResolvedInterface final {
 
 class DiscoveryClient final {
  public:
-  explicit DiscoveryClient(HttpFetcher fetcher,
-                           std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
+  explicit DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
-  [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(
-      std::string_view base_url);
+  [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(std::string_view base_url);
 
  private:
   struct CacheEntry final {
@@ -51,8 +49,7 @@ class DiscoveryClient final {
   };
 
   [[nodiscard]] static core::Result<std::string> BuildDiscoveryUrl(std::string_view base_url);
-  [[nodiscard]] static core::Result<std::string> BuildExtendedDiscoveryUrl(
-      std::string_view base_url);
+  [[nodiscard]] static core::Result<std::string> BuildExtendedDiscoveryUrl(std::string_view base_url);
   [[nodiscard]] static core::Result<void> ValidateAgentCard(const lf::a2a::v1::AgentCard& card);
 
   HttpFetcher fetcher_;
@@ -62,12 +59,11 @@ class DiscoveryClient final {
 
 class AgentCardResolver final {
  public:
-  [[nodiscard]] static core::Result<ResolvedInterface> SelectPreferredInterface(
-      const lf::a2a::v1::AgentCard& card, PreferredTransport preferred);
+  [[nodiscard]] static core::Result<ResolvedInterface> SelectPreferredInterface(const lf::a2a::v1::AgentCard& card,
+                                                                                PreferredTransport preferred);
 
  private:
-  [[nodiscard]] static core::Result<void> ValidateInterface(
-      const lf::a2a::v1::AgentInterface& iface);
+  [[nodiscard]] static core::Result<void> ValidateInterface(const lf::a2a::v1::AgentInterface& iface);
 };
 
 }  // namespace a2a::client

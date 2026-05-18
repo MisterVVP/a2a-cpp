@@ -37,14 +37,12 @@ std::string Trim(std::string_view value) {
 
 bool IsAuthSignalHeader(std::string_view lowered_name) {
   return lowered_name == "authorization" || lowered_name == "proxy-authorization" ||
-         lowered_name.find("auth") != std::string_view::npos ||
-         lowered_name.find("token") != std::string_view::npos ||
+         lowered_name.find("auth") != std::string_view::npos || lowered_name.find("token") != std::string_view::npos ||
          lowered_name.find("api-key") != std::string_view::npos ||
          lowered_name.find("apikey") != std::string_view::npos;
 }
 
-core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor,
-                                                  const DispatchRequest& request,
+core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context) {
   switch (request.operation) {
     case DispatcherOperation::kSendMessage: {
@@ -122,8 +120,7 @@ std::unordered_map<std::string, std::string> ExtractAuthMetadata(
       const std::string lowered_value = ToLower(trimmed_value);
       constexpr std::string_view kBearerPrefix = "bearer ";
       if (lowered_value.starts_with(kBearerPrefix) && trimmed_value.size() > kBearerPrefix.size()) {
-        auth_metadata.insert_or_assign("bearer_token",
-                                       Trim(trimmed_value.substr(kBearerPrefix.size())));
+        auth_metadata.insert_or_assign("bearer_token", Trim(trimmed_value.substr(kBearerPrefix.size())));
       }
     }
 
@@ -145,12 +142,10 @@ std::unordered_map<std::string, std::string> ExtractAuthMetadata(
 
 Dispatcher::Dispatcher(AgentExecutor* executor) : executor_(executor) {}
 
-Dispatcher::Dispatcher(AgentExecutor* executor,
-                       std::vector<std::shared_ptr<ServerInterceptor>> interceptors)
+Dispatcher::Dispatcher(AgentExecutor* executor, std::vector<std::shared_ptr<ServerInterceptor>> interceptors)
     : executor_(executor), interceptors_(std::move(interceptors)) {}
 
-core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request,
-                                                    RequestContext& context) const {
+core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request, RequestContext& context) const {
   if (executor_ == nullptr) {
     return core::Error::Internal("Server dispatcher executor is not configured");
   }
@@ -264,8 +259,7 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
       }
       const auto& cutoff = *request.status_timestamp_after;
       const auto& ts = task.status().timestamp();
-      if (ts.seconds() < cutoff.seconds() ||
-          (ts.seconds() == cutoff.seconds() && ts.nanos() < cutoff.nanos())) {
+      if (ts.seconds() < cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() < cutoff.nanos())) {
         continue;
       }
     }
@@ -276,8 +270,7 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
     return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
   }
 
-  const std::size_t effective_page_size =
-      request.page_size == 0 ? filtered.size() : request.page_size;
+  const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
   ListTasksResponse response;
   response.page_size = std::min(effective_page_size, filtered.size() - offset.value());
   response.total_size = filtered.size();
