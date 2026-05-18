@@ -296,7 +296,8 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
       if (keep == 0) {
         task.clear_history();
       } else if (static_cast<std::size_t>(task.history_size()) > keep) {
-        const int remove_count = static_cast<int>(task.history_size() - keep);
+        const auto history_size = static_cast<std::size_t>(task.history_size());
+        const int remove_count = static_cast<int>(history_size - keep);
         task.mutable_history()->DeleteSubrange(0, remove_count);
       }
     }
