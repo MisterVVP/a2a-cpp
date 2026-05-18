@@ -11,15 +11,13 @@ int main() {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
-      &dispatcher,
-      a2a::examples::BuildRestAgentCard("PushConfig Example Agent", "http://agent.local/a2a"),
+      &dispatcher, a2a::examples::BuildRestAgentCard("PushConfig Example Agent", "http://agent.local/a2a"),
       {.rest_api_base_path = "/a2a"});
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kRest,
                                      .url = "http://agent.local/a2a"},
-      [&server](const a2a::client::HttpRequest& request)
-          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [&server](const a2a::client::HttpRequest& request) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         const auto response = server.Handle({.method = request.method,
                                              .target = a2a::examples::UrlToTarget(request.url),
                                              .headers = request.headers,

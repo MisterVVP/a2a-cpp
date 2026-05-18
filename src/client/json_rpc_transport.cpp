@@ -64,15 +64,13 @@ core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
   return {};
 }
 
-core::Error BuildJsonRpcEnvelopeError(std::string_view message,
-                                      const HttpClientResponse& response) {
+core::Error BuildJsonRpcEnvelopeError(std::string_view message, const HttpClientResponse& response) {
   return core::Error::RemoteProtocol(std::string(message))
       .WithTransport("jsonrpc")
       .WithHttpStatus(response.status_code);
 }
 
-core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value,
-                                    const HttpClientResponse& response) {
+core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value, const HttpClientResponse& response) {
   if (!error_value.has_struct_value()) {
     return BuildJsonRpcEnvelopeError("JSON-RPC error payload must be an object", response);
   }
@@ -82,8 +80,7 @@ core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value,
   std::string code;
 
   const auto message_it = fields.find("message");
-  if (message_it != fields.end() &&
-      message_it->second.kind_case() == ::google::protobuf::Value::kStringValue) {
+  if (message_it != fields.end() && message_it->second.kind_case() == ::google::protobuf::Value::kStringValue) {
     message = message_it->second.string_value();
   }
 
@@ -97,16 +94,15 @@ core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value,
     }
   }
 
-  core::Error error = core::Error::RemoteProtocol(message).WithTransport("jsonrpc").WithHttpStatus(
-      response.status_code);
+  core::Error error =
+      core::Error::RemoteProtocol(message).WithTransport("jsonrpc").WithHttpStatus(response.status_code);
   if (!code.empty()) {
     error = error.WithProtocolCode(code);
   }
   return error;
 }
 
-core::Result<google::protobuf::Struct> ParseEnvelope(std::string_view payload,
-                                                     const HttpClientResponse& response) {
+core::Result<google::protobuf::Struct> ParseEnvelope(std::string_view payload, const HttpClientResponse& response) {
   google::protobuf::Struct envelope;
   const auto parse = core::JsonToMessage(payload, &envelope);
   if (!parse.ok()) {
@@ -124,15 +120,13 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
 
   const auto& fields = parsed.value().fields();
   const auto version_it = fields.find("jsonrpc");
-  if (version_it == fields.end() ||
-      version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
+  if (version_it == fields.end() || version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
       version_it->second.string_value() != core::json_rpc::kVersion) {
     return BuildJsonRpcEnvelopeError("JSON-RPC response has invalid version", response);
   }
 
   const auto id_it = fields.find("id");
-  if (id_it == fields.end() ||
-      id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+  if (id_it == fields.end() || id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
     return BuildJsonRpcEnvelopeError("JSON-RPC response id must be a string", response);
   }
   if (id_it->second.string_value() != expected_id) {
@@ -142,8 +136,7 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
   const auto error_it = fields.find("error");
   const auto result_it = fields.find("result");
   if (error_it != fields.end() && result_it != fields.end()) {
-    return BuildJsonRpcEnvelopeError("JSON-RPC response must not contain both result and error",
-                                     response);
+    return BuildJsonRpcEnvelopeError("JSON-RPC response must not contain both result and error", response);
   }
 
   if (error_it != fields.end()) {
@@ -158,8 +151,7 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
 }
 
 template <typename T>
-core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value,
-                                   int response_status_code) {
+core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, int response_status_code) {
   T message;
   const auto json = core::MessageToJson(result_value);
   if (!json.ok()) {
@@ -175,8 +167,7 @@ core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value,
 }  // namespace
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
-                                   std::chrono::milliseconds default_timeout,
-                                   RequestIdGenerator id_generator)
+                                   std::chrono::milliseconds default_timeout, RequestIdGenerator id_generator)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       default_timeout_(default_timeout),
@@ -186,8 +177,8 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
   }
 }
 
-core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(
-    std::string request_body, const CallOptions& options) const {
+core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
+                                                                      const CallOptions& options) const {
   if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {
     return core::Error::Validation("JsonRpcTransport requires a JSON-RPC interface");
   }
@@ -210,15 +201,14 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(
   http_request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
-    http_request.headers[std::string(core::Extensions::kHeaderName)] =
-        core::Extensions::Format(options.extensions);
+    http_request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
   }
   if (options.auth_hook) {
     options.auth_hook(http_request.headers);
   }
   if (options.credential_provider != nullptr) {
-    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context,
-                                                 &http_request.headers);
+    const auto applied =
+        ApplyCredentialProvider(*options.credential_provider, options.auth_context, &http_request.headers);
     if (!applied.ok()) {
       return applied.error();
     }
@@ -236,9 +226,9 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(
   return response.value();
 }
 
-core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(
-    std::string_view method_name, const google::protobuf::Message& request,
-    const CallOptions& options) const {
+core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(std::string_view method_name,
+                                                                             const google::protobuf::Message& request,
+                                                                             const CallOptions& options) const {
   if (method_name.empty()) {
     return core::Error::Validation("JSON-RPC method name is required");
   }
@@ -291,22 +281,20 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(
 
 core::Result<lf::a2a::v1::SendMessageResponse> JsonRpcTransport::SendMessage(
     const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) {
-  const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kSendMessage, request, options);
+  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kSendMessage, request, options);
   if (!result.ok()) {
     return result.error();
   }
 
-  const auto response =
-      ParseResultMessage<lf::a2a::v1::SendMessageResponse>(result.value(), kHttpOkMin);
+  const auto response = ParseResultMessage<lf::a2a::v1::SendMessageResponse>(result.value(), kHttpOkMin);
   if (!response.ok()) {
     return response.error();
   }
   return response.value();
 }
 
-core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(
-    const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options) {
+core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                          const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskRequest.id is required");
   }
@@ -332,8 +320,7 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
     (*params.mutable_fields())["pageToken"].set_string_value(request.page_token);
   }
 
-  const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kListTasks, params, options);
+  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kListTasks, params, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -359,8 +346,7 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
         return task_json.error().WithTransport("jsonrpc").WithHttpStatus(kHttpOkMin);
       }
       lf::a2a::v1::Task task;
-      const auto task_parse =
-          core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
+      const auto task_parse = core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
       if (!task_parse.ok()) {
         return task_parse.error().WithTransport("jsonrpc").WithHttpStatus(kHttpOkMin);
       }
@@ -371,8 +357,7 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
   const auto next_page_token_it = fields.find("nextPageToken");
   if (next_page_token_it != fields.end()) {
     if (next_page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Serialization(
-                 "ListTasks JSON-RPC result field 'nextPageToken' must be a string")
+      return core::Error::Serialization("ListTasks JSON-RPC result field 'nextPageToken' must be a string")
           .WithTransport("jsonrpc")
           .WithHttpStatus(kHttpOkMin);
     }
@@ -382,14 +367,13 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
   return parsed;
 }
 
-core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(
-    const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) {
+core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                             const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("CancelTaskRequest.id is required");
   }
 
-  const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kCancelTask, request, options);
+  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kCancelTask, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -400,53 +384,47 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(
   return response.value();
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-JsonRpcTransport::CreateTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
-  const auto result = InvokeForResultValue(
-      core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig, request, options);
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
-  const auto response =
-      ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), kHttpOkMin);
+  const auto response = ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), kHttpOkMin);
   if (!response.ok()) {
     return response.error();
   }
   return response.value();
 }
 
-core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-JsonRpcTransport::GetTaskPushNotificationConfig(
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
   }
 
-  const auto result = InvokeForResultValue(
-      core::json_rpc::MethodNames::kGetTaskPushNotificationConfig, request, options);
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kGetTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
-  const auto response =
-      ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), kHttpOkMin);
+  const auto response = ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), kHttpOkMin);
   if (!response.ok()) {
     return response.error();
   }
   return response.value();
 }
 
-core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-JsonRpcTransport::ListTaskPushNotificationConfigs(
-    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-    const CallOptions& options) {
-  const auto result = InvokeForResultValue(
-      core::json_rpc::MethodNames::kListTaskPushNotificationConfigs, request, options);
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> JsonRpcTransport::ListTaskPushNotificationConfigs(
+    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kListTaskPushNotificationConfigs, request, options);
   if (!result.ok()) {
     return result.error();
   }
-  const auto response = ParseResultMessage<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(
-      result.value(), kHttpOkMin);
+  const auto response =
+      ParseResultMessage<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(result.value(), kHttpOkMin);
   if (!response.ok()) {
     return response.error();
   }
@@ -454,14 +432,13 @@ JsonRpcTransport::ListTaskPushNotificationConfigs(
 }
 
 core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
-    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-    const CallOptions& options) {
+    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
     return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
   }
 
-  const auto result = InvokeForResultValue(
-      core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig, request, options);
+  const auto result =
+      InvokeForResultValue(core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -474,17 +451,16 @@ core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
 }
 
 core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SendStreamingMessage(
-    const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
-    const CallOptions& options) {
+    const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) {
   (void)request;
   (void)observer;
   (void)options;
   return core::Error::Validation("JSON-RPC transport does not support streaming operations");
 }
 
-core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(
-    const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
-    const CallOptions& options) {
+core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                            StreamObserver& observer,
+                                                                            const CallOptions& options) {
   (void)request;
   (void)observer;
   (void)options;

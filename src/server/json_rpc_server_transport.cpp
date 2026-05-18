@@ -41,8 +41,7 @@ std::string ToLower(std::string_view value) {
   return lowered;
 }
 
-std::string FindHeader(const std::unordered_map<std::string, std::string>& headers,
-                       std::string_view name) {
+std::string FindHeader(const std::unordered_map<std::string, std::string>& headers, std::string_view name) {
   const std::string lowered_name = ToLower(name);
   for (const auto& [header_name, header_value] : headers) {
     if (ToLower(header_name) == lowered_name) {
@@ -97,10 +96,8 @@ bool IsSubscribeToTaskMethod(std::string_view method) {
 }
 
 bool IsPushConfigMethod(std::string_view method) {
-  return method == "CreateTaskPushNotificationConfig" ||
-         method == "GetTaskPushNotificationConfig" ||
-         method == "ListTaskPushNotificationConfigs" ||
-         method == "DeleteTaskPushNotificationConfig" ||
+  return method == "CreateTaskPushNotificationConfig" || method == "GetTaskPushNotificationConfig" ||
+         method == "ListTaskPushNotificationConfigs" || method == "DeleteTaskPushNotificationConfig" ||
          method == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
          method == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
          method == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
@@ -147,8 +144,7 @@ core::Result<google::protobuf::Value> FindIdField(const google::protobuf::Struct
 core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelope) {
   const auto& fields = envelope.fields();
   const auto method_it = fields.find("method");
-  if (method_it == fields.end() ||
-      method_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
+  if (method_it == fields.end() || method_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
       method_it->second.string_value().empty()) {
     return core::Error::Validation("JSON-RPC request method must be a non-empty string");
   }
@@ -178,8 +174,7 @@ core::Result<google::protobuf::Struct> FindParamsField(const google::protobuf::S
 core::Result<void> ValidateJsonRpcVersion(const google::protobuf::Struct& envelope) {
   const auto& fields = envelope.fields();
   const auto version_it = fields.find("jsonrpc");
-  if (version_it == fields.end() ||
-      version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
+  if (version_it == fields.end() || version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
       version_it->second.string_value() != core::json_rpc::kVersion) {
     return core::Error::Validation("JSON-RPC request has invalid version");
   }
@@ -273,11 +268,9 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
       return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be a string");
     }
     google::protobuf::Timestamp ts;
-    const auto parsed_ts =
-        core::JsonToMessage("\"" + timestamp_after_it->second.string_value() + "\"", &ts);
+    const auto parsed_ts = core::JsonToMessage("\"" + timestamp_after_it->second.string_value() + "\"", &ts);
     if (!parsed_ts.ok()) {
-      return core::Error::Validation(
-          "ListTasksRequest.statusTimestampAfter must be an RFC3339 timestamp");
+      return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be an RFC3339 timestamp");
     }
     payload.status_timestamp_after = ts;
   }
@@ -306,9 +299,9 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
   return payload;
 }
 
-core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
-    std::string_view method_name, const google::protobuf::Struct& params,
-    const JsonRpcServerTransportOptions& options) {
+core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view method_name,
+                                                             const google::protobuf::Struct& params,
+                                                             const JsonRpcServerTransportOptions& options) {
   if (IsPushConfigMethod(method_name)) {
     (void)params;
     return core::protocol_errors::PushNotificationNotSupported();
@@ -363,8 +356,7 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(
   return core::Error::Internal("Unsupported JSON-RPC dispatcher operation");
 }
 
-core::Result<google::protobuf::Value> BuildJsonValueFromMessage(
-    const google::protobuf::Message& message) {
+core::Result<google::protobuf::Value> BuildJsonValueFromMessage(const google::protobuf::Message& message) {
   const auto json = core::MessageToJson(message);
   if (!json.ok()) {
     return json.error();
@@ -420,13 +412,10 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value()) {
     if (*protocol_code == core::protocol_codes::kTaskNotFound) return "TASK_NOT_FOUND";
     if (*protocol_code == core::protocol_codes::kTaskNotCancelable) return "TASK_NOT_CANCELABLE";
-    if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported)
-      return "PUSH_NOTIFICATION_NOT_SUPPORTED";
+    if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported) return "PUSH_NOTIFICATION_NOT_SUPPORTED";
     if (*protocol_code == core::protocol_codes::kUnsupportedOperation) return "UNSUPPORTED_OPERATION";
-    if (*protocol_code == core::protocol_codes::kContentTypeNotSupported)
-      return "CONTENT_TYPE_NOT_SUPPORTED";
-    if (*protocol_code == core::protocol_codes::kInvalidAgentResponse)
-      return "INVALID_AGENT_RESPONSE";
+    if (*protocol_code == core::protocol_codes::kContentTypeNotSupported) return "CONTENT_TYPE_NOT_SUPPORTED";
+    if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) return "INVALID_AGENT_RESPONSE";
     if (*protocol_code == core::protocol_codes::kVersionNotSupported) return "VERSION_NOT_SUPPORTED";
   }
 
@@ -523,8 +512,8 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
   return response;
 }
 
-core::Result<HttpServerResponse> BuildSubscribeSseResponse(
-    const google::protobuf::Value& id, const lf::a2a::v1::Task& task) {
+core::Result<HttpServerResponse> BuildSubscribeSseResponse(const google::protobuf::Value& id,
+                                                           const lf::a2a::v1::Task& task) {
   if (core::IsTerminalTaskState(task.status().state())) {
     return core::protocol_errors::UnsupportedOperation("task is already terminal");
   }
@@ -545,8 +534,7 @@ core::Result<HttpServerResponse> BuildSubscribeSseResponse(
   lf::a2a::v1::StreamResponse terminal_event;
   terminal_event.mutable_status_update()->set_task_id(task.id());
   terminal_event.mutable_status_update()->set_context_id(task.context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(
-      lf::a2a::v1::TASK_STATE_COMPLETED);
+  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
   const auto terminal_append = AppendSseJsonRpcEvent(response.body, id, terminal_event);
   if (!terminal_append.ok()) {
     return terminal_append.error();
@@ -556,35 +544,31 @@ core::Result<HttpServerResponse> BuildSubscribeSseResponse(
 
 }  // namespace
 
-JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher,
-                                               JsonRpcServerTransportOptions options)
+JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcServerTransportOptions options)
     : dispatcher_(dispatcher), options_(std::move(options)) {
   options_.rpc_path = NormalizePath(std::move(options_.rpc_path));
 }
 
-core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
-    const HttpServerRequest& request) const {
+core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServerRequest& request) const {
   if (dispatcher_ == nullptr) {
     return core::Error::Internal("JSON-RPC server dispatcher is not configured");
   }
 
   const std::string normalized_target = NormalizePath(request.target);
   if (request.method != "POST" || normalized_target != options_.rpc_path) {
-    return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{},
-                              std::nullopt, kHttpOk);
+    return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{}, std::nullopt,
+                              kHttpOk);
   }
 
   if (!HasJsonContentType(request)) {
     const auto error = core::protocol_errors::ContentTypeNotSupported().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error,
-                              kHttpOk);
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, kHttpOk);
   }
 
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
     const auto error = version.error().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error,
-                              kHttpOk);
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, kHttpOk);
   }
 
   const auto parsed = ParseRequest(request.body, options_);
@@ -603,8 +587,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
       case core::ErrorCode::kInternal:
         break;
     }
-    return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
-                              kHttpOk);
+    return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(), kHttpOk);
   }
 
   const auto method = FindMethodField(request.body);
@@ -612,34 +595,31 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
   const bool is_subscribe = method.ok() && IsSubscribeToTaskMethod(method.value());
 
   RequestContext context;
-  context.remote_address = request.remote_address.empty()
-                               ? std::optional<std::string>{}
-                               : std::optional<std::string>(request.remote_address);
+  context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
+                                                          : std::optional<std::string>(request.remote_address);
   context.client_headers = request.headers;
   context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   auto dispatch = dispatcher_->Dispatch(parsed.value().dispatch, context);
   if (!dispatch.ok()) {
     const int http_status = HttpStatusFromError(dispatch.error());
-    return BuildErrorResponse(JsonRpcCodeFromError(dispatch.error()), dispatch.error().message(),
-                              parsed.value().id, dispatch.error().WithTransport("jsonrpc"),
-                              http_status);
+    return BuildErrorResponse(JsonRpcCodeFromError(dispatch.error()), dispatch.error().message(), parsed.value().id,
+                              dispatch.error().WithTransport("jsonrpc"), http_status);
   }
 
   if (is_streaming) {
     auto* session = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
     if (session == nullptr) {
-      const auto error = core::protocol_errors::InvalidAgentResponse(
-                             "JSON-RPC streaming response payload mismatch")
+      const auto error = core::protocol_errors::InvalidAgentResponse("JSON-RPC streaming response payload mismatch")
                              .WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
-                                error, HttpStatusFromError(error));
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                HttpStatusFromError(error));
     }
     const auto sse = BuildSseResponse(parsed.value().id.value(), *session);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
-                                error, HttpStatusFromError(error));
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                HttpStatusFromError(error));
     }
     return sse.value();
   }
@@ -647,17 +627,16 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
   if (is_subscribe) {
     const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
     if (task == nullptr) {
-      const auto error = core::protocol_errors::InvalidAgentResponse(
-                             "JSON-RPC subscribe response payload mismatch")
+      const auto error = core::protocol_errors::InvalidAgentResponse("JSON-RPC subscribe response payload mismatch")
                              .WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
-                                error, HttpStatusFromError(error));
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                HttpStatusFromError(error));
     }
     const auto sse = BuildSubscribeSseResponse(parsed.value().id.value(), *task);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
-                                error, HttpStatusFromError(error));
+      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                HttpStatusFromError(error));
     }
     return sse.value();
   }
@@ -665,15 +644,14 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
   const auto result = SerializeDispatchResult(parsed.value().dispatch, dispatch.value());
   if (!result.ok()) {
     const auto tagged = result.error().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(tagged), tagged.message(), parsed.value().id,
-                              tagged, HttpStatusFromError(tagged));
+    return BuildErrorResponse(JsonRpcCodeFromError(tagged), tagged.message(), parsed.value().id, tagged,
+                              HttpStatusFromError(tagged));
   }
 
   return BuildSuccessResponse(parsed.value().id, result.value());
 }
 
-core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(
-    const HttpServerRequest& request) const {
+core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
   const std::string version = FindHeader(request.headers, core::Version::kHeaderName);
   if (version.empty()) {
     if (options_.require_version_header) {
@@ -730,8 +708,7 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse(
-            "JSON-RPC SendMessage response payload mismatch");
+        return core::protocol_errors::InvalidAgentResponse("JSON-RPC SendMessage response payload mismatch");
       }
       return BuildJsonValueFromMessage(*payload);
     }
@@ -746,21 +723,19 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse(
-            "JSON-RPC ListTasks response payload mismatch");
+        return core::protocol_errors::InvalidAgentResponse("JSON-RPC ListTasks response payload mismatch");
       }
       return BuildListTasksResult(*payload);
     }
     case DispatcherOperation::kSendStreamingMessage:
-      return core::protocol_errors::InvalidAgentResponse(
-          "Streaming JSON-RPC responses must be serialized as SSE");
+      return core::protocol_errors::InvalidAgentResponse("Streaming JSON-RPC responses must be serialized as SSE");
   }
 
   return core::protocol_errors::InvalidAgentResponse("Unsupported JSON-RPC dispatcher operation");
 }
 
-HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(
-    const ResponseId& id, const google::protobuf::Value& result) {
+HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId& id,
+                                                                const google::protobuf::Value& result) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
 
@@ -777,17 +752,17 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(
   if (body.ok()) {
     response.body = body.value();
   } else {
-    response.body =
-        R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Failed to serialize response"}})";
+    response.body = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Failed to serialize response"}})";
     response.status_code = kHttpInternalServerError;
   }
 
   return response;
 }
 
-HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(
-    int json_rpc_code, std::string_view message, const ResponseId& id,
-    const std::optional<core::Error>& error, int http_status) {
+HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code, std::string_view message,
+                                                              const ResponseId& id,
+                                                              const std::optional<core::Error>& error,
+                                                              int http_status) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
   (*fields)["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
@@ -835,8 +810,7 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(
   if (body.ok()) {
     response.body = body.value();
   } else {
-    response.body =
-        R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Failed to serialize error"}})";
+    response.body = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Failed to serialize error"}})";
     response.status_code = kHttpInternalServerError;
   }
 

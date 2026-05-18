@@ -30,14 +30,13 @@ ResolvedInterface MakeResolvedJsonRpc() {
 }
 
 std::string BuildResultEnvelope(std::string_view id, std::string_view result_json) {
-  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) +
-         std::string(R"(","result":)") + std::string(result_json) + "}";
+  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) + std::string(R"(","result":)") +
+         std::string(result_json) + "}";
 }
 
 std::string BuildErrorEnvelope(std::string_view id, int code, std::string_view message) {
-  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) +
-         std::string(R"(","error":{"code":)") + std::to_string(code) +
-         std::string(R"(,"message":")") + std::string(message) + R"("}})";
+  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) + std::string(R"(","error":{"code":)") +
+         std::to_string(code) + std::string(R"(,"message":")") + std::string(message) + R"("}})";
 }
 
 std::string ExtractRequestId(const std::string& json_payload) {
@@ -47,8 +46,7 @@ std::string ExtractRequestId(const std::string& json_payload) {
     return {};
   }
   const auto id = envelope.fields().find("id");
-  if (id == envelope.fields().end() ||
-      id->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+  if (id == envelope.fields().end() || id->second.kind_case() != ::google::protobuf::Value::kStringValue) {
     return {};
   }
   return id->second.string_value();
@@ -62,10 +60,8 @@ class RecordingClientInterceptor final : public a2a::client::ClientInterceptor {
     events_->push_back("before:" + std::string(context.operation));
   }
 
-  void AfterCall(const a2a::client::ClientCallContext& context,
-                 const a2a::client::ClientCallResult& result) override {
-    events_->push_back("after:" + std::string(context.operation) + ":" +
-                       (result.ok ? "ok" : "error"));
+  void AfterCall(const a2a::client::ClientCallContext& context, const a2a::client::ClientCallResult& result) override {
+    events_->push_back("after:" + std::string(context.operation) + ":" + (result.ok ? "ok" : "error"));
   }
 
  private:
@@ -74,12 +70,11 @@ class RecordingClientInterceptor final : public a2a::client::ClientInterceptor {
 
 TEST(JsonRpcClientIntegrationTest, MapsRemoteJsonRpcErrorObject) {
   auto transport = std::make_unique<JsonRpcTransport>(
-      MakeResolvedJsonRpc(),
-      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = BuildErrorEnvelope(ExtractRequestId(request.body),
-                                                             kMethodNotFound, "Method not found")};
+      MakeResolvedJsonRpc(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = BuildErrorEnvelope(ExtractRequestId(request.body), kMethodNotFound, "Method not found")};
       });
 
   A2AClient client(std::move(transport));
@@ -94,12 +89,10 @@ TEST(JsonRpcClientIntegrationTest, MapsRemoteJsonRpcErrorObject) {
 
 TEST(JsonRpcClientIntegrationTest, InvalidResultPayloadReturnsSerializationError) {
   auto transport = std::make_unique<JsonRpcTransport>(
-      MakeResolvedJsonRpc(),
-      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{
-            .status_code = kHttpOk,
-            .headers = {{"A2A-Version", "1.0"}},
-            .body = BuildResultEnvelope(ExtractRequestId(request.body), R"({"id":123})")};
+      MakeResolvedJsonRpc(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = BuildResultEnvelope(ExtractRequestId(request.body), R"({"id":123})")};
       });
 
   A2AClient client(std::move(transport));
@@ -113,10 +106,10 @@ TEST(JsonRpcClientIntegrationTest, InvalidResultPayloadReturnsSerializationError
 }
 
 TEST(JsonRpcClientIntegrationTest, TimeoutOrNetworkFailureBubblesUp) {
-  auto transport = std::make_unique<JsonRpcTransport>(
-      MakeResolvedJsonRpc(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return a2a::core::Error::Network("request timed out");
-      });
+  auto transport = std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(),
+                                                      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+                                                        return a2a::core::Error::Network("request timed out");
+                                                      });
 
   A2AClient client(std::move(transport));
   lf::a2a::v1::GetTaskRequest request;
@@ -129,12 +122,11 @@ TEST(JsonRpcClientIntegrationTest, TimeoutOrNetworkFailureBubblesUp) {
 
 TEST(JsonRpcClientIntegrationTest, UnsupportedMethodErrorIsSurfacedForDeleteConfig) {
   auto transport = std::make_unique<JsonRpcTransport>(
-      MakeResolvedJsonRpc(),
-      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = BuildErrorEnvelope(ExtractRequestId(request.body),
-                                                             kMethodNotFound, "Method not found")};
+      MakeResolvedJsonRpc(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = BuildErrorEnvelope(ExtractRequestId(request.body), kMethodNotFound, "Method not found")};
       });
 
   A2AClient client(std::move(transport));
@@ -149,12 +141,11 @@ TEST(JsonRpcClientIntegrationTest, UnsupportedMethodErrorIsSurfacedForDeleteConf
 
 TEST(JsonRpcClientIntegrationTest, ListTasksAndInterceptorsCaptureLifecycle) {
   auto transport = std::make_unique<JsonRpcTransport>(
-      MakeResolvedJsonRpc(),
-      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = BuildResultEnvelope(ExtractRequestId(request.body),
-                                                              R"({"tasks":[{"id":"t-1"}]})")};
+      MakeResolvedJsonRpc(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = BuildResultEnvelope(ExtractRequestId(request.body), R"({"tasks":[{"id":"t-1"}]})")};
       });
 
   A2AClient client(std::move(transport));

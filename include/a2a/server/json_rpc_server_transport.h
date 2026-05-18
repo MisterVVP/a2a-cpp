@@ -43,15 +43,15 @@ class JsonRpcServerTransport final {
   };
 
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
-  [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(
-      std::string_view body, const JsonRpcServerTransportOptions& options);
-  [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(
-      const DispatchRequest& request, const DispatchResponse& response);
-  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(
-      const ResponseId& id, const google::protobuf::Value& result);
-  [[nodiscard]] static HttpServerResponse BuildErrorResponse(
-      int json_rpc_code, std::string_view message, const ResponseId& id,
-      const std::optional<core::Error>& error, int http_status);
+  [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(std::string_view body,
+                                                                 const JsonRpcServerTransportOptions& options);
+  [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
+                                                                                     const DispatchResponse& response);
+  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
+                                                               const google::protobuf::Value& result);
+  [[nodiscard]] static HttpServerResponse BuildErrorResponse(int json_rpc_code, std::string_view message,
+                                                             const ResponseId& id,
+                                                             const std::optional<core::Error>& error, int http_status);
   [[nodiscard]] static std::string NormalizePath(std::string path);
 
   Dispatcher* dispatcher_ = nullptr;

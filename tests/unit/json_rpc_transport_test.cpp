@@ -33,8 +33,7 @@ ResolvedInterface MakeResolvedJsonRpc() {
 }
 
 std::string SuccessGetTaskEnvelope(std::string_view request_id) {
-  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(request_id) +
-         R"(","result":{"id":"t-1"}})";
+  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(request_id) + R"(","result":{"id":"t-1"}})";
 }
 
 a2a::core::Result<google::protobuf::Struct> ParseJsonStruct(const std::string& body) {
@@ -52,9 +51,8 @@ TEST(JsonRpcTransportUnitTest, UsesPostToResolvedJsonRpcUrl) {
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = SuccessGetTaskEnvelope("req-123")};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
@@ -73,9 +71,8 @@ TEST(JsonRpcTransportUnitTest, RespectsTimeoutOverrideFromCallOptions) {
       MakeResolvedJsonRpc(),
       [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         EXPECT_EQ(request.timeout, kCustomTimeout);
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = SuccessGetTaskEnvelope("req-123")};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
@@ -96,9 +93,8 @@ TEST(JsonRpcTransportUnitTest, SerializesExpectedEnvelopeFields) {
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = SuccessGetTaskEnvelope("req-123")};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
@@ -121,10 +117,9 @@ TEST(JsonRpcTransportUnitTest, ResponseIdMismatchReturnsRemoteProtocolError) {
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
       [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{
-            .status_code = kHttpOk,
-            .headers = {{"A2A-Version", "1.0"}},
-            .body = R"({"jsonrpc":"2.0","id":"other","result":{"id":"t-1"}})"};
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"jsonrpc":"2.0","id":"other","result":{"id":"t-1"}})"};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "expected-id"; });
 
@@ -141,8 +136,7 @@ TEST(JsonRpcTransportUnitTest, ResponseIdMismatchReturnsRemoteProtocolError) {
 TEST(JsonRpcTransportUnitTest, MalformedEnvelopeReturnsSerializationError) {
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{
-            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = "{not-json"};
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = "{not-json"};
       });
 
   A2AClient client(std::move(transport));
@@ -161,9 +155,8 @@ TEST(JsonRpcTransportUnitTest, InjectsApiKeyHeaderViaCredentialProvider) {
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = SuccessGetTaskEnvelope("req-123")};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
@@ -172,8 +165,7 @@ TEST(JsonRpcTransportUnitTest, InjectsApiKeyHeaderViaCredentialProvider) {
   request.set_id("t-1");
 
   CallOptions options;
-  options.credential_provider =
-      std::make_shared<a2a::client::ApiKeyCredentialProvider>("secret-key", "X-API-Key");
+  options.credential_provider = std::make_shared<a2a::client::ApiKeyCredentialProvider>("secret-key", "X-API-Key");
 
   const auto response = client.GetTask(request, options);
   ASSERT_TRUE(response.ok()) << response.error().message();
@@ -186,9 +178,8 @@ TEST(JsonRpcTransportUnitTest, InjectsBearerTokenAndMtlsConfiguration) {
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = SuccessGetTaskEnvelope("req-123")};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
@@ -197,8 +188,7 @@ TEST(JsonRpcTransportUnitTest, InjectsBearerTokenAndMtlsConfiguration) {
   request.set_id("t-1");
 
   CallOptions options;
-  options.credential_provider =
-      std::make_shared<a2a::client::BearerTokenCredentialProvider>("token-123");
+  options.credential_provider = std::make_shared<a2a::client::BearerTokenCredentialProvider>("token-123");
   options.mtls = a2a::client::MtlsConfig{.client_certificate_pem = "cert",
                                          .client_private_key_pem = "key",
                                          .trusted_ca_pem = "",
@@ -218,9 +208,8 @@ TEST(JsonRpcTransportUnitTest, InjectsCustomHeadersViaCredentialProvider) {
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}},
-                                  .body = SuccessGetTaskEnvelope("req-123")};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-123")};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 
@@ -229,8 +218,8 @@ TEST(JsonRpcTransportUnitTest, InjectsCustomHeadersViaCredentialProvider) {
   request.set_id("t-1");
 
   CallOptions options;
-  options.credential_provider = std::make_shared<a2a::client::CustomHeaderCredentialProvider>(
-      a2a::client::HeaderMap{{"X-Custom-Auth", "abc"}});
+  options.credential_provider =
+      std::make_shared<a2a::client::CustomHeaderCredentialProvider>(a2a::client::HeaderMap{{"X-Custom-Auth", "abc"}});
 
   const auto response = client.GetTask(request, options);
   ASSERT_TRUE(response.ok()) << response.error().message();
@@ -243,10 +232,9 @@ TEST(JsonRpcTransportUnitTest, ListTasksUsesListTasksMethodAndParsesResponse) {
       MakeResolvedJsonRpc(),
       [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{
-            .status_code = kHttpOk,
-            .headers = {{"A2A-Version", "1.0"}},
-            .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[{"id":"task-1"}]}})"};
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[{"id":"task-1"}]}})"};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 

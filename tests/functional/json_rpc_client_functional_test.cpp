@@ -28,20 +28,18 @@ ResolvedInterface MakeResolvedJsonRpc() {
 }
 
 std::string BuildResultEnvelope(std::string_view id, std::string_view result_json) {
-  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) +
-         std::string(R"(","result":)") + std::string(result_json) + "}";
+  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) + std::string(R"(","result":)") +
+         std::string(result_json) + "}";
 }
 
 std::string BuildErrorEnvelope(std::string_view id, int code, std::string_view message) {
-  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) +
-         std::string(R"(","error":{"code":)") + std::to_string(code) +
-         std::string(R"(,"message":")") + std::string(message) + R"("}})";
+  return std::string(R"({"jsonrpc":"2.0","id":")") + std::string(id) + std::string(R"(","error":{"code":)") +
+         std::to_string(code) + std::string(R"(,"message":")") + std::string(message) + R"("}})";
 }
 
 std::string ExtractFieldOrDefault(const google::protobuf::Struct& object, std::string_view field) {
   const auto value = object.fields().find(std::string(field));
-  if (value == object.fields().end() ||
-      value->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+  if (value == object.fields().end() || value->second.kind_case() != ::google::protobuf::Value::kStringValue) {
     return {};
   }
   return value->second.string_value();
@@ -57,10 +55,9 @@ a2a::core::Result<HttpClientResponse> HandleFunctionalRequest(const HttpRequest&
   const std::string id = ExtractFieldOrDefault(envelope, "id");
   const std::string method = ExtractFieldOrDefault(envelope, "method");
   if (method == "a2a.sendMessage") {
-    return HttpClientResponse{
-        .status_code = kHttpOk,
-        .headers = {{"A2A-Version", "1.0"}},
-        .body = BuildResultEnvelope(id, R"({"message":{"role":"ROLE_AGENT"}})")};
+    return HttpClientResponse{.status_code = kHttpOk,
+                              .headers = {{"A2A-Version", "1.0"}},
+                              .body = BuildResultEnvelope(id, R"({"message":{"role":"ROLE_AGENT"}})")};
   }
   if (method == "a2a.getTask") {
     return HttpClientResponse{.status_code = kHttpOk,
@@ -68,16 +65,15 @@ a2a::core::Result<HttpClientResponse> HandleFunctionalRequest(const HttpRequest&
                               .body = BuildResultEnvelope(id, R"({"id":"t-1"})")};
   }
   if (method == "a2a.cancelTask") {
-    return HttpClientResponse{.status_code = kHttpOk,
-                              .headers = {{"A2A-Version", "1.0"}},
-                              .body = BuildResultEnvelope(
-                                  id, R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})")};
-  }
-  if (method == "a2a.listTasks") {
     return HttpClientResponse{
         .status_code = kHttpOk,
         .headers = {{"A2A-Version", "1.0"}},
-        .body = BuildResultEnvelope(id, R"({"tasks":[{"id":"t-1"}],"nextPageToken":"next"})")};
+        .body = BuildResultEnvelope(id, R"({"id":"t-1","status":{"state":"TASK_STATE_CANCELED"}})")};
+  }
+  if (method == "a2a.listTasks") {
+    return HttpClientResponse{.status_code = kHttpOk,
+                              .headers = {{"A2A-Version", "1.0"}},
+                              .body = BuildResultEnvelope(id, R"({"tasks":[{"id":"t-1"}],"nextPageToken":"next"})")};
   }
 
   return HttpClientResponse{.status_code = kHttpOk,
@@ -86,8 +82,7 @@ a2a::core::Result<HttpClientResponse> HandleFunctionalRequest(const HttpRequest&
 }
 
 TEST(JsonRpcClientFunctionalTest, SendMessageRoundTripsThroughTransportContract) {
-  auto transport =
-      std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
+  auto transport = std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
   A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest request;
@@ -100,8 +95,7 @@ TEST(JsonRpcClientFunctionalTest, SendMessageRoundTripsThroughTransportContract)
 }
 
 TEST(JsonRpcClientFunctionalTest, GetTaskRoundTripsThroughTransportContract) {
-  auto transport =
-      std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
+  auto transport = std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
   A2AClient client(std::move(transport));
 
   lf::a2a::v1::GetTaskRequest request;
@@ -113,8 +107,7 @@ TEST(JsonRpcClientFunctionalTest, GetTaskRoundTripsThroughTransportContract) {
 }
 
 TEST(JsonRpcClientFunctionalTest, CancelTaskRoundTripsThroughTransportContract) {
-  auto transport =
-      std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
+  auto transport = std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
   A2AClient client(std::move(transport));
 
   lf::a2a::v1::CancelTaskRequest request;
@@ -126,8 +119,7 @@ TEST(JsonRpcClientFunctionalTest, CancelTaskRoundTripsThroughTransportContract) 
 }
 
 TEST(JsonRpcClientFunctionalTest, ListTasksRoundTripsThroughTransportContract) {
-  auto transport =
-      std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
+  auto transport = std::make_unique<JsonRpcTransport>(MakeResolvedJsonRpc(), HandleFunctionalRequest);
   A2AClient client(std::move(transport));
 
   const auto response = client.ListTasks({.page_size = 5, .page_token = "0"});
@@ -139,8 +131,7 @@ TEST(JsonRpcClientFunctionalTest, ListTasksRoundTripsThroughTransportContract) {
 
 TEST(JsonRpcClientFunctionalTest, CredentialProviderDecoratesOutboundHeaders) {
   auto transport = std::make_unique<JsonRpcTransport>(
-      MakeResolvedJsonRpc(),
-      [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+      MakeResolvedJsonRpc(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         const auto auth_it = request.headers.find("Authorization");
         EXPECT_NE(auth_it, request.headers.end());
         if (auth_it != request.headers.end()) {
@@ -154,8 +145,7 @@ TEST(JsonRpcClientFunctionalTest, CredentialProviderDecoratesOutboundHeaders) {
   request.set_id("t-1");
 
   a2a::client::CallOptions options;
-  options.credential_provider =
-      std::make_shared<a2a::client::BearerTokenCredentialProvider>("functional-token");
+  options.credential_provider = std::make_shared<a2a::client::BearerTokenCredentialProvider>("functional-token");
 
   const auto response = client.GetTask(request, options);
   ASSERT_TRUE(response.ok()) << response.error().message();

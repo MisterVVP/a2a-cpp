@@ -20,22 +20,19 @@ namespace a2a::core::protocol_errors {
       .WithProtocolCode(std::string(protocol_codes::kTaskNotCancelable));
 }
 
-[[nodiscard]] inline Error PushNotificationNotSupported(
-    std::string message = "push notifications are not supported") {
+[[nodiscard]] inline Error PushNotificationNotSupported(std::string message = "push notifications are not supported") {
   return Error::RemoteProtocol(std::move(message))
       .WithHttpStatus(400)
       .WithProtocolCode(std::string(protocol_codes::kPushNotificationNotSupported));
 }
 
-[[nodiscard]] inline Error UnsupportedOperation(
-    std::string message = "operation is not supported") {
+[[nodiscard]] inline Error UnsupportedOperation(std::string message = "operation is not supported") {
   return Error::RemoteProtocol(std::move(message))
       .WithHttpStatus(400)
       .WithProtocolCode(std::string(protocol_codes::kUnsupportedOperation));
 }
 
-[[nodiscard]] inline Error ContentTypeNotSupported(
-    std::string message = "content type is not supported") {
+[[nodiscard]] inline Error ContentTypeNotSupported(std::string message = "content type is not supported") {
   return Error::RemoteProtocol(std::move(message))
       .WithHttpStatus(415)
       .WithProtocolCode(std::string(protocol_codes::kContentTypeNotSupported));

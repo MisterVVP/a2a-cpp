@@ -64,8 +64,7 @@ int main(int argc, char** argv) {
 
   lf::a2a::v1::CancelTaskRequest cancel;
   cancel.set_id("interop-task-1");
-  if (auto r = client.CancelTask(cancel);
-      !r.ok() || r.value().status().state() != lf::a2a::v1::TASK_STATE_CANCELED) {
+  if (auto r = client.CancelTask(cancel); !r.ok() || r.value().status().state() != lf::a2a::v1::TASK_STATE_CANCELED) {
     return 1;
   }
 

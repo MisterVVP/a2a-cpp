@@ -11,9 +11,8 @@ namespace {
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     observed_request_header = context.client_headers["A2A-Version"];
     observed_bearer_token = context.auth_metadata["bearer_token"];
     observed_api_key = context.auth_metadata["api_key"];
@@ -24,8 +23,7 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     return a2a::core::Error::Validation("not implemented");
@@ -40,8 +38,8 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
     return task;
   }
 
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     return a2a::server::ListTasksResponse{};
@@ -81,20 +79,15 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
-  const auto response = server.Handle({.method = "GET",
-                                       .target = "/.well-known/agent-card.json",
-                                       .headers = {},
-                                       .body = {},
-                                       .remote_address = {}});
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
 
   lf::a2a::v1::AgentCard parsed;
-  ASSERT_TRUE(
-      a2a::core::JsonToMessage(response.value().body, &parsed, {.ignore_unknown_fields = true})
-          .ok());
+  ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &parsed, {.ignore_unknown_fields = true}).ok());
   ASSERT_FALSE(parsed.supported_interfaces().empty());
   EXPECT_EQ(parsed.supported_interfaces(0).protocol_version(), "1.0");
   ASSERT_EQ(parsed.supported_interfaces_size(), 1);
@@ -106,11 +99,8 @@ TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
-  const auto response = server.Handle({.method = "GET",
-                                       .target = "/.well-known/agent.json",
-                                       .headers = {},
-                                       .body = {},
-                                       .remote_address = {}});
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
@@ -121,11 +111,8 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
-  const auto response = server.Handle({.method = "GET",
-                                       .target = "/.well-known/agent.json",
-                                       .headers = {},
-                                       .body = {},
-                                       .remote_address = {}});
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   google::protobuf::Struct parsed;
@@ -134,9 +121,8 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   ASSERT_TRUE(fields.contains("endpoint"));
   EXPECT_EQ(fields.at("endpoint").string_value(), "http://localhost:8080/a2a");
   ASSERT_TRUE(fields.contains("preferredTransport"));
-  EXPECT_EQ(fields.at("preferredTransport").string_value(),
-            std::string(a2a::core::protocol_bindings::kHttpJson));
-  }
+  EXPECT_EQ(fields.at("preferredTransport").string_value(), std::string(a2a::core::protocol_bindings::kHttpJson));
+}
 
 TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
   EchoExecutor executor;
@@ -147,8 +133,7 @@ TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
       {.method = "POST",
        .target = "/a2a/message:send",
        .headers = {{"A2A-Version", "1.0"}},
-       .body =
-           R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})",
+       .body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-1"}})",
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
@@ -162,11 +147,8 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
 
-  const auto response = server.Handle({.method = "GET",
-                                       .target = "/a2a/tasks/task-7",
-                                       .headers = {},
-                                       .body = {},
-                                       .remote_address = {}});
+  const auto response =
+      server.Handle({.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 400);
@@ -197,11 +179,8 @@ TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
   const auto response = server.Handle(
       {.method = "POST",
        .target = "/a2a/message:send",
-       .headers = {{"A2A-Version", "1.0"},
-                   {"Authorization", "Bearer token-rest"},
-                   {"X-API-Key", "rest-key"}},
-       .body =
-           R"({"message":{"messageId":"msg-2","role":"ROLE_USER","parts":[{"text":"hello"}]}})",
+       .headers = {{"A2A-Version", "1.0"}, {"Authorization", "Bearer token-rest"}, {"X-API-Key", "rest-key"}},
+       .body = R"({"message":{"messageId":"msg-2","role":"ROLE_USER","parts":[{"text":"hello"}]}})",
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());

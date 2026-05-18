@@ -121,11 +121,9 @@ int main(int argc, char** argv) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport grpc(&dispatcher);
-  a2a::server::RestServerTransport rest(
-      &dispatcher, agent_card,
-      {.rest_api_base_path = "/a2a", .include_legacy_transport_fields = false});
-  a2a::server::JsonRpcServerTransport jsonrpc(
-      &dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
+  a2a::server::RestServerTransport rest(&dispatcher, agent_card,
+                                        {.rest_api_base_path = "/a2a", .include_legacy_transport_fields = false});
+  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
 
   int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
   int opt = 1;
@@ -138,8 +136,7 @@ int main(int argc, char** argv) {
   if (listen(server_fd, 128) != 0) return 1;
 
   grpc::ServerBuilder grpc_builder;
-  grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port),
-                                grpc::InsecureServerCredentials());
+  grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port), grpc::InsecureServerCredentials());
   grpc_builder.RegisterService(&grpc);
   std::unique_ptr<grpc::Server> grpc_server = grpc_builder.BuildAndStart();
   if (!grpc_server) {
@@ -174,11 +171,8 @@ int main(int argc, char** argv) {
     }
     const std::string body = req.substr(header_end + 4);
 
-    a2a::server::HttpServerRequest request{.method = method,
-                                           .target = target,
-                                           .headers = headers,
-                                           .body = body,
-                                           .remote_address = "localhost"};
+    a2a::server::HttpServerRequest request{
+        .method = method, .target = target, .headers = headers, .body = body, .remote_address = "localhost"};
     auto response = rest.Handle(request);
     if (target == "/rpc" || target == "/") {
       request.target = "/rpc";

@@ -49,8 +49,7 @@ core::Result<void> SseParser::Finish(const EventCallback& on_event) {
   }
 
   if (!current_data_.empty() || !current_event_.empty()) {
-    return core::Error::Serialization("SSE stream ended with unterminated event frame")
-        .WithTransport("http");
+    return core::Error::Serialization("SSE stream ended with unterminated event frame").WithTransport("http");
   }
   return {};
 }
@@ -65,8 +64,7 @@ core::Result<void> SseParser::ConsumeLine(std::string_view line, const EventCall
 
   const std::size_t separator = line.find(':');
   if (separator == std::string_view::npos) {
-    return core::Error::Serialization("Malformed SSE line: missing ':' separator")
-        .WithTransport("http");
+    return core::Error::Serialization("Malformed SSE line: missing ':' separator").WithTransport("http");
   }
 
   const std::string_view field = line.substr(0, separator);
@@ -86,8 +84,7 @@ core::Result<void> SseParser::ConsumeLine(std::string_view line, const EventCall
     return {};
   }
 
-  return core::Error::Serialization("Malformed SSE line: unsupported field '" + std::string(field) +
-                                    "'")
+  return core::Error::Serialization("Malformed SSE line: unsupported field '" + std::string(field) + "'")
       .WithTransport("http");
 }
 

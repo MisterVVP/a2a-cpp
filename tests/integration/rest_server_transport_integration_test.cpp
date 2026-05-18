@@ -33,31 +33,27 @@ class RestIntegrationHarness final {
       : executor_(&store_),
         dispatcher_(&executor_),
         server_(&dispatcher_,
-                a2a::tests::support::BuildRestAgentCard("Integration REST Agent",
-                                                        "http://agent.local/a2a"),
+                a2a::tests::support::BuildRestAgentCard("Integration REST Agent", "http://agent.local/a2a"),
                 {.rest_api_base_path = "/a2a"}) {}
 
   a2a::client::DiscoveryClient CreateDiscoveryClient() {
-    return a2a::client::DiscoveryClient(
-        [this](std::string_view url) { return FetchAgentCard(url); });
+    return a2a::client::DiscoveryClient([this](std::string_view url) { return FetchAgentCard(url); });
   }
 
-  std::unique_ptr<a2a::client::HttpJsonTransport> CreateTransport(
-      const a2a::client::ResolvedInterface& resolved) {
+  std::unique_ptr<a2a::client::HttpJsonTransport> CreateTransport(const a2a::client::ResolvedInterface& resolved) {
     return std::make_unique<a2a::client::HttpJsonTransport>(
         resolved, [this](const a2a::client::HttpRequest& request) { return SendHttp(request); });
   }
 
   a2a::core::Result<a2a::server::HttpServerResponse> Handle(std::string method, std::string target,
                                                             a2a::client::HeaderMap headers = {}) {
-    return server_.Handle(a2a::tests::support::MakeHttpRequest(std::move(method), std::move(target),
-                                                               std::move(headers)));
+    return server_.Handle(
+        a2a::tests::support::MakeHttpRequest(std::move(method), std::move(target), std::move(headers)));
   }
 
  private:
   a2a::core::Result<a2a::client::HttpResponse> FetchAgentCard(std::string_view url) {
-    const auto response =
-        server_.Handle(a2a::tests::support::MakeHttpRequest("GET", UrlToTarget(url), {}, {}, {}));
+    const auto response = server_.Handle(a2a::tests::support::MakeHttpRequest("GET", UrlToTarget(url), {}, {}, {}));
     if (!response.ok()) {
       return response.error();
     }
@@ -67,8 +63,7 @@ class RestIntegrationHarness final {
     };
   }
 
-  a2a::core::Result<a2a::client::HttpClientResponse> SendHttp(
-      const a2a::client::HttpRequest& request) {
+  a2a::core::Result<a2a::client::HttpClientResponse> SendHttp(const a2a::client::HttpRequest& request) {
     const auto response = server_.Handle({.method = request.method,
                                           .target = UrlToTarget(request.url),
                                           .headers = request.headers,
@@ -90,8 +85,7 @@ class RestIntegrationHarness final {
   a2a::server::RestServerTransport server_;
 };
 
-a2a::core::Result<a2a::client::ResolvedInterface> DiscoverRestInterface(
-    RestIntegrationHarness* harness) {
+a2a::core::Result<a2a::client::ResolvedInterface> DiscoverRestInterface(RestIntegrationHarness* harness) {
   if (harness == nullptr) {
     return a2a::core::Error::Internal("Harness is required");
   }
@@ -102,8 +96,7 @@ a2a::core::Result<a2a::client::ResolvedInterface> DiscoverRestInterface(
     return card.error();
   }
 
-  return a2a::client::AgentCardResolver::SelectPreferredInterface(
-      card.value(), a2a::client::PreferredTransport::kRest);
+  return a2a::client::AgentCardResolver::SelectPreferredInterface(card.value(), a2a::client::PreferredTransport::kRest);
 }
 
 TEST(RestServerTransportIntegrationTest, DiscoveryAndA2AClientRoundTripWorks) {
@@ -137,8 +130,7 @@ TEST(RestServerTransportIntegrationTest, DiscoveryAndA2AClientRoundTripWorks) {
   ASSERT_TRUE(cancel_response.ok());
   EXPECT_EQ(cancel_response.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
 
-  const auto list_response =
-      harness.Handle("GET", "/a2a/tasks?pageSize=10", {{"A2A-Version", "1.0"}});
+  const auto list_response = harness.Handle("GET", "/a2a/tasks?pageSize=10", {{"A2A-Version", "1.0"}});
   ASSERT_TRUE(list_response.ok());
   EXPECT_EQ(list_response.value().status_code, 200);
   EXPECT_NE(list_response.value().body.find("rest-integration-1"), std::string::npos);
@@ -155,9 +147,8 @@ TEST(RestServerTransportIntegrationTest, MissingVersionHeaderIsRejected) {
 
 class AuthCapturingExecutor final : public a2a::server::AgentExecutor {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     observed_bearer_token = context.auth_metadata["bearer_token"];
     observed_api_key = context.auth_metadata["api_key"];
 
@@ -168,8 +159,7 @@ class AuthCapturingExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     return a2a::core::Error::Validation("streaming not implemented");
@@ -183,8 +173,8 @@ class AuthCapturingExecutor final : public a2a::server::AgentExecutor {
     return task;
   }
 
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     return a2a::server::ListTasksResponse{};
@@ -206,9 +196,7 @@ TEST(RestServerTransportIntegrationTest, AuthHeadersPropagateToServerContext) {
   AuthCapturingExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
-      &dispatcher,
-      a2a::tests::support::BuildRestAgentCard("Integration REST Auth Agent",
-                                              "http://agent.local/a2a"),
+      &dispatcher, a2a::tests::support::BuildRestAgentCard("Integration REST Auth Agent", "http://agent.local/a2a"),
       {.rest_api_base_path = "/a2a"});
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
@@ -216,8 +204,7 @@ TEST(RestServerTransportIntegrationTest, AuthHeadersPropagateToServerContext) {
                                      .url = "http://agent.local/a2a",
                                      .security_requirements = {},
                                      .security_schemes = {}},
-      [&server](const a2a::client::HttpRequest& request)
-          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [&server](const a2a::client::HttpRequest& request) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         const auto response = server.Handle({.method = request.method,
                                              .target = UrlToTarget(request.url),
                                              .headers = request.headers,
@@ -238,8 +225,7 @@ TEST(RestServerTransportIntegrationTest, AuthHeadersPropagateToServerContext) {
   request.mutable_message()->set_task_id("auth-integration-1");
 
   a2a::client::CallOptions options;
-  options.credential_provider =
-      std::make_shared<a2a::client::BearerTokenCredentialProvider>("integration-token");
+  options.credential_provider = std::make_shared<a2a::client::BearerTokenCredentialProvider>("integration-token");
   options.headers["X-API-Key"] = "integration-api-key";
 
   const auto response = client.SendMessage(request, options);

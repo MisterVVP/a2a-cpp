@@ -23,11 +23,9 @@ core::Result<HeaderMap> ApiKeyCredentialProvider::GetHeaders(const AuthContext& 
   return headers;
 }
 
-BearerTokenCredentialProvider::BearerTokenCredentialProvider(std::string token)
-    : token_(std::move(token)) {}
+BearerTokenCredentialProvider::BearerTokenCredentialProvider(std::string token) : token_(std::move(token)) {}
 
-core::Result<HeaderMap> BearerTokenCredentialProvider::GetHeaders(
-    const AuthContext& context) const {
+core::Result<HeaderMap> BearerTokenCredentialProvider::GetHeaders(const AuthContext& context) const {
   (void)context;
   if (token_.empty()) {
     return core::Error::Validation("Bearer token is required");
@@ -38,11 +36,9 @@ core::Result<HeaderMap> BearerTokenCredentialProvider::GetHeaders(
   return headers;
 }
 
-CustomHeaderCredentialProvider::CustomHeaderCredentialProvider(HeaderMap headers)
-    : headers_(std::move(headers)) {}
+CustomHeaderCredentialProvider::CustomHeaderCredentialProvider(HeaderMap headers) : headers_(std::move(headers)) {}
 
-core::Result<HeaderMap> CustomHeaderCredentialProvider::GetHeaders(
-    const AuthContext& context) const {
+core::Result<HeaderMap> CustomHeaderCredentialProvider::GetHeaders(const AuthContext& context) const {
   (void)context;
   if (headers_.empty()) {
     return core::Error::Validation("At least one custom auth header is required");
@@ -50,12 +46,10 @@ core::Result<HeaderMap> CustomHeaderCredentialProvider::GetHeaders(
   return headers_;
 }
 
-OAuth2BearerCredentialProvider::OAuth2BearerCredentialProvider(
-    std::shared_ptr<OAuth2TokenProvider> token_provider)
+OAuth2BearerCredentialProvider::OAuth2BearerCredentialProvider(std::shared_ptr<OAuth2TokenProvider> token_provider)
     : token_provider_(std::move(token_provider)) {}
 
-core::Result<HeaderMap> OAuth2BearerCredentialProvider::GetHeaders(
-    const AuthContext& context) const {
+core::Result<HeaderMap> OAuth2BearerCredentialProvider::GetHeaders(const AuthContext& context) const {
   if (token_provider_ == nullptr) {
     return core::Error::Internal("OAuth2 token provider is not configured");
   }
@@ -73,8 +67,8 @@ core::Result<HeaderMap> OAuth2BearerCredentialProvider::GetHeaders(
   return headers;
 }
 
-core::Result<void> ApplyCredentialProvider(const CredentialProvider& provider,
-                                           const AuthContext& context, HeaderMap* headers) {
+core::Result<void> ApplyCredentialProvider(const CredentialProvider& provider, const AuthContext& context,
+                                           HeaderMap* headers) {
   if (headers == nullptr) {
     return core::Error::Internal("Auth header output map is required");
   }

@@ -4,8 +4,7 @@
 
 namespace a2a::core {
 
-Result<std::string> MessageToJson(const google::protobuf::Message& message,
-                                  const ProtoJsonWriteOptions& options) {
+Result<std::string> MessageToJson(const google::protobuf::Message& message, const ProtoJsonWriteOptions& options) {
   google::protobuf::util::JsonPrintOptions print_options;
   print_options.add_whitespace = options.add_whitespace;
 #if PROTOBUF_VERSION >= 5026000
@@ -34,8 +33,7 @@ Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* mes
   google::protobuf::util::JsonParseOptions parse_options;
   parse_options.ignore_unknown_fields = options.ignore_unknown_fields;
 
-  const auto status =
-      google::protobuf::util::JsonStringToMessage(std::string(json), message, parse_options);
+  const auto status = google::protobuf::util::JsonStringToMessage(std::string(json), message, parse_options);
   if (!status.ok()) {
     return Error::Serialization(status.ToString());
   }

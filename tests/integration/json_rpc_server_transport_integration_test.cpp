@@ -33,17 +33,14 @@ class JsonRpcIntegrationHarness final {
   JsonRpcIntegrationHarness()
       : executor_(&store_),
         dispatcher_(&executor_),
-        card_(a2a::tests::support::BuildJsonRpcAgentCard("Integration JSON-RPC Agent",
-                                                         "http://agent.local/rpc")),
+        card_(a2a::tests::support::BuildJsonRpcAgentCard("Integration JSON-RPC Agent", "http://agent.local/rpc")),
         server_(&dispatcher_, {.rpc_path = "/rpc"}) {}
 
   a2a::client::DiscoveryClient CreateDiscoveryClient() {
-    return a2a::client::DiscoveryClient(
-        [this](std::string_view url) { return FetchAgentCard(url); });
+    return a2a::client::DiscoveryClient([this](std::string_view url) { return FetchAgentCard(url); });
   }
 
-  std::unique_ptr<a2a::client::JsonRpcTransport> CreateTransport(
-      const a2a::client::ResolvedInterface& resolved) {
+  std::unique_ptr<a2a::client::JsonRpcTransport> CreateTransport(const a2a::client::ResolvedInterface& resolved) {
     return std::make_unique<a2a::client::JsonRpcTransport>(
         resolved, [this](const a2a::client::HttpRequest& request) { return SendHttp(request); });
   }
@@ -60,8 +57,7 @@ class JsonRpcIntegrationHarness final {
     return a2a::client::HttpResponse{.status_code = kHttpOk, .body = body.value()};
   }
 
-  a2a::core::Result<a2a::client::HttpClientResponse> SendHttp(
-      const a2a::client::HttpRequest& request) {
+  a2a::core::Result<a2a::client::HttpClientResponse> SendHttp(const a2a::client::HttpRequest& request) {
     const auto response = server_.Handle({.method = request.method,
                                           .target = UrlToTarget(request.url),
                                           .headers = request.headers,
@@ -89,8 +85,8 @@ TEST(JsonRpcServerTransportIntegrationTest, DiscoveryAndClientRoundTripWorks) {
   const auto card = discovery.Fetch("http://agent.local");
   ASSERT_TRUE(card.ok());
 
-  const auto resolved = a2a::client::AgentCardResolver::SelectPreferredInterface(
-      card.value(), a2a::client::PreferredTransport::kJsonRpc);
+  const auto resolved =
+      a2a::client::AgentCardResolver::SelectPreferredInterface(card.value(), a2a::client::PreferredTransport::kJsonRpc);
   ASSERT_TRUE(resolved.ok());
 
   auto transport = harness.CreateTransport(resolved.value());

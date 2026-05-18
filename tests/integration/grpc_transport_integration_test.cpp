@@ -19,8 +19,7 @@ namespace {
 
 class StreamSession final : public a2a::server::ServerStreamSession {
  public:
-  explicit StreamSession(std::vector<lf::a2a::v1::StreamResponse> events)
-      : events_(std::move(events)) {}
+  explicit StreamSession(std::vector<lf::a2a::v1::StreamResponse> events) : events_(std::move(events)) {}
 
   a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
     if (index_ >= events_.size()) {
@@ -38,9 +37,8 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
  public:
   explicit StreamingStoreExecutor(a2a::server::TaskStore* store) : store_(store) {}
 
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::Task task;
     task.set_id(request.message().task_id());
@@ -55,14 +53,12 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
     event.mutable_task()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    return std::unique_ptr<a2a::server::ServerStreamSession>(
-        std::make_unique<StreamSession>(std::vector{event}));
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<StreamSession>(std::vector{event}));
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -71,8 +67,8 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     return store_->Get(request.id());
   }
 
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)context;
     return store_->List(request);
   }
@@ -188,8 +184,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
 }
 
 std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
-  auto channel =
-      grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
 
   auto transport = std::make_unique<a2a::client::GrpcTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kGrpc,
@@ -200,8 +195,7 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return std::make_unique<a2a::client::A2AClient>(std::move(transport));
 }
 
-[[nodiscard]] a2a::core::Result<void> VerifyPushConfigUnsupported(
-    a2a::client::A2AClient* client) {
+[[nodiscard]] a2a::core::Result<void> VerifyPushConfigUnsupported(a2a::client::A2AClient* client) {
   if (client == nullptr) {
     return a2a::core::Error::Internal("Client must not be null");
   }

@@ -35,8 +35,7 @@ inline std::string UrlToTarget(std::string_view url) {
 
 class SequenceStreamSession final : public server::ServerStreamSession {
  public:
-  explicit SequenceStreamSession(std::vector<lf::a2a::v1::StreamResponse> events)
-      : events_(std::move(events)) {}
+  explicit SequenceStreamSession(std::vector<lf::a2a::v1::StreamResponse> events) : events_(std::move(events)) {}
 
   [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
     if (index_ >= events_.size()) {
@@ -52,8 +51,8 @@ class SequenceStreamSession final : public server::ServerStreamSession {
 
 class ExampleExecutor final : public server::AgentExecutor {
  public:
-  core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
+  core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                             server::RequestContext& context) override {
     (void)context;
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
@@ -102,8 +101,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
     ++status_timestamp_counter_;
-    task.mutable_status()->mutable_timestamp()->set_seconds(
-        static_cast<int64_t>(status_timestamp_counter_));
+    task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp_counter_));
 
     task.clear_artifacts();
     const std::string request_text =
@@ -111,15 +109,13 @@ class ExampleExecutor final : public server::AgentExecutor {
     std::string normalized_request_text;
     normalized_request_text.reserve(request_text.size());
     for (const char ch : request_text) {
-      normalized_request_text.push_back(
-          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+      normalized_request_text.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
     const std::string request_message_id = request.message().message_id();
     std::string normalized_message_id;
     normalized_message_id.reserve(request_message_id.size());
     for (const char ch : request_message_id) {
-      normalized_message_id.push_back(
-          static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+      normalized_message_id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
     std::string normalized_task_id;
     normalized_task_id.reserve(task_id.size());
@@ -127,57 +123,51 @@ class ExampleExecutor final : public server::AgentExecutor {
       normalized_task_id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
     }
 
-    const bool wants_file_url_artifact =
-        normalized_request_text.find("file_url_artifact") != std::string::npos ||
-        normalized_request_text.find("file-url-artifact") != std::string::npos ||
-        normalized_request_text.find("file url artifact") != std::string::npos ||
-        normalized_request_text.find("file_url") != std::string::npos ||
-        normalized_request_text.find("file-url") != std::string::npos ||
-        normalized_message_id.find("file_url") != std::string::npos ||
-        normalized_message_id.find("file-url") != std::string::npos ||
-        normalized_task_id.find("file_url") != std::string::npos ||
-        normalized_task_id.find("file-url") != std::string::npos ||
-        (normalized_request_text.find("file") != std::string::npos &&
-         normalized_request_text.find("url") != std::string::npos);
-    const bool wants_file_artifact =
-        normalized_request_text.find("file_artifact") != std::string::npos ||
-        normalized_request_text.find("file-artifact") != std::string::npos ||
-        normalized_request_text.find("file artifact") != std::string::npos ||
-        normalized_message_id.find("file") != std::string::npos ||
-        normalized_task_id.find("file") != std::string::npos ||
-        normalized_request_text.find("output.txt") != std::string::npos;
-    const bool wants_data_artifact =
-        normalized_request_text.find("data_artifact") != std::string::npos ||
-        normalized_request_text.find("data-artifact") != std::string::npos ||
-        normalized_request_text.find("data artifact") != std::string::npos ||
-        normalized_message_id.find("data") != std::string::npos ||
-        normalized_task_id.find("data") != std::string::npos ||
-        normalized_request_text.find("json") != std::string::npos ||
-        normalized_request_text.find("structured data") != std::string::npos;
-    const bool wants_message_response =
-        normalized_request_text.find("message response") != std::string::npos ||
-        normalized_request_text.find("return a message") != std::string::npos ||
-        normalized_request_text.find("respond with message") != std::string::npos ||
-        normalized_message_id.find("message-response") != std::string::npos ||
-        normalized_message_id.find("message_response") != std::string::npos ||
-        normalized_message_id.find("message") != std::string::npos ||
-        normalized_task_id.find("message-response") != std::string::npos ||
-        normalized_task_id.find("message_response") != std::string::npos ||
-        normalized_task_id.find("message") != std::string::npos ||
-        normalized_request_text.find("message with text") != std::string::npos;
-    const bool wants_completed_task =
-        normalized_message_id.find("complete-task") != std::string::npos ||
-        normalized_message_id.find("complete_task") != std::string::npos ||
-        normalized_task_id.find("complete-task") != std::string::npos ||
-        normalized_task_id.find("complete_task") != std::string::npos ||
-        normalized_request_text.find("complete task") != std::string::npos ||
-        normalized_request_text.find("complete after history") != std::string::npos;
-    const bool wants_input_required_task =
-        normalized_message_id.find("input-required") != std::string::npos ||
-        normalized_message_id.find("input_required") != std::string::npos ||
-        normalized_task_id.find("input-required") != std::string::npos ||
-        normalized_task_id.find("input_required") != std::string::npos ||
-        normalized_request_text.find("input required") != std::string::npos;
+    const bool wants_file_url_artifact = normalized_request_text.find("file_url_artifact") != std::string::npos ||
+                                         normalized_request_text.find("file-url-artifact") != std::string::npos ||
+                                         normalized_request_text.find("file url artifact") != std::string::npos ||
+                                         normalized_request_text.find("file_url") != std::string::npos ||
+                                         normalized_request_text.find("file-url") != std::string::npos ||
+                                         normalized_message_id.find("file_url") != std::string::npos ||
+                                         normalized_message_id.find("file-url") != std::string::npos ||
+                                         normalized_task_id.find("file_url") != std::string::npos ||
+                                         normalized_task_id.find("file-url") != std::string::npos ||
+                                         (normalized_request_text.find("file") != std::string::npos &&
+                                          normalized_request_text.find("url") != std::string::npos);
+    const bool wants_file_artifact = normalized_request_text.find("file_artifact") != std::string::npos ||
+                                     normalized_request_text.find("file-artifact") != std::string::npos ||
+                                     normalized_request_text.find("file artifact") != std::string::npos ||
+                                     normalized_message_id.find("file") != std::string::npos ||
+                                     normalized_task_id.find("file") != std::string::npos ||
+                                     normalized_request_text.find("output.txt") != std::string::npos;
+    const bool wants_data_artifact = normalized_request_text.find("data_artifact") != std::string::npos ||
+                                     normalized_request_text.find("data-artifact") != std::string::npos ||
+                                     normalized_request_text.find("data artifact") != std::string::npos ||
+                                     normalized_message_id.find("data") != std::string::npos ||
+                                     normalized_task_id.find("data") != std::string::npos ||
+                                     normalized_request_text.find("json") != std::string::npos ||
+                                     normalized_request_text.find("structured data") != std::string::npos;
+    const bool wants_message_response = normalized_request_text.find("message response") != std::string::npos ||
+                                        normalized_request_text.find("return a message") != std::string::npos ||
+                                        normalized_request_text.find("respond with message") != std::string::npos ||
+                                        normalized_message_id.find("message-response") != std::string::npos ||
+                                        normalized_message_id.find("message_response") != std::string::npos ||
+                                        normalized_message_id.find("message") != std::string::npos ||
+                                        normalized_task_id.find("message-response") != std::string::npos ||
+                                        normalized_task_id.find("message_response") != std::string::npos ||
+                                        normalized_task_id.find("message") != std::string::npos ||
+                                        normalized_request_text.find("message with text") != std::string::npos;
+    const bool wants_completed_task = normalized_message_id.find("complete-task") != std::string::npos ||
+                                      normalized_message_id.find("complete_task") != std::string::npos ||
+                                      normalized_task_id.find("complete-task") != std::string::npos ||
+                                      normalized_task_id.find("complete_task") != std::string::npos ||
+                                      normalized_request_text.find("complete task") != std::string::npos ||
+                                      normalized_request_text.find("complete after history") != std::string::npos;
+    const bool wants_input_required_task = normalized_message_id.find("input-required") != std::string::npos ||
+                                           normalized_message_id.find("input_required") != std::string::npos ||
+                                           normalized_task_id.find("input-required") != std::string::npos ||
+                                           normalized_task_id.find("input_required") != std::string::npos ||
+                                           normalized_request_text.find("input required") != std::string::npos;
 
     if (wants_completed_task) {
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
@@ -228,8 +218,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     response.mutable_message()->set_message_id("response-" + task_id);
     response.mutable_message()->set_task_id(task_id);
     response.mutable_message()->set_context_id(task.context_id());
-    response.mutable_message()->add_parts()->set_text(
-        wants_message_response ? "Direct message response" : "ack");
+    response.mutable_message()->add_parts()->set_text(wants_message_response ? "Direct message response" : "ack");
     if (wants_message_response) {
       // Keep message payload set.
     } else {
@@ -268,15 +257,13 @@ class ExampleExecutor final : public server::AgentExecutor {
     lf::a2a::v1::StreamResponse completed;
     completed.mutable_status_update()->set_task_id(task_id);
     completed.mutable_status_update()->set_context_id(tasks_.at(task_id).context_id());
-    completed.mutable_status_update()->mutable_status()->set_state(
-        lf::a2a::v1::TASK_STATE_COMPLETED);
+    completed.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
 
     std::vector<lf::a2a::v1::StreamResponse> events;
     events.push_back(working);
     events.push_back(completed);
 
-    std::unique_ptr<server::ServerStreamSession> stream =
-        std::make_unique<SequenceStreamSession>(std::move(events));
+    std::unique_ptr<server::ServerStreamSession> stream = std::make_unique<SequenceStreamSession>(std::move(events));
     return stream;
   }
 
@@ -307,18 +294,15 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (it == tasks_.end()) continue;
       const auto& task = it->second;
       if (!request.context_id.empty() && task.context_id() != request.context_id) continue;
-      if (request.status_filter.has_value() && task.status().state() != *request.status_filter)
-        continue;
+      if (request.status_filter.has_value() && task.status().state() != *request.status_filter) continue;
       filtered.push_back(task);
     }
 
-    std::stable_sort(
-        filtered.begin(), filtered.end(),
-        [](const lf::a2a::v1::Task& lhs, const lf::a2a::v1::Task& rhs) {
-          const auto lhs_s = lhs.status().has_timestamp() ? lhs.status().timestamp().seconds() : 0;
-          const auto rhs_s = rhs.status().has_timestamp() ? rhs.status().timestamp().seconds() : 0;
-          return lhs_s > rhs_s;
-        });
+    std::stable_sort(filtered.begin(), filtered.end(), [](const lf::a2a::v1::Task& lhs, const lf::a2a::v1::Task& rhs) {
+      const auto lhs_s = lhs.status().has_timestamp() ? lhs.status().timestamp().seconds() : 0;
+      const auto rhs_s = rhs.status().has_timestamp() ? rhs.status().timestamp().seconds() : 0;
+      return lhs_s > rhs_s;
+    });
 
     std::size_t offset = 0;
     if (!request.page_token.empty()) {
@@ -326,8 +310,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       const auto* e = b + request.page_token.size();
       const auto p = std::from_chars(b, e, offset);
       if (p.ec != std::errc() || p.ptr != e) {
-        return core::Error::Validation(
-            "ListTasksRequest.page_token must be a non-negative integer");
+        return core::Error::Validation("ListTasksRequest.page_token must be a non-negative integer");
       }
     }
     if (offset > filtered.size()) {

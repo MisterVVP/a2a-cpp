@@ -36,17 +36,12 @@ const std::array<RestRoute, 6> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendStreamingMessage,
               .operation = DispatcherOperation::kSendStreamingMessage},
-    RestRoute{
-        .method = "GET", .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = "GET", .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
     RestRoute{.method = "GET",
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
-    RestRoute{.method = "POST",
-              .path_pattern = "/tasks/{id}:cancel",
-              .operation = DispatcherOperation::kCancelTask},
-    RestRoute{.method = "POST",
-              .path_pattern = "/tasks/{id}:subscribe",
-              .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
+    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kGetTask},
 };
 
 std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_cancel) {
@@ -64,8 +59,7 @@ std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_c
       return std::nullopt;
     }
     suffix = suffix.substr(0, suffix.size() - RestEndpointPaths::kTaskCancelSuffix.size());
-  } else if (suffix.ends_with(RestEndpointPaths::kTaskCancelSuffix) ||
-             suffix.ends_with(kTaskSubscribeSuffix)) {
+  } else if (suffix.ends_with(RestEndpointPaths::kTaskCancelSuffix) || suffix.ends_with(kTaskSubscribeSuffix)) {
     return std::nullopt;
   }
 
@@ -76,8 +70,7 @@ std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_c
   return suffix;
 }
 
-std::optional<std::string> ParseTaskIdFromActionPath(std::string_view path,
-                                                     std::string_view action_suffix) {
+std::optional<std::string> ParseTaskIdFromActionPath(std::string_view path, std::string_view action_suffix) {
   if (!path.starts_with(RestEndpointPaths::kTaskResourcePrefix) || !path.ends_with(action_suffix)) {
     return std::nullopt;
   }
@@ -304,8 +297,7 @@ core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task)
   lf::a2a::v1::StreamResponse terminal_event;
   terminal_event.mutable_status_update()->set_task_id(task.id());
   terminal_event.mutable_status_update()->set_context_id(task.context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(
-      lf::a2a::v1::TASK_STATE_COMPLETED);
+  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
   const auto terminal_append = AppendSseEvent(response, terminal_event);
   if (!terminal_append.ok()) {
     return terminal_append.error();
@@ -325,8 +317,7 @@ const std::vector<RestRoute>& RestTransport::Routes() {
 
 std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestRequest& request) {
   if (request.method == "POST" &&
-      (request.path == RestEndpointPaths::kSendMessage ||
-       request.path == RestEndpointPaths::kSendStreamingMessage)) {
+      (request.path == RestEndpointPaths::kSendMessage || request.path == RestEndpointPaths::kSendStreamingMessage)) {
     lf::a2a::v1::SendMessageRequest payload;
     const auto parse = core::JsonToMessage(request.body, &payload);
     if (!parse.ok()) {
@@ -354,16 +345,14 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
     if (const auto context_id = LookupQuery(request, "contextId"); context_id.has_value()) {
       payload.context_id = *context_id;
     }
-    if (const auto history_length = LookupQuery(request, "historyLength");
-        history_length.has_value()) {
+    if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
       const int parsed_history_length = ParsePageSize(*history_length);
       if (parsed_history_length < 0) {
         return std::nullopt;
       }
       payload.history_length = static_cast<std::size_t>(parsed_history_length);
     }
-    if (const auto include_artifacts = LookupQuery(request, "includeArtifacts");
-        include_artifacts.has_value()) {
+    if (const auto include_artifacts = LookupQuery(request, "includeArtifacts"); include_artifacts.has_value()) {
       payload.include_artifacts = *include_artifacts == "true";
     }
     return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
@@ -374,8 +363,7 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
     if (task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest payload;
       payload.set_id(task_id.value());
-      if (const auto history_length = LookupQuery(request, "historyLength");
-          history_length.has_value()) {
+      if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
         const int parsed_history_length = ParsePageSize(*history_length);
         if (parsed_history_length < 0) {
           return std::nullopt;
@@ -398,8 +386,8 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
   return std::nullopt;
 }
 
-core::Result<RestResponse> RestTransport::SerializeDispatchResponse(
-    DispatcherOperation operation, DispatchResponse& response) {
+core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOperation operation,
+                                                                    DispatchResponse& response) {
   switch (operation) {
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
@@ -503,8 +491,7 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
   }
 
   if (IsPushNotificationConfigPath(request)) {
-    return BuildErrorResponse(
-        core::protocol_errors::PushNotificationNotSupported().WithTransport("rest"));
+    return BuildErrorResponse(core::protocol_errors::PushNotificationNotSupported().WithTransport("rest"));
   }
 
   if (request.method == "POST") {
@@ -513,15 +500,15 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
       lf::a2a::v1::GetTaskRequest get_task_request;
       get_task_request.set_id(*subscribe_task_id);
       RequestContext context = request.context;
-      const auto dispatch_response = dispatcher_->Dispatch(
-          {.operation = DispatcherOperation::kGetTask, .payload = get_task_request}, context);
+      const auto dispatch_response =
+          dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get_task_request}, context);
       if (!dispatch_response.ok()) {
         return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
       }
       const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch_response.value().payload());
       if (task == nullptr) {
-        return BuildErrorResponse(core::Error::Internal(
-            "Unexpected dispatch payload type for SubscribeToTask").WithTransport("rest"));
+        return BuildErrorResponse(
+            core::Error::Internal("Unexpected dispatch payload type for SubscribeToTask").WithTransport("rest"));
       }
       const auto subscribe_response = BuildSubscribeResponse(*task);
       if (!subscribe_response.ok()) {
@@ -533,8 +520,8 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
 
   const auto dispatch_request = BuildDispatchRequest(request);
   if (!dispatch_request.has_value()) {
-    return BuildErrorResponse(core::Error::Validation("No matching route or request was malformed")
-                                  .WithHttpStatus(kHttpNotFound));
+    return BuildErrorResponse(
+        core::Error::Validation("No matching route or request was malformed").WithHttpStatus(kHttpNotFound));
   }
 
   RequestContext context = request.context;
@@ -543,8 +530,7 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
     return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
   }
 
-  const auto response =
-      SerializeDispatchResponse(dispatch_request->operation, dispatch_response.value());
+  const auto response = SerializeDispatchResponse(dispatch_request->operation, dispatch_response.value());
   if (!response.ok()) {
     return BuildErrorResponse(response.error().WithTransport("rest"));
   }

@@ -39,23 +39,15 @@ Error& Error::operator=(Error&& other) noexcept {
   return *this;
 }
 
-Error Error::Validation(std::string message) {
-  return {ErrorCode::kValidation, std::move(message)};
-}
+Error Error::Validation(std::string message) { return {ErrorCode::kValidation, std::move(message)}; }
 
-Error Error::UnsupportedVersion(std::string message) {
-  return {ErrorCode::kUnsupportedVersion, std::move(message)};
-}
+Error Error::UnsupportedVersion(std::string message) { return {ErrorCode::kUnsupportedVersion, std::move(message)}; }
 
 Error Error::Network(std::string message) { return {ErrorCode::kNetwork, std::move(message)}; }
 
-Error Error::RemoteProtocol(std::string message) {
-  return {ErrorCode::kRemoteProtocol, std::move(message)};
-}
+Error Error::RemoteProtocol(std::string message) { return {ErrorCode::kRemoteProtocol, std::move(message)}; }
 
-Error Error::Serialization(std::string message) {
-  return {ErrorCode::kSerialization, std::move(message)};
-}
+Error Error::Serialization(std::string message) { return {ErrorCode::kSerialization, std::move(message)}; }
 
 Error Error::Internal(std::string message) { return {ErrorCode::kInternal, std::move(message)}; }
 

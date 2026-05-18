@@ -16,8 +16,8 @@ class StoreExecutor final : public server::AgentExecutor {
  public:
   explicit StoreExecutor(server::TaskStore* store) : store_(store) {}
 
-  core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
+  core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                             server::RequestContext& context) override {
     (void)context;
     if (request.message().task_id().empty()) {
       return core::Error::Validation("message.task_id is required");
@@ -85,10 +85,9 @@ inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::
   return card;
 }
 
-inline server::HttpServerRequest MakeHttpRequest(
-    std::string method, std::string target,
-    std::unordered_map<std::string, std::string> headers = {}, std::string body = {},
-    std::string remote_address = {}) {
+inline server::HttpServerRequest MakeHttpRequest(std::string method, std::string target,
+                                                 std::unordered_map<std::string, std::string> headers = {},
+                                                 std::string body = {}, std::string remote_address = {}) {
   return server::HttpServerRequest{.method = std::move(method),
                                    .target = std::move(target),
                                    .headers = std::move(headers),
