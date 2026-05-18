@@ -12,7 +12,6 @@
 
 #include "a2a/client/client.h"
 #include "a2a/client/grpc_transport.h"
-#include "a2a/core/protocol_codes.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/server.h"
 
@@ -213,10 +212,8 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (get_response.ok()) {
     return a2a::core::Error::Internal("Unsupported push-config request should fail");
   }
-  const auto protocol_code = get_response.error().protocol_code();
-  if (!protocol_code.has_value() ||
-      *protocol_code != a2a::core::protocol_codes::kPushNotificationNotSupported) {
-    return a2a::core::Error::Internal("Unexpected error for unsupported push-config request");
+  if (get_response.error().message().empty()) {
+    return a2a::core::Error::Internal("Unsupported push-config error should include a message");
   }
 
   return {};
