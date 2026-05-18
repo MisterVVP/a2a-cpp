@@ -17,13 +17,16 @@ int main() {
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kRest,
-                                     .url = "http://agent.local/a2a"},
+                                     .url = "http://agent.local/a2a",
+                                     .security_requirements = {},
+                                     .security_schemes = {}},
       [&server](const a2a::client::HttpRequest& request)
           -> a2a::core::Result<a2a::client::HttpClientResponse> {
         const auto response = server.Handle({.method = request.method,
                                              .target = a2a::examples::UrlToTarget(request.url),
                                              .headers = request.headers,
-                                             .body = request.body});
+                                             .body = request.body,
+                                             .remote_address = {}});
         if (!response.ok()) {
           return response.error();
         }
@@ -35,14 +38,16 @@ int main() {
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest seed;
   seed.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-  seed.mutable_message()->set_task_id("list-example-task");
+  *seed.mutable_message()->add_parts()->mutable_text() = "hello from ListTasks example";
   const auto send = client.SendMessage(seed);
   if (!send.ok()) {
     std::cerr << "seed send failed: " << send.error().message() << '\n';
     return 1;
   }
 
-  const auto list = client.ListTasks({.page_size = 10});
+  a2a::client::ListTasksRequest list_request;
+  list_request.page_size = 10;
+  const auto list = client.ListTasks(list_request);
   if (!list.ok()) {
     std::cerr << "list failed: " << list.error().message() << '\n';
     return 1;
