@@ -16,6 +16,8 @@ namespace a2a::core {
     case lf::a2a::v1::TASK_STATE_WORKING:
     case lf::a2a::v1::TASK_STATE_INPUT_REQUIRED:
     case lf::a2a::v1::TASK_STATE_AUTH_REQUIRED:
+    case lf::a2a::v1::TaskState_INT_MIN_SENTINEL_DO_NOT_USE_:
+    case lf::a2a::v1::TaskState_INT_MAX_SENTINEL_DO_NOT_USE_:
       return false;
   }
   return false;
