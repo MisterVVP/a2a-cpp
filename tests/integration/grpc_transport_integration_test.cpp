@@ -12,6 +12,7 @@
 
 #include "a2a/client/client.h"
 #include "a2a/client/grpc_transport.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/server.h"
 
@@ -200,7 +201,7 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return std::make_unique<a2a::client::A2AClient>(std::move(transport));
 }
 
-[[nodiscard]] a2a::core::Result<void> VerifyMissingTaskReturnsNotFound(
+[[nodiscard]] a2a::core::Result<void> VerifyPushConfigUnsupported(
     a2a::client::A2AClient* client) {
   if (client == nullptr) {
     return a2a::core::Error::Internal("Client must not be null");
@@ -210,9 +211,11 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   get_request.set_id("missing-task-id");
   const auto get_response = client->GetTaskPushNotificationConfig(get_request);
   if (get_response.ok()) {
-    return a2a::core::Error::Internal("Missing task lookup should fail");
+    return a2a::core::Error::Internal("Unsupported push-config request should fail");
   }
-  if (get_response.error().message() != "Not implemented") {
+  const auto protocol_code = get_response.error().protocol_code();
+  if (!protocol_code.has_value() ||
+      *protocol_code != a2a::core::protocol_codes::kPushNotificationNotSupported) {
     return a2a::core::Error::Internal("Unexpected error for unsupported push-config request");
   }
 
@@ -294,13 +297,13 @@ TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming)
   harness->server->Shutdown();
 }
 
-TEST(GrpcTransportIntegrationTest, UnsupportedPushConfigMethodReturnsNotImplemented) {
+TEST(GrpcTransportIntegrationTest, UnsupportedPushConfigMethodReturnsError) {
   auto harness = StartHarness();
   ASSERT_NE(harness->server, nullptr);
   ASSERT_GT(harness->port, 0);
 
   auto client = BuildClient(harness->port);
-  const auto push_config = VerifyMissingTaskReturnsNotFound(client.get());
+  const auto push_config = VerifyPushConfigUnsupported(client.get());
   ASSERT_TRUE(push_config.ok()) << push_config.error().message();
 
   harness->server->Shutdown();
