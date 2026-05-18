@@ -38,7 +38,6 @@ int main() {
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-  request.mutable_message()->set_task_id("rest-example-task");
   *request.mutable_message()->add_parts()->mutable_text() = "hello from REST example";
 
   const auto send = client.SendMessage(request);
