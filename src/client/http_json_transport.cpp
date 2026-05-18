@@ -25,8 +25,8 @@ constexpr int kHttpOkMax = 299;
 constexpr int kHttpNoContent = 204;
 
 struct EndpointMap final {
-  static constexpr std::string_view kSendMessage = "/messages:send";
-  static constexpr std::string_view kSendStreamingMessage = "/messages:stream";
+  static constexpr std::string_view kSendMessage = "/message:send";
+  static constexpr std::string_view kSendStreamingMessage = "/message:stream";
   static constexpr std::string_view kTaskCollection = "/tasks";
   static constexpr std::string_view kPushConfigCollection = "/pushNotificationConfigs";
 };
