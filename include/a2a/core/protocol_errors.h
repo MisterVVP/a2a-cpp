@@ -33,4 +33,25 @@ namespace a2a::core::protocol_errors {
       .WithProtocolCode(std::string(protocol_codes::kUnsupportedOperation));
 }
 
+[[nodiscard]] inline Error ContentTypeNotSupported(
+    std::string message = "content type is not supported") {
+  return Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(415)
+      .WithProtocolCode(std::string(protocol_codes::kContentTypeNotSupported));
+}
+
+[[nodiscard]] inline Error InvalidAgentResponse(
+    std::string message = "invalid agent response") {
+  return Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(502)
+      .WithProtocolCode(std::string(protocol_codes::kInvalidAgentResponse));
+}
+
+[[nodiscard]] inline Error VersionNotSupported(
+    std::string message = "version is not supported") {
+  return Error::UnsupportedVersion(std::move(message))
+      .WithHttpStatus(400)
+      .WithProtocolCode(std::string(protocol_codes::kVersionNotSupported));
+}
+
 }  // namespace a2a::core::protocol_errors
