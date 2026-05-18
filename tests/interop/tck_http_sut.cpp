@@ -1,10 +1,16 @@
-#include <arpa/inet.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <cerrno>
 #include <csignal>
@@ -27,6 +33,14 @@ namespace {
 volatile std::sig_atomic_t kKeepRunning = 1;
 
 void SignalHandler(int) { kKeepRunning = 0; }
+
+void CloseSocket(int fd) {
+#ifdef _WIN32
+  closesocket(fd);
+#else
+  close(fd);
+#endif
+}
 
 std::optional<std::string> ReadRequest(int fd) {
   std::string request;
@@ -125,9 +139,14 @@ int main(int argc, char** argv) {
                                         {.rest_api_base_path = "/a2a", .include_legacy_transport_fields = false});
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
 
+#ifdef _WIN32
+  WSADATA wsa_data;
+  if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) return 1;
+#endif
+
   int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
   int opt = 1;
-  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port));
@@ -150,7 +169,7 @@ int main(int argc, char** argv) {
     if (fd < 0) continue;
     const auto req_opt = ReadRequest(fd);
     if (!req_opt) {
-      close(fd);
+      CloseSocket(fd);
       continue;
     }
     const std::string req = *req_opt;
@@ -181,9 +200,12 @@ int main(int argc, char** argv) {
     if (response.ok()) {
       WriteResponse(fd, response.value());
     }
-    close(fd);
+    CloseSocket(fd);
   }
   grpc_server->Shutdown();
-  close(server_fd);
+  CloseSocket(server_fd);
+#ifdef _WIN32
+  WSACleanup();
+#endif
   return 0;
 }
