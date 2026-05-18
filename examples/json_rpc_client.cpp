@@ -35,7 +35,7 @@ int main() {
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-  request.mutable_message()->set_task_id("json-rpc-example-task");
+  *request.mutable_message()->add_parts()->mutable_text() = "hello from JSON-RPC example";
 
   const auto send = client.SendMessage(request);
   if (!send.ok()) {
