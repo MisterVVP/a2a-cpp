@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,7 +23,6 @@ namespace a2a::server {
 namespace {
 
 constexpr int kHttpOk = 200;
-constexpr int kHttpBadRequest = 400;
 constexpr int kHttpInternalServerError = 500;
 
 constexpr int kJsonRpcParseError = -32700;
@@ -30,6 +30,7 @@ constexpr int kJsonRpcInvalidRequest = -32600;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
+constexpr int kJsonRpcVersionNotSupported = -32009;
 
 std::string ToLower(std::string_view value) {
   std::string lowered;
@@ -449,7 +450,7 @@ int JsonRpcCodeFromError(const core::Error& error) {
     case core::ErrorCode::kValidation:
       return kJsonRpcInvalidParams;
     case core::ErrorCode::kUnsupportedVersion:
-      return static_cast<int>(std::strtol(core::protocol_codes::kVersionNotSupported.data(), nullptr, 10));
+      return kJsonRpcVersionNotSupported;
     case core::ErrorCode::kRemoteProtocol: {
       const auto protocol_code = error.protocol_code();
       if (protocol_code.has_value()) {
@@ -471,7 +472,7 @@ int JsonRpcCodeFromError(const core::Error& error) {
   return kJsonRpcInternalError;
 }
 
-core::Result<void> AppendSseJsonRpcEvent(std::string& body, const JsonRpcServerTransport::ResponseId& id,
+core::Result<void> AppendSseJsonRpcEvent(std::string& body, const google::protobuf::Value& id,
                                          const lf::a2a::v1::StreamResponse& event) {
   const auto event_value = BuildJsonValueFromMessage(event);
   if (!event_value.ok()) {
@@ -481,7 +482,7 @@ core::Result<void> AppendSseJsonRpcEvent(std::string& body, const JsonRpcServerT
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
   (*fields)["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
-  (*fields)["id"] = id.value();
+  (*fields)["id"] = id;
   (*fields)["result"] = event_value.value();
 
   const auto serialized = core::MessageToJson(envelope);
@@ -494,7 +495,7 @@ core::Result<void> AppendSseJsonRpcEvent(std::string& body, const JsonRpcServerT
   return {};
 }
 
-core::Result<HttpServerResponse> BuildSseResponse(const JsonRpcServerTransport::ResponseId& id,
+core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value& id,
                                                   std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
     return core::Error::Internal("JSON-RPC streaming session is missing");
@@ -523,7 +524,7 @@ core::Result<HttpServerResponse> BuildSseResponse(const JsonRpcServerTransport::
 }
 
 core::Result<HttpServerResponse> BuildSubscribeSseResponse(
-    const JsonRpcServerTransport::ResponseId& id, const lf::a2a::v1::Task& task) {
+    const google::protobuf::Value& id, const lf::a2a::v1::Task& task) {
   if (core::IsTerminalTaskState(task.status().state())) {
     return core::protocol_errors::UnsupportedOperation("task is already terminal");
   }
@@ -634,7 +635,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
                                 error, HttpStatusFromError(error));
     }
-    const auto sse = BuildSseResponse(parsed.value().id, *session);
+    const auto sse = BuildSseResponse(parsed.value().id.value(), *session);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
@@ -652,7 +653,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
                                 error, HttpStatusFromError(error));
     }
-    const auto sse = BuildSubscribeSseResponse(parsed.value().id, *task);
+    const auto sse = BuildSubscribeSseResponse(parsed.value().id.value(), *task);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id,
