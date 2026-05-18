@@ -441,7 +441,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(
     return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for SubscribeToTask"};
   }
   if (core::IsTerminalTaskState(task->status().state())) {
-    return ToGrpcStatus(core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
+    return ToGrpcStatus(
+        core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
   }
 
   lf::a2a::v1::StreamResponse current_event;
