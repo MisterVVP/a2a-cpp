@@ -18,6 +18,36 @@ if [[ -f "${SUT_PID_FILE}" ]] && kill -0 "$(cat "${SUT_PID_FILE}")" 2>/dev/null;
   exit 1
 fi
 
+python3 - "${ROOT_DIR}/tests/interop/tck_http_sut.cpp" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+old = '''    auto response = rest.Handle(request);
+    if (target == "/rpc" || target == "/") {
+      request.target = "/rpc";
+      response = jsonrpc.Handle(request);
+    }
+'''
+new = '''    const auto query_start = target.find('?');
+    std::string normalized_target =
+        query_start == std::string::npos ? target : target.substr(0, query_start);
+    while (normalized_target.size() > 1 && normalized_target.back() == '/') {
+      normalized_target.pop_back();
+    }
+    const bool has_jsonrpc_envelope = body.find("\\\"jsonrpc\\\"") != std::string::npos;
+
+    auto response = rest.Handle(request);
+    if (has_jsonrpc_envelope || normalized_target == "/rpc" || normalized_target == "/") {
+      request.target = "/rpc";
+      response = jsonrpc.Handle(request);
+    }
+'''
+if old in source and new not in source:
+    path.write_text(source.replace(old, new))
+PY
+
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build "${BUILD_DIR}" --parallel --target "${SUT_TARGET}"
 
