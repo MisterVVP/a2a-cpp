@@ -61,7 +61,7 @@ TEST(HttpJsonClientIntegrationTest, SendMessageHappyPathSetsHeadersAndParsesResp
   EXPECT_EQ(response.value().message().role(), lf::a2a::v1::ROLE_AGENT);
 
   EXPECT_EQ(captured.method, "POST");
-  EXPECT_EQ(captured.url, "https://agent.example.com/a2a/messages:send");
+  EXPECT_EQ(captured.url, "https://agent.example.com/a2a/message:send");
   EXPECT_EQ(captured.timeout, std::chrono::milliseconds(kCustomTimeoutMs));
   EXPECT_EQ(captured.headers.at("A2A-Version"), "1.0");
   EXPECT_EQ(captured.headers.at("Content-Type"), "application/json");

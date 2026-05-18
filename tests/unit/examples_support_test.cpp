@@ -16,14 +16,14 @@ TEST(ExampleSupportTest, ExampleExecutorHandlesSendAndCancelFlow) {
   a2a::server::RequestContext context;
 
   lf::a2a::v1::SendMessageRequest send;
-  send.mutable_message()->set_task_id("unit-example-task");
+  send.mutable_message()->set_message_id("unit-example-task");
   send.mutable_message()->add_parts()->set_text("hello");
   const auto send_result = executor.SendMessage(send, context);
   ASSERT_TRUE(send_result.ok());
-  EXPECT_EQ(send_result.value().task().id(), "unit-example-task");
+  EXPECT_EQ(send_result.value().task().id(), "task-unit-example-task");
 
   lf::a2a::v1::CancelTaskRequest cancel;
-  cancel.set_id("unit-example-task");
+  cancel.set_id("task-unit-example-task");
   const auto cancel_result = executor.CancelTask(cancel, context);
   ASSERT_TRUE(cancel_result.ok());
   EXPECT_EQ(cancel_result.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);

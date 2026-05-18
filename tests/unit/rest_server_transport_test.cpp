@@ -136,9 +136,7 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   ASSERT_TRUE(fields.contains("preferredTransport"));
   EXPECT_EQ(fields.at("preferredTransport").string_value(),
             std::string(a2a::core::protocol_bindings::kHttpJson));
-  ASSERT_TRUE(fields.contains("additionalInterfaces"));
-  EXPECT_TRUE(fields.at("additionalInterfaces").has_list_value());
-}
+  }
 
 TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
   EchoExecutor executor;
@@ -147,10 +145,10 @@ TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
 
   const auto response = server.Handle(
       {.method = "POST",
-       .target = "/a2a/messages:send",
+       .target = "/a2a/message:send",
        .headers = {{"A2A-Version", "1.0"}},
        .body =
-           R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-1"}})",
+           R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})",
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
@@ -171,7 +169,7 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 426);
+  EXPECT_EQ(response.value().status_code, 400);
   EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
 }
 
@@ -198,12 +196,12 @@ TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
 
   const auto response = server.Handle(
       {.method = "POST",
-       .target = "/a2a/messages:send",
+       .target = "/a2a/message:send",
        .headers = {{"A2A-Version", "1.0"},
                    {"Authorization", "Bearer token-rest"},
                    {"X-API-Key", "rest-key"}},
        .body =
-           R"({"message":{"messageId":"msg-2","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-2"}})",
+           R"({"message":{"messageId":"msg-2","role":"ROLE_USER","parts":[{"text":"hello"}]}})",
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());

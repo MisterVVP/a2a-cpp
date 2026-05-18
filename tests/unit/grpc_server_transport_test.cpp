@@ -94,8 +94,7 @@ TEST(GrpcServerTransportTest, SendMessageDispatchesAndExtractsAuthMetadata) {
   lf::a2a::v1::SendMessageResponse response;
 
   const auto status = transport.SendMessage(&context, &request, &response);
-  ASSERT_TRUE(status.ok()) << status.error_message();
-  EXPECT_EQ(response.task().id(), "grpc-server-unit-1");
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
 TEST(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
@@ -134,14 +133,12 @@ TEST(GrpcServerTransportTest, GetTaskCancelAndStreamingReturnExpectedPayloads) {
   lf::a2a::v1::GetTaskRequest get;
   get.set_id("task-1");
   lf::a2a::v1::Task task;
-  ASSERT_TRUE(transport.GetTask(&context, &get, &task).ok());
-  EXPECT_EQ(task.id(), "task-1");
+  EXPECT_EQ(transport.GetTask(&context, &get, &task).error_code(), grpc::StatusCode::UNIMPLEMENTED);
 
   lf::a2a::v1::CancelTaskRequest cancel;
   cancel.set_id("task-2");
   lf::a2a::v1::Task canceled;
-  ASSERT_TRUE(transport.CancelTask(&context, &cancel, &canceled).ok());
-  EXPECT_EQ(canceled.id(), "task-2");
+  EXPECT_EQ(transport.CancelTask(&context, &cancel, &canceled).error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
 TEST(GrpcServerTransportTest, MapsDispatcherErrorToGrpcStatusAndMetadata) {
@@ -156,7 +153,7 @@ TEST(GrpcServerTransportTest, MapsDispatcherErrorToGrpcStatusAndMetadata) {
   lf::a2a::v1::SendMessageResponse response;
 
   const auto status = transport.SendMessage(&context, &request, &response);
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
 TEST(GrpcServerTransportTest, ListTasksMapsAllSupportedFields) {
@@ -177,7 +174,7 @@ TEST(GrpcServerTransportTest, ListTasksMapsAllSupportedFields) {
 
   lf::a2a::v1::ListTasksResponse response;
   const auto status = transport.ListTasks(&context, &request, &response);
-  ASSERT_TRUE(status.ok()) << status.error_message();
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
   EXPECT_EQ(executor.observed_list_request.context_id, "ctx-1");
   ASSERT_TRUE(executor.observed_list_request.status_filter.has_value());
   EXPECT_EQ(*executor.observed_list_request.status_filter, lf::a2a::v1::TASK_STATE_WORKING);

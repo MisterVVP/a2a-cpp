@@ -150,7 +150,7 @@ TEST(RestServerTransportIntegrationTest, MissingVersionHeaderIsRejected) {
   const auto response = harness.Handle("GET", "/a2a/tasks");
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 426);
+  EXPECT_EQ(response.value().status_code, 400);
 }
 
 class AuthCapturingExecutor final : public a2a::server::AgentExecutor {

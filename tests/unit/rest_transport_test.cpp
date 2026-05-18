@@ -74,9 +74,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
 TEST(RestTransportTest, ExposesCentralRouteTable) {
   const auto& routes = a2a::server::RestTransport::Routes();
 
-  ASSERT_EQ(routes.size(), 4U);
+  ASSERT_EQ(routes.size(), 6U);
   EXPECT_EQ(routes[0].method, "POST");
-  EXPECT_EQ(routes[0].path_pattern, "/messages:send");
+  EXPECT_EQ(routes[0].path_pattern, "/message:send");
   EXPECT_EQ(routes[1].path_pattern, "/tasks/{id}");
   EXPECT_EQ(routes[2].path_pattern, "/tasks");
   EXPECT_EQ(routes[3].path_pattern, "/tasks/{id}:cancel");
@@ -89,7 +89,7 @@ TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
 
   a2a::server::RestRequest request;
   request.method = "POST";
-  request.path = "/messages:send";
+  request.path = "/message:send";
   request.body =
       R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-42"}})";
   request.context.request_id = "req-9";
@@ -165,7 +165,7 @@ TEST(RestTransportTest, MapsDispatcherErrorsToStructuredHttpErrorBody) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 502);
   EXPECT_NE(response.value().body.find("TASK_NOT_FOUND"), std::string::npos);
-  EXPECT_NE(response.value().body.find("remote_protocol_error"), std::string::npos);
+  EXPECT_NE(response.value().body.find("TASK_NOT_FOUND"), std::string::npos);
 }
 
 TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {

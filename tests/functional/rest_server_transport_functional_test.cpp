@@ -16,8 +16,8 @@ TEST(RestServerTransportFunctionalTest, SupportsCoreTaskLifecycleOverHttpTargetM
       {.rest_api_base_path = "/api"});
 
   const auto send_response = server.Handle(a2a::tests::support::MakeHttpRequest(
-      "POST", "/api/messages:send", {{"A2A-Version", "1.0"}},
-      R"({"message":{"role":"ROLE_USER","taskId":"task-functional-1"}})"));
+      "POST", "/api/message:send", {{"A2A-Version", "1.0"}},
+      R"({"message":{"role":"ROLE_USER","messageId":"task-functional-1"}})"));
   ASSERT_TRUE(send_response.ok());
   EXPECT_EQ(send_response.value().status_code, 200);
 
