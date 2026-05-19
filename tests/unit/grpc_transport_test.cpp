@@ -16,9 +16,9 @@
 
 namespace {
 
-constexpr char kGrpcEndpoint[] = "localhost:50051";
-constexpr char kAuthHeaderName[] = "X-Test-API-Key";
-constexpr char kStreamFailureMessage[] = "stream unavailable";
+const std::string kGrpcEndpoint = "localhost:50051";
+const std::string kAuthHeaderName = "X-Test-API-Key";
+const std::string kStreamFailureMessage = "stream unavailable";
 constexpr int kStreamPollIntervalMs = 1;
 
 class FakeStreamReader final : public a2a::client::GrpcTransport::StreamReader {
@@ -180,8 +180,7 @@ TEST(GrpcTransportTest, SendMessageValidatesBuildContextFailures) {
 
   {
     auto rpc = std::make_unique<FakeRpcClient>();
-    a2a::client::GrpcTransport transport(MakeResolvedInterface(a2a::client::PreferredTransport::kRest),
-                                         std::move(rpc));
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(a2a::client::PreferredTransport::kRest), std::move(rpc));
     const auto result = transport.SendMessage(MakeSendMessageRequest(kTaskId), {});
 
     ASSERT_FALSE(result.ok());
@@ -261,8 +260,7 @@ TEST(GrpcTransportTest, SendStreamingMessageReportsReaderAndFinishErrors) {
   {
     auto rpc = std::make_unique<FakeRpcClient>();
     rpc->stream_reader = std::make_unique<FakeStreamReader>(
-        std::vector<lf::a2a::v1::StreamResponse>{},
-        grpc::Status(grpc::StatusCode::UNAVAILABLE, kStreamFailureMessage));
+        std::vector<lf::a2a::v1::StreamResponse>{}, grpc::Status(grpc::StatusCode::UNAVAILABLE, kStreamFailureMessage));
     a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
 
     RecordingObserver observer;
@@ -336,8 +334,7 @@ TEST(GrpcTransportTest, SubscribeTaskValidatesInputAndReportsStreamErrors) {
   {
     auto rpc = std::make_unique<FakeRpcClient>();
     rpc->stream_reader = std::make_unique<FakeStreamReader>(
-        std::vector<lf::a2a::v1::StreamResponse>{},
-        grpc::Status(grpc::StatusCode::UNAVAILABLE, kStreamFailureMessage));
+        std::vector<lf::a2a::v1::StreamResponse>{}, grpc::Status(grpc::StatusCode::UNAVAILABLE, kStreamFailureMessage));
     a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
 
     lf::a2a::v1::GetTaskRequest request;

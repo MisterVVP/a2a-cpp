@@ -249,4 +249,80 @@ TEST(JsonRpcTransportUnitTest, ListTasksUsesListTasksMethodAndParsesResponse) {
   EXPECT_EQ(envelope.value().fields().at("method").string_value(), "a2a.listTasks");
 }
 
+TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = 500,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"id":"t-1"}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+  const auto response = client.GetTask(request);
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
+}
+
+TEST(JsonRpcTransportUnitTest, ReturnsUnsupportedVersionOnInvalidA2AVersionHeader) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"a2a-version", "999.0"}},
+                                  .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"id":"t-1"}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+  const auto response = client.GetTask(request);
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kUnsupportedVersion);
+}
+
+TEST(JsonRpcTransportUnitTest, ParsesJsonRpcErrorObjectProtocolCodeAndMessage) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = 502,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body = R"({"jsonrpc":"2.0","id":"req-123","error":{"code":-32601,"message":"missing method"}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+  const auto response = client.GetTask(request);
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(response.error().protocol_code().value_or(""), "-32601");
+}
+
+TEST(JsonRpcTransportUnitTest, RejectsEnvelopeWithBothResultAndError) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body =
+                R"({"jsonrpc":"2.0","id":"req-123","result":{"id":"t-1"},"error":{"code":-32000,"message":"bad"}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+  const auto response = client.GetTask(request);
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
+}
+
 }  // namespace

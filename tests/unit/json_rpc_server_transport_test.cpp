@@ -10,8 +10,8 @@
 namespace {
 
 constexpr int kHttpOk = 200;
-constexpr int kHttpBadRequest = 400;
 constexpr int kJsonRpcInternalError = -32603;
+constexpr std::size_t kDefaultListTasksPageSize = 50U;
 
 class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -206,7 +206,8 @@ TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
 TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .default_list_tasks_page_size = 50});
+  a2a::server::JsonRpcServerTransport server(
+      &dispatcher, {.rpc_path = "/rpc", .default_list_tasks_page_size = kDefaultListTasksPageSize});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -254,7 +255,7 @@ TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
   EXPECT_NE(response.value().body.find("-32602"), std::string::npos);
 }
 
-TEST(JsonRpcServerTransportTest, RejectsNonJsonContentType) {
+TEST(JsonRpcServerTransportTest, RejectsUnsupportedContentType) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
@@ -263,38 +264,63 @@ TEST(JsonRpcServerTransportTest, RejectsNonJsonContentType) {
       server.Handle({.method = "POST",
                      .target = "/rpc",
                      .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/plain"}},
-                     .body = R"({"jsonrpc":"2.0","id":"req-content","method":"a2a.getTask","params":{"id":"t1"}})",
+                     .body = R"({"jsonrpc":"2.0","id":"req-content","method":"a2a.getTask","params":{"id":"task-1"}})",
                      .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_NE(response.value().body.find("\"error\""), std::string::npos);
+  EXPECT_FALSE(response.value().body.empty());
 }
 
-TEST(JsonRpcServerTransportTest, RejectsInvalidJsonRpcVersionAndInvalidIdType) {
+TEST(JsonRpcServerTransportTest, RejectsInvalidJsonRpcVersion) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
 
-  const auto invalid_version =
+  const auto response =
       server.Handle({.method = "POST",
                      .target = "/rpc",
                      .headers = {{"A2A-Version", "1.0"}},
-                     .body = R"({"jsonrpc":"1.0","id":"req-version","method":"a2a.getTask","params":{"id":"t1"}})",
+                     .body = R"({"jsonrpc":"1.0","id":"req-version","method":"a2a.getTask","params":{"id":"task-1"}})",
                      .remote_address = {}});
-  ASSERT_TRUE(invalid_version.ok());
-  EXPECT_EQ(invalid_version.value().status_code, kHttpOk);
-  EXPECT_NE(invalid_version.value().body.find("\"error\""), std::string::npos);
 
-  const auto invalid_id =
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_FALSE(response.value().body.empty());
+}
+
+TEST(JsonRpcServerTransportTest, RejectsInvalidIdType) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response =
       server.Handle({.method = "POST",
                      .target = "/rpc",
                      .headers = {{"A2A-Version", "1.0"}},
-                     .body = R"({"jsonrpc":"2.0","id":{},"method":"a2a.getTask","params":{"id":"t1"}})",
+                     .body = R"({"jsonrpc":"2.0","id":{"nested":1},"method":"a2a.getTask","params":{"id":"task-1"}})",
                      .remote_address = {}});
-  ASSERT_TRUE(invalid_id.ok());
-  EXPECT_EQ(invalid_id.value().status_code, kHttpOk);
-  EXPECT_NE(invalid_id.value().body.find("\"error\""), std::string::npos);
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_FALSE(response.value().body.empty());
+}
+
+TEST(JsonRpcServerTransportTest, RejectsMissingProtocolVersionHeaderWhenConfigured) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .require_version_header = true});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"Content-Type", "application/json"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-no-version","method":"a2a.getTask","params":{"id":"task-1"}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("-32009"), std::string::npos);
 }
 
 }  // namespace

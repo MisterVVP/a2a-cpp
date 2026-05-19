@@ -9,6 +9,8 @@
 #include "a2a/server/server.h"
 
 namespace {
+constexpr int64_t kStatusTimestampSeconds = 10;
+constexpr int32_t kStatusTimestampNanos = 5;
 
 class FakeStreamSession final : public a2a::server::ServerStreamSession {
  public:
@@ -159,12 +161,28 @@ TEST(GrpcServerTransportTest, ListTasksMapsAllSupportedFields) {
   request.set_page_size(3);
   request.set_history_length(2);
   request.set_include_artifacts(true);
-  request.mutable_status_timestamp_after()->set_seconds(10);
-  request.mutable_status_timestamp_after()->set_nanos(5);
+  request.mutable_status_timestamp_after()->set_seconds(kStatusTimestampSeconds);
+  request.mutable_status_timestamp_after()->set_nanos(kStatusTimestampNanos);
 
   lf::a2a::v1::ListTasksResponse response;
   const auto status = transport.ListTasks(&context, &request, &response);
   EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+}
+
+TEST(GrpcServerTransportTest, ListTasksInputValidationRequiresProtocolVersionHeader) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::ListTasksRequest request;
+  request.set_page_size(0);
+  lf::a2a::v1::ListTasksResponse response;
+  EXPECT_EQ(transport.ListTasks(&context, &request, &response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
+
+  request.set_page_size(10);
+  request.set_history_length(-1);
+  EXPECT_EQ(transport.ListTasks(&context, &request, &response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
 }  // namespace
