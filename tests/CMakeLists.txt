@@ -136,6 +136,21 @@ target_link_libraries(sse_parser_test
 
 gtest_discover_tests(sse_parser_test)
 
+
+add_executable(http_json_transport_test
+  unit/http_json_transport_test.cpp
+)
+
+target_link_libraries(http_json_transport_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(http_json_transport_test)
+
 add_executable(http_json_client_integration_test
   integration/http_json_client_integration_test.cpp
 )
