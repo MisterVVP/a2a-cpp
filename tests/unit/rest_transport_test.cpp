@@ -180,4 +180,50 @@ TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {
   EXPECT_EQ(response.value().http_status, 404);
 }
 
+TEST(RestTransportTest, RejectsMalformedQueryParameters) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = "GET";
+  request.path = "/tasks";
+  request.query_params["pageSize"] = "abc";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, 404);
+}
+
+TEST(RestTransportTest, RejectsUnsupportedPushNotificationEndpoints) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = "POST";
+  request.path = "/tasks/task-1/pushNotificationConfigs";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, 400);
+  EXPECT_NE(response.value().body.find("PUSH_NOTIFICATION_NOT_SUPPORTED"), std::string::npos);
+}
+
+TEST(RestTransportTest, SupportsSubscribeEndpointForNonTerminalTask) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = "POST";
+  request.path = "/tasks/task-77:subscribe";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, 200);
+  EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
+  EXPECT_NE(response.value().body.find("task-77"), std::string::npos);
+}
+
 }  // namespace

@@ -334,8 +334,7 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
   auto state = std::make_shared<StreamHandle::State>();
   auto context = std::move(context_result.value());
   auto worker =
-      StreamHandle::WorkerThread([this, state, subscribe_request, &observer,
-                                  context = std::move(context)]() mutable {
+      StreamHandle::WorkerThread([this, state, subscribe_request, &observer, context = std::move(context)]() mutable {
         auto reader = rpc_client_->SubscribeToTask(context.get(), subscribe_request);
         if (reader == nullptr) {
           observer.OnError(core::Error::Internal("Failed to create gRPC subscribe stream reader"));
