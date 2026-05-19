@@ -11,7 +11,7 @@
 namespace {
 constexpr int64_t kStatusTimestampSeconds = 10;
 constexpr int32_t kStatusTimestampNanos = 5;
-
+constexpr int32_t kValidPageSize = 10;
 class FakeStreamSession final : public a2a::server::ServerStreamSession {
  public:
   explicit FakeStreamSession(std::vector<lf::a2a::v1::StreamResponse> events) : events_(std::move(events)) {}
@@ -180,9 +180,22 @@ TEST(GrpcServerTransportTest, ListTasksInputValidationRequiresProtocolVersionHea
   lf::a2a::v1::ListTasksResponse response;
   EXPECT_EQ(transport.ListTasks(&context, &request, &response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
 
-  request.set_page_size(10);
+  request.set_page_size(kValidPageSize);
   request.set_history_length(-1);
   EXPECT_EQ(transport.ListTasks(&context, &request, &response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
+}
+
+TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplemented) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_task_id("task-version");
+  lf::a2a::v1::SendMessageResponse response;
+
+  EXPECT_EQ(transport.SendMessage(&context, &request, &response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
 }  // namespace
