@@ -246,11 +246,68 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!observer.completed) {
     return a2a::core::Error::Internal("SubscribeTask stream did not complete");
   }
-  if (observer.events.empty()) {
-    return a2a::core::Error::Internal("SubscribeTask returned no events");
+  constexpr std::size_t kExpectedSubscribeEventCount = 2U;
+  if (observer.events.size() != kExpectedSubscribeEventCount) {
+    return a2a::core::Error::Internal("SubscribeTask returned unexpected number of events");
+  }
+  if (!observer.events.front().has_task()) {
+    return a2a::core::Error::Internal("SubscribeTask first event must contain task payload");
   }
   if (observer.events.front().task().id() != kTaskId) {
-    return a2a::core::Error::Internal("SubscribeTask returned unexpected task id");
+    return a2a::core::Error::Internal("SubscribeTask first event returned unexpected task id");
+  }
+  if (!observer.events[1].has_status_update()) {
+    return a2a::core::Error::Internal("SubscribeTask second event must contain status_update payload");
+  }
+  if (observer.events[1].status_update().task_id() != kTaskId) {
+    return a2a::core::Error::Internal("SubscribeTask second event returned unexpected task id");
+  }
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifySubscribeTaskDeterministicOrdering(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  constexpr std::string_view kTaskId = "grpc-subscribe-ordering-1";
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send_request.mutable_message()->set_task_id(std::string(kTaskId));
+  const auto send_response = client->SendMessage(send_request);
+  if (!send_response.ok()) {
+    return send_response.error();
+  }
+
+  lf::a2a::v1::GetTaskRequest subscribe_request;
+  subscribe_request.set_id(std::string(kTaskId));
+
+  RecordingObserver first_observer;
+  const auto first_stream = client->SubscribeTask(subscribe_request, first_observer);
+  if (!first_stream.ok()) {
+    return first_stream.error();
+  }
+  while (first_stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  RecordingObserver second_observer;
+  const auto second_stream = client->SubscribeTask(subscribe_request, second_observer);
+  if (!second_stream.ok()) {
+    return second_stream.error();
+  }
+  while (second_stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  constexpr std::size_t kExpectedEventCount = 2U;
+  if (first_observer.events.size() != kExpectedEventCount || second_observer.events.size() != kExpectedEventCount) {
+    return a2a::core::Error::Internal("SubscribeTask streams returned unexpected event counts");
+  }
+  for (std::size_t index = 0; index < kExpectedEventCount; ++index) {
+    if (first_observer.events[index].SerializeAsString() != second_observer.events[index].SerializeAsString()) {
+      return a2a::core::Error::Internal("SubscribeTask streams emitted different events or ordering");
+    }
   }
   return {};
 }
@@ -310,6 +367,16 @@ TEST(GrpcTransportIntegrationTest, SubscribeTaskReturnsTaskEvents) {
   ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
 
   harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, SubscribeTaskIsDeterministicAcrossStreams) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness, nullptr);
+  auto client = BuildClient(harness->port);
+  ASSERT_NE(client, nullptr);
+
+  const auto subscribe = VerifySubscribeTaskDeterministicOrdering(client.get());
+  ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
 }
 
 TEST(GrpcTransportIntegrationTest, GetTaskReturnsErrorForUnknownTaskId) {
