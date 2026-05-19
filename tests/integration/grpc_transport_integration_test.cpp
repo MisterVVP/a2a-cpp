@@ -312,6 +312,22 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return {};
 }
 
+[[nodiscard]] a2a::core::Result<void> VerifyListTasksValidation(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  constexpr int32_t kInvalidPageSize = 101;
+  a2a::client::ListTasksRequest invalid_page_size;
+  invalid_page_size.page_size = static_cast<std::size_t>(kInvalidPageSize);
+  const auto invalid_page_size_response = client->ListTasks(invalid_page_size);
+  if (invalid_page_size_response.ok()) {
+    return a2a::core::Error::Internal("ListTasks with invalid page_size should fail");
+  }
+
+  return {};
+}
+
 [[nodiscard]] a2a::core::Result<void> VerifyMissingTaskLookupFails(a2a::client::A2AClient* client) {
   if (client == nullptr) {
     return a2a::core::Error::Internal("Client must not be null");
@@ -377,6 +393,18 @@ TEST(GrpcTransportIntegrationTest, SubscribeTaskIsDeterministicAcrossStreams) {
 
   const auto subscribe = VerifySubscribeTaskDeterministicOrdering(client.get());
   ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
+}
+
+TEST(GrpcTransportIntegrationTest, ListTasksValidationErrorsAreReturned) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto validation = VerifyListTasksValidation(client.get());
+  ASSERT_TRUE(validation.ok()) << validation.error().message();
+
+  harness->server->Shutdown();
 }
 
 TEST(GrpcTransportIntegrationTest, GetTaskReturnsErrorForUnknownTaskId) {
