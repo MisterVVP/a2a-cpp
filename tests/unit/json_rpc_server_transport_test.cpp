@@ -255,4 +255,72 @@ TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
   EXPECT_NE(response.value().body.find("-32602"), std::string::npos);
 }
 
+TEST(JsonRpcServerTransportTest, RejectsUnsupportedContentType) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response =
+      server.Handle({.method = "POST",
+                     .target = "/rpc",
+                     .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/plain"}},
+                     .body = R"({"jsonrpc":"2.0","id":"req-content","method":"a2a.getTask","params":{"id":"task-1"}})",
+                     .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_FALSE(response.value().body.empty());
+}
+
+TEST(JsonRpcServerTransportTest, RejectsInvalidJsonRpcVersion) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response =
+      server.Handle({.method = "POST",
+                     .target = "/rpc",
+                     .headers = {{"A2A-Version", "1.0"}},
+                     .body = R"({"jsonrpc":"1.0","id":"req-version","method":"a2a.getTask","params":{"id":"task-1"}})",
+                     .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_FALSE(response.value().body.empty());
+}
+
+TEST(JsonRpcServerTransportTest, RejectsInvalidIdType) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response =
+      server.Handle({.method = "POST",
+                     .target = "/rpc",
+                     .headers = {{"A2A-Version", "1.0"}},
+                     .body = R"({"jsonrpc":"2.0","id":{"nested":1},"method":"a2a.getTask","params":{"id":"task-1"}})",
+                     .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_FALSE(response.value().body.empty());
+}
+
+TEST(JsonRpcServerTransportTest, RejectsMissingProtocolVersionHeaderWhenConfigured) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .require_version_header = true});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"Content-Type", "application/json"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-no-version","method":"a2a.getTask","params":{"id":"task-1"}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("-32009"), std::string::npos);
+}
+
 }  // namespace
