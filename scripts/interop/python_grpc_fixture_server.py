@@ -11,6 +11,7 @@ from a2a.v1 import a2a_pb2_grpc
 
 TASKS = {}
 
+
 class Service(a2a_pb2_grpc.A2AServiceServicer):
     def SendMessage(self, request, context):
         task_id = request.message.task_id
@@ -36,12 +37,12 @@ class Service(a2a_pb2_grpc.A2AServiceServicer):
         task.status.state = a2a_pb2.TASK_STATE_WORKING
         yield a2a_pb2.StreamResponse(task=task)
 
-    def SubscribeTask(self, request, context):
+    def SubscribeToTask(self, request, context):
         if request.id not in TASKS:
             context.abort(grpc.StatusCode.NOT_FOUND, "task not found")
         yield a2a_pb2.StreamResponse(task=TASKS[request.id])
 
-    def SetTaskPushNotificationConfig(self, request, context):
+    def CreateTaskPushNotificationConfig(self, request, context):
         context.abort(grpc.StatusCode.UNIMPLEMENTED, "Not implemented")
 
     def GetTaskPushNotificationConfig(self, request, context):
@@ -67,6 +68,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         server.stop(0)
+
 
 if __name__ == "__main__":
     main()
