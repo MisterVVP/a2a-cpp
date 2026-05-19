@@ -333,35 +333,36 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
 
   auto state = std::make_shared<StreamHandle::State>();
   auto context = std::move(context_result.value());
-  auto worker = StreamHandle::WorkerThread([this, state, subscribe_request, &observer,
-                                            context = std::move(context)]() mutable {
-    auto reader = rpc_client_->SubscribeToTask(context.get(), subscribe_request);
-    if (reader == nullptr) {
-      observer.OnError(core::Error::Internal("Failed to create gRPC subscribe stream reader"));
-      state->active.store(false);
-      return;
-    }
+  auto worker =
+      StreamHandle::WorkerThread([this, state, subscribe_request, &observer,
+                                  context = std::move(context)]() mutable {
+        auto reader = rpc_client_->SubscribeToTask(context.get(), subscribe_request);
+        if (reader == nullptr) {
+          observer.OnError(core::Error::Internal("Failed to create gRPC subscribe stream reader"));
+          state->active.store(false);
+          return;
+        }
 
-    lf::a2a::v1::StreamResponse event;
-    while (!state->cancel_requested.load() && reader->Read(&event)) {
-      observer.OnEvent(event);
-    }
+        lf::a2a::v1::StreamResponse event;
+        while (!state->cancel_requested.load() && reader->Read(&event)) {
+          observer.OnEvent(event);
+        }
 
-    const auto status = reader->Finish();
-    if (state->cancel_requested.load()) {
-      state->active.store(false);
-      return;
-    }
+        const auto status = reader->Finish();
+        if (state->cancel_requested.load()) {
+          state->active.store(false);
+          return;
+        }
 
-    if (!status.ok()) {
-      observer.OnError(BuildGrpcError(status));
-      state->active.store(false);
-      return;
-    }
+        if (!status.ok()) {
+          observer.OnError(BuildGrpcError(status));
+          state->active.store(false);
+          return;
+        }
 
-    observer.OnCompleted();
-    state->active.store(false);
-  });
+        observer.OnCompleted();
+        state->active.store(false);
+      });
 
   return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
