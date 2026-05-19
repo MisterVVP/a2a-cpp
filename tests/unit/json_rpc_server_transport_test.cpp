@@ -15,6 +15,23 @@ constexpr std::size_t kDefaultListTasksPageSize = 50U;
 
 class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
+  class SingleEventSession final : public a2a::server::ServerStreamSession {
+   public:
+    explicit SingleEventSession(lf::a2a::v1::StreamResponse event) : event_(std::move(event)) {}
+
+    a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+      if (consumed_) {
+        return std::optional<lf::a2a::v1::StreamResponse>{};
+      }
+      consumed_ = true;
+      return std::optional<lf::a2a::v1::StreamResponse>(event_);
+    }
+
+   private:
+    lf::a2a::v1::StreamResponse event_;
+    bool consumed_ = false;
+  };
+
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& context) override {
     last_version_header = context.client_headers["A2A-Version"];
@@ -26,9 +43,13 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
-    (void)request;
+    if (fail_streaming) {
+      return a2a::core::Error::Internal("stream unavailable");
+    }
     (void)context;
-    return a2a::core::Error::Validation("not implemented");
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_task()->set_id(request.message().task_id());
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(event));
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -36,6 +57,7 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
     (void)context;
     lf::a2a::v1::Task task;
     task.set_id(request.id());
+    task.mutable_status()->set_state(task_state);
     return task;
   }
 
@@ -56,6 +78,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
 
   std::string last_version_header;
   std::string last_bearer_token;
+  bool fail_streaming = false;
+  lf::a2a::v1::TaskState task_state = lf::a2a::v1::TASK_STATE_WORKING;
 };
 
 TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
@@ -321,6 +345,79 @@ TEST(JsonRpcServerTransportTest, RejectsMissingProtocolVersionHeaderWhenConfigur
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("-32009"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, SupportsStreamingMethodWithSseResponse) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body =
+           R"({"jsonrpc":"2.0","id":"req-stream","method":"a2a.sendStreamingMessage","params":{"message":{"role":"ROLE_USER","taskId":"task-stream"}}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
+  EXPECT_NE(response.value().body.find("task-stream"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTask) {
+  JsonRpcEchoExecutor executor;
+  executor.task_state = lf::a2a::v1::TASK_STATE_WORKING;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-sub","method":"a2a.subscribeToTask","params":{"id":"task-sub"}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
+  EXPECT_NE(response.value().body.find("task-sub"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, SubscribeToTaskRejectsTerminalTask) {
+  JsonRpcEchoExecutor executor;
+  executor.task_state = lf::a2a::v1::TASK_STATE_COMPLETED;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-sub-terminal","method":"a2a.subscribeToTask","params":{"id":"task-sub"}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("task is already terminal"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, RejectsInvalidListTasksValues) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(
+      {.method = "POST",
+       .target = "/rpc",
+       .headers = {{"A2A-Version", "1.0"}},
+       .body = R"({"jsonrpc":"2.0","id":"req-list-token","method":"a2a.listTasks","params":{"pageToken":"abc"}})",
+       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("pageToken must be a valid offset"), std::string::npos);
 }
 
 }  // namespace
