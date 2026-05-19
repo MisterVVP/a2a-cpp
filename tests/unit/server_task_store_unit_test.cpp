@@ -1,10 +1,10 @@
-#include "a2a/server/server.h"
-
 #include <gtest/gtest.h>
 
 #include <optional>
 #include <string>
 #include <unordered_map>
+
+#include "a2a/server/server.h"
 
 namespace {
 
@@ -39,12 +39,11 @@ lf::a2a::v1::Task MakeTask(std::string id, std::string context_id, lf::a2a::v1::
 }
 
 TEST(ServerHelpersTest, ExtractAuthMetadataNormalizesAndCollectsSignals) {
-  const std::unordered_map<std::string, std::string> headers = {
-      {"Authorization", "  Bearer sample-token  "},
-            {"X-API-Key", "key-123"},
-      {"X-Forwarded-Client-Cert", "cert-chain"},
-      {"X-Custom-Token", "custom-token"},
-      {"X-Auth-Provider", "provider"}};
+  const std::unordered_map<std::string, std::string> headers = {{"Authorization", "  Bearer sample-token  "},
+                                                                {"X-API-Key", "key-123"},
+                                                                {"X-Forwarded-Client-Cert", "cert-chain"},
+                                                                {"X-Custom-Token", "custom-token"},
+                                                                {"X-Auth-Provider", "provider"}};
 
   const auto metadata = a2a::server::ExtractAuthMetadata(headers);
 
@@ -79,17 +78,17 @@ TEST(InMemoryTaskStoreUnitTest, ValidatesInputAndReturnsNotFoundErrors) {
 TEST(InMemoryTaskStoreUnitTest, AppliesFilteringPaginationAndProjectionOptions) {
   a2a::server::InMemoryTaskStore store;
 
-  ASSERT_TRUE(store.CreateOrUpdate(
-                      MakeTask("task-1", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
-                               kTimestampBaseSeconds, true))
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-1", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                                           kTimestampBaseSeconds, true))
                   .ok());
-  ASSERT_TRUE(store.CreateOrUpdate(
-                      MakeTask("task-2", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_CANCELED,
-                               kTimestampBaseSeconds + 1, false, 1))
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-2", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_CANCELED,
+                                           kTimestampBaseSeconds + 1, false, 1))
                   .ok());
-  ASSERT_TRUE(store.CreateOrUpdate(
-                      MakeTask("task-3", std::string(kContextBeta), lf::a2a::v1::TASK_STATE_WORKING,
-                               kTimestampBaseSeconds + 2, true))
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-3", std::string(kContextBeta), lf::a2a::v1::TASK_STATE_WORKING,
+                                           kTimestampBaseSeconds + 2, true))
                   .ok());
 
   a2a::server::ListTasksRequest first_page_request(kFirstPageSize, "0");
@@ -132,9 +131,9 @@ TEST(InMemoryTaskStoreUnitTest, AppliesFilteringPaginationAndProjectionOptions) 
 TEST(InMemoryTaskStoreUnitTest, CancelUpdatesStateAndRejectsTerminalTasks) {
   a2a::server::InMemoryTaskStore store;
 
-  ASSERT_TRUE(store.CreateOrUpdate(
-                      MakeTask("task-1", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
-                               kTimestampBaseSeconds, true))
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-1", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                                           kTimestampBaseSeconds, true))
                   .ok());
 
   const auto canceled_result = store.Cancel("task-1");

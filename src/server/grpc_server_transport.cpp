@@ -427,12 +427,6 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return ToGrpcStatus(core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
   }
 
-  lf::a2a::v1::StreamResponse current_event;
-  *current_event.mutable_task() = *task;
-  if (!writer->Write(current_event)) {
-    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
-  }
-
   lf::a2a::v1::StreamResponse terminal_event;
   terminal_event.mutable_status_update()->set_task_id(task->id());
   terminal_event.mutable_status_update()->set_context_id(task->context_id());

@@ -36,7 +36,8 @@ TEST(HttpJsonTransportUnitTest, GetTaskBuildsExpectedRequest) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"id":"task-1"})"};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"id":"task-1"})"};
       });
 
   A2AClient client(std::move(transport));
@@ -86,7 +87,8 @@ TEST(HttpJsonTransportUnitTest, DeleteTaskPushNotificationConfigHandlesNoContent
 TEST(HttpJsonTransportUnitTest, UnsupportedVersionHeaderReturnsError) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "999.0"}}, .body = R"({"id":"task-1"})"};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "999.0"}}, .body = R"({"id":"task-1"})"};
       });
 
   A2AClient client(std::move(transport));
@@ -101,7 +103,8 @@ TEST(HttpJsonTransportUnitTest, UnsupportedVersionHeaderReturnsError) {
 TEST(HttpJsonTransportUnitTest, ListTasksRejectsWrongNextPageTokenType) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"tasks":[],"nextPageToken":3})"};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"tasks":[],"nextPageToken":3})"};
       });
 
   A2AClient client(std::move(transport));
@@ -115,7 +118,8 @@ TEST(HttpJsonTransportUnitTest, GetTaskAppliesCredentialProvider) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
-        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"id":"task-1"})"};
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"id":"task-1"})"};
       });
 
   A2AClient client(std::move(transport));
