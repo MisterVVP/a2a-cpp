@@ -45,9 +45,6 @@ class GrpcTransport final : public ClientTransport {
                                                  const lf::a2a::v1::GetTaskRequest& request,
                                                  lf::a2a::v1::Task* response) = 0;
 
-    [[nodiscard]] virtual std::unique_ptr<StreamReader> SubscribeToTask(
-        ::grpc::ClientContext* context, const lf::a2a::v1::SubscribeToTaskRequest& request) = 0;
-
     [[nodiscard]] virtual ::grpc::Status CancelTask(::grpc::ClientContext* context,
                                                     const lf::a2a::v1::CancelTaskRequest& request,
                                                     lf::a2a::v1::Task* response) = 0;
