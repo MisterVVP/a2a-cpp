@@ -16,6 +16,11 @@
 
 namespace {
 
+constexpr char kGrpcEndpoint[] = "localhost:50051";
+constexpr char kAuthHeaderName[] = "X-Test-API-Key";
+constexpr char kStreamFailureMessage[] = "stream unavailable";
+constexpr int kStreamPollIntervalMs = 1;
+
 class FakeStreamReader final : public a2a::client::GrpcTransport::StreamReader {
  public:
   explicit FakeStreamReader(std::vector<lf::a2a::v1::StreamResponse> events,
@@ -135,13 +140,33 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   bool completed = false;
 };
 
+a2a::client::ResolvedInterface MakeResolvedInterface(
+    a2a::client::PreferredTransport transport = a2a::client::PreferredTransport::kGrpc,
+    std::string url = kGrpcEndpoint) {
+  return {.transport = transport, .url = std::move(url), .security_requirements = {}, .security_schemes = {}};
+}
+
+lf::a2a::v1::SendMessageRequest MakeSendMessageRequest(std::string_view task_id) {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_task_id(std::string(task_id));
+  return request;
+}
+
+lf::a2a::v1::StreamResponse MakeTaskStreamEvent(std::string_view task_id) {
+  lf::a2a::v1::StreamResponse event;
+  event.mutable_task()->set_id(std::string(task_id));
+  return event;
+}
+
+void WaitForStream(const a2a::client::StreamHandle& stream) {
+  while (stream.IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(kStreamPollIntervalMs));
+  }
+}
+
 TEST(GrpcTransportTest, GetTaskValidatesRequestId) {
   auto rpc = std::make_unique<FakeRpcClient>();
-  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
-                                        .url = "localhost:50051",
-                                        .security_requirements = {},
-                                        .security_schemes = {}},
-                                       std::move(rpc));
+  a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
 
   lf::a2a::v1::GetTaskRequest request;
   const auto result = transport.GetTask(request, {});
@@ -150,47 +175,115 @@ TEST(GrpcTransportTest, GetTaskValidatesRequestId) {
   EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
 }
 
-TEST(GrpcTransportTest, SendStreamingMessageDeliversEventsAndCompletion) {
-  auto rpc = std::make_unique<FakeRpcClient>();
-  lf::a2a::v1::StreamResponse event;
-  event.mutable_task()->set_id("stream-task");
-  rpc->stream_reader = std::make_unique<FakeStreamReader>(std::vector{event});
+TEST(GrpcTransportTest, SendMessageValidatesBuildContextFailures) {
+  constexpr std::string_view kTaskId = "context-task";
 
-  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
-                                        .url = "localhost:50051",
-                                        .security_requirements = {},
-                                        .security_schemes = {}},
-                                       std::move(rpc));
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(a2a::client::PreferredTransport::kRest),
+                                         std::move(rpc));
+    const auto result = transport.SendMessage(MakeSendMessageRequest(kTaskId), {});
 
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_task_id("stream-task");
-
-  RecordingObserver observer;
-  auto stream = transport.SendStreamingMessage(request, observer, {});
-  ASSERT_TRUE(stream.ok()) << stream.error().message();
-
-  while (stream.value()->IsActive()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
   }
 
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(a2a::client::PreferredTransport::kGrpc, {}),
+                                         std::move(rpc));
+    const auto result = transport.SendMessage(MakeSendMessageRequest(kTaskId), {});
+
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  }
+
+  {
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(),
+                                         std::unique_ptr<a2a::client::GrpcTransport::RpcClient>{});
+    const auto result = transport.SendMessage(MakeSendMessageRequest(kTaskId), {});
+
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
+  }
+
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    a2a::client::CallOptions options;
+    options.credential_provider =
+        std::make_shared<a2a::client::ApiKeyCredentialProvider>(std::string{}, kAuthHeaderName);
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+    const auto result = transport.SendMessage(MakeSendMessageRequest(kTaskId), options);
+
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  }
+}
+
+TEST(GrpcTransportTest, SendStreamingMessageDeliversEventsAndCompletion) {
+  constexpr std::string_view kTaskId = "stream-task";
+  auto rpc = std::make_unique<FakeRpcClient>();
+  rpc->stream_reader = std::make_unique<FakeStreamReader>(std::vector{MakeTaskStreamEvent(kTaskId)});
+
+  a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+  RecordingObserver observer;
+  auto stream = transport.SendStreamingMessage(MakeSendMessageRequest(kTaskId), observer, {});
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+
+  WaitForStream(*stream.value());
+
   ASSERT_EQ(observer.events.size(), 1U);
-  EXPECT_EQ(observer.events.front().task().id(), "stream-task");
+  EXPECT_EQ(observer.events.front().task().id(), std::string(kTaskId));
   EXPECT_TRUE(observer.completed);
   EXPECT_FALSE(observer.last_error.has_value());
+}
+
+TEST(GrpcTransportTest, SendStreamingMessageReportsReaderAndFinishErrors) {
+  constexpr std::string_view kTaskId = "stream-error-task";
+
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+    RecordingObserver observer;
+    auto stream = transport.SendStreamingMessage(MakeSendMessageRequest(kTaskId), observer, {});
+    ASSERT_TRUE(stream.ok()) << stream.error().message();
+
+    WaitForStream(*stream.value());
+
+    EXPECT_TRUE(observer.events.empty());
+    EXPECT_FALSE(observer.completed);
+    ASSERT_TRUE(observer.last_error.has_value());
+    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kInternal);
+  }
+
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    rpc->stream_reader = std::make_unique<FakeStreamReader>(
+        std::vector<lf::a2a::v1::StreamResponse>{},
+        grpc::Status(grpc::StatusCode::UNAVAILABLE, kStreamFailureMessage));
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+    RecordingObserver observer;
+    auto stream = transport.SendStreamingMessage(MakeSendMessageRequest(kTaskId), observer, {});
+    ASSERT_TRUE(stream.ok()) << stream.error().message();
+
+    WaitForStream(*stream.value());
+
+    EXPECT_TRUE(observer.events.empty());
+    EXPECT_FALSE(observer.completed);
+    ASSERT_TRUE(observer.last_error.has_value());
+    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kRemoteProtocol);
+  }
 }
 
 TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
   constexpr std::string_view kTaskId = "sub-task";
   auto rpc = std::make_unique<FakeRpcClient>();
-  lf::a2a::v1::StreamResponse event;
-  event.mutable_task()->set_id(std::string(kTaskId));
-  rpc->stream_reader = std::make_unique<FakeStreamReader>(std::vector{event});
+  rpc->stream_reader = std::make_unique<FakeStreamReader>(std::vector{MakeTaskStreamEvent(kTaskId)});
 
-  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
-                                        .url = "localhost:50051",
-                                        .security_requirements = {},
-                                        .security_schemes = {}},
-                                       std::move(rpc));
+  a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
 
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(std::string(kTaskId));
@@ -199,43 +292,93 @@ TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
   auto stream = transport.SubscribeTask(request, observer, {});
   ASSERT_TRUE(stream.ok()) << stream.error().message();
 
-  while (stream.value()->IsActive()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  WaitForStream(*stream.value());
 
   ASSERT_EQ(observer.events.size(), 1U);
-  EXPECT_EQ(observer.events.front().task().id(), kTaskId);
+  EXPECT_EQ(observer.events.front().task().id(), std::string(kTaskId));
   EXPECT_TRUE(observer.completed);
   EXPECT_FALSE(observer.last_error.has_value());
+}
+
+TEST(GrpcTransportTest, SubscribeTaskValidatesInputAndReportsStreamErrors) {
+  constexpr std::string_view kTaskId = "sub-error-task";
+
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+    lf::a2a::v1::GetTaskRequest request;
+    RecordingObserver observer;
+    const auto stream = transport.SubscribeTask(request, observer, {});
+
+    ASSERT_FALSE(stream.ok());
+    EXPECT_EQ(stream.error().code(), a2a::core::ErrorCode::kValidation);
+  }
+
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+    lf::a2a::v1::GetTaskRequest request;
+    request.set_id(std::string(kTaskId));
+    RecordingObserver observer;
+    auto stream = transport.SubscribeTask(request, observer, {});
+    ASSERT_TRUE(stream.ok()) << stream.error().message();
+
+    WaitForStream(*stream.value());
+
+    EXPECT_TRUE(observer.events.empty());
+    EXPECT_FALSE(observer.completed);
+    ASSERT_TRUE(observer.last_error.has_value());
+    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kInternal);
+  }
+
+  {
+    auto rpc = std::make_unique<FakeRpcClient>();
+    rpc->stream_reader = std::make_unique<FakeStreamReader>(
+        std::vector<lf::a2a::v1::StreamResponse>{},
+        grpc::Status(grpc::StatusCode::UNAVAILABLE, kStreamFailureMessage));
+    a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+    lf::a2a::v1::GetTaskRequest request;
+    request.set_id(std::string(kTaskId));
+    RecordingObserver observer;
+    auto stream = transport.SubscribeTask(request, observer, {});
+    ASSERT_TRUE(stream.ok()) << stream.error().message();
+
+    WaitForStream(*stream.value());
+
+    EXPECT_TRUE(observer.events.empty());
+    EXPECT_FALSE(observer.completed);
+    ASSERT_TRUE(observer.last_error.has_value());
+    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kRemoteProtocol);
+  }
 }
 
 TEST(GrpcTransportTest, PushNotificationConfigCrudAndListCoverSuccessAndValidation) {
   constexpr std::string_view kTaskId = "task-123";
   auto rpc = std::make_unique<FakeRpcClient>();
   auto* rpc_ptr = rpc.get();
-  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
-                                        .url = "localhost:50051",
-                                        .security_requirements = {},
-                                        .security_schemes = {}},
-                                       std::move(rpc));
+  a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
 
   lf::a2a::v1::TaskPushNotificationConfig create_request;
   create_request.set_id(std::string(kTaskId));
   const auto create_result = transport.CreateTaskPushNotificationConfig(create_request, {});
   ASSERT_TRUE(create_result.ok()) << create_result.error().message();
-  EXPECT_EQ(create_result.value().id(), kTaskId);
+  EXPECT_EQ(create_result.value().id(), std::string(kTaskId));
 
   lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
   get_request.set_id(std::string(kTaskId));
   const auto get_result = transport.GetTaskPushNotificationConfig(get_request, {});
   ASSERT_TRUE(get_result.ok()) << get_result.error().message();
-  EXPECT_EQ(get_result.value().id(), kTaskId);
+  EXPECT_EQ(get_result.value().id(), std::string(kTaskId));
 
+  constexpr std::string_view kNextPageToken = "next";
   lf::a2a::v1::ListTaskPushNotificationConfigsRequest list_request;
-  list_request.set_page_token("next");
+  list_request.set_page_token(std::string(kNextPageToken));
   const auto list_result = transport.ListTaskPushNotificationConfigs(list_request, {});
   ASSERT_TRUE(list_result.ok()) << list_result.error().message();
-  EXPECT_EQ(list_result.value().next_page_token(), "next");
+  EXPECT_EQ(list_result.value().next_page_token(), std::string(kNextPageToken));
 
   lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
   delete_request.set_id(std::string(kTaskId));
@@ -257,6 +400,7 @@ TEST(GrpcTransportTest, PushNotificationConfigCrudAndListCoverSuccessAndValidati
 
 TEST(GrpcTransportTest, MapsGrpcStatusesToRemoteProtocolError) {
   constexpr std::string_view kMessage = "permission denied";
+  constexpr std::string_view kTaskId = "task";
   auto rpc = std::make_unique<FakeRpcClient>();
   rpc->send_status = grpc::Status(grpc::StatusCode::PERMISSION_DENIED, std::string(kMessage));
   rpc->task_status = grpc::Status(grpc::StatusCode::NOT_FOUND, "task missing");
@@ -267,26 +411,20 @@ TEST(GrpcTransportTest, MapsGrpcStatusesToRemoteProtocolError) {
   rpc->delete_config_status = grpc::Status(grpc::StatusCode::ABORTED, "aborted");
   auto* rpc_ptr = rpc.get();
 
-  a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
-                                        .url = "localhost:50051",
-                                        .security_requirements = {},
-                                        .security_schemes = {}},
-                                       std::move(rpc));
+  a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
 
-  lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_task_id("task");
-  const auto send_result = transport.SendMessage(send_request, {});
+  const auto send_result = transport.SendMessage(MakeSendMessageRequest(kTaskId), {});
   ASSERT_FALSE(send_result.ok());
   EXPECT_EQ(send_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
 
   lf::a2a::v1::GetTaskRequest get_task_request;
-  get_task_request.set_id("task");
+  get_task_request.set_id(std::string(kTaskId));
   const auto get_task_result = transport.GetTask(get_task_request, {});
   ASSERT_FALSE(get_task_result.ok());
   EXPECT_EQ(get_task_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
 
   lf::a2a::v1::CancelTaskRequest cancel_task_request;
-  cancel_task_request.set_id("task");
+  cancel_task_request.set_id(std::string(kTaskId));
   const auto cancel_result = transport.CancelTask(cancel_task_request, {});
   ASSERT_FALSE(cancel_result.ok());
   EXPECT_EQ(cancel_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
@@ -297,7 +435,7 @@ TEST(GrpcTransportTest, MapsGrpcStatusesToRemoteProtocolError) {
   EXPECT_EQ(create_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
 
   lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
-  get_request.set_id("task");
+  get_request.set_id(std::string(kTaskId));
   const auto get_result = transport.GetTaskPushNotificationConfig(get_request, {});
   ASSERT_FALSE(get_result.ok());
   EXPECT_EQ(get_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
@@ -308,7 +446,7 @@ TEST(GrpcTransportTest, MapsGrpcStatusesToRemoteProtocolError) {
   EXPECT_EQ(list_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
 
   lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
-  delete_request.set_id("task");
+  delete_request.set_id(std::string(kTaskId));
   const auto delete_result = transport.DeleteTaskPushNotificationConfig(delete_request, {});
   ASSERT_FALSE(delete_result.ok());
   EXPECT_EQ(delete_result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
