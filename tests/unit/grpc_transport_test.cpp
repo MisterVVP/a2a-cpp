@@ -55,6 +55,13 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     return std::move(stream_reader);
   }
 
+  std::unique_ptr<a2a::client::GrpcTransport::StreamReader> SubscribeToTask(
+      grpc::ClientContext* context, const lf::a2a::v1::SubscribeToTaskRequest& request) override {
+    (void)context;
+    last_task_id = request.id();
+    return std::move(stream_reader);
+  }
+
   grpc::Status GetTask(grpc::ClientContext* context, const lf::a2a::v1::GetTaskRequest& request,
                        lf::a2a::v1::Task* response) override {
     (void)context;
@@ -173,7 +180,12 @@ TEST(GrpcTransportTest, SendStreamingMessageDeliversEventsAndCompletion) {
 }
 
 TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
+  constexpr std::string_view kTaskId = "sub-task";
   auto rpc = std::make_unique<FakeRpcClient>();
+  lf::a2a::v1::StreamResponse event;
+  event.mutable_task()->set_id(std::string(kTaskId));
+  rpc->stream_reader = std::make_unique<FakeStreamReader>(std::vector{event});
+
   a2a::client::GrpcTransport transport({.transport = a2a::client::PreferredTransport::kGrpc,
                                         .url = "localhost:50051",
                                         .security_requirements = {},
@@ -181,7 +193,7 @@ TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
                                        std::move(rpc));
 
   lf::a2a::v1::GetTaskRequest request;
-  request.set_id("sub-task");
+  request.set_id(std::string(kTaskId));
 
   RecordingObserver observer;
   auto stream = transport.SubscribeTask(request, observer, {});
@@ -192,8 +204,9 @@ TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
   }
 
   ASSERT_EQ(observer.events.size(), 1U);
-  EXPECT_EQ(observer.events.front().task().id(), "sub-task");
+  EXPECT_EQ(observer.events.front().task().id(), kTaskId);
   EXPECT_TRUE(observer.completed);
+  EXPECT_FALSE(observer.last_error.has_value());
 }
 
 TEST(GrpcTransportTest, PushNotificationConfigCrudAndListCoverSuccessAndValidation) {
