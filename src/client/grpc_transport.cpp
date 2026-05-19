@@ -50,6 +50,11 @@ class StubRpcClient final : public GrpcTransport::RpcClient {
     return stub_->GetTask(context, request, response);
   }
 
+  [[nodiscard]] std::unique_ptr<GrpcTransport::StreamReader> SubscribeToTask(
+      ::grpc::ClientContext* context, const lf::a2a::v1::SubscribeToTaskRequest& request) override {
+    return std::make_unique<StubStreamReader>(stub_->SubscribeToTask(context, request));
+  }
+
   [[nodiscard]] ::grpc::Status CancelTask(::grpc::ClientContext* context, const lf::a2a::v1::CancelTaskRequest& request,
                                           lf::a2a::v1::Task* response) override {
     return stub_->CancelTask(context, request, response);
@@ -318,26 +323,45 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
     return core::Error::Validation("GetTaskRequest.id is required");
   }
 
+  auto context_result = BuildContext(options);
+  if (!context_result.ok()) {
+    return context_result.error();
+  }
+
+  lf::a2a::v1::SubscribeToTaskRequest subscribe_request;
+  subscribe_request.set_id(request.id());
+
   auto state = std::make_shared<StreamHandle::State>();
-  auto worker = StreamHandle::WorkerThread([this, request, &observer, state, options]() {
-    if (state->cancel_requested.load()) {
-      state->active.store(false);
-      return;
-    }
+  auto context = std::move(context_result.value());
+  auto worker = StreamHandle::WorkerThread(
+      [this, state, subscribe_request, &observer, context = std::move(context)]() mutable {
+        auto reader = rpc_client_->SubscribeToTask(context.get(), subscribe_request);
+        if (reader == nullptr) {
+          observer.OnError(core::Error::Internal("Failed to create gRPC subscribe stream reader"));
+          state->active.store(false);
+          return;
+        }
 
-    const auto task = GetTask(request, options);
-    if (!task.ok()) {
-      observer.OnError(task.error());
-      state->active.store(false);
-      return;
-    }
+        lf::a2a::v1::StreamResponse event;
+        while (!state->cancel_requested.load() && reader->Read(&event)) {
+          observer.OnEvent(event);
+        }
 
-    lf::a2a::v1::StreamResponse response;
-    *response.mutable_task() = task.value();
-    observer.OnEvent(response);
-    observer.OnCompleted();
-    state->active.store(false);
-  });
+        const auto status = reader->Finish();
+        if (state->cancel_requested.load()) {
+          state->active.store(false);
+          return;
+        }
+
+        if (!status.ok()) {
+          observer.OnError(BuildGrpcError(status));
+          state->active.store(false);
+          return;
+        }
+
+        observer.OnCompleted();
+        state->active.store(false);
+      });
 
   return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
