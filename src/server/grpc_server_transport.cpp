@@ -33,7 +33,7 @@ namespace {
 }
 
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
-  const auto protocol_code = error.protocol_code();
+  const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
   }
@@ -63,7 +63,7 @@ std::string ErrorCodeName(core::ErrorCode code) {
 }
 
 std::string ErrorInfoReason(const core::Error& error) {
-  const auto protocol_code = error.protocol_code();
+  const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return "TASK_NOT_FOUND";
   }
@@ -94,45 +94,62 @@ std::string ErrorInfoReason(const core::Error& error) {
 }
 
 int GrpcStatusCodeNumber(::grpc::StatusCode code) {
+  constexpr int kStatusOk = 0;
+  constexpr int kStatusCancelled = 1;
+  constexpr int kStatusUnknown = 2;
+  constexpr int kStatusInvalidArgument = 3;
+  constexpr int kStatusDeadlineExceeded = 4;
+  constexpr int kStatusNotFound = 5;
+  constexpr int kStatusAlreadyExists = 6;
+  constexpr int kStatusPermissionDenied = 7;
+  constexpr int kStatusResourceExhausted = 8;
+  constexpr int kStatusFailedPrecondition = 9;
+  constexpr int kStatusAborted = 10;
+  constexpr int kStatusOutOfRange = 11;
+  constexpr int kStatusUnimplemented = 12;
+  constexpr int kStatusInternal = 13;
+  constexpr int kStatusUnavailable = 14;
+  constexpr int kStatusDataLoss = 15;
+  constexpr int kStatusUnauthenticated = 16;
   switch (code) {
     case ::grpc::StatusCode::OK:
-      return 0;
+      return kStatusOk;
     case ::grpc::StatusCode::CANCELLED:
-      return 1;
+      return kStatusCancelled;
     case ::grpc::StatusCode::UNKNOWN:
-      return 2;
+      return kStatusUnknown;
     case ::grpc::StatusCode::INVALID_ARGUMENT:
-      return 3;
+      return kStatusInvalidArgument;
     case ::grpc::StatusCode::DEADLINE_EXCEEDED:
-      return 4;
+      return kStatusDeadlineExceeded;
     case ::grpc::StatusCode::NOT_FOUND:
-      return 5;
+      return kStatusNotFound;
     case ::grpc::StatusCode::ALREADY_EXISTS:
-      return 6;
+      return kStatusAlreadyExists;
     case ::grpc::StatusCode::PERMISSION_DENIED:
-      return 7;
+      return kStatusPermissionDenied;
     case ::grpc::StatusCode::RESOURCE_EXHAUSTED:
-      return 8;
+      return kStatusResourceExhausted;
     case ::grpc::StatusCode::FAILED_PRECONDITION:
-      return 9;
+      return kStatusFailedPrecondition;
     case ::grpc::StatusCode::ABORTED:
-      return 10;
+      return kStatusAborted;
     case ::grpc::StatusCode::OUT_OF_RANGE:
-      return 11;
+      return kStatusOutOfRange;
     case ::grpc::StatusCode::UNIMPLEMENTED:
-      return 12;
+      return kStatusUnimplemented;
     case ::grpc::StatusCode::INTERNAL:
-      return 13;
+      return kStatusInternal;
     case ::grpc::StatusCode::UNAVAILABLE:
-      return 14;
+      return kStatusUnavailable;
     case ::grpc::StatusCode::DATA_LOSS:
-      return 15;
+      return kStatusDataLoss;
     case ::grpc::StatusCode::UNAUTHENTICATED:
-      return 16;
+      return kStatusUnauthenticated;
     case ::grpc::StatusCode::DO_NOT_USE:
       break;
   }
-  return 2;
+  return kStatusUnknown;
 }
 
 void AppendVarint(std::string& out, std::uint64_t value) {

@@ -23,6 +23,7 @@ using a2a::core::ErrorCode;
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpNoContent = 204;
+constexpr int kHistoryLength = 9;
 
 ResolvedInterface MakeResolvedRest() {
   ResolvedInterface resolved;
@@ -43,7 +44,7 @@ TEST(HttpJsonTransportUnitTest, GetTaskBuildsExpectedRequest) {
   A2AClient client(std::move(transport));
   lf::a2a::v1::GetTaskRequest request;
   request.set_id("task-1");
-  request.set_history_length(9);
+  request.set_history_length(kHistoryLength);
   const auto response = client.GetTask(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(captured.method, "GET");

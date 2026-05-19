@@ -10,8 +10,8 @@
 namespace {
 
 constexpr int kHttpOk = 200;
-constexpr int kHttpBadRequest = 400;
 constexpr int kJsonRpcInternalError = -32603;
+constexpr std::size_t kDefaultListTasksPageSize = 50U;
 
 class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -206,7 +206,8 @@ TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
 TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .default_list_tasks_page_size = 50});
+  a2a::server::JsonRpcServerTransport server(
+      &dispatcher, {.rpc_path = "/rpc", .default_list_tasks_page_size = kDefaultListTasksPageSize});
 
   const auto response =
       server.Handle({.method = "POST",

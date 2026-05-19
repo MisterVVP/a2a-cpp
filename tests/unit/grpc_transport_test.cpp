@@ -16,9 +16,9 @@
 
 namespace {
 
-constexpr char kGrpcEndpoint[] = "localhost:50051";
-constexpr char kAuthHeaderName[] = "X-Test-API-Key";
-constexpr char kStreamFailureMessage[] = "stream unavailable";
+const std::string kGrpcEndpoint = "localhost:50051";
+const std::string kAuthHeaderName = "X-Test-API-Key";
+const std::string kStreamFailureMessage = "stream unavailable";
 constexpr int kStreamPollIntervalMs = 1;
 
 class FakeStreamReader final : public a2a::client::GrpcTransport::StreamReader {
