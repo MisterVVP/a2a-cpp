@@ -283,4 +283,30 @@ TEST(GrpcServerTransportTest, PushNotificationMethodsReturnProtocolMessage) {
   EXPECT_FALSE(get_status.error_message().empty());
 }
 
+TEST(GrpcServerTransportTest, StreamingRpcsValidateNullRequestPointers) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  EXPECT_EQ(transport.SendStreamingMessage(&context, nullptr, nullptr).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(transport.SubscribeToTask(&context, nullptr, nullptr).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(GrpcServerTransportTest, MissingVersionHeaderIncludesHelpfulMessage) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task response;
+
+  const auto status = transport.GetTask(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_NE(status.error_message().find("Missing required A2A-Version header"), std::string::npos);
+}
+
 }  // namespace
