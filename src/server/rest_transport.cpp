@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -77,7 +78,7 @@ std::optional<std::string> ParseTaskIdFromActionPath(std::string_view path, std:
 
   const auto id_start = RestEndpointPaths::kTaskResourcePrefix.size();
   const auto id_length = path.size() - id_start - action_suffix.size();
-  const std::string task_id(path.substr(id_start, id_length));
+  std::string task_id(path.substr(id_start, id_length));
   if (task_id.empty() || task_id.find('/') != std::string::npos) {
     return std::nullopt;
   }
@@ -130,11 +131,10 @@ std::string ErrorStatusName(int http_status) {
     case kHttpConflict:
       return "FAILED_PRECONDITION";
     case kHttpBadGateway:
+    case kHttpInternalServerError:
       return "INTERNAL";
     case kHttpServiceUnavailable:
       return "UNAVAILABLE";
-    case kHttpInternalServerError:
-      return "INTERNAL";
     default:
       return "UNKNOWN";
   }
@@ -157,17 +157,11 @@ std::string ErrorInfoReason(const core::Error& error) {
     }
   }
 
-  switch (error.code()) {
-    case core::ErrorCode::kUnsupportedVersion:
-      return "VERSION_NOT_SUPPORTED";
-    case core::ErrorCode::kRemoteProtocol:
-      return "UNSUPPORTED_OPERATION";
-    case core::ErrorCode::kValidation:
-      return "UNSUPPORTED_OPERATION";
-    case core::ErrorCode::kNetwork:
-    case core::ErrorCode::kSerialization:
-    case core::ErrorCode::kInternal:
-      return "INVALID_AGENT_RESPONSE";
+  if (error.code() == core::ErrorCode::kUnsupportedVersion) {
+    return "VERSION_NOT_SUPPORTED";
+  }
+  if (error.code() == core::ErrorCode::kRemoteProtocol || error.code() == core::ErrorCode::kValidation) {
+    return "UNSUPPORTED_OPERATION";
   }
   return "INVALID_AGENT_RESPONSE";
 }
@@ -177,18 +171,14 @@ int ToHttpStatus(const core::Error& error) {
   if (http_status.has_value()) {
     return *http_status;
   }
-  switch (error.code()) {
-    case core::ErrorCode::kValidation:
-      return kHttpBadRequest;
-    case core::ErrorCode::kUnsupportedVersion:
-      return kHttpBadRequest;
-    case core::ErrorCode::kNetwork:
-      return kHttpServiceUnavailable;
-    case core::ErrorCode::kRemoteProtocol:
-      return kHttpBadGateway;
-    case core::ErrorCode::kSerialization:
-    case core::ErrorCode::kInternal:
-      return kHttpInternalServerError;
+  if (error.code() == core::ErrorCode::kValidation || error.code() == core::ErrorCode::kUnsupportedVersion) {
+    return kHttpBadRequest;
+  }
+  if (error.code() == core::ErrorCode::kNetwork) {
+    return kHttpServiceUnavailable;
+  }
+  if (error.code() == core::ErrorCode::kRemoteProtocol) {
+    return kHttpBadGateway;
   }
   return kHttpInternalServerError;
 }
@@ -265,10 +255,11 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
     if (!next.ok()) {
       return next.error();
     }
-    if (!next.value().has_value()) {
+    const auto& event = next.value();
+    if (!event.has_value()) {
       break;
     }
-    const auto append = AppendSseEvent(response, *next.value());
+    const auto append = AppendSseEvent(response, event.value());
     if (!append.ok()) {
       return append.error();
     }
@@ -306,6 +297,94 @@ core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task)
   return response;
 }
 
+std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& request) {
+  if (request.method != "POST" ||
+      (request.path != RestEndpointPaths::kSendMessage && request.path != RestEndpointPaths::kSendStreamingMessage)) {
+    return std::nullopt;
+  }
+
+  lf::a2a::v1::SendMessageRequest payload;
+  const auto parse = core::JsonToMessage(request.body, &payload);
+  if (!parse.ok()) {
+    return std::nullopt;
+  }
+
+  const DispatcherOperation operation = request.path == RestEndpointPaths::kSendStreamingMessage
+                                            ? DispatcherOperation::kSendStreamingMessage
+                                            : DispatcherOperation::kSendMessage;
+  return DispatchRequest{.operation = operation, .payload = payload};
+}
+
+std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& request) {
+  if (request.method != "GET" || request.path != RestEndpointPaths::kTaskCollection) {
+    return std::nullopt;
+  }
+
+  ListTasksRequest payload;
+  if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
+    const int parsed_page_size = ParsePageSize(*raw_page_size);
+    if (parsed_page_size < 0) {
+      return std::nullopt;
+    }
+    payload.page_size = static_cast<std::size_t>(parsed_page_size);
+  }
+
+  if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
+    payload.page_token = *raw_page_token;
+  }
+  if (const auto context_id = LookupQuery(request, "contextId"); context_id.has_value()) {
+    payload.context_id = *context_id;
+  }
+  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
+    const int parsed_history_length = ParsePageSize(*history_length);
+    if (parsed_history_length < 0) {
+      return std::nullopt;
+    }
+    payload.history_length = static_cast<std::size_t>(parsed_history_length);
+  }
+  if (const auto include_artifacts = LookupQuery(request, "includeArtifacts"); include_artifacts.has_value()) {
+    payload.include_artifacts = *include_artifacts == "true";
+  }
+  return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
+}
+
+std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& request) {
+  if (request.method != "GET") {
+    return std::nullopt;
+  }
+
+  const auto task_id = ParseTaskIdFromPath(request.path, false);
+  if (!task_id.has_value()) {
+    return std::nullopt;
+  }
+
+  lf::a2a::v1::GetTaskRequest payload;
+  payload.set_id(*task_id);
+  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
+    const int parsed_history_length = ParsePageSize(*history_length);
+    if (parsed_history_length < 0) {
+      return std::nullopt;
+    }
+    payload.set_history_length(parsed_history_length);
+  }
+  return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
+}
+
+std::optional<DispatchRequest> BuildCancelTaskDispatchRequest(const RestRequest& request) {
+  if (request.method != "POST") {
+    return std::nullopt;
+  }
+
+  const auto task_id = ParseTaskIdFromPath(request.path, true);
+  if (!task_id.has_value()) {
+    return std::nullopt;
+  }
+
+  lf::a2a::v1::CancelTaskRequest payload;
+  payload.set_id(*task_id);
+  return DispatchRequest{.operation = DispatcherOperation::kCancelTask, .payload = payload};
+}
+
 }  // namespace
 
 RestTransport::RestTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
@@ -316,74 +395,16 @@ const std::vector<RestRoute>& RestTransport::Routes() {
 }
 
 std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestRequest& request) {
-  if (request.method == "POST" &&
-      (request.path == RestEndpointPaths::kSendMessage || request.path == RestEndpointPaths::kSendStreamingMessage)) {
-    lf::a2a::v1::SendMessageRequest payload;
-    const auto parse = core::JsonToMessage(request.body, &payload);
-    if (!parse.ok()) {
-      return std::nullopt;
-    }
-    const DispatcherOperation operation = request.path == RestEndpointPaths::kSendStreamingMessage
-                                              ? DispatcherOperation::kSendStreamingMessage
-                                              : DispatcherOperation::kSendMessage;
-    return DispatchRequest{.operation = operation, .payload = payload};
+  if (auto dispatch_request = BuildMessageDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
   }
-
-  if (request.method == "GET" && request.path == RestEndpointPaths::kTaskCollection) {
-    ListTasksRequest payload;
-    if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
-      const int parsed_page_size = ParsePageSize(*raw_page_size);
-      if (parsed_page_size < 0) {
-        return std::nullopt;
-      }
-      payload.page_size = static_cast<std::size_t>(parsed_page_size);
-    }
-
-    if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
-      payload.page_token = *raw_page_token;
-    }
-    if (const auto context_id = LookupQuery(request, "contextId"); context_id.has_value()) {
-      payload.context_id = *context_id;
-    }
-    if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
-      const int parsed_history_length = ParsePageSize(*history_length);
-      if (parsed_history_length < 0) {
-        return std::nullopt;
-      }
-      payload.history_length = static_cast<std::size_t>(parsed_history_length);
-    }
-    if (const auto include_artifacts = LookupQuery(request, "includeArtifacts"); include_artifacts.has_value()) {
-      payload.include_artifacts = *include_artifacts == "true";
-    }
-    return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
+  if (auto dispatch_request = BuildListTasksDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
   }
-
-  if (request.method == "GET") {
-    const auto task_id = ParseTaskIdFromPath(request.path, false);
-    if (task_id.has_value()) {
-      lf::a2a::v1::GetTaskRequest payload;
-      payload.set_id(task_id.value());
-      if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
-        const int parsed_history_length = ParsePageSize(*history_length);
-        if (parsed_history_length < 0) {
-          return std::nullopt;
-        }
-        payload.set_history_length(parsed_history_length);
-      }
-      return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
-    }
+  if (auto dispatch_request = BuildGetTaskDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
   }
-
-  if (request.method == "POST") {
-    const auto task_id = ParseTaskIdFromPath(request.path, true);
-    if (task_id.has_value()) {
-      lf::a2a::v1::CancelTaskRequest payload;
-      payload.set_id(task_id.value());
-      return DispatchRequest{.operation = DispatcherOperation::kCancelTask, .payload = payload};
-    }
-  }
-
-  return std::nullopt;
+  return BuildCancelTaskDispatchRequest(request);
 }
 
 core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOperation operation,
@@ -458,7 +479,6 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   auto* envelope_fields = envelope.mutable_fields();
   google::protobuf::Value error_node;
   auto* error_fields = error_node.mutable_struct_value()->mutable_fields();
-
   (*error_fields)["code"].set_number_value(http_status);
   (*error_fields)["status"].set_string_value(ErrorStatusName(http_status));
   (*error_fields)["message"].set_string_value(std::string(error.message()));
