@@ -1,6 +1,11 @@
 #include "a2a/server/grpc_server_transport.h"
 
+#if __has_include(<grpcpp/test/server_context_test_spouse.h>)
 #include <grpcpp/test/server_context_test_spouse.h>
+#define A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE 1
+#else
+#define A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE 0
+#endif
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -135,6 +140,7 @@ TEST(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
             grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+#if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 void AddValidVersionHeader(grpc::testing::ServerContextTestSpouse& spouse) {
   spouse.AddClientMetadata(std::string(a2a::server::GrpcServerTransport::kVersionMetadataKey),
                            a2a::core::Version::HeaderValue());
@@ -257,6 +263,8 @@ TEST(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
   EXPECT_EQ(executor.observed_list_request.context_id, "ctx-1");
   EXPECT_TRUE(executor.observed_list_request.include_artifacts);
 }
+
+#endif  // A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 
 TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnaryOperations) {
   FakeExecutor executor;
