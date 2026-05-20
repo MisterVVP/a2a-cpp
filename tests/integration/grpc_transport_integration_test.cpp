@@ -204,10 +204,32 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   get_request.set_id("missing-task-id");
   const auto get_response = client->GetTaskPushNotificationConfig(get_request);
   if (get_response.ok()) {
-    return a2a::core::Error::Internal("Unsupported push-config request should fail");
+    return a2a::core::Error::Internal("Unsupported push-config get request should fail");
   }
-  if (get_response.error().message().empty()) {
-    return a2a::core::Error::Internal("Unsupported push-config error should include a message");
+
+  lf::a2a::v1::TaskPushNotificationConfig create_request;
+  create_request.set_id("missing-task-id");
+  const auto create_response = client->CreateTaskPushNotificationConfig(create_request);
+  if (create_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config create request should fail");
+  }
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest list_request;
+  const auto list_response = client->ListTaskPushNotificationConfigs(list_request);
+  if (list_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config list request should fail");
+  }
+
+  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
+  delete_request.set_id("missing-task-id");
+  const auto delete_response = client->DeleteTaskPushNotificationConfig(delete_request);
+  if (delete_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config delete request should fail");
+  }
+
+  if (get_response.error().message().empty() || create_response.error().message().empty() ||
+      list_response.error().message().empty() || delete_response.error().message().empty()) {
+    return a2a::core::Error::Internal("Unsupported push-config errors should include messages");
   }
 
   return {};
