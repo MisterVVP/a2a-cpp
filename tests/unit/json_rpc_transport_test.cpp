@@ -331,25 +331,15 @@ TEST(JsonRpcTransportUnitTest, ValidatesRequiredIdsForTaskAndPushConfigOperation
         return a2a::core::Error::Internal("requester should not be called");
       }));
 
-  lf::a2a::v1::GetTaskRequest get_task;
-  const auto get_task_response = client.GetTask(get_task);
-  ASSERT_FALSE(get_task_response.ok());
-  EXPECT_EQ(get_task_response.error().code(), ErrorCode::kValidation);
+  const auto expect_validation = [](const auto& result) {
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code(), ErrorCode::kValidation);
+  };
 
-  lf::a2a::v1::CancelTaskRequest cancel_task;
-  const auto cancel_task_response = client.CancelTask(cancel_task);
-  ASSERT_FALSE(cancel_task_response.ok());
-  EXPECT_EQ(cancel_task_response.error().code(), ErrorCode::kValidation);
-
-  lf::a2a::v1::GetTaskPushNotificationConfigRequest get_push;
-  const auto get_push_response = client.GetTaskPushNotificationConfig(get_push);
-  ASSERT_FALSE(get_push_response.ok());
-  EXPECT_EQ(get_push_response.error().code(), ErrorCode::kValidation);
-
-  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_push;
-  const auto delete_push_response = client.DeleteTaskPushNotificationConfig(delete_push);
-  ASSERT_FALSE(delete_push_response.ok());
-  EXPECT_EQ(delete_push_response.error().code(), ErrorCode::kValidation);
+  expect_validation(client.GetTask(lf::a2a::v1::GetTaskRequest{}));
+  expect_validation(client.CancelTask(lf::a2a::v1::CancelTaskRequest{}));
+  expect_validation(client.GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest{}));
+  expect_validation(client.DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest{}));
 }
 
 TEST(JsonRpcTransportUnitTest, ReturnsValidationForUnsupportedStreamingOperations) {
