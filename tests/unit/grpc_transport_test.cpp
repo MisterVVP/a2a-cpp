@@ -164,6 +164,12 @@ void WaitForStream(const a2a::client::StreamHandle& stream) {
   }
 }
 
+void ExpectObserverErrorCode(const RecordingObserver& observer, a2a::core::ErrorCode expected_code) {
+  ASSERT_TRUE(observer.last_error.has_value());
+  const auto& error = observer.last_error.value();
+  EXPECT_EQ(error.code(), expected_code);
+}
+
 TEST(GrpcTransportTest, GetTaskValidatesRequestId) {
   auto rpc = std::make_unique<FakeRpcClient>();
   a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
@@ -253,8 +259,7 @@ TEST(GrpcTransportTest, SendStreamingMessageReportsReaderAndFinishErrors) {
 
     EXPECT_TRUE(observer.events.empty());
     EXPECT_FALSE(observer.completed);
-    ASSERT_TRUE(observer.last_error.has_value());
-    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kInternal);
+    ExpectObserverErrorCode(observer, a2a::core::ErrorCode::kInternal);
   }
 
   {
@@ -271,8 +276,7 @@ TEST(GrpcTransportTest, SendStreamingMessageReportsReaderAndFinishErrors) {
 
     EXPECT_TRUE(observer.events.empty());
     EXPECT_FALSE(observer.completed);
-    ASSERT_TRUE(observer.last_error.has_value());
-    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kRemoteProtocol);
+    ExpectObserverErrorCode(observer, a2a::core::ErrorCode::kRemoteProtocol);
   }
 }
 
@@ -327,8 +331,7 @@ TEST(GrpcTransportTest, SubscribeTaskValidatesInputAndReportsStreamErrors) {
 
     EXPECT_TRUE(observer.events.empty());
     EXPECT_FALSE(observer.completed);
-    ASSERT_TRUE(observer.last_error.has_value());
-    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kInternal);
+    ExpectObserverErrorCode(observer, a2a::core::ErrorCode::kInternal);
   }
 
   {
@@ -347,8 +350,7 @@ TEST(GrpcTransportTest, SubscribeTaskValidatesInputAndReportsStreamErrors) {
 
     EXPECT_TRUE(observer.events.empty());
     EXPECT_FALSE(observer.completed);
-    ASSERT_TRUE(observer.last_error.has_value());
-    EXPECT_EQ(observer.last_error->code(), a2a::core::ErrorCode::kRemoteProtocol);
+    ExpectObserverErrorCode(observer, a2a::core::ErrorCode::kRemoteProtocol);
   }
 }
 
