@@ -43,6 +43,7 @@ These instructions apply to the entire repository. Follow them for all changes u
 - Use project formatter and linter in CI and locally before merging.
 - Treat warnings as actionable; keep warning count at zero for touched code.
 - Keep diffs small and reviewable.
+- Do not suppress linter findings with `NOLINT` unless there is a documented, reviewer-approved justification in code comments and the PR description. Prefer structural refactors that eliminate the warning.
 - Document non-obvious decisions with short comments near the code.
 - **Magic strings are forbidden** in production and test code. Use named `constexpr` constants (or equivalent strongly typed constants) and centralize protocol literals in shared headers where possible.
 - Prioritize performance and algorithmic efficiency:

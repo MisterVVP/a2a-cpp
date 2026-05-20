@@ -152,10 +152,12 @@ int GrpcStatusCodeNumber(::grpc::StatusCode code) {
   return kStatusUnknown;
 }
 
+constexpr std::uint64_t kVarintContinuationBit = 0x80U;
+constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
+constexpr std::uint32_t kVarintShiftBits = 7U;
+constexpr int32_t kMaxListTasksPageSize = 100;
+
 void AppendVarint(std::string& out, std::uint64_t value) {
-  constexpr std::uint64_t kVarintContinuationBit = 0x80U;
-  constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
-  constexpr std::uint32_t kVarintShiftBits = 7U;
   while (value >= kVarintContinuationBit) {
     out.push_back(static_cast<char>((value & kVarintPayloadMask) | kVarintContinuationBit));
     value >>= kVarintShiftBits;
@@ -376,7 +378,6 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   ListTasksRequest list_request;
   if (request->has_page_size()) {
     const int32_t page_size = request->page_size();
-    constexpr int32_t kMaxListTasksPageSize = 100;
     if (page_size <= 0 || page_size > kMaxListTasksPageSize) {
       return ToGrpcStatus(core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
     }

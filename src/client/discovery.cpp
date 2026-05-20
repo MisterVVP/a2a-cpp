@@ -45,13 +45,18 @@ using a2a::core::protocol_bindings::kGrpc;
 using a2a::core::protocol_bindings::kHttpJson;
 using a2a::core::protocol_bindings::kJsonRpc;
 
-bool IsValidInterfaceEndpoint(std::string_view protocol_binding,
-                              std::string_view endpoint) {  // NOLINT(bugprone-easily-swappable-parameters)
-  if (protocol_binding == kHttpJson || protocol_binding == kJsonRpc) {
-    return HasHttpScheme(endpoint);
+struct InterfaceEndpoint final {
+  std::string_view protocol_binding;
+  std::string_view endpoint;
+};
+
+bool IsValidInterfaceEndpoint(const InterfaceEndpoint& candidate) {
+  if (candidate.protocol_binding == kHttpJson || candidate.protocol_binding == kJsonRpc) {
+    return HasHttpScheme(candidate.endpoint);
   }
-  if (protocol_binding == kGrpc) {
-    return HasGrpcScheme(endpoint) || HasHttpScheme(endpoint) || HasHostPortShape(endpoint);
+  if (candidate.protocol_binding == kGrpc) {
+    return HasGrpcScheme(candidate.endpoint) || HasHttpScheme(candidate.endpoint) ||
+           HasHostPortShape(candidate.endpoint);
   }
   return false;
 }
@@ -201,7 +206,7 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
     if (iface.url().empty()) {
       return core::Error::Validation("Agent Card contains an interface without a URL");
     }
-    if (!IsValidInterfaceEndpoint(iface.protocol_binding(), iface.url())) {
+    if (!IsValidInterfaceEndpoint({.protocol_binding = iface.protocol_binding(), .endpoint = iface.url()})) {
       return core::Error::Validation("Agent Card interface endpoint is invalid for its protocol binding");
     }
     for (const auto& requirement : card.security_requirements()) {
@@ -216,52 +221,46 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
   return {};
 }
 
-core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
-    const lf::a2a::v1::AgentCard& card,
-    PreferredTransport preferred) {  // NOLINT(readability-function-cognitive-complexity)
+std::array<std::string_view, 3> BuildTransportOrder(std::string_view preferred_wire) {
+  if (preferred_wire == kHttpJson) {
+    return {kHttpJson, kJsonRpc, kGrpc};
+  }
+  if (preferred_wire == kJsonRpc) {
+    return {kJsonRpc, kHttpJson, kGrpc};
+  }
+  return {kGrpc, kHttpJson, kJsonRpc};
+}
+
+void PopulateSecurityMetadata(const lf::a2a::v1::AgentCard& card, ResolvedInterface& resolved) {
+  for (const auto& requirement : card.security_requirements()) {
+    for (const auto& [scheme_name, _] : requirement.schemes()) {
+      resolved.security_requirements.push_back(scheme_name);
+    }
+  }
+  for (const auto& name : resolved.security_requirements) {
+    const auto scheme = card.security_schemes().find(name);
+    if (scheme != card.security_schemes().end()) {
+      resolved.security_schemes.emplace(name, scheme->second);
+    }
+  }
+}
+
+core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(const lf::a2a::v1::AgentCard& card,
+                                                                            PreferredTransport preferred) {
   const auto preferred_wire = ToWireTransport(preferred);
   if (!preferred_wire.has_value()) {
     return core::Error::Validation("Invalid preferred transport requested");
   }
 
-  std::array<std::string_view, 3> order = {preferred_wire.value(), kHttpJson, kJsonRpc};
-  if (preferred_wire.value() == kHttpJson) {
-    order[1] = kJsonRpc;
-    order[2] = kGrpc;
-  } else if (preferred_wire.value() == kJsonRpc) {
-    order[1] = kHttpJson;
-    order[2] = kGrpc;
-  } else {
-    order[1] = kHttpJson;
-    order[2] = kJsonRpc;
-  }
-
-  for (const auto transport : order) {
+  for (const auto transport : BuildTransportOrder(preferred_wire.value())) {
     for (const auto& iface : card.supported_interfaces()) {
-      if (iface.protocol_binding() != transport) {
+      if (iface.protocol_binding() != transport || !ValidateInterface(iface).ok()) {
         continue;
       }
-      const auto valid = ValidateInterface(iface);
-      if (!valid.ok()) {
-        continue;
-      }
-
       ResolvedInterface resolved;
       resolved.transport = ToPreferredTransport(iface.protocol_binding());
       resolved.url = iface.url();
-      if (!card.security_requirements().empty()) {
-        for (const auto& requirement : card.security_requirements()) {
-          for (const auto& [scheme_name, _] : requirement.schemes()) {
-            resolved.security_requirements.push_back(scheme_name);
-          }
-        }
-      }
-      for (const auto& name : resolved.security_requirements) {
-        const auto scheme = card.security_schemes().find(name);
-        if (scheme != card.security_schemes().end()) {
-          resolved.security_schemes.emplace(name, scheme->second);
-        }
-      }
+      PopulateSecurityMetadata(card, resolved);
       return resolved;
     }
   }
@@ -276,7 +275,7 @@ core::Result<void> AgentCardResolver::ValidateInterface(const lf::a2a::v1::Agent
   if (iface.url().empty()) {
     return core::Error::Validation("Missing interface URL");
   }
-  if (!IsValidInterfaceEndpoint(iface.protocol_binding(), iface.url())) {
+  if (!IsValidInterfaceEndpoint({.protocol_binding = iface.protocol_binding(), .endpoint = iface.url()})) {
     return core::Error::Validation("Interface endpoint is invalid for its protocol binding");
   }
   return {};
