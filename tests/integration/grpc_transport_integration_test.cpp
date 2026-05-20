@@ -350,6 +350,27 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return {};
 }
 
+[[nodiscard]] a2a::core::Result<void> VerifyExtendedAgentCardRpc(int port) {
+  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+  auto stub = lf::a2a::v1::A2AService::NewStub(channel);
+  grpc::ClientContext context;
+  context.AddMetadata("a2a-version", "1.0");
+
+  lf::a2a::v1::GetExtendedAgentCardRequest request;
+  lf::a2a::v1::AgentCard response;
+  const auto status = stub->GetExtendedAgentCard(&context, request, &response);
+  if (!status.ok()) {
+    return a2a::core::Error::Internal("GetExtendedAgentCard RPC failed");
+  }
+  if (response.name() != "A2A C++ SDK Agent") {
+    return a2a::core::Error::Internal("Unexpected agent card name");
+  }
+  if (!response.capabilities().streaming() || response.capabilities().push_notifications()) {
+    return a2a::core::Error::Internal("Unexpected capability defaults");
+  }
+  return {};
+}
+
 [[nodiscard]] a2a::core::Result<void> VerifyMissingTaskLookupFails(a2a::client::A2AClient* client) {
   if (client == nullptr) {
     return a2a::core::Error::Internal("Client must not be null");
@@ -425,6 +446,17 @@ TEST(GrpcTransportIntegrationTest, ListTasksValidationErrorsAreReturned) {
   auto client = BuildClient(harness->port);
   const auto validation = VerifyListTasksValidation(client.get());
   ASSERT_TRUE(validation.ok()) << validation.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, GetExtendedAgentCardReturnsCompatibilityDefaults) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  const auto card = VerifyExtendedAgentCardRpc(harness->port);
+  ASSERT_TRUE(card.ok()) << card.error().message();
 
   harness->server->Shutdown();
 }
