@@ -46,12 +46,16 @@ TEST(ExampleSupportTest, StreamingAndListTasksAreDeterministic) {
   const auto first = stream_result.value()->Next();
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(first.value().has_value());
-  EXPECT_EQ(first.value()->status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(first.value().has_value());
+  EXPECT_EQ(first.value().value().status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
 
   const auto second = stream_result.value()->Next();
   ASSERT_TRUE(second.ok());
   ASSERT_TRUE(second.value().has_value());
-  EXPECT_EQ(second.value()->status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(second.value().has_value());
+  EXPECT_EQ(second.value().value().status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
 
   const auto done = stream_result.value()->Next();
   ASSERT_TRUE(done.ok());
