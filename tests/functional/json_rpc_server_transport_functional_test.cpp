@@ -10,7 +10,6 @@
 namespace {
 
 constexpr int kHttpOk = 200;
-constexpr int kHttpUpgradeRequired = 426;
 
 TEST(JsonRpcServerTransportFunctionalTest, SupportsTaskLifecycleMethodsOverJsonRpc) {
   a2a::server::InMemoryTaskStore store;

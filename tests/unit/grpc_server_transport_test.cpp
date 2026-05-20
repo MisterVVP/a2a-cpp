@@ -1,5 +1,11 @@
 #include "a2a/server/grpc_server_transport.h"
 
+#if __has_include(<grpcpp/test/server_context_test_spouse.h>)
+#include <grpcpp/test/server_context_test_spouse.h>
+#define A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE 1
+#else
+#define A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE 0
+#endif
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -7,6 +13,8 @@
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/protocol_errors.h"
+#include "a2a/core/version.h"
 #include "a2a/server/server.h"
 
 namespace {
@@ -36,6 +44,9 @@ class FakeStreamSession final : public a2a::server::ServerStreamSession {
 class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
   bool fail_send = false;
+  bool fail_get_task = false;
+  bool fail_cancel_task = false;
+  bool fail_list_tasks = false;
 
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& context) override {
@@ -59,6 +70,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                a2a::server::RequestContext& context) override {
     (void)context;
+    if (fail_get_task) {
+      return a2a::core::protocol_errors::TaskNotFound(request.id());
+    }
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     return task;
@@ -67,6 +81,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
                                                               a2a::server::RequestContext& context) override {
     (void)context;
+    if (fail_list_tasks) {
+      return a2a::core::protocol_errors::UnsupportedOperation("list not supported");
+    }
     observed_list_request = request;
     a2a::server::ListTasksResponse response;
     response.page_size = request.page_size;
@@ -77,6 +94,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                   a2a::server::RequestContext& context) override {
     (void)context;
+    if (fail_cancel_task) {
+      return a2a::core::protocol_errors::TaskNotCancelable(request.id());
+    }
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     return task;
@@ -119,6 +139,133 @@ TEST(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
   EXPECT_EQ(service->GetExtendedAgentCard(&context, &card_request, nullptr).error_code(),
             grpc::StatusCode::INVALID_ARGUMENT);
 }
+
+#if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
+void AddValidVersionHeader(grpc::testing::ServerContextTestSpouse& spouse) {
+  spouse.AddClientMetadata(std::string(a2a::server::GrpcServerTransport::kVersionMetadataKey),
+                           a2a::core::Version::HeaderValue());
+}
+
+TEST(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_task_id(std::string(kTaskIdOne));
+  lf::a2a::v1::SendMessageResponse response;
+
+  const auto status = transport.SendMessage(&context, &request, &response);
+  EXPECT_TRUE(status.ok());
+  EXPECT_EQ(response.task().id(), std::string(kTaskIdOne));
+}
+
+TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) {
+  FakeExecutor executor;
+  executor.fail_send = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_task_id(std::string(kTaskIdOne));
+  lf::a2a::v1::SendMessageResponse response;
+
+  const auto status = transport.SendMessage(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+
+  const auto trailing = spouse.GetTrailingMetadata();
+  EXPECT_TRUE(trailing.find("a2a-error-code") != trailing.end());
+  EXPECT_TRUE(trailing.find(std::string(a2a::server::GrpcServerTransport::kProtocolCodeMetadataKey)) != trailing.end());
+  EXPECT_TRUE(trailing.find("grpc-status-details-bin") != trailing.end());
+}
+
+TEST(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {
+  FakeExecutor executor;
+  executor.fail_get_task = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task response;
+
+  const auto status = transport.GetTask(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::NOT_FOUND);
+}
+
+TEST(GrpcServerTransportTest, CancelTaskProtocolErrorMapsToFailedPrecondition) {
+  FakeExecutor executor;
+  executor.fail_cancel_task = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::CancelTaskRequest request;
+  request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task response;
+
+  const auto status = transport.CancelTask(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
+}
+
+TEST(GrpcServerTransportTest, ListTasksValidatesPageSizeAndHistoryLength) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::ListTasksRequest request;
+  request.set_page_size(0);
+  lf::a2a::v1::ListTasksResponse response;
+  EXPECT_EQ(transport.ListTasks(&context, &request, &response).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+
+  lf::a2a::v1::ListTasksRequest request_large_page_size;
+  constexpr int32_t kInvalidLargePageSize = 101;
+  request_large_page_size.set_page_size(kInvalidLargePageSize);
+  EXPECT_EQ(transport.ListTasks(&context, &request_large_page_size, &response).error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::ListTasksRequest request;
+  request.set_page_size(3);
+  request.set_page_token("token-1");
+  request.set_context_id("ctx-1");
+  request.set_history_length(2);
+  request.set_include_artifacts(true);
+  request.set_status(lf::a2a::v1::TASK_STATE_WORKING);
+  lf::a2a::v1::ListTasksResponse response;
+
+  const auto status = transport.ListTasks(&context, &request, &response);
+  EXPECT_TRUE(status.ok());
+  EXPECT_EQ(response.page_size(), 3);
+  EXPECT_EQ(response.total_size(), 1);
+  EXPECT_EQ(executor.observed_list_request.page_token, "token-1");
+  EXPECT_EQ(executor.observed_list_request.context_id, "ctx-1");
+  EXPECT_TRUE(executor.observed_list_request.include_artifacts);
+}
+
+#endif  // A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 
 TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnaryOperations) {
   FakeExecutor executor;

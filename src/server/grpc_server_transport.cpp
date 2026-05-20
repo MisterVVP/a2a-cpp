@@ -152,10 +152,15 @@ int GrpcStatusCodeNumber(::grpc::StatusCode code) {
   return kStatusUnknown;
 }
 
+constexpr std::uint64_t kVarintContinuationBit = 0x80U;
+constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
+constexpr std::uint32_t kVarintShiftBits = 7U;
+constexpr int32_t kMaxListTasksPageSize = 100;
+
 void AppendVarint(std::string& out, std::uint64_t value) {
-  while (value >= 0x80U) {
-    out.push_back(static_cast<char>((value & 0x7FU) | 0x80U));
-    value >>= 7U;
+  while (value >= kVarintContinuationBit) {
+    out.push_back(static_cast<char>((value & kVarintPayloadMask) | kVarintContinuationBit));
+    value >>= kVarintShiftBits;
   }
   out.push_back(static_cast<char>(value));
 }
@@ -177,7 +182,7 @@ std::string SerializeErrorInfo(const core::Error& error) {
   return message;
 }
 
-std::string SerializeAny(std::string type_url, const std::string& value) {
+std::string SerializeAny(const std::string& type_url, const std::string& value) {
   std::string message;
   AppendLengthDelimited(message, 1U, type_url);
   AppendLengthDelimited(message, 2U, value);
@@ -373,7 +378,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   ListTasksRequest list_request;
   if (request->has_page_size()) {
     const int32_t page_size = request->page_size();
-    if (page_size <= 0 || page_size > 100) {
+    if (page_size <= 0 || page_size > kMaxListTasksPageSize) {
       return ToGrpcStatus(core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
     }
     list_request.page_size = static_cast<std::size_t>(page_size);

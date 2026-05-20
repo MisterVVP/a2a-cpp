@@ -202,22 +202,44 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     return core::Error::Internal("JSON-RPC max_list_tasks_page_size must be at least 1");
   }
 
+  const auto& fields = params.fields();
   ListTasksRequest payload;
-  const auto page_size_it = params.fields().find("pageSize");
-  if (page_size_it != params.fields().end()) {
-    if (page_size_it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
+  auto parse_page_size = [&]() -> core::Result<void> {
+    const auto it = fields.find("pageSize");
+    if (it == fields.end()) {
+      return {};
+    }
+    if (it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
       return core::Error::Validation("ListTasksRequest.pageSize must be a number");
     }
-    const double page_size = page_size_it->second.number_value();
+    const double page_size = it->second.number_value();
     if (page_size < static_cast<double>(kMinPageSize) ||
         page_size > static_cast<double>(options.max_list_tasks_page_size)) {
       return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and " +
                                      std::to_string(options.max_list_tasks_page_size));
     }
     payload.page_size = static_cast<std::size_t>(page_size);
-  }
+    return {};
+  };
+  auto parse_context_id = [&]() -> core::Result<void> {
+    const auto context_id_it = fields.find("contextId");
+    if (context_id_it != fields.end()) {
+      if (context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+        return core::Error::Validation("ListTasksRequest.contextId must be a string");
+      }
+      payload.context_id = context_id_it->second.string_value();
+    }
+    const auto snake_context_id_it = fields.find("context_id");
+    if (payload.context_id.empty() && snake_context_id_it != fields.end()) {
+      if (snake_context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+        return core::Error::Validation("ListTasksRequest.context_id must be a string");
+      }
+      payload.context_id = snake_context_id_it->second.string_value();
+    }
+    return {};
+  };
 
-  const auto page_token_it = params.fields().find("pageToken");
+  const auto page_token_it = fields.find("pageToken");
   if (page_token_it != params.fields().end()) {
     if (page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Validation("ListTasksRequest.pageToken must be a string");
@@ -234,23 +256,16 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     }
   }
 
-  const auto context_id_it = params.fields().find("contextId");
-  if (context_id_it != params.fields().end()) {
-    if (context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Validation("ListTasksRequest.contextId must be a string");
-    }
-    payload.context_id = context_id_it->second.string_value();
+  const auto parse_page_size_result = parse_page_size();
+  if (!parse_page_size_result.ok()) {
+    return parse_page_size_result.error();
+  }
+  const auto parse_context_id_result = parse_context_id();
+  if (!parse_context_id_result.ok()) {
+    return parse_context_id_result.error();
   }
 
-  const auto snake_context_id_it = params.fields().find("context_id");
-  if (payload.context_id.empty() && snake_context_id_it != params.fields().end()) {
-    if (snake_context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Validation("ListTasksRequest.context_id must be a string");
-    }
-    payload.context_id = snake_context_id_it->second.string_value();
-  }
-
-  const auto status_it = params.fields().find("status");
+  const auto status_it = fields.find("status");
   if (status_it != params.fields().end()) {
     if (status_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Validation("ListTasksRequest.status must be a string");
@@ -262,7 +277,7 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     payload.status_filter = state;
   }
 
-  const auto timestamp_after_it = params.fields().find("statusTimestampAfter");
+  const auto timestamp_after_it = fields.find("statusTimestampAfter");
   if (timestamp_after_it != params.fields().end()) {
     if (timestamp_after_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
       return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be a string");
@@ -275,7 +290,7 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     payload.status_timestamp_after = ts;
   }
 
-  const auto history_length_it = params.fields().find("historyLength");
+  const auto history_length_it = fields.find("historyLength");
   if (history_length_it != params.fields().end()) {
     if (history_length_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
         history_length_it->second.number_value() < 0) {
@@ -284,7 +299,7 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
     payload.history_length = static_cast<std::size_t>(history_length_it->second.number_value());
   }
 
-  const auto include_artifacts_it = params.fields().find("includeArtifacts");
+  const auto include_artifacts_it = fields.find("includeArtifacts");
   if (include_artifacts_it != params.fields().end()) {
     if (include_artifacts_it->second.kind_case() != ::google::protobuf::Value::kBoolValue) {
       return core::Error::Validation("ListTasksRequest.includeArtifacts must be a boolean");
@@ -408,15 +423,29 @@ int HttpStatusFromError(const core::Error& error) {
 }
 
 std::string ErrorInfoReason(const core::Error& error) {
-  const auto protocol_code = error.protocol_code();
+  const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value()) {
-    if (*protocol_code == core::protocol_codes::kTaskNotFound) return "TASK_NOT_FOUND";
-    if (*protocol_code == core::protocol_codes::kTaskNotCancelable) return "TASK_NOT_CANCELABLE";
-    if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported) return "PUSH_NOTIFICATION_NOT_SUPPORTED";
-    if (*protocol_code == core::protocol_codes::kUnsupportedOperation) return "UNSUPPORTED_OPERATION";
-    if (*protocol_code == core::protocol_codes::kContentTypeNotSupported) return "CONTENT_TYPE_NOT_SUPPORTED";
-    if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) return "INVALID_AGENT_RESPONSE";
-    if (*protocol_code == core::protocol_codes::kVersionNotSupported) return "VERSION_NOT_SUPPORTED";
+    if (*protocol_code == core::protocol_codes::kTaskNotFound) {
+      return "TASK_NOT_FOUND";
+    }
+    if (*protocol_code == core::protocol_codes::kTaskNotCancelable) {
+      return "TASK_NOT_CANCELABLE";
+    }
+    if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
+      return "PUSH_NOTIFICATION_NOT_SUPPORTED";
+    }
+    if (*protocol_code == core::protocol_codes::kUnsupportedOperation) {
+      return "UNSUPPORTED_OPERATION";
+    }
+    if (*protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+      return "CONTENT_TYPE_NOT_SUPPORTED";
+    }
+    if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+      return "INVALID_AGENT_RESPONSE";
+    }
+    if (*protocol_code == core::protocol_codes::kVersionNotSupported) {
+      return "VERSION_NOT_SUPPORTED";
+    }
   }
 
   switch (error.code()) {
