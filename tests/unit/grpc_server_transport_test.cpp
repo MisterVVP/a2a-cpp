@@ -234,4 +234,53 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults)
   EXPECT_TRUE(response.capabilities().streaming());
 }
 
+TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
+  a2a::server::GrpcServerTransport transport(nullptr);
+  grpc::ServerContext context;
+
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_task_id(std::string(kTaskIdOne));
+  lf::a2a::v1::SendMessageResponse send_response;
+  const auto send_status = transport.SendMessage(&context, &send_request, &send_response);
+  EXPECT_EQ(send_status.error_code(), grpc::StatusCode::INTERNAL);
+
+  lf::a2a::v1::GetTaskRequest get_request;
+  get_request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task get_response;
+  const auto get_status = transport.GetTask(&context, &get_request, &get_response);
+  EXPECT_EQ(get_status.error_code(), grpc::StatusCode::INTERNAL);
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task cancel_response;
+  const auto cancel_status = transport.CancelTask(&context, &cancel_request, &cancel_response);
+  EXPECT_EQ(cancel_status.error_code(), grpc::StatusCode::INTERNAL);
+
+  lf::a2a::v1::ListTasksRequest list_request;
+  list_request.set_page_size(kValidPageSize);
+  lf::a2a::v1::ListTasksResponse list_response;
+  const auto list_status = transport.ListTasks(&context, &list_request, &list_response);
+  EXPECT_EQ(list_status.error_code(), grpc::StatusCode::INTERNAL);
+}
+
+TEST(GrpcServerTransportTest, PushNotificationMethodsReturnProtocolMessage) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+  grpc::ServerContext context;
+  auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
+
+  lf::a2a::v1::TaskPushNotificationConfig create_request;
+  lf::a2a::v1::TaskPushNotificationConfig create_response;
+  const auto create_status = service->CreateTaskPushNotificationConfig(&context, &create_request, &create_response);
+  EXPECT_EQ(create_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_FALSE(create_status.error_message().empty());
+
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
+  lf::a2a::v1::TaskPushNotificationConfig get_response;
+  const auto get_status = service->GetTaskPushNotificationConfig(&context, &get_request, &get_response);
+  EXPECT_EQ(get_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_FALSE(get_status.error_message().empty());
+}
+
 }  // namespace
