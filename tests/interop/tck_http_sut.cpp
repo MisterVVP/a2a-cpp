@@ -33,7 +33,8 @@
 namespace {
 constexpr std::size_t kInitialRequestCapacity = 8192;
 constexpr std::size_t kBufferSize = 4096;
-constexpr std::size_t kMaxRequestSize = 1024U * 1024U;
+constexpr std::size_t kRequestSizeUnit = 1024;
+constexpr std::size_t kMaxRequestSize = kRequestSizeUnit * kRequestSizeUnit;
 constexpr std::size_t kContentLengthPrefixSize = std::string_view("Content-Length:").size();
 constexpr int kListenBacklog = 128;
 constexpr int kDefaultPort = 50061;
