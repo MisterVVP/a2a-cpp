@@ -309,4 +309,56 @@ TEST(GrpcServerTransportTest, MissingVersionHeaderIncludesHelpfulMessage) {
   EXPECT_NE(status.error_message().find("Missing required A2A-Version header"), std::string::npos);
 }
 
+TEST(GrpcServerTransportTest, InvalidArgumentMessagesAreStableForRpcShapes) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+  grpc::ServerContext context;
+
+  lf::a2a::v1::SendMessageResponse send_response;
+  const auto send_status = transport.SendMessage(&context, nullptr, &send_response);
+  EXPECT_EQ(send_status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(send_status.error_message(), "Request and response are required");
+
+  const auto streaming_status = transport.SendStreamingMessage(&context, nullptr, nullptr);
+  EXPECT_EQ(streaming_status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(streaming_status.error_message(), "Request and writer are required");
+
+  lf::a2a::v1::Task task_response;
+  const auto get_status = transport.GetTask(&context, nullptr, &task_response);
+  EXPECT_EQ(get_status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(get_status.error_message(), "Request and response are required");
+
+  const auto subscribe_status = transport.SubscribeToTask(&context, nullptr, nullptr);
+  EXPECT_EQ(subscribe_status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(subscribe_status.error_message(), "Request and writer are required");
+}
+
+TEST(GrpcServerTransportTest, MissingVersionHeaderMappingIsConsistentAcrossRpcs) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+  grpc::ServerContext context;
+
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_task_id(std::string(kTaskIdOne));
+  lf::a2a::v1::SendMessageResponse send_response;
+  const auto send_status = transport.SendMessage(&context, &send_request, &send_response);
+  EXPECT_EQ(send_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_NE(send_status.error_message().find("Missing required A2A-Version header"), std::string::npos);
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(std::string(kTaskIdTwo));
+  lf::a2a::v1::Task cancel_response;
+  const auto cancel_status = transport.CancelTask(&context, &cancel_request, &cancel_response);
+  EXPECT_EQ(cancel_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_NE(cancel_status.error_message().find("Missing required A2A-Version header"), std::string::npos);
+
+  lf::a2a::v1::ListTasksRequest list_request;
+  lf::a2a::v1::ListTasksResponse list_response;
+  const auto list_status = transport.ListTasks(&context, &list_request, &list_response);
+  EXPECT_EQ(list_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_NE(list_status.error_message().find("Missing required A2A-Version header"), std::string::npos);
+}
+
 }  // namespace
