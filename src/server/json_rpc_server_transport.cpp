@@ -31,6 +31,9 @@ constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
 constexpr int kJsonRpcVersionNotSupported = -32009;
+constexpr int kJsonRpcServerErrorMin = -32099;
+constexpr int kJsonRpcServerErrorMax = -32000;
+constexpr std::size_t kMinListTasksPageSize = 1;
 
 std::string ToLower(std::string_view value) {
   std::string lowered;
@@ -195,122 +198,179 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
   return payload;
 }
 
+core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params,
+                                          const JsonRpcServerTransportOptions& options,
+                                          ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto it = fields.find("pageSize");
+  if (it == fields.end()) {
+    return {};
+  }
+  if (it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
+    return core::Error::Validation("ListTasksRequest.pageSize must be a number");
+  }
+  const double page_size = it->second.number_value();
+  if (page_size < static_cast<double>(kMinListTasksPageSize) ||
+      page_size > static_cast<double>(options.max_list_tasks_page_size)) {
+    return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and " +
+                                   std::to_string(options.max_list_tasks_page_size));
+  }
+  payload->page_size = static_cast<std::size_t>(page_size);
+  return {};
+}
+
+core::Result<void> ParseListTasksContextId(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto context_id_it = fields.find("contextId");
+  if (context_id_it != fields.end()) {
+    if (context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+      return core::Error::Validation("ListTasksRequest.contextId must be a string");
+    }
+    payload->context_id = context_id_it->second.string_value();
+  }
+
+  const auto snake_context_id_it = fields.find("context_id");
+  if (!payload->context_id.empty() || snake_context_id_it == fields.end()) {
+    return {};
+  }
+  if (snake_context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+    return core::Error::Validation("ListTasksRequest.context_id must be a string");
+  }
+  payload->context_id = snake_context_id_it->second.string_value();
+  return {};
+}
+
+core::Result<void> ParseListTasksPageToken(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto page_token_it = fields.find("pageToken");
+  if (page_token_it == fields.end()) {
+    return {};
+  }
+  if (page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+    return core::Error::Validation("ListTasksRequest.pageToken must be a string");
+  }
+  payload->page_token = page_token_it->second.string_value();
+  if (payload->page_token.empty()) {
+    return {};
+  }
+
+  std::uint64_t parsed_offset = 0;
+  const auto* begin = payload->page_token.data();
+  const auto* end = begin + payload->page_token.size();
+  const auto parsed = std::from_chars(begin, end, parsed_offset);
+  if (parsed.ec != std::errc() || parsed.ptr != end) {
+    return core::Error::Validation("ListTasksRequest.pageToken must be a valid offset");
+  }
+  return {};
+}
+
+core::Result<void> ParseListTasksStatus(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto status_it = fields.find("status");
+  if (status_it == fields.end()) {
+    return {};
+  }
+  if (status_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+    return core::Error::Validation("ListTasksRequest.status must be a string");
+  }
+  lf::a2a::v1::TaskState state = lf::a2a::v1::TASK_STATE_UNSPECIFIED;
+  if (!lf::a2a::v1::TaskState_Parse(status_it->second.string_value(), &state)) {
+    return core::Error::Validation("ListTasksRequest.status must be a valid TaskState value");
+  }
+  payload->status_filter = state;
+  return {};
+}
+
+core::Result<void> ParseListTasksTimestampAfter(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto timestamp_after_it = fields.find("statusTimestampAfter");
+  if (timestamp_after_it == fields.end()) {
+    return {};
+  }
+  if (timestamp_after_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+    return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be a string");
+  }
+
+  google::protobuf::Timestamp ts;
+  const auto parsed_ts = core::JsonToMessage("\"" + timestamp_after_it->second.string_value() + "\"", &ts);
+  if (!parsed_ts.ok()) {
+    return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be an RFC3339 timestamp");
+  }
+  payload->status_timestamp_after = ts;
+  return {};
+}
+
+core::Result<void> ParseListTasksHistoryLength(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto history_length_it = fields.find("historyLength");
+  if (history_length_it == fields.end()) {
+    return {};
+  }
+  if (history_length_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
+      history_length_it->second.number_value() < 0) {
+    return core::Error::Validation("ListTasksRequest.historyLength must be non-negative");
+  }
+  payload->history_length = static_cast<std::size_t>(history_length_it->second.number_value());
+  return {};
+}
+
+core::Result<void> ParseListTasksIncludeArtifacts(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto& fields = params.fields();
+  const auto include_artifacts_it = fields.find("includeArtifacts");
+  if (include_artifacts_it == fields.end()) {
+    return {};
+  }
+  if (include_artifacts_it->second.kind_case() != ::google::protobuf::Value::kBoolValue) {
+    return core::Error::Validation("ListTasksRequest.includeArtifacts must be a boolean");
+  }
+  payload->include_artifacts = include_artifacts_it->second.bool_value();
+  return {};
+}
+
+core::Result<void> ApplyListTasksParsers(const google::protobuf::Struct& params,
+                                         const JsonRpcServerTransportOptions& options,
+                                         ListTasksRequest* payload) {
+  const auto page_size = ParseListTasksPageSize(params, options, payload);
+  if (!page_size.ok()) {
+    return page_size.error();
+  }
+  const auto context_id = ParseListTasksContextId(params, payload);
+  if (!context_id.ok()) {
+    return context_id.error();
+  }
+  const auto page_token = ParseListTasksPageToken(params, payload);
+  if (!page_token.ok()) {
+    return page_token.error();
+  }
+  const auto status = ParseListTasksStatus(params, payload);
+  if (!status.ok()) {
+    return status.error();
+  }
+  const auto timestamp_after = ParseListTasksTimestampAfter(params, payload);
+  if (!timestamp_after.ok()) {
+    return timestamp_after.error();
+  }
+  const auto history_length = ParseListTasksHistoryLength(params, payload);
+  if (!history_length.ok()) {
+    return history_length.error();
+  }
+  return ParseListTasksIncludeArtifacts(params, payload);
+}
+
 core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params,
                                                      const JsonRpcServerTransportOptions& options) {
-  constexpr std::size_t kMinPageSize = 1;
-  if (options.max_list_tasks_page_size < kMinPageSize) {
+  if (options.max_list_tasks_page_size < kMinListTasksPageSize) {
     return core::Error::Internal("JSON-RPC max_list_tasks_page_size must be at least 1");
   }
 
-  const auto& fields = params.fields();
   ListTasksRequest payload;
-  auto parse_page_size = [&]() -> core::Result<void> {
-    const auto it = fields.find("pageSize");
-    if (it == fields.end()) {
-      return {};
-    }
-    if (it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
-      return core::Error::Validation("ListTasksRequest.pageSize must be a number");
-    }
-    const double page_size = it->second.number_value();
-    if (page_size < static_cast<double>(kMinPageSize) ||
-        page_size > static_cast<double>(options.max_list_tasks_page_size)) {
-      return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and " +
-                                     std::to_string(options.max_list_tasks_page_size));
-    }
-    payload.page_size = static_cast<std::size_t>(page_size);
-    return {};
-  };
-  auto parse_context_id = [&]() -> core::Result<void> {
-    const auto context_id_it = fields.find("contextId");
-    if (context_id_it != fields.end()) {
-      if (context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-        return core::Error::Validation("ListTasksRequest.contextId must be a string");
-      }
-      payload.context_id = context_id_it->second.string_value();
-    }
-    const auto snake_context_id_it = fields.find("context_id");
-    if (payload.context_id.empty() && snake_context_id_it != fields.end()) {
-      if (snake_context_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-        return core::Error::Validation("ListTasksRequest.context_id must be a string");
-      }
-      payload.context_id = snake_context_id_it->second.string_value();
-    }
-    return {};
-  };
-
-  const auto page_token_it = fields.find("pageToken");
-  if (page_token_it != params.fields().end()) {
-    if (page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Validation("ListTasksRequest.pageToken must be a string");
-    }
-    payload.page_token = page_token_it->second.string_value();
-    if (!payload.page_token.empty()) {
-      std::uint64_t parsed_offset = 0;
-      const auto* begin = payload.page_token.data();
-      const auto* end = begin + payload.page_token.size();
-      const auto parsed = std::from_chars(begin, end, parsed_offset);
-      if (parsed.ec != std::errc() || parsed.ptr != end) {
-        return core::Error::Validation("ListTasksRequest.pageToken must be a valid offset");
-      }
-    }
+  const auto parsed = ApplyListTasksParsers(params, options, &payload);
+  if (!parsed.ok()) {
+    return parsed.error();
   }
-
-  const auto parse_page_size_result = parse_page_size();
-  if (!parse_page_size_result.ok()) {
-    return parse_page_size_result.error();
-  }
-  const auto parse_context_id_result = parse_context_id();
-  if (!parse_context_id_result.ok()) {
-    return parse_context_id_result.error();
-  }
-
-  const auto status_it = fields.find("status");
-  if (status_it != params.fields().end()) {
-    if (status_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Validation("ListTasksRequest.status must be a string");
-    }
-    lf::a2a::v1::TaskState state = lf::a2a::v1::TASK_STATE_UNSPECIFIED;
-    if (!lf::a2a::v1::TaskState_Parse(status_it->second.string_value(), &state)) {
-      return core::Error::Validation("ListTasksRequest.status must be a valid TaskState value");
-    }
-    payload.status_filter = state;
-  }
-
-  const auto timestamp_after_it = fields.find("statusTimestampAfter");
-  if (timestamp_after_it != params.fields().end()) {
-    if (timestamp_after_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be a string");
-    }
-    google::protobuf::Timestamp ts;
-    const auto parsed_ts = core::JsonToMessage("\"" + timestamp_after_it->second.string_value() + "\"", &ts);
-    if (!parsed_ts.ok()) {
-      return core::Error::Validation("ListTasksRequest.statusTimestampAfter must be an RFC3339 timestamp");
-    }
-    payload.status_timestamp_after = ts;
-  }
-
-  const auto history_length_it = fields.find("historyLength");
-  if (history_length_it != params.fields().end()) {
-    if (history_length_it->second.kind_case() != ::google::protobuf::Value::kNumberValue ||
-        history_length_it->second.number_value() < 0) {
-      return core::Error::Validation("ListTasksRequest.historyLength must be non-negative");
-    }
-    payload.history_length = static_cast<std::size_t>(history_length_it->second.number_value());
-  }
-
-  const auto include_artifacts_it = fields.find("includeArtifacts");
-  if (include_artifacts_it != params.fields().end()) {
-    if (include_artifacts_it->second.kind_case() != ::google::protobuf::Value::kBoolValue) {
-      return core::Error::Validation("ListTasksRequest.includeArtifacts must be a boolean");
-    }
-    payload.include_artifacts = include_artifacts_it->second.bool_value();
-  }
-
   if (payload.page_size == 0) {
     payload.page_size = options.default_list_tasks_page_size;
   }
-
   return payload;
 }
 
@@ -470,13 +530,13 @@ int JsonRpcCodeFromError(const core::Error& error) {
     case core::ErrorCode::kUnsupportedVersion:
       return kJsonRpcVersionNotSupported;
     case core::ErrorCode::kRemoteProtocol: {
-      const auto protocol_code = error.protocol_code();
+      const auto& protocol_code = error.protocol_code();
       if (protocol_code.has_value()) {
         int parsed_code = 0;
         const auto* begin = protocol_code->data();
         const auto* end = begin + protocol_code->size();
         const auto parse = std::from_chars(begin, end, parsed_code);
-        if (parse.ec == std::errc() && parse.ptr == end && parsed_code <= -32000) {
+        if (parse.ec == std::errc() && parse.ptr == end && parsed_code <= kJsonRpcServerErrorMax) {
           return parsed_code;
         }
       }
@@ -530,10 +590,11 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
     if (!next.ok()) {
       return next.error();
     }
-    if (!next.value().has_value()) {
+    const auto& event = next.value();
+    if (!event.has_value()) {
       break;
     }
-    const auto append = AppendSseJsonRpcEvent(response.body, id, *next.value());
+    const auto append = AppendSseJsonRpcEvent(response.body, id, event.value_or(lf::a2a::v1::StreamResponse{}));
     if (!append.ok()) {
       return append.error();
     }
@@ -802,7 +863,7 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
   (*error_fields)["code"].set_number_value(json_rpc_code);
   (*error_fields)["message"].set_string_value(std::string(message));
 
-  if (error.has_value() && json_rpc_code >= -32099 && json_rpc_code <= -32000) {
+  if (error.has_value() && json_rpc_code >= kJsonRpcServerErrorMin && json_rpc_code <= kJsonRpcServerErrorMax) {
     google::protobuf::Value data;
     auto* data_values = data.mutable_list_value()->mutable_values();
     google::protobuf::Value error_info;
@@ -811,8 +872,8 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
     (*info_fields)["reason"].set_string_value(ErrorInfoReason(*error));
     (*info_fields)["domain"].set_string_value("a2a-protocol.org");
 
-    const auto protocol_code = error->protocol_code();
-    const auto transport = error->transport();
+    const auto& protocol_code = error->protocol_code();
+    const auto& transport = error->transport();
     if (protocol_code.has_value() || transport.has_value()) {
       google::protobuf::Value metadata;
       auto* metadata_fields = metadata.mutable_struct_value()->mutable_fields();
