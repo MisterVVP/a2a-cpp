@@ -23,6 +23,8 @@ using a2a::client::ResolvedInterface;
 using a2a::core::ErrorCode;
 
 constexpr int kHttpOk = 200;
+constexpr int kHttpServerError = 500;
+constexpr int kHttpBadGateway = 502;
 constexpr std::chrono::milliseconds kCustomTimeout{1200};
 
 ResolvedInterface MakeResolvedJsonRpc() {
@@ -253,7 +255,7 @@ TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
       [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = 500,
+        return HttpClientResponse{.status_code = kHttpServerError,
                                   .headers = {{"A2A-Version", "1.0"}},
                                   .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"id":"t-1"}})"};
       },
@@ -290,7 +292,7 @@ TEST(JsonRpcTransportUnitTest, ParsesJsonRpcErrorObjectProtocolCodeAndMessage) {
       MakeResolvedJsonRpc(),
       [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return HttpClientResponse{
-            .status_code = 502,
+            .status_code = kHttpBadGateway,
             .headers = {{"A2A-Version", "1.0"}},
             .body = R"({"jsonrpc":"2.0","id":"req-123","error":{"code":-32601,"message":"missing method"}})"};
       },
