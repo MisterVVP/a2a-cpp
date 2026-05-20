@@ -325,4 +325,80 @@ TEST(JsonRpcTransportUnitTest, RejectsEnvelopeWithBothResultAndError) {
   EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
 }
 
+TEST(JsonRpcTransportUnitTest, ValidatesRequiredIdsForTaskAndPushConfigOperations) {
+  A2AClient client(std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return a2a::core::Error::Internal("requester should not be called");
+      }));
+
+  lf::a2a::v1::GetTaskRequest get_task;
+  const auto get_task_response = client.GetTask(get_task);
+  ASSERT_FALSE(get_task_response.ok());
+  EXPECT_EQ(get_task_response.error().code(), ErrorCode::kValidation);
+
+  lf::a2a::v1::CancelTaskRequest cancel_task;
+  const auto cancel_task_response = client.CancelTask(cancel_task);
+  ASSERT_FALSE(cancel_task_response.ok());
+  EXPECT_EQ(cancel_task_response.error().code(), ErrorCode::kValidation);
+
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest get_push;
+  const auto get_push_response = client.GetTaskPushNotificationConfig(get_push);
+  ASSERT_FALSE(get_push_response.ok());
+  EXPECT_EQ(get_push_response.error().code(), ErrorCode::kValidation);
+
+  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_push;
+  const auto delete_push_response = client.DeleteTaskPushNotificationConfig(delete_push);
+  ASSERT_FALSE(delete_push_response.ok());
+  EXPECT_EQ(delete_push_response.error().code(), ErrorCode::kValidation);
+}
+
+TEST(JsonRpcTransportUnitTest, ReturnsValidationForUnsupportedStreamingOperations) {
+  A2AClient client(std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return a2a::core::Error::Internal("requester should not be called");
+      }));
+
+  class TestObserver final : public a2a::client::StreamObserver {
+   public:
+    void OnEvent(const lf::a2a::v1::StreamResponse& response) override { (void)response; }
+    void OnError(const a2a::core::Error& error) override { (void)error; }
+    void OnCompleted() override {}
+  } observer;
+
+  lf::a2a::v1::SendMessageRequest send_request;
+  const auto stream_response = client.SendStreamingMessage(send_request, observer);
+  ASSERT_FALSE(stream_response.ok());
+  EXPECT_EQ(stream_response.error().code(), ErrorCode::kValidation);
+
+  lf::a2a::v1::GetTaskRequest subscribe_request;
+  const auto subscribe_response = client.SubscribeTask(subscribe_request, observer);
+  ASSERT_FALSE(subscribe_response.ok());
+  EXPECT_EQ(subscribe_response.error().code(), ErrorCode::kValidation);
+}
+
+TEST(JsonRpcTransportUnitTest, PropagatesConfiguredRequestHeadersAndExtensions) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = SuccessGetTaskEnvelope("req-headers")};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-headers"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  CallOptions options;
+  options.headers["X-Trace-Id"] = "trace-1";
+  options.extensions = {"ext.alpha", "ext.beta"};
+
+  const auto response = client.GetTask(request, options);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(captured.headers.at("X-Trace-Id"), "trace-1");
+  EXPECT_TRUE(captured.headers.contains("A2A-Extensions"));
+}
+
 }  // namespace
