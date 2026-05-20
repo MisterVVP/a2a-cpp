@@ -166,8 +166,7 @@ void WaitForStream(const a2a::client::StreamHandle& stream) {
 
 void ExpectObserverErrorCode(const RecordingObserver& observer, a2a::core::ErrorCode expected_code) {
   ASSERT_TRUE(observer.last_error.has_value());
-  const auto& error = observer.last_error.value();
-  EXPECT_EQ(error.code(), expected_code);
+  EXPECT_EQ(observer.last_error.value_or(a2a::core::Error::Internal("missing observer error")).code(), expected_code);
 }
 
 TEST(GrpcTransportTest, GetTaskValidatesRequestId) {
