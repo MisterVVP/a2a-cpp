@@ -204,10 +204,32 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   get_request.set_id("missing-task-id");
   const auto get_response = client->GetTaskPushNotificationConfig(get_request);
   if (get_response.ok()) {
-    return a2a::core::Error::Internal("Unsupported push-config request should fail");
+    return a2a::core::Error::Internal("Unsupported push-config get request should fail");
   }
-  if (get_response.error().message().empty()) {
-    return a2a::core::Error::Internal("Unsupported push-config error should include a message");
+
+  lf::a2a::v1::TaskPushNotificationConfig create_request;
+  create_request.set_id("missing-task-id");
+  const auto create_response = client->CreateTaskPushNotificationConfig(create_request);
+  if (create_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config create request should fail");
+  }
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest list_request;
+  const auto list_response = client->ListTaskPushNotificationConfigs(list_request);
+  if (list_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config list request should fail");
+  }
+
+  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
+  delete_request.set_id("missing-task-id");
+  const auto delete_response = client->DeleteTaskPushNotificationConfig(delete_request);
+  if (delete_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config delete request should fail");
+  }
+
+  if (get_response.error().message().empty() || create_response.error().message().empty() ||
+      list_response.error().message().empty() || delete_response.error().message().empty()) {
+    return a2a::core::Error::Internal("Unsupported push-config errors should include messages");
   }
 
   return {};
@@ -312,6 +334,43 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return {};
 }
 
+[[nodiscard]] a2a::core::Result<void> VerifyListTasksValidation(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  constexpr int32_t kInvalidPageSize = 101;
+  a2a::client::ListTasksRequest invalid_page_size;
+  invalid_page_size.page_size = static_cast<std::size_t>(kInvalidPageSize);
+  const auto invalid_page_size_response = client->ListTasks(invalid_page_size);
+  if (invalid_page_size_response.ok()) {
+    return a2a::core::Error::Internal("ListTasks with invalid page_size should fail");
+  }
+
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifyExtendedAgentCardRpc(int port) {
+  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+  auto stub = lf::a2a::v1::A2AService::NewStub(channel);
+  grpc::ClientContext context;
+  context.AddMetadata("a2a-version", "1.0");
+
+  lf::a2a::v1::GetExtendedAgentCardRequest request;
+  lf::a2a::v1::AgentCard response;
+  const auto status = stub->GetExtendedAgentCard(&context, request, &response);
+  if (!status.ok()) {
+    return a2a::core::Error::Internal("GetExtendedAgentCard RPC failed");
+  }
+  if (response.name() != "A2A C++ SDK Agent") {
+    return a2a::core::Error::Internal("Unexpected agent card name");
+  }
+  if (!response.capabilities().streaming() || response.capabilities().push_notifications()) {
+    return a2a::core::Error::Internal("Unexpected capability defaults");
+  }
+  return {};
+}
+
 [[nodiscard]] a2a::core::Result<void> VerifyMissingTaskLookupFails(a2a::client::A2AClient* client) {
   if (client == nullptr) {
     return a2a::core::Error::Internal("Client must not be null");
@@ -377,6 +436,29 @@ TEST(GrpcTransportIntegrationTest, SubscribeTaskIsDeterministicAcrossStreams) {
 
   const auto subscribe = VerifySubscribeTaskDeterministicOrdering(client.get());
   ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
+}
+
+TEST(GrpcTransportIntegrationTest, ListTasksValidationErrorsAreReturned) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto validation = VerifyListTasksValidation(client.get());
+  ASSERT_TRUE(validation.ok()) << validation.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, GetExtendedAgentCardReturnsCompatibilityDefaults) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  const auto card = VerifyExtendedAgentCardRpc(harness->port);
+  ASSERT_TRUE(card.ok()) << card.error().message();
+
+  harness->server->Shutdown();
 }
 
 TEST(GrpcTransportIntegrationTest, GetTaskReturnsErrorForUnknownTaskId) {
