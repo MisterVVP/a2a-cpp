@@ -233,7 +233,8 @@ TEST(GrpcServerTransportTest, ListTasksValidatesPageSizeAndHistoryLength) {
   EXPECT_EQ(transport.ListTasks(&context, &request, &response).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 
   lf::a2a::v1::ListTasksRequest request_large_page_size;
-  request_large_page_size.set_page_size(101);
+  constexpr int32_t kInvalidLargePageSize = 101;
+  request_large_page_size.set_page_size(kInvalidLargePageSize);
   EXPECT_EQ(transport.ListTasks(&context, &request_large_page_size, &response).error_code(),
             grpc::StatusCode::INVALID_ARGUMENT);
 }

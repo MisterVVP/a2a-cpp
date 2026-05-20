@@ -45,7 +45,8 @@ using a2a::core::protocol_bindings::kGrpc;
 using a2a::core::protocol_bindings::kHttpJson;
 using a2a::core::protocol_bindings::kJsonRpc;
 
-bool IsValidInterfaceEndpoint(std::string_view protocol_binding, std::string_view endpoint) {
+bool IsValidInterfaceEndpoint(std::string_view protocol_binding,
+                              std::string_view endpoint) {  // NOLINT(bugprone-easily-swappable-parameters)
   if (protocol_binding == kHttpJson || protocol_binding == kJsonRpc) {
     return HasHttpScheme(endpoint);
   }
@@ -215,8 +216,9 @@ core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCa
   return {};
 }
 
-core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(const lf::a2a::v1::AgentCard& card,
-                                                                            PreferredTransport preferred) {
+core::Result<ResolvedInterface> AgentCardResolver::SelectPreferredInterface(
+    const lf::a2a::v1::AgentCard& card,
+    PreferredTransport preferred) {  // NOLINT(readability-function-cognitive-complexity)
   const auto preferred_wire = ToWireTransport(preferred);
   if (!preferred_wire.has_value()) {
     return core::Error::Validation("Invalid preferred transport requested");
