@@ -17,8 +17,7 @@ int main() {
                                      .url = "http://agent.local/rpc",
                                      .security_requirements = {},
                                      .security_schemes = {}},
-      [&server](const a2a::client::HttpRequest& request)
-          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [&server](const a2a::client::HttpRequest& request) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         const auto response = server.Handle({.method = request.method,
                                              .target = a2a::examples::UrlToTarget(request.url),
                                              .headers = request.headers,
@@ -34,8 +33,8 @@ int main() {
 
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
-  request.mutable_message()->set_task_id("json-rpc-example-task");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  *request.mutable_message()->add_parts()->mutable_text() = "hello from JSON-RPC example";
 
   const auto send = client.SendMessage(request);
   if (!send.ok()) {

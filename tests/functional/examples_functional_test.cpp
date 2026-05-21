@@ -28,7 +28,6 @@ void ExpectStreamEnded(a2a::server::ServerStreamSession* stream) {
 }
 
 TEST(ExamplesFunctionalTest, StreamingExecutorReturnsWorkingThenCompletedEvents) {
-  constexpr bool kExpectedFinalEvent = true;
   a2a::examples::ExampleExecutor executor;
   a2a::server::RequestContext context;
 
@@ -44,7 +43,6 @@ TEST(ExamplesFunctionalTest, StreamingExecutorReturnsWorkingThenCompletedEvents)
 
   const auto second = RequireNextEvent(stream.get());
   EXPECT_EQ(second.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
-  EXPECT_EQ(second.status_update().final(), kExpectedFinalEvent);
 
   ExpectStreamEnded(stream.get());
 }

@@ -4,36 +4,45 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/task_states.h"
 
 namespace a2a::server {
 namespace {
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpBadRequest = 400;
+constexpr int kHttpConflict = 409;
 constexpr int kHttpNotFound = 404;
-constexpr int kHttpUpgradeRequired = 426;
 constexpr int kHttpBadGateway = 502;
 constexpr int kHttpServiceUnavailable = 503;
 constexpr int kHttpInternalServerError = 500;
 constexpr std::size_t kDecimalBase = 10;
+constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
+constexpr std::string_view kPushNotificationConfigsSegment = "/pushNotificationConfigs";
 
-const std::array<RestRoute, 4> kRoutes = {
+const std::array<RestRoute, 6> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
-    RestRoute{
-        .method = "GET", .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = "POST",
+              .path_pattern = RestEndpointPaths::kSendStreamingMessage,
+              .operation = DispatcherOperation::kSendStreamingMessage},
+    RestRoute{.method = "GET", .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
     RestRoute{.method = "GET",
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
-    RestRoute{.method = "POST",
-              .path_pattern = "/tasks/{id}:cancel",
-              .operation = DispatcherOperation::kCancelTask},
+    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
+    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kGetTask},
 };
 
 std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_cancel) {
@@ -51,7 +60,7 @@ std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_c
       return std::nullopt;
     }
     suffix = suffix.substr(0, suffix.size() - RestEndpointPaths::kTaskCancelSuffix.size());
-  } else if (suffix.ends_with(RestEndpointPaths::kTaskCancelSuffix)) {
+  } else if (suffix.ends_with(RestEndpointPaths::kTaskCancelSuffix) || suffix.ends_with(kTaskSubscribeSuffix)) {
     return std::nullopt;
   }
 
@@ -60,6 +69,32 @@ std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_c
   }
 
   return suffix;
+}
+
+std::optional<std::string> ParseTaskIdFromActionPath(std::string_view path, std::string_view action_suffix) {
+  if (!path.starts_with(RestEndpointPaths::kTaskResourcePrefix) || !path.ends_with(action_suffix)) {
+    return std::nullopt;
+  }
+
+  const auto id_start = RestEndpointPaths::kTaskResourcePrefix.size();
+  const auto id_length = path.size() - id_start - action_suffix.size();
+  std::string task_id(path.substr(id_start, id_length));
+  if (task_id.empty() || task_id.find('/') != std::string::npos) {
+    return std::nullopt;
+  }
+  return task_id;
+}
+
+bool IsPushNotificationConfigPath(const RestRequest& request) {
+  if (request.method != "POST" && request.method != "GET" && request.method != "DELETE") {
+    return false;
+  }
+  if (!request.path.starts_with(RestEndpointPaths::kTaskResourcePrefix)) {
+    return false;
+  }
+  const auto suffix = request.path.substr(RestEndpointPaths::kTaskResourcePrefix.size());
+  const auto push_segment = suffix.find(kPushNotificationConfigsSegment);
+  return push_segment != std::string_view::npos && push_segment > 0;
 }
 
 int ParsePageSize(std::string_view raw_page_size) {
@@ -87,22 +122,48 @@ std::optional<std::string> LookupQuery(const RestRequest& request, std::string_v
   return it->second;
 }
 
-std::string ErrorCodeName(core::ErrorCode code) {
-  switch (code) {
-    case core::ErrorCode::kValidation:
-      return "validation_error";
-    case core::ErrorCode::kUnsupportedVersion:
-      return "unsupported_version";
-    case core::ErrorCode::kNetwork:
-      return "network_error";
-    case core::ErrorCode::kRemoteProtocol:
-      return "remote_protocol_error";
-    case core::ErrorCode::kSerialization:
-      return "serialization_error";
-    case core::ErrorCode::kInternal:
-      return "internal_error";
+std::string ErrorStatusName(int http_status) {
+  switch (http_status) {
+    case kHttpBadRequest:
+      return "INVALID_ARGUMENT";
+    case kHttpNotFound:
+      return "NOT_FOUND";
+    case kHttpConflict:
+      return "FAILED_PRECONDITION";
+    case kHttpBadGateway:
+    case kHttpInternalServerError:
+      return "INTERNAL";
+    case kHttpServiceUnavailable:
+      return "UNAVAILABLE";
+    default:
+      return "UNKNOWN";
   }
-  return "internal_error";
+}
+
+std::string ErrorInfoReason(const core::Error& error) {
+  const auto& protocol_code = error.protocol_code();
+  if (protocol_code.has_value()) {
+    if (*protocol_code == core::protocol_codes::kTaskNotFound) {
+      return "TASK_NOT_FOUND";
+    }
+    if (*protocol_code == core::protocol_codes::kTaskNotCancelable) {
+      return "TASK_NOT_CANCELABLE";
+    }
+    if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
+      return "PUSH_NOTIFICATION_NOT_SUPPORTED";
+    }
+    if (*protocol_code == core::protocol_codes::kUnsupportedOperation) {
+      return "UNSUPPORTED_OPERATION";
+    }
+  }
+
+  if (error.code() == core::ErrorCode::kUnsupportedVersion) {
+    return "VERSION_NOT_SUPPORTED";
+  }
+  if (error.code() == core::ErrorCode::kRemoteProtocol || error.code() == core::ErrorCode::kValidation) {
+    return "UNSUPPORTED_OPERATION";
+  }
+  return "INVALID_AGENT_RESPONSE";
 }
 
 int ToHttpStatus(const core::Error& error) {
@@ -110,18 +171,14 @@ int ToHttpStatus(const core::Error& error) {
   if (http_status.has_value()) {
     return *http_status;
   }
-  switch (error.code()) {
-    case core::ErrorCode::kValidation:
-      return kHttpBadRequest;
-    case core::ErrorCode::kUnsupportedVersion:
-      return kHttpUpgradeRequired;
-    case core::ErrorCode::kNetwork:
-      return kHttpServiceUnavailable;
-    case core::ErrorCode::kRemoteProtocol:
-      return kHttpBadGateway;
-    case core::ErrorCode::kSerialization:
-    case core::ErrorCode::kInternal:
-      return kHttpInternalServerError;
+  if (error.code() == core::ErrorCode::kValidation || error.code() == core::ErrorCode::kUnsupportedVersion) {
+    return kHttpBadRequest;
+  }
+  if (error.code() == core::ErrorCode::kNetwork) {
+    return kHttpServiceUnavailable;
+  }
+  if (error.code() == core::ErrorCode::kRemoteProtocol) {
+    return kHttpBadGateway;
   }
   return kHttpInternalServerError;
 }
@@ -159,6 +216,175 @@ core::Result<std::string> BuildListTasksJson(const ListTasksResponse& response) 
   return core::MessageToJson(payload);
 }
 
+core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& message) {
+  const auto body = core::MessageToJson(message);
+  if (!body.ok()) {
+    return body.error();
+  }
+
+  RestResponse response;
+  response.http_status = kHttpOk;
+  response.headers["Content-Type"] = "application/json";
+  response.body = body.value();
+  return response;
+}
+
+core::Result<void> AppendSseEvent(RestResponse& response, const lf::a2a::v1::StreamResponse& event) {
+  const auto event_json = core::MessageToJson(event);
+  if (!event_json.ok()) {
+    return event_json.error();
+  }
+  response.body += "data: ";
+  response.body += event_json.value();
+  response.body += "\n\n";
+  return {};
+}
+
+core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSession>& session) {
+  if (session == nullptr) {
+    return core::Error::Internal("Streaming response session is missing");
+  }
+
+  RestResponse response;
+  response.http_status = kHttpOk;
+  response.headers["Content-Type"] = "text/event-stream";
+  response.headers["Cache-Control"] = "no-cache";
+
+  while (true) {
+    auto next = session->Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    const auto& event = next.value();
+    if (!event.has_value()) {
+      break;
+    }
+    const auto append = AppendSseEvent(response, event.value());
+    if (!append.ok()) {
+      return append.error();
+    }
+  }
+
+  return response;
+}
+
+core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task) {
+  if (core::IsTerminalTaskState(task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+
+  RestResponse response;
+  response.http_status = kHttpOk;
+  response.headers["Content-Type"] = "text/event-stream";
+  response.headers["Cache-Control"] = "no-cache";
+
+  lf::a2a::v1::StreamResponse current_event;
+  *current_event.mutable_task() = task;
+  const auto current_append = AppendSseEvent(response, current_event);
+  if (!current_append.ok()) {
+    return current_append.error();
+  }
+
+  lf::a2a::v1::StreamResponse terminal_event;
+  terminal_event.mutable_status_update()->set_task_id(task.id());
+  terminal_event.mutable_status_update()->set_context_id(task.context_id());
+  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
+  const auto terminal_append = AppendSseEvent(response, terminal_event);
+  if (!terminal_append.ok()) {
+    return terminal_append.error();
+  }
+
+  return response;
+}
+
+std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& request) {
+  if (request.method != "POST" ||
+      (request.path != RestEndpointPaths::kSendMessage && request.path != RestEndpointPaths::kSendStreamingMessage)) {
+    return std::nullopt;
+  }
+
+  lf::a2a::v1::SendMessageRequest payload;
+  const auto parse = core::JsonToMessage(request.body, &payload);
+  if (!parse.ok()) {
+    return std::nullopt;
+  }
+
+  const DispatcherOperation operation = request.path == RestEndpointPaths::kSendStreamingMessage
+                                            ? DispatcherOperation::kSendStreamingMessage
+                                            : DispatcherOperation::kSendMessage;
+  return DispatchRequest{.operation = operation, .payload = payload};
+}
+
+std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& request) {
+  if (request.method != "GET" || request.path != RestEndpointPaths::kTaskCollection) {
+    return std::nullopt;
+  }
+
+  ListTasksRequest payload;
+  if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
+    const int parsed_page_size = ParsePageSize(*raw_page_size);
+    if (parsed_page_size < 0) {
+      return std::nullopt;
+    }
+    payload.page_size = static_cast<std::size_t>(parsed_page_size);
+  }
+
+  if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
+    payload.page_token = *raw_page_token;
+  }
+  if (const auto context_id = LookupQuery(request, "contextId"); context_id.has_value()) {
+    payload.context_id = *context_id;
+  }
+  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
+    const int parsed_history_length = ParsePageSize(*history_length);
+    if (parsed_history_length < 0) {
+      return std::nullopt;
+    }
+    payload.history_length = static_cast<std::size_t>(parsed_history_length);
+  }
+  if (const auto include_artifacts = LookupQuery(request, "includeArtifacts"); include_artifacts.has_value()) {
+    payload.include_artifacts = *include_artifacts == "true";
+  }
+  return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
+}
+
+std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& request) {
+  if (request.method != "GET") {
+    return std::nullopt;
+  }
+
+  const auto task_id = ParseTaskIdFromPath(request.path, false);
+  if (!task_id.has_value()) {
+    return std::nullopt;
+  }
+
+  lf::a2a::v1::GetTaskRequest payload;
+  payload.set_id(*task_id);
+  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
+    const int parsed_history_length = ParsePageSize(*history_length);
+    if (parsed_history_length < 0) {
+      return std::nullopt;
+    }
+    payload.set_history_length(parsed_history_length);
+  }
+  return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
+}
+
+std::optional<DispatchRequest> BuildCancelTaskDispatchRequest(const RestRequest& request) {
+  if (request.method != "POST") {
+    return std::nullopt;
+  }
+
+  const auto task_id = ParseTaskIdFromPath(request.path, true);
+  if (!task_id.has_value()) {
+    return std::nullopt;
+  }
+
+  lf::a2a::v1::CancelTaskRequest payload;
+  payload.set_id(*task_id);
+  return DispatchRequest{.operation = DispatcherOperation::kCancelTask, .payload = payload};
+}
+
 }  // namespace
 
 RestTransport::RestTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
@@ -169,65 +395,34 @@ const std::vector<RestRoute>& RestTransport::Routes() {
 }
 
 std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestRequest& request) {
-  if (request.method == "POST" && request.path == RestEndpointPaths::kSendMessage) {
-    lf::a2a::v1::SendMessageRequest payload;
-    const auto parse = core::JsonToMessage(request.body, &payload);
-    if (!parse.ok()) {
-      return std::nullopt;
-    }
-    return DispatchRequest{.operation = DispatcherOperation::kSendMessage, .payload = payload};
+  if (auto dispatch_request = BuildMessageDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
   }
-
-  if (request.method == "GET" && request.path == RestEndpointPaths::kTaskCollection) {
-    ListTasksRequest payload;
-    if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
-      const int parsed_page_size = ParsePageSize(*raw_page_size);
-      if (parsed_page_size < 0) {
-        return std::nullopt;
-      }
-      payload.page_size = static_cast<std::size_t>(parsed_page_size);
-    }
-
-    if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
-      payload.page_token = *raw_page_token;
-    }
-    return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
+  if (auto dispatch_request = BuildListTasksDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
   }
-
-  if (request.method == "GET") {
-    const auto task_id = ParseTaskIdFromPath(request.path, false);
-    if (task_id.has_value()) {
-      lf::a2a::v1::GetTaskRequest payload;
-      payload.set_id(task_id.value());
-      if (const auto history_length = LookupQuery(request, "historyLength");
-          history_length.has_value()) {
-        payload.set_history_length(*history_length);
-      }
-      return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
-    }
+  if (auto dispatch_request = BuildGetTaskDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
   }
-
-  if (request.method == "POST") {
-    const auto task_id = ParseTaskIdFromPath(request.path, true);
-    if (task_id.has_value()) {
-      lf::a2a::v1::CancelTaskRequest payload;
-      payload.set_id(task_id.value());
-      return DispatchRequest{.operation = DispatcherOperation::kCancelTask, .payload = payload};
-    }
-  }
-
-  return std::nullopt;
+  return BuildCancelTaskDispatchRequest(request);
 }
 
-core::Result<std::string> RestTransport::SerializeDispatchResponse(
-    DispatcherOperation operation, const DispatchResponse& response) {
+core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOperation operation,
+                                                                    DispatchResponse& response) {
   switch (operation) {
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
       if (payload == nullptr) {
         return core::Error::Internal("SendMessage response payload mismatch");
       }
-      return core::MessageToJson(*payload);
+      return BuildJsonResponse(*payload);
+    }
+    case DispatcherOperation::kSendStreamingMessage: {
+      auto* payload = std::get_if<std::unique_ptr<ServerStreamSession>>(&response.payload());
+      if (payload == nullptr) {
+        return core::Error::Internal("SendStreamingMessage response payload mismatch");
+      }
+      return BuildStreamingResponse(*payload);
     }
     case DispatcherOperation::kGetTask:
     case DispatcherOperation::kCancelTask: {
@@ -235,68 +430,77 @@ core::Result<std::string> RestTransport::SerializeDispatchResponse(
       if (payload == nullptr) {
         return core::Error::Internal("Task response payload mismatch");
       }
-      return core::MessageToJson(*payload);
+      return BuildJsonResponse(*payload);
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
         return core::Error::Internal("ListTasks response payload mismatch");
       }
-      return BuildListTasksJson(*payload);
+      const auto body = BuildListTasksJson(*payload);
+      if (!body.ok()) {
+        return body.error();
+      }
+      RestResponse rest_response;
+      rest_response.http_status = kHttpOk;
+      rest_response.headers["Content-Type"] = "application/json";
+      rest_response.body = body.value();
+      return rest_response;
     }
-    case DispatcherOperation::kSendStreamingMessage:
-      return core::Error::Validation("Streaming route is not supported by REST transport adapter");
   }
 
   return core::Error::Internal("Unsupported dispatcher operation");
 }
 
 RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
-  google::protobuf::Struct details;
-  auto* detail_fields = details.mutable_fields();
+  const int http_status = ToHttpStatus(error);
 
-  google::protobuf::Value code_name;
-  code_name.set_string_value(ErrorCodeName(error.code()));
-  (*detail_fields)["code"] = std::move(code_name);
+  google::protobuf::Struct error_info;
+  auto* error_info_fields = error_info.mutable_fields();
+  (*error_info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
+  (*error_info_fields)["reason"].set_string_value(ErrorInfoReason(error));
+  (*error_info_fields)["domain"].set_string_value("a2a-protocol.org");
 
   const auto& transport_value = error.transport();
-  if (transport_value.has_value()) {
-    google::protobuf::Value transport;
-    transport.set_string_value(*transport_value);
-    (*detail_fields)["transport"] = std::move(transport);
-  }
-
   const auto& protocol_code_value = error.protocol_code();
-  if (protocol_code_value.has_value()) {
-    google::protobuf::Value protocol_code;
-    protocol_code.set_string_value(*protocol_code_value);
-    (*detail_fields)["protocolCode"] = std::move(protocol_code);
+  if (transport_value.has_value() || protocol_code_value.has_value()) {
+    google::protobuf::Value metadata_value;
+    auto* metadata_fields = metadata_value.mutable_struct_value()->mutable_fields();
+    if (transport_value.has_value()) {
+      (*metadata_fields)["transport"].set_string_value(*transport_value);
+    }
+    if (protocol_code_value.has_value()) {
+      (*metadata_fields)["protocolCode"].set_string_value(*protocol_code_value);
+    }
+    (*error_info_fields)["metadata"] = std::move(metadata_value);
   }
 
   google::protobuf::Struct envelope;
   auto* envelope_fields = envelope.mutable_fields();
   google::protobuf::Value error_node;
   auto* error_fields = error_node.mutable_struct_value()->mutable_fields();
+  (*error_fields)["code"].set_number_value(http_status);
+  (*error_fields)["status"].set_string_value(ErrorStatusName(http_status));
+  (*error_fields)["message"].set_string_value(std::string(error.message()));
 
-  google::protobuf::Value message;
-  message.set_string_value(std::string(error.message()));
-  (*error_fields)["message"] = std::move(message);
-
-  google::protobuf::Value detail_struct;
-  *detail_struct.mutable_struct_value() = std::move(details);
-  (*error_fields)["details"] = std::move(detail_struct);
+  google::protobuf::Value details;
+  auto* details_values = details.mutable_list_value()->mutable_values();
+  google::protobuf::Value error_info_value;
+  *error_info_value.mutable_struct_value() = std::move(error_info);
+  details_values->Add(std::move(error_info_value));
+  (*error_fields)["details"] = std::move(details);
 
   (*envelope_fields)["error"] = std::move(error_node);
 
   RestResponse response;
-  response.http_status = ToHttpStatus(error);
+  response.http_status = http_status;
   response.headers["Content-Type"] = "application/json";
 
   const auto serialized = core::MessageToJson(envelope);
   if (serialized.ok()) {
     response.body = serialized.value();
   } else {
-    response.body = R"({"error":{"message":"Failed to serialize error"}})";
+    response.body = R"({"error":{"code":500,"status":"INTERNAL","message":"Failed to serialize error"}})";
   }
   return response;
 }
@@ -306,29 +510,52 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
     return core::Error::Internal("REST transport dispatcher is not configured");
   }
 
+  if (IsPushNotificationConfigPath(request)) {
+    return BuildErrorResponse(core::protocol_errors::PushNotificationNotSupported().WithTransport("rest"));
+  }
+
+  if (request.method == "POST") {
+    const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
+    if (subscribe_task_id.has_value()) {
+      lf::a2a::v1::GetTaskRequest get_task_request;
+      get_task_request.set_id(*subscribe_task_id);
+      RequestContext context = request.context;
+      const auto dispatch_response =
+          dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get_task_request}, context);
+      if (!dispatch_response.ok()) {
+        return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
+      }
+      const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch_response.value().payload());
+      if (task == nullptr) {
+        return BuildErrorResponse(
+            core::Error::Internal("Unexpected dispatch payload type for SubscribeToTask").WithTransport("rest"));
+      }
+      const auto subscribe_response = BuildSubscribeResponse(*task);
+      if (!subscribe_response.ok()) {
+        return BuildErrorResponse(subscribe_response.error().WithTransport("rest"));
+      }
+      return subscribe_response.value();
+    }
+  }
+
   const auto dispatch_request = BuildDispatchRequest(request);
   if (!dispatch_request.has_value()) {
-    return BuildErrorResponse(core::Error::Validation("No matching route or request was malformed")
-                                  .WithHttpStatus(kHttpNotFound));
+    return BuildErrorResponse(
+        core::Error::Validation("No matching route or request was malformed").WithHttpStatus(kHttpNotFound));
   }
 
   RequestContext context = request.context;
-  const auto dispatch_response = dispatcher_->Dispatch(dispatch_request.value(), context);
+  auto dispatch_response = dispatcher_->Dispatch(dispatch_request.value(), context);
   if (!dispatch_response.ok()) {
     return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
   }
 
-  const auto body =
-      SerializeDispatchResponse(dispatch_request->operation, dispatch_response.value());
-  if (!body.ok()) {
-    return BuildErrorResponse(body.error().WithTransport("rest"));
+  const auto response = SerializeDispatchResponse(dispatch_request->operation, dispatch_response.value());
+  if (!response.ok()) {
+    return BuildErrorResponse(response.error().WithTransport("rest"));
   }
 
-  RestResponse response;
-  response.http_status = kHttpOk;
-  response.headers["Content-Type"] = "application/json";
-  response.body = body.value();
-  return response;
+  return response.value();
 }
 
 }  // namespace a2a::server

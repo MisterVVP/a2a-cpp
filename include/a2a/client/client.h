@@ -108,40 +108,34 @@ class ClientTransport {
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) = 0;
-  [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> GetTask(
-      const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options) = 0;
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                const CallOptions& options) = 0;
   [[nodiscard]] virtual core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
                                                                   const CallOptions& options) = 0;
-  [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> CancelTask(
-      const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) = 0;
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                                   const CallOptions& options) = 0;
 
-  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-  SetTaskPushNotificationConfig(const lf::a2a::v1::TaskPushNotificationConfig& request,
-                                const CallOptions& options) = 0;
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) = 0;
 
-  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig>
-  GetTaskPushNotificationConfig(const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-                                const CallOptions& options) = 0;
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) = 0;
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-  ListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-      const CallOptions& options) = 0;
+  ListTaskPushNotificationConfigs(const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+                                  const CallOptions& options) = 0;
 
   [[nodiscard]] virtual core::Result<void> DeleteTaskPushNotificationConfig(
-      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-      const CallOptions& options) = 0;
+      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) = 0;
 
   // Threading contract: observer callbacks run on transport-managed background
   // threads. The caller must keep observer alive until stream completion,
   // cancellation, or handle destruction.
   [[nodiscard]] virtual core::Result<std::unique_ptr<StreamHandle>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
-      const CallOptions& options) = 0;
+      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) = 0;
 
   [[nodiscard]] virtual core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(
-      const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
-      const CallOptions& options) = 0;
+      const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer, const CallOptions& options) = 0;
 
   [[nodiscard]] virtual core::Result<void> Shutdown() { return {}; }
 };
@@ -158,32 +152,27 @@ class A2AClient final {
   [[nodiscard]] core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
                                                           const CallOptions& options = {});
 
-  [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
-      const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options = {});
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                           const CallOptions& options = {});
 
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options = {});
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-      const CallOptions& options = {});
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options = {});
 
-  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-  ListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-      const CallOptions& options = {});
+  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options = {});
 
   [[nodiscard]] core::Result<void> DeleteTaskPushNotificationConfig(
-      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-      const CallOptions& options = {});
+      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options = {});
 
   [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
-      const CallOptions& options = {});
+      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options = {});
 
-  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(
-      const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
-      const CallOptions& options = {});
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                          StreamObserver& observer,
+                                                                          const CallOptions& options = {});
 
   void AddInterceptor(std::shared_ptr<ClientInterceptor> interceptor);
   [[nodiscard]] core::Result<void> Destroy();

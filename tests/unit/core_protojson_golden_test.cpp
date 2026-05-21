@@ -32,8 +32,7 @@ TEST(CoreProtoJsonGoldenTest, TaskMatchesGoldenFixture) {
 }
 
 TEST(CoreProtoJsonGoldenTest, SendMessageRequestMatchesGoldenFixture) {
-  const std::string expected =
-      ReadFixture("tests/fixtures/protojson/send_message_request_golden.json");
+  const std::string expected = ReadFixture("tests/fixtures/protojson/send_message_request_golden.json");
   lf::a2a::v1::SendMessageRequest request;
 
   const auto parse = a2a::core::JsonToMessage(expected, &request);

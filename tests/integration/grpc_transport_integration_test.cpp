@@ -19,8 +19,7 @@ namespace {
 
 class StreamSession final : public a2a::server::ServerStreamSession {
  public:
-  explicit StreamSession(std::vector<lf::a2a::v1::StreamResponse> events)
-      : events_(std::move(events)) {}
+  explicit StreamSession(std::vector<lf::a2a::v1::StreamResponse> events) : events_(std::move(events)) {}
 
   a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
     if (index_ >= events_.size()) {
@@ -38,9 +37,8 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
  public:
   explicit StreamingStoreExecutor(a2a::server::TaskStore* store) : store_(store) {}
 
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::Task task;
     task.set_id(request.message().task_id());
@@ -55,14 +53,12 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
     event.mutable_task()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    return std::unique_ptr<a2a::server::ServerStreamSession>(
-        std::make_unique<StreamSession>(std::vector{event}));
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<StreamSession>(std::vector{event}));
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -71,8 +67,8 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     return store_->Get(request.id());
   }
 
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)context;
     return store_->List(request);
   }
@@ -121,7 +117,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
     return a2a::core::Error::Internal("Client must not be null");
   }
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("grpc-integration-1");
 
   auto send_response = client->SendMessage(send_request);
@@ -159,7 +155,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
     return a2a::core::Error::Internal("Client must not be null");
   }
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id("grpc-integration-1");
 
   RecordingObserver observer;
@@ -188,8 +184,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
 }
 
 std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
-  auto channel =
-      grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
 
   auto transport = std::make_unique<a2a::client::GrpcTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kGrpc,
@@ -200,8 +195,7 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return std::make_unique<a2a::client::A2AClient>(std::move(transport));
 }
 
-[[nodiscard]] a2a::core::Result<void> VerifyMissingTaskReturnsNotFound(
-    a2a::client::A2AClient* client) {
+[[nodiscard]] a2a::core::Result<void> VerifyPushConfigUnsupported(a2a::client::A2AClient* client) {
   if (client == nullptr) {
     return a2a::core::Error::Internal("Client must not be null");
   }
@@ -210,10 +204,32 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   get_request.set_id("missing-task-id");
   const auto get_response = client->GetTaskPushNotificationConfig(get_request);
   if (get_response.ok()) {
-    return a2a::core::Error::Internal("Missing task lookup should fail");
+    return a2a::core::Error::Internal("Unsupported push-config get request should fail");
   }
-  if (get_response.error().message() != "Not implemented") {
-    return a2a::core::Error::Internal("Unexpected error for unsupported push-config request");
+
+  lf::a2a::v1::TaskPushNotificationConfig create_request;
+  create_request.set_id("missing-task-id");
+  const auto create_response = client->CreateTaskPushNotificationConfig(create_request);
+  if (create_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config create request should fail");
+  }
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest list_request;
+  const auto list_response = client->ListTaskPushNotificationConfigs(list_request);
+  if (list_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config list request should fail");
+  }
+
+  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
+  delete_request.set_id("missing-task-id");
+  const auto delete_response = client->DeleteTaskPushNotificationConfig(delete_request);
+  if (delete_response.ok()) {
+    return a2a::core::Error::Internal("Unsupported push-config delete request should fail");
+  }
+
+  if (get_response.error().message().empty() || create_response.error().message().empty() ||
+      list_response.error().message().empty() || delete_response.error().message().empty()) {
+    return a2a::core::Error::Internal("Unsupported push-config errors should include messages");
   }
 
   return {};
@@ -226,7 +242,7 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
 
   constexpr std::string_view kTaskId = "grpc-subscribe-1";
   lf::a2a::v1::SendMessageRequest send_request;
-  send_request.mutable_message()->set_role("user");
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send_request.mutable_message()->set_task_id(std::string(kTaskId));
   const auto send_response = client->SendMessage(send_request);
   if (!send_response.ok()) {
@@ -252,11 +268,105 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!observer.completed) {
     return a2a::core::Error::Internal("SubscribeTask stream did not complete");
   }
-  if (observer.events.empty()) {
-    return a2a::core::Error::Internal("SubscribeTask returned no events");
+  constexpr std::size_t kExpectedSubscribeEventCount = 2U;
+  if (observer.events.size() != kExpectedSubscribeEventCount) {
+    return a2a::core::Error::Internal("SubscribeTask returned unexpected number of events");
+  }
+  if (!observer.events.front().has_task()) {
+    return a2a::core::Error::Internal("SubscribeTask first event must contain task payload");
   }
   if (observer.events.front().task().id() != kTaskId) {
-    return a2a::core::Error::Internal("SubscribeTask returned unexpected task id");
+    return a2a::core::Error::Internal("SubscribeTask first event returned unexpected task id");
+  }
+  if (!observer.events[1].has_status_update()) {
+    return a2a::core::Error::Internal("SubscribeTask second event must contain status_update payload");
+  }
+  if (observer.events[1].status_update().task_id() != kTaskId) {
+    return a2a::core::Error::Internal("SubscribeTask second event returned unexpected task id");
+  }
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifySubscribeTaskDeterministicOrdering(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  constexpr std::string_view kTaskId = "grpc-subscribe-ordering-1";
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send_request.mutable_message()->set_task_id(std::string(kTaskId));
+  const auto send_response = client->SendMessage(send_request);
+  if (!send_response.ok()) {
+    return send_response.error();
+  }
+
+  lf::a2a::v1::GetTaskRequest subscribe_request;
+  subscribe_request.set_id(std::string(kTaskId));
+
+  RecordingObserver first_observer;
+  const auto first_stream = client->SubscribeTask(subscribe_request, first_observer);
+  if (!first_stream.ok()) {
+    return first_stream.error();
+  }
+  while (first_stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  RecordingObserver second_observer;
+  const auto second_stream = client->SubscribeTask(subscribe_request, second_observer);
+  if (!second_stream.ok()) {
+    return second_stream.error();
+  }
+  while (second_stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  constexpr std::size_t kExpectedEventCount = 2U;
+  if (first_observer.events.size() != kExpectedEventCount || second_observer.events.size() != kExpectedEventCount) {
+    return a2a::core::Error::Internal("SubscribeTask streams returned unexpected event counts");
+  }
+  for (std::size_t index = 0; index < kExpectedEventCount; ++index) {
+    if (first_observer.events[index].SerializeAsString() != second_observer.events[index].SerializeAsString()) {
+      return a2a::core::Error::Internal("SubscribeTask streams emitted different events or ordering");
+    }
+  }
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifyListTasksValidation(a2a::client::A2AClient* client) {
+  if (client == nullptr) {
+    return a2a::core::Error::Internal("Client must not be null");
+  }
+
+  constexpr int32_t kInvalidPageSize = 101;
+  a2a::client::ListTasksRequest invalid_page_size;
+  invalid_page_size.page_size = static_cast<std::size_t>(kInvalidPageSize);
+  const auto invalid_page_size_response = client->ListTasks(invalid_page_size);
+  if (invalid_page_size_response.ok()) {
+    return a2a::core::Error::Internal("ListTasks with invalid page_size should fail");
+  }
+
+  return {};
+}
+
+[[nodiscard]] a2a::core::Result<void> VerifyExtendedAgentCardRpc(int port) {
+  auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+  auto stub = lf::a2a::v1::A2AService::NewStub(channel);
+  grpc::ClientContext context;
+  context.AddMetadata("a2a-version", "1.0");
+
+  lf::a2a::v1::GetExtendedAgentCardRequest request;
+  lf::a2a::v1::AgentCard response;
+  const auto status = stub->GetExtendedAgentCard(&context, request, &response);
+  if (!status.ok()) {
+    return a2a::core::Error::Internal("GetExtendedAgentCard RPC failed");
+  }
+  if (response.name() != "A2A C++ SDK Agent") {
+    return a2a::core::Error::Internal("Unexpected agent card name");
+  }
+  if (!response.capabilities().streaming() || response.capabilities().push_notifications()) {
+    return a2a::core::Error::Internal("Unexpected capability defaults");
   }
   return {};
 }
@@ -294,13 +404,13 @@ TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming)
   harness->server->Shutdown();
 }
 
-TEST(GrpcTransportIntegrationTest, UnsupportedPushConfigMethodReturnsNotImplemented) {
+TEST(GrpcTransportIntegrationTest, UnsupportedPushConfigMethodReturnsError) {
   auto harness = StartHarness();
   ASSERT_NE(harness->server, nullptr);
   ASSERT_GT(harness->port, 0);
 
   auto client = BuildClient(harness->port);
-  const auto push_config = VerifyMissingTaskReturnsNotFound(client.get());
+  const auto push_config = VerifyPushConfigUnsupported(client.get());
   ASSERT_TRUE(push_config.ok()) << push_config.error().message();
 
   harness->server->Shutdown();
@@ -314,6 +424,39 @@ TEST(GrpcTransportIntegrationTest, SubscribeTaskReturnsTaskEvents) {
   auto client = BuildClient(harness->port);
   const auto subscribe = VerifySubscribeTask(client.get());
   ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, SubscribeTaskIsDeterministicAcrossStreams) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness, nullptr);
+  auto client = BuildClient(harness->port);
+  ASSERT_NE(client, nullptr);
+
+  const auto subscribe = VerifySubscribeTaskDeterministicOrdering(client.get());
+  ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
+}
+
+TEST(GrpcTransportIntegrationTest, ListTasksValidationErrorsAreReturned) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto validation = VerifyListTasksValidation(client.get());
+  ASSERT_TRUE(validation.ok()) << validation.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, GetExtendedAgentCardReturnsCompatibilityDefaults) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  const auto card = VerifyExtendedAgentCardRpc(harness->port);
+  ASSERT_TRUE(card.ok()) << card.error().message();
 
   harness->server->Shutdown();
 }

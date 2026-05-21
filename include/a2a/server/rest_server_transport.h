@@ -28,11 +28,13 @@ struct HttpServerResponse final {
 struct RestServerTransportOptions final {
   std::string rest_api_base_path = "/";
   bool require_version_header = true;
+  bool include_legacy_transport_fields = true;
 };
 
 class RestServerTransport final {
  public:
   static constexpr std::string_view kAgentCardPath = "/.well-known/agent-card.json";
+  static constexpr std::string_view kLegacyAgentCardPath = "/.well-known/agent.json";
 
   RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                       RestServerTransportOptions options = {});
@@ -42,8 +44,7 @@ class RestServerTransport final {
  private:
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
-  [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(
-      const HttpServerRequest& request) const;
+  [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
   [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response);
 
   static std::string NormalizeBasePath(std::string_view path);

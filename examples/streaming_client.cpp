@@ -28,15 +28,12 @@ int main() {
                                      .url = "http://agent.local/a2a",
                                      .security_requirements = {},
                                      .security_schemes = {}},
-      [](const a2a::client::HttpRequest& request)
-          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [](const a2a::client::HttpRequest& request) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         (void)request;
         return a2a::core::Error::Validation("non-streaming not used in this example");
       },
-      [](const a2a::client::HttpRequest& request,
-         const a2a::client::HttpStreamChunkHandler& on_chunk,
-         const a2a::client::StreamCancelled& is_cancelled)
-          -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
+         const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         (void)request;
         if (is_cancelled()) {
           return a2a::client::HttpClientResponse{.status_code = 499, .headers = {}, .body = {}};
@@ -66,7 +63,7 @@ int main() {
   PrintingObserver observer;
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role("user");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   request.mutable_message()->set_task_id("stream-example-task");
 
   const auto handle = client.SendStreamingMessage(request, observer);

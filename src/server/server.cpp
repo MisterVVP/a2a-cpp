@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_errors.h"
+#include "a2a/core/task_states.h"
 
 namespace a2a::server {
 
@@ -35,14 +37,57 @@ std::string Trim(std::string_view value) {
 
 bool IsAuthSignalHeader(std::string_view lowered_name) {
   return lowered_name == "authorization" || lowered_name == "proxy-authorization" ||
-         lowered_name.find("auth") != std::string_view::npos ||
-         lowered_name.find("token") != std::string_view::npos ||
+         lowered_name.find("auth") != std::string_view::npos || lowered_name.find("token") != std::string_view::npos ||
          lowered_name.find("api-key") != std::string_view::npos ||
          lowered_name.find("apikey") != std::string_view::npos;
 }
 
-core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor,
-                                                  const DispatchRequest& request,
+bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf::Timestamp& cutoff) {
+  if (!task.status().has_timestamp()) {
+    return false;
+  }
+  const auto& ts = task.status().timestamp();
+  return ts.seconds() > cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() >= cutoff.nanos());
+}
+
+bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
+  if (!request.context_id.empty() && task.context_id() != request.context_id) {
+    return false;
+  }
+  if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
+    return false;
+  }
+  if (request.status_timestamp_after.has_value() && !HasStatusAfterCutoff(task, *request.status_timestamp_after)) {
+    return false;
+  }
+  return true;
+}
+
+void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
+  if (keep == 0) {
+    task->clear_history();
+    return;
+  }
+  if (static_cast<std::size_t>(task->history_size()) <= keep) {
+    return;
+  }
+  const auto history_size = static_cast<std::size_t>(task->history_size());
+  const int remove_count = static_cast<int>(history_size - keep);
+  task->mutable_history()->DeleteSubrange(0, remove_count);
+}
+
+lf::a2a::v1::Task BuildListTask(const lf::a2a::v1::Task& source, const ListTasksRequest& request) {
+  lf::a2a::v1::Task task = source;
+  if (!request.include_artifacts) {
+    task.clear_artifacts();
+  }
+  if (request.history_length.has_value()) {
+    ApplyHistoryLimit(&task, *request.history_length);
+  }
+  return task;
+}
+
+core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context) {
   switch (request.operation) {
     case DispatcherOperation::kSendMessage: {
@@ -120,8 +165,7 @@ std::unordered_map<std::string, std::string> ExtractAuthMetadata(
       const std::string lowered_value = ToLower(trimmed_value);
       constexpr std::string_view kBearerPrefix = "bearer ";
       if (lowered_value.starts_with(kBearerPrefix) && trimmed_value.size() > kBearerPrefix.size()) {
-        auth_metadata.insert_or_assign("bearer_token",
-                                       Trim(trimmed_value.substr(kBearerPrefix.size())));
+        auth_metadata.insert_or_assign("bearer_token", Trim(trimmed_value.substr(kBearerPrefix.size())));
       }
     }
 
@@ -143,12 +187,10 @@ std::unordered_map<std::string, std::string> ExtractAuthMetadata(
 
 Dispatcher::Dispatcher(AgentExecutor* executor) : executor_(executor) {}
 
-Dispatcher::Dispatcher(AgentExecutor* executor,
-                       std::vector<std::shared_ptr<ServerInterceptor>> interceptors)
+Dispatcher::Dispatcher(AgentExecutor* executor, std::vector<std::shared_ptr<ServerInterceptor>> interceptors)
     : executor_(executor), interceptors_(std::move(interceptors)) {}
 
-core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request,
-                                                    RequestContext& context) const {
+core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request, RequestContext& context) const {
   if (executor_ == nullptr) {
     return core::Error::Internal("Server dispatcher executor is not configured");
   }
@@ -214,7 +256,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
-    return core::Error::Validation("Task not found");
+    return core::protocol_errors::TaskNotFound("Task not found");
   }
   return it->second;
 }
@@ -242,24 +284,31 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
 
   std::lock_guard<std::mutex> lock(mutex_);
 
-  if (offset.value() > ordered_ids_.size()) {
+  std::vector<const lf::a2a::v1::Task*> filtered;
+  filtered.reserve(ordered_ids_.size());
+  for (const auto& id : ordered_ids_) {
+    const auto it = tasks_.find(id);
+    if (it != tasks_.end() && MatchesListFilters(it->second, request)) {
+      filtered.push_back(&it->second);
+    }
+  }
+
+  const std::size_t start = offset.value();
+  if (start > filtered.size()) {
     return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
   }
 
-  const std::size_t max_items = request.page_size == 0
-                                    ? ordered_ids_.size()
-                                    : std::min(request.page_size, ordered_ids_.size());
-
+  const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
   ListTasksResponse response;
-  for (std::size_t idx = offset.value(); idx < ordered_ids_.size(); ++idx) {
-    if (response.tasks.size() >= max_items) {
+  response.page_size = std::min(effective_page_size, filtered.size() - start);
+  response.total_size = filtered.size();
+
+  for (std::size_t idx = start; idx < filtered.size(); ++idx) {
+    if (response.tasks.size() >= effective_page_size) {
       response.next_page_token = std::to_string(idx);
       break;
     }
-    const auto task_it = tasks_.find(ordered_ids_[idx]);
-    if (task_it != tasks_.end()) {
-      response.tasks.push_back(task_it->second);
-    }
+    response.tasks.push_back(BuildListTask(*filtered[idx], request));
   }
 
   return response;
@@ -273,7 +322,10 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = tasks_.find(std::string(id));
   if (it == tasks_.end()) {
-    return core::Error::Validation("Task not found");
+    return core::protocol_errors::TaskNotFound("Task not found");
+  }
+  if (core::IsTerminalTaskState(it->second.status().state())) {
+    return core::protocol_errors::TaskNotCancelable();
   }
 
   auto* mutable_status = it->second.mutable_status();

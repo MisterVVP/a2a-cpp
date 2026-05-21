@@ -136,6 +136,21 @@ target_link_libraries(sse_parser_test
 
 gtest_discover_tests(sse_parser_test)
 
+
+add_executable(http_json_transport_test
+  unit/http_json_transport_test.cpp
+)
+
+target_link_libraries(http_json_transport_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(http_json_transport_test)
+
 add_executable(http_json_client_integration_test
   integration/http_json_client_integration_test.cpp
 )
@@ -262,6 +277,20 @@ target_link_libraries(grpc_server_transport_test
 )
 
 gtest_discover_tests(grpc_server_transport_test)
+
+add_executable(server_task_store_unit_test
+  unit/server_task_store_unit_test.cpp
+)
+
+target_link_libraries(server_task_store_unit_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(server_task_store_unit_test)
 
 add_executable(json_rpc_client_functional_test
   functional/json_rpc_client_functional_test.cpp
@@ -466,3 +495,8 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::core
     a2a::proto_generated
 )
+
+add_executable(tck_http_sut interop/tck_http_sut.cpp)
+target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/examples)
+target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
+

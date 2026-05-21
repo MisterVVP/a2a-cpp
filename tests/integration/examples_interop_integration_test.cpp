@@ -20,27 +20,22 @@ TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
-      &dispatcher,
-      a2a::examples::BuildRestAgentCard("Interop Example Agent", "http://agent.local/a2a"),
+      &dispatcher, a2a::examples::BuildRestAgentCard("Interop Example Agent", "http://agent.local/a2a"),
       {.rest_api_base_path = "/a2a"});
 
   a2a::client::DiscoveryClient discovery([&server](std::string_view url) {
-    const auto response = server.Handle({.method = "GET",
-                                         .target = a2a::examples::UrlToTarget(url),
-                                         .headers = {},
-                                         .body = {},
-                                         .remote_address = {}});
+    const auto response = server.Handle(
+        {.method = "GET", .target = a2a::examples::UrlToTarget(url), .headers = {}, .body = {}, .remote_address = {}});
     if (!response.ok()) {
       return a2a::client::HttpResponse{.status_code = kInternalServerErrorStatusCode, .body = {}};
     }
-    return a2a::client::HttpResponse{.status_code = response.value().status_code,
-                                     .body = response.value().body};
+    return a2a::client::HttpResponse{.status_code = response.value().status_code, .body = response.value().body};
   });
 
   const auto card = discovery.Fetch("http://agent.local");
   ASSERT_TRUE(card.ok());
-  const auto resolved = a2a::client::AgentCardResolver::SelectPreferredInterface(
-      card.value(), a2a::client::PreferredTransport::kRest);
+  const auto resolved =
+      a2a::client::AgentCardResolver::SelectPreferredInterface(card.value(), a2a::client::PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
@@ -63,10 +58,12 @@ TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery
   a2a::client::A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest send;
-  send.mutable_message()->set_task_id("interop-rest-task");
+  send.mutable_message()->set_message_id("interop-rest-msg-1");
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send.mutable_message()->add_parts()->set_text("hello");
   const auto send_result = client.SendMessage(send);
   ASSERT_TRUE(send_result.ok()) << send_result.error().message();
-  EXPECT_EQ(send_result.value().task().id(), "interop-rest-task");
+  EXPECT_FALSE(send_result.value().task().id().empty());
 }
 
 TEST(ExamplesInteropIntegrationTest, JsonRpcExampleServerRoundTripWorks) {
@@ -98,15 +95,17 @@ TEST(ExamplesInteropIntegrationTest, JsonRpcExampleServerRoundTripWorks) {
   a2a::client::A2AClient client(std::move(transport));
 
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_task_id("interop-json-rpc-task");
+  request.mutable_message()->set_message_id("interop-json-rpc-msg-1");
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  request.mutable_message()->add_parts()->set_text("hello");
   const auto send = client.SendMessage(request);
   ASSERT_TRUE(send.ok()) << send.error().message();
 
   lf::a2a::v1::GetTaskRequest get;
-  get.set_id("interop-json-rpc-task");
+  get.set_id(send.value().task().id());
   const auto loaded = client.GetTask(get);
   ASSERT_TRUE(loaded.ok()) << loaded.error().message();
-  EXPECT_EQ(loaded.value().id(), "interop-json-rpc-task");
+  EXPECT_EQ(loaded.value().id(), send.value().task().id());
 }
 
 }  // namespace

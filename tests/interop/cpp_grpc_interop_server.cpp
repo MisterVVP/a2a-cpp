@@ -15,8 +15,7 @@
 namespace {
 class StreamSession final : public a2a::server::ServerStreamSession {
  public:
-  explicit StreamSession(std::vector<lf::a2a::v1::StreamResponse> events)
-      : events_(std::move(events)) {}
+  explicit StreamSession(std::vector<lf::a2a::v1::StreamResponse> events) : events_(std::move(events)) {}
   a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
     if (index_ >= events_.size()) {
       return std::optional<lf::a2a::v1::StreamResponse>{};
@@ -32,9 +31,8 @@ class StreamSession final : public a2a::server::ServerStreamSession {
 class Executor final : public a2a::server::AgentExecutor {
  public:
   explicit Executor(a2a::server::TaskStore* store) : store_(store) {}
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::Task task;
     task.set_id(request.message().task_id());
@@ -47,22 +45,20 @@ class Executor final : public a2a::server::AgentExecutor {
     return response;
   }
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
     event.mutable_task()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    return std::unique_ptr<a2a::server::ServerStreamSession>(
-        std::make_unique<StreamSession>(std::vector{event}));
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<StreamSession>(std::vector{event}));
   }
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                a2a::server::RequestContext& context) override {
     (void)context;
     return store_->Get(request.id());
   }
-  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(
-      const a2a::server::ListTasksRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
     (void)context;
     return store_->List(request);
   }

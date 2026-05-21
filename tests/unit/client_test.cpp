@@ -12,13 +12,12 @@ namespace {
 
 class FakeClientTransport final : public a2a::client::ClientTransport {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request,
-      const a2a::client::CallOptions& options) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  const a2a::client::CallOptions& options) override {
     (void)request;
     (void)options;
     lf::a2a::v1::SendMessageResponse response;
-    response.mutable_message()->set_role("assistant");
+    response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     return response;
   }
 
@@ -30,9 +29,8 @@ class FakeClientTransport final : public a2a::client::ClientTransport {
     return task;
   }
 
-  a2a::core::Result<a2a::client::ListTasksResponse> ListTasks(
-      const a2a::client::ListTasksRequest& request,
-      const a2a::client::CallOptions& options) override {
+  a2a::core::Result<a2a::client::ListTasksResponse> ListTasks(const a2a::client::ListTasksRequest& request,
+                                                              const a2a::client::CallOptions& options) override {
     (void)request;
     (void)options;
     if (list_tasks_error.has_value()) {
@@ -41,18 +39,16 @@ class FakeClientTransport final : public a2a::client::ClientTransport {
     return list_tasks_response;
   }
 
-  a2a::core::Result<lf::a2a::v1::Task> CancelTask(
-      const lf::a2a::v1::CancelTaskRequest& request,
-      const a2a::client::CallOptions& options) override {
+  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                  const a2a::client::CallOptions& options) override {
     (void)options;
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     return task;
   }
 
-  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
-      const lf::a2a::v1::TaskPushNotificationConfig& request,
-      const a2a::client::CallOptions& options) override {
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, const a2a::client::CallOptions& options) override {
     (void)options;
     return request;
   }
@@ -66,8 +62,7 @@ class FakeClientTransport final : public a2a::client::ClientTransport {
     return config;
   }
 
-  a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-  ListTaskPushNotificationConfigs(
+  a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
       const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
       const a2a::client::CallOptions& options) override {
     (void)request;
@@ -120,10 +115,8 @@ class RecordingInterceptor final : public a2a::client::ClientInterceptor {
     events_->push_back(tag_ + ":before:" + std::string(context.operation));
   }
 
-  void AfterCall(const a2a::client::ClientCallContext& context,
-                 const a2a::client::ClientCallResult& result) override {
-    events_->push_back(tag_ + ":after:" + std::string(context.operation) + ":" +
-                       (result.ok ? "ok" : "error"));
+  void AfterCall(const a2a::client::ClientCallContext& context, const a2a::client::ClientCallResult& result) override {
+    events_->push_back(tag_ + ":after:" + std::string(context.operation) + ":" + (result.ok ? "ok" : "error"));
   }
 
  private:
@@ -149,7 +142,7 @@ TEST(A2AClientTest, ReturnsInternalErrorWhenTransportNotConfigured) {
   } observer;
 
   lf::a2a::v1::SendMessageRequest stream_request;
-  stream_request.mutable_message()->set_role("user");
+  stream_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   const auto stream_response = client.SendStreamingMessage(stream_request, observer);
   ASSERT_FALSE(stream_response.ok());
   EXPECT_EQ(stream_response.error().code(), a2a::core::ErrorCode::kInternal);
@@ -171,8 +164,7 @@ TEST(A2AClientTest, ListTasksRunsInterceptorsInExpectedOrderForSuccessAndFailure
   ASSERT_EQ(list_result.value().tasks.size(), 1U);
 
   const std::vector<std::string> expected_success = {"i1:before:ListTasks", "i2:before:ListTasks",
-                                                     "i2:after:ListTasks:ok",
-                                                     "i1:after:ListTasks:ok"};
+                                                     "i2:after:ListTasks:ok", "i1:after:ListTasks:ok"};
   EXPECT_EQ(events, expected_success);
 }
 

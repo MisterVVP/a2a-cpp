@@ -28,40 +28,35 @@ class JsonRpcTransport final : public ClientTransport {
                                                         const CallOptions& options) override;
   [[nodiscard]] core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
                                                           const CallOptions& options) override;
-  [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
-      const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                           const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-      const CallOptions& options) override;
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-  ListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-      const CallOptions& options) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<void> DeleteTaskPushNotificationConfig(
-      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-      const CallOptions& options) override;
+      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
-      const CallOptions& options) override;
+      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(
-      const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
-      const CallOptions& options) override;
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                          StreamObserver& observer,
+                                                                          const CallOptions& options) override;
 
  private:
-  [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(
-      std::string request_body, const CallOptions& options) const;
+  [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(std::string request_body,
+                                                                    const CallOptions& options) const;
 
-  [[nodiscard]] core::Result<google::protobuf::Value> InvokeForResultValue(
-      std::string_view method_name, const google::protobuf::Message& request,
-      const CallOptions& options) const;
+  [[nodiscard]] core::Result<google::protobuf::Value> InvokeForResultValue(std::string_view method_name,
+                                                                           const google::protobuf::Message& request,
+                                                                           const CallOptions& options) const;
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;

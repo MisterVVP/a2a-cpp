@@ -1,26 +1,24 @@
 {
-  "protocolVersion": "1.0",
   "name": "Fixture Agent",
+  "description": "Fixture",
+  "version": "1.0.0",
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
   "supportedInterfaces": [
-    {
-      "transport": "TRANSPORT_PROTOCOL_REST",
-      "url": "https://agent.example.com/a2a",
-      "securityRequirements": [
-        "oauth2"
-      ]
-    },
-    {
-      "transport": "TRANSPORT_PROTOCOL_JSON_RPC",
-      "url": "https://agent.example.com/rpc"
-    }
+    {"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"},
+    {"protocolBinding":"JSONRPC","protocolVersion":"1.0","url":"https://agent.example.com/rpc"}
   ],
   "securitySchemes": {
     "oauth2": {
-      "type": "oauth2",
-      "description": "OAuth2 token"
+      "oauth2SecurityScheme": {
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://issuer.example.com/oauth/token",
+            "scopes": {"agent.read":"Read access"}
+          }
+        }
+      }
     }
   },
-  "defaultSecurityRequirements": [
-    "oauth2"
-  ]
+  "securityRequirements": [{"schemes":{"oauth2":{"list":[]}}}]
 }

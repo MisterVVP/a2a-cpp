@@ -114,8 +114,7 @@ TEST(CoreProtoJsonTest, EnumSerializationUsesNamesByDefault) {
 
 TEST(CoreProtoJsonTest, RejectsUnknownFieldsByDefault) {
   lf::a2a::v1::Task task;
-  const auto parse_status =
-      a2a::core::JsonToMessage(R"({"id":"task-2","unknownField":true})", &task);
+  const auto parse_status = a2a::core::JsonToMessage(R"({"id":"task-2","unknownField":true})", &task);
   ASSERT_FALSE(parse_status.ok());
   EXPECT_EQ(parse_status.error().code(), a2a::core::ErrorCode::kSerialization);
 }
@@ -125,8 +124,7 @@ TEST(CoreProtoJsonTest, CanIgnoreUnknownFieldsWhenRequested) {
   a2a::core::ProtoJsonParseOptions parse_options;
   parse_options.ignore_unknown_fields = true;
 
-  const auto parse_status =
-      a2a::core::JsonToMessage(R"({"id":"task-3","unknownField":true})", &task, parse_options);
+  const auto parse_status = a2a::core::JsonToMessage(R"({"id":"task-3","unknownField":true})", &task, parse_options);
   ASSERT_TRUE(parse_status.ok());
   EXPECT_EQ(task.id(), "task-3");
 }

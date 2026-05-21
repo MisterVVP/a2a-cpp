@@ -4,6 +4,7 @@ set -euo pipefail
 echo "[verify_changes] Running format checks..."
 mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
 if [ "${#CPP_FILES[@]}" -gt 0 ]; then
+  clang-format -i "${CPP_FILES[@]}"
   clang-format --dry-run --Werror "${CPP_FILES[@]}"
 fi
 

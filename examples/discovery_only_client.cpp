@@ -5,8 +5,8 @@
 #include "example_support.h"
 
 int main() {
-  const auto card_json = a2a::core::MessageToJson(
-      a2a::examples::BuildRestAgentCard("Discovery Example Agent", "http://agent.local/a2a"));
+  const auto card_json =
+      a2a::core::MessageToJson(a2a::examples::BuildRestAgentCard("Discovery Example Agent", "http://agent.local/a2a"));
   if (!card_json.ok()) {
     std::cerr << "failed to prepare fixture: " << card_json.error().message() << '\n';
     return 1;

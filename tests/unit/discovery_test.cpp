@@ -22,8 +22,7 @@ constexpr int kHttpNotFound = 404;
 constexpr int kHttpOk = 200;
 
 TEST(DiscoveryClientTest, RejectsMalformedBaseUrl) {
-  DiscoveryClient client(
-      [](std::string_view) -> a2a::core::Result<HttpResponse> { return HttpResponse{}; });
+  DiscoveryClient client([](std::string_view) -> a2a::core::Result<HttpResponse> { return HttpResponse{}; });
 
   const auto result = client.Fetch("ftp://example.com");
   ASSERT_FALSE(result.ok());
@@ -55,8 +54,7 @@ TEST(DiscoveryClientTest, ReportsBadJsonWithSerializationError) {
 
 TEST(DiscoveryClientTest, RejectsCardsWithoutSupportedInterfaces) {
   DiscoveryClient client([](std::string_view) -> a2a::core::Result<HttpResponse> {
-    return HttpResponse{.status_code = kHttpOk,
-                        .body = R"({"protocolVersion":"1.0","name":"no-interfaces"})"};
+    return HttpResponse{.status_code = kHttpOk, .body = R"({"name":"no-interfaces"})"};
   });
 
   const auto result = client.Fetch("https://agent.example.com");
@@ -69,7 +67,7 @@ TEST(DiscoveryClientTest, RejectsUnsupportedProtocolVersion) {
     return HttpResponse{
         .status_code = kHttpOk,
         .body =
-            R"({"protocolVersion":"2.0","supportedInterfaces":[{"transport":"TRANSPORT_PROTOCOL_REST","url":"https://agent.example.com/a2a"}]})"};
+            R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"2.0","url":"https://agent.example.com/a2a"}]})"};
   });
 
   const auto result = client.Fetch("https://agent.example.com");
@@ -82,7 +80,7 @@ TEST(DiscoveryClientTest, RejectsUnknownSecurityRequirementReferences) {
     return HttpResponse{
         .status_code = kHttpOk,
         .body =
-            R"({"protocolVersion":"1.0","supportedInterfaces":[{"transport":"TRANSPORT_PROTOCOL_REST","url":"https://agent.example.com/a2a","securityRequirements":["oauth2"]}]})"};
+            R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}],"securityRequirements":[{"schemes":{"oauth2":{"list":[]}}}]})"};
   });
 
   const auto result = client.Fetch("https://agent.example.com");
@@ -98,7 +96,7 @@ TEST(DiscoveryClientTest, UsesInMemoryCacheWithinTtl) {
         return HttpResponse{
             .status_code = kHttpOk,
             .body =
-                R"({"protocolVersion":"1.0","supportedInterfaces":[{"transport":"TRANSPORT_PROTOCOL_REST","url":"https://agent.example.com/a2a"}]})"};
+                R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}]})"};
       },
       a2a::client::kDefaultDiscoveryCacheTtl);
 
@@ -116,7 +114,7 @@ TEST(DiscoveryClientTest, FetchExtendedAgentCardUsesExtendedQueryPath) {
     return HttpResponse{
         .status_code = kHttpOk,
         .body =
-            R"({"protocolVersion":"1.0","supportedInterfaces":[{"transport":"TRANSPORT_PROTOCOL_REST","url":"https://agent.example.com/a2a"}]})"};
+            R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}]})"};
   });
 
   const auto fetched = client.FetchExtendedAgentCard("https://agent.example.com/");
@@ -125,16 +123,16 @@ TEST(DiscoveryClientTest, FetchExtendedAgentCardUsesExtendedQueryPath) {
 }
 TEST(AgentCardResolverTest, SelectsPreferredThenFallsBack) {
   lf::a2a::v1::AgentCard card;
-  card.set_protocol_version("1.0");
   auto* json_rpc = card.add_supported_interfaces();
-  json_rpc->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_JSON_RPC);
+  json_rpc->set_protocol_binding("JSONRPC");
+  json_rpc->set_protocol_version("1.0");
   json_rpc->set_url("https://agent.example.com/rpc");
   auto* grpc = card.add_supported_interfaces();
-  grpc->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC);
+  grpc->set_protocol_binding("GRPC");
+  grpc->set_protocol_version("1.0");
   grpc->set_url("https://agent.example.com/grpc");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   EXPECT_EQ(resolved.value().transport, PreferredTransport::kJsonRpc);
   EXPECT_EQ(resolved.value().url, "https://agent.example.com/rpc");
@@ -142,13 +140,12 @@ TEST(AgentCardResolverTest, SelectsPreferredThenFallsBack) {
 
 TEST(AgentCardResolverTest, SelectsGrpcInterfaceWhenPreferred) {
   lf::a2a::v1::AgentCard card;
-  card.set_protocol_version("1.0");
   auto* grpc = card.add_supported_interfaces();
-  grpc->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_GRPC);
+  grpc->set_protocol_binding("GRPC");
+  grpc->set_protocol_version("1.0");
   grpc->set_url("dns:///agent.example.com:50051");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kGrpc);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kGrpc);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   EXPECT_EQ(resolved.value().transport, PreferredTransport::kGrpc);
   EXPECT_EQ(resolved.value().url, "dns:///agent.example.com:50051");
@@ -156,15 +153,15 @@ TEST(AgentCardResolverTest, SelectsGrpcInterfaceWhenPreferred) {
 
 TEST(AgentCardResolverTest, UsesDefaultSecurityRequirementsWhenInterfaceSpecificNotSet) {
   lf::a2a::v1::AgentCard card;
-  card.set_protocol_version("1.0");
-  card.add_default_security_requirements("oauth2");
-  (*card.mutable_security_schemes())["oauth2"].set_type("oauth2");
+  (*card.mutable_security_schemes())["oauth2"].mutable_oauth2_security_scheme();
+  auto* requirement = card.add_security_requirements();
+  (*requirement->mutable_schemes())["oauth2"];
   auto* rest = card.add_supported_interfaces();
-  rest->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_REST);
+  rest->set_protocol_binding("HTTP+JSON");
+  rest->set_protocol_version("1.0");
   rest->set_url("https://agent.example.com/a2a");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   ASSERT_EQ(resolved.value().security_requirements.size(), 1U);
   EXPECT_EQ(resolved.value().security_requirements[0], "oauth2");
@@ -173,13 +170,11 @@ TEST(AgentCardResolverTest, UsesDefaultSecurityRequirementsWhenInterfaceSpecific
 
 TEST(AgentCardResolverTest, ReturnsValidationErrorWhenNoUsableInterfaceExists) {
   lf::a2a::v1::AgentCard card;
-  card.set_protocol_version("1.0");
   auto* iface = card.add_supported_interfaces();
-  iface->set_transport(lf::a2a::v1::TRANSPORT_PROTOCOL_UNSPECIFIED);
+  iface->set_protocol_binding("");
   iface->set_url("");
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(card, PreferredTransport::kRest);
   ASSERT_FALSE(resolved.ok());
   EXPECT_EQ(resolved.error().code(), a2a::core::ErrorCode::kValidation);
 }
@@ -195,8 +190,7 @@ TEST(DiscoveryIntegrationFixtureTest, LoadsValidFixtureAndResolvesSecurityMetada
   const auto fetched = client.Fetch("https://agent.example.com");
   ASSERT_TRUE(fetched.ok()) << fetched.error().message();
 
-  const auto resolved =
-      AgentCardResolver::SelectPreferredInterface(fetched.value(), PreferredTransport::kRest);
+  const auto resolved = AgentCardResolver::SelectPreferredInterface(fetched.value(), PreferredTransport::kRest);
   ASSERT_TRUE(resolved.ok()) << resolved.error().message();
   EXPECT_EQ(resolved.value().url, "https://agent.example.com/a2a");
   EXPECT_TRUE(resolved.value().security_schemes.contains("oauth2"));

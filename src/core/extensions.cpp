@@ -70,8 +70,7 @@ Result<std::vector<std::string>> Extensions::Parse(std::string_view header_value
 
     if (!token.empty()) {
       if (!IsValidToken(token)) {
-        return Error::Validation("A2A-Extensions header contains invalid token: " +
-                                 std::string(token));
+        return Error::Validation("A2A-Extensions header contains invalid token: " + std::string(token));
       }
       parsed.emplace_back(token);
     }

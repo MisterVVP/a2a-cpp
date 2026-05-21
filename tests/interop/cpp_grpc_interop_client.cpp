@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
   a2a::client::A2AClient client(std::make_unique<a2a::client::GrpcTransport>(iface, channel));
 
   lf::a2a::v1::SendMessageRequest send;
-  send.mutable_message()->set_role("user");
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   send.mutable_message()->set_task_id("interop-task-1");
   if (auto r = client.SendMessage(send); !r.ok()) {
     return 1;
@@ -64,8 +64,7 @@ int main(int argc, char** argv) {
 
   lf::a2a::v1::CancelTaskRequest cancel;
   cancel.set_id("interop-task-1");
-  if (auto r = client.CancelTask(cancel);
-      !r.ok() || r.value().status().state() != lf::a2a::v1::TASK_STATE_CANCELED) {
+  if (auto r = client.CancelTask(cancel); !r.ok() || r.value().status().state() != lf::a2a::v1::TASK_STATE_CANCELED) {
     return 1;
   }
 

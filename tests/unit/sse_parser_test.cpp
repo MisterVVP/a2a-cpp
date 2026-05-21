@@ -7,8 +7,7 @@
 
 namespace {
 
-a2a::core::Result<void> CaptureEvent(std::vector<a2a::client::SseEvent>& events,
-                                     const a2a::client::SseEvent& event) {
+a2a::core::Result<void> CaptureEvent(std::vector<a2a::client::SseEvent>& events, const a2a::client::SseEvent& event) {
   events.push_back(event);
   return {};
 }
@@ -16,9 +15,8 @@ a2a::core::Result<void> CaptureEvent(std::vector<a2a::client::SseEvent>& events,
 void FeedChunksOrFail(a2a::client::SseParser& parser, const std::vector<std::string>& chunks,
                       std::vector<a2a::client::SseEvent>& events) {
   for (const auto& chunk : chunks) {
-    const auto status = parser.Feed(chunk, [&events](const a2a::client::SseEvent& event) {
-      return CaptureEvent(events, event);
-    });
+    const auto status =
+        parser.Feed(chunk, [&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
     ASSERT_TRUE(status.ok()) << status.error().message();
   }
 }
@@ -36,8 +34,8 @@ TEST(SseParserTest, ParsesSimpleSequenceAndMultilineData) {
 
   ASSERT_TRUE(first_feed.ok()) << first_feed.error().message();
 
-  const auto finish = parser.Finish(
-      [&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
+  const auto finish =
+      parser.Finish([&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
   ASSERT_TRUE(finish.ok()) << finish.error().message();
 
   ASSERT_EQ(events.size(), 2U);
@@ -53,8 +51,8 @@ TEST(SseParserTest, HandlesFragmentedFramesAcrossChunks) {
   std::vector<a2a::client::SseEvent> events;
   FeedChunksOrFail(parser, {"eve", "nt: mes", "sage\nda", "ta: {}\n\n"}, events);
 
-  const auto finish = parser.Finish(
-      [&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
+  const auto finish =
+      parser.Finish([&events](const a2a::client::SseEvent& event) { return CaptureEvent(events, event); });
 
   ASSERT_TRUE(finish.ok()) << finish.error().message();
   ASSERT_EQ(events.size(), 1U);
@@ -66,8 +64,7 @@ TEST(SseParserTest, HandlesFragmentedFramesAcrossChunks) {
 TEST(SseParserTest, ReportsMalformedFrame) {
   a2a::client::SseParser parser;
 
-  const auto feed = parser.Feed(
-      "unknown\n", [](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); });
+  const auto feed = parser.Feed("unknown\n", [](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); });
 
   ASSERT_FALSE(feed.ok());
   EXPECT_EQ(feed.error().code(), a2a::core::ErrorCode::kSerialization);
@@ -77,13 +74,11 @@ TEST(SseParserTest, ReportsMalformedFrame) {
 TEST(SseParserTest, ReportsUnterminatedEventOnFinish) {
   a2a::client::SseParser parser;
 
-  const auto feed = parser.Feed("data: {\"task\":{}}\n", [](const a2a::client::SseEvent&) {
-    return a2a::core::Result<void>();
-  });
+  const auto feed =
+      parser.Feed("data: {\"task\":{}}\n", [](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); });
   ASSERT_TRUE(feed.ok()) << feed.error().message();
 
-  const auto finish =
-      parser.Finish([](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); });
+  const auto finish = parser.Finish([](const a2a::client::SseEvent&) { return a2a::core::Result<void>(); });
 
   ASSERT_FALSE(finish.ok());
   EXPECT_EQ(finish.error().code(), a2a::core::ErrorCode::kSerialization);

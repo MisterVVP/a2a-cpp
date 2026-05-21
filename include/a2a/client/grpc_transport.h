@@ -34,9 +34,9 @@ class GrpcTransport final : public ClientTransport {
    public:
     virtual ~RpcClient() = default;
 
-    [[nodiscard]] virtual ::grpc::Status SendMessage(
-        ::grpc::ClientContext* context, const lf::a2a::v1::SendMessageRequest& request,
-        lf::a2a::v1::SendMessageResponse* response) = 0;
+    [[nodiscard]] virtual ::grpc::Status SendMessage(::grpc::ClientContext* context,
+                                                     const lf::a2a::v1::SendMessageRequest& request,
+                                                     lf::a2a::v1::SendMessageResponse* response) = 0;
 
     [[nodiscard]] virtual std::unique_ptr<StreamReader> SendStreamingMessage(
         ::grpc::ClientContext* context, const lf::a2a::v1::SendMessageRequest& request) = 0;
@@ -45,27 +45,31 @@ class GrpcTransport final : public ClientTransport {
                                                  const lf::a2a::v1::GetTaskRequest& request,
                                                  lf::a2a::v1::Task* response) = 0;
 
+    [[nodiscard]] virtual std::unique_ptr<StreamReader> SubscribeToTask(
+        ::grpc::ClientContext* context, const lf::a2a::v1::SubscribeToTaskRequest& request) {
+      (void)context;
+      (void)request;
+      return std::unique_ptr<StreamReader>();
+    }
+
     [[nodiscard]] virtual ::grpc::Status CancelTask(::grpc::ClientContext* context,
                                                     const lf::a2a::v1::CancelTaskRequest& request,
                                                     lf::a2a::v1::Task* response) = 0;
 
-    [[nodiscard]] virtual ::grpc::Status SetTaskPushNotificationConfig(
+    [[nodiscard]] virtual ::grpc::Status CreateTaskPushNotificationConfig(
         ::grpc::ClientContext* context, const lf::a2a::v1::TaskPushNotificationConfig& request,
         lf::a2a::v1::TaskPushNotificationConfig* response) = 0;
 
     [[nodiscard]] virtual ::grpc::Status GetTaskPushNotificationConfig(
-        ::grpc::ClientContext* context,
-        const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
+        ::grpc::ClientContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
         lf::a2a::v1::TaskPushNotificationConfig* response) = 0;
 
     [[nodiscard]] virtual ::grpc::Status ListTaskPushNotificationConfigs(
-        ::grpc::ClientContext* context,
-        const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+        ::grpc::ClientContext* context, const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
         lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response) = 0;
 
     [[nodiscard]] virtual ::grpc::Status DeleteTaskPushNotificationConfig(
-        ::grpc::ClientContext* context,
-        const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+        ::grpc::ClientContext* context, const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
         google::protobuf::Empty* response) = 0;
   };
 
@@ -83,36 +87,30 @@ class GrpcTransport final : public ClientTransport {
   [[nodiscard]] core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& request,
                                                           const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(
-      const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                           const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> SetTaskPushNotificationConfig(
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-      const CallOptions& options) override;
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
-  ListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-      const CallOptions& options) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<void> DeleteTaskPushNotificationConfig(
-      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-      const CallOptions& options) override;
+      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) override;
 
   [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
-      const CallOptions& options) override;
+      const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) override;
 
-  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(
-      const lf::a2a::v1::GetTaskRequest& request, StreamObserver& observer,
-      const CallOptions& options) override;
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                          StreamObserver& observer,
+                                                                          const CallOptions& options) override;
 
  private:
-  [[nodiscard]] core::Result<std::unique_ptr<::grpc::ClientContext>> BuildContext(
-      const CallOptions& options) const;
+  [[nodiscard]] core::Result<std::unique_ptr<::grpc::ClientContext>> BuildContext(const CallOptions& options) const;
   [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
   ResolvedInterface resolved_interface_;

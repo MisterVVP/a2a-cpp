@@ -12,7 +12,8 @@
 namespace a2a::server {
 
 struct RestEndpointPaths final {
-  static constexpr std::string_view kSendMessage = "/messages:send";
+  static constexpr std::string_view kSendMessage = "/message:send";
+  static constexpr std::string_view kSendStreamingMessage = "/message:stream";
   static constexpr std::string_view kTaskCollection = "/tasks";
   static constexpr std::string_view kTaskResourcePrefix = "/tasks/";
   static constexpr std::string_view kTaskCancelSuffix = ":cancel";
@@ -47,10 +48,9 @@ class RestTransport final {
   [[nodiscard]] core::Result<RestResponse> Handle(const RestRequest& request) const;
 
  private:
-  [[nodiscard]] static std::optional<DispatchRequest> BuildDispatchRequest(
-      const RestRequest& request);
-  [[nodiscard]] static core::Result<std::string> SerializeDispatchResponse(
-      DispatcherOperation operation, const DispatchResponse& response);
+  [[nodiscard]] static std::optional<DispatchRequest> BuildDispatchRequest(const RestRequest& request);
+  [[nodiscard]] static core::Result<RestResponse> SerializeDispatchResponse(DispatcherOperation operation,
+                                                                            DispatchResponse& response);
   [[nodiscard]] static RestResponse BuildErrorResponse(const core::Error& error);
 
   Dispatcher* dispatcher_ = nullptr;
