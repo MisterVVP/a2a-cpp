@@ -42,6 +42,51 @@ bool IsAuthSignalHeader(std::string_view lowered_name) {
          lowered_name.find("apikey") != std::string_view::npos;
 }
 
+bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf::Timestamp& cutoff) {
+  if (!task.status().has_timestamp()) {
+    return false;
+  }
+  const auto& ts = task.status().timestamp();
+  return ts.seconds() > cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() >= cutoff.nanos());
+}
+
+bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
+  if (!request.context_id.empty() && task.context_id() != request.context_id) {
+    return false;
+  }
+  if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
+    return false;
+  }
+  if (request.status_timestamp_after.has_value() && !HasStatusAfterCutoff(task, *request.status_timestamp_after)) {
+    return false;
+  }
+  return true;
+}
+
+void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
+  if (keep == 0) {
+    task->clear_history();
+    return;
+  }
+  if (static_cast<std::size_t>(task->history_size()) <= keep) {
+    return;
+  }
+  const auto history_size = static_cast<std::size_t>(task->history_size());
+  const int remove_count = static_cast<int>(history_size - keep);
+  task->mutable_history()->DeleteSubrange(0, remove_count);
+}
+
+lf::a2a::v1::Task BuildListTask(const lf::a2a::v1::Task& source, const ListTasksRequest& request) {
+  lf::a2a::v1::Task task = source;
+  if (!request.include_artifacts) {
+    task.clear_artifacts();
+  }
+  if (request.history_length.has_value()) {
+    ApplyHistoryLimit(&task, *request.history_length);
+  }
+  return task;
+}
+
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context) {
   switch (request.operation) {
@@ -243,58 +288,27 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
   filtered.reserve(ordered_ids_.size());
   for (const auto& id : ordered_ids_) {
     const auto it = tasks_.find(id);
-    if (it == tasks_.end()) {
-      continue;
+    if (it != tasks_.end() && MatchesListFilters(it->second, request)) {
+      filtered.push_back(&it->second);
     }
-    const auto& task = it->second;
-    if (!request.context_id.empty() && task.context_id() != request.context_id) {
-      continue;
-    }
-    if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
-      continue;
-    }
-    if (request.status_timestamp_after.has_value()) {
-      if (!task.status().has_timestamp()) {
-        continue;
-      }
-      const auto& cutoff = *request.status_timestamp_after;
-      const auto& ts = task.status().timestamp();
-      if (ts.seconds() < cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() < cutoff.nanos())) {
-        continue;
-      }
-    }
-    filtered.push_back(&task);
   }
 
-  if (offset.value() > filtered.size()) {
+  const std::size_t start = offset.value();
+  if (start > filtered.size()) {
     return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
   }
 
   const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
   ListTasksResponse response;
-  response.page_size = std::min(effective_page_size, filtered.size() - offset.value());
+  response.page_size = std::min(effective_page_size, filtered.size() - start);
   response.total_size = filtered.size();
 
-  for (std::size_t idx = offset.value(); idx < filtered.size(); ++idx) {
+  for (std::size_t idx = start; idx < filtered.size(); ++idx) {
     if (response.tasks.size() >= effective_page_size) {
       response.next_page_token = std::to_string(idx);
       break;
     }
-    lf::a2a::v1::Task task = *filtered[idx];
-    if (!request.include_artifacts) {
-      task.clear_artifacts();
-    }
-    if (request.history_length.has_value()) {
-      const std::size_t keep = *request.history_length;
-      if (keep == 0) {
-        task.clear_history();
-      } else if (static_cast<std::size_t>(task.history_size()) > keep) {
-        const auto history_size = static_cast<std::size_t>(task.history_size());
-        const int remove_count = static_cast<int>(history_size - keep);
-        task.mutable_history()->DeleteSubrange(0, remove_count);
-      }
-    }
-    response.tasks.push_back(std::move(task));
+    response.tasks.push_back(BuildListTask(*filtered[idx], request));
   }
 
   return response;

@@ -180,9 +180,9 @@ TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) 
   EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 
   const auto trailing = spouse.GetTrailingMetadata();
-  EXPECT_TRUE(trailing.find("a2a-error-code") != trailing.end());
-  EXPECT_TRUE(trailing.find(std::string(a2a::server::GrpcServerTransport::kProtocolCodeMetadataKey)) != trailing.end());
-  EXPECT_TRUE(trailing.find("grpc-status-details-bin") != trailing.end());
+  EXPECT_TRUE(trailing.contains("a2a-error-code"));
+  EXPECT_TRUE(trailing.contains(std::string(a2a::server::GrpcServerTransport::kProtocolCodeMetadataKey)));
+  EXPECT_TRUE(trailing.contains("grpc-status-details-bin"));
 }
 
 TEST(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {

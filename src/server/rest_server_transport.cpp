@@ -20,6 +20,12 @@ constexpr int kHttpNotFound = 404;
 constexpr int kHttpOk = 200;
 constexpr int kHexAlphabetOffset = 10;
 
+struct ErrorBodySpec final {
+  int status_code = kHttpBadRequest;
+  std::string_view message;
+  std::string_view reason;
+};
+
 std::string ToLower(std::string_view value) {
   std::string lowered;
   lowered.reserve(value.size());
@@ -50,11 +56,11 @@ std::string HttpStatusName(int status_code) {
   }
 }
 
-std::string ErrorBody(int status_code, std::string_view message, std::string_view reason) {
+std::string ErrorBody(const ErrorBodySpec& spec) {
   google::protobuf::Struct error_info;
   auto* error_info_fields = error_info.mutable_fields();
   (*error_info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
-  (*error_info_fields)["reason"].set_string_value(std::string(reason));
+  (*error_info_fields)["reason"].set_string_value(std::string(spec.reason));
   (*error_info_fields)["domain"].set_string_value("a2a-protocol.org");
 
   google::protobuf::Struct envelope;
@@ -62,9 +68,9 @@ std::string ErrorBody(int status_code, std::string_view message, std::string_vie
   google::protobuf::Value error_value;
   auto* error_fields = error_value.mutable_struct_value()->mutable_fields();
 
-  (*error_fields)["code"].set_number_value(status_code);
-  (*error_fields)["status"].set_string_value(HttpStatusName(status_code));
-  (*error_fields)["message"].set_string_value(std::string(message));
+  (*error_fields)["code"].set_number_value(spec.status_code);
+  (*error_fields)["status"].set_string_value(HttpStatusName(spec.status_code));
+  (*error_fields)["message"].set_string_value(std::string(spec.message));
 
   google::protobuf::Value details;
   auto* details_values = details.mutable_list_value()->mutable_values();
@@ -87,7 +93,7 @@ HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view mess
   response.status_code = status_code;
   response.headers["Content-Type"] = "application/json";
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  response.body = ErrorBody(status_code, message, reason);
+  response.body = ErrorBody({.status_code = status_code, .message = message, .reason = reason});
   return response;
 }
 
@@ -362,7 +368,9 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   auto skills_it = fields->find("skills");
   if (skills_it != fields->end() && skills_it->second.has_list_value()) {
     for (auto& skill : *skills_it->second.mutable_list_value()->mutable_values()) {
-      if (!skill.has_struct_value()) continue;
+      if (!skill.has_struct_value()) {
+        continue;
+      }
       EnsureListField(skill.mutable_struct_value(), "tags");
     }
   }

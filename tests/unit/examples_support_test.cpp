@@ -43,15 +43,20 @@ TEST(ExampleSupportTest, StreamingAndListTasksAreDeterministic) {
   stream_request.mutable_message()->add_parts()->set_text("hello stream");
   const auto stream_result = executor.SendStreamingMessage(stream_request, context);
   ASSERT_TRUE(stream_result.ok());
+
   const auto first = stream_result.value()->Next();
   ASSERT_TRUE(first.ok());
-  ASSERT_TRUE(first.value().has_value());
-  EXPECT_EQ(first.value()->status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  const auto& first_event = first.value();
+  ASSERT_TRUE(first_event.has_value());
+  EXPECT_EQ(first_event.value_or(lf::a2a::v1::StreamResponse{}).status_update().status().state(),
+            lf::a2a::v1::TASK_STATE_WORKING);
 
   const auto second = stream_result.value()->Next();
   ASSERT_TRUE(second.ok());
-  ASSERT_TRUE(second.value().has_value());
-  EXPECT_EQ(second.value()->status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  const auto& second_event = second.value();
+  ASSERT_TRUE(second_event.has_value());
+  EXPECT_EQ(second_event.value_or(lf::a2a::v1::StreamResponse{}).status_update().status().state(),
+            lf::a2a::v1::TASK_STATE_COMPLETED);
 
   const auto done = stream_result.value()->Next();
   ASSERT_TRUE(done.ok());
