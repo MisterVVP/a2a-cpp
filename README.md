@@ -1,8 +1,6 @@
 # a2a-cpp: C++20 Agent2Agent (A2A) SDK
 
-[![grpc TCK (main)](https://img.shields.io/github/actions/workflow/status/mistervvp/a2a-cpp/tck.yml?branch=main&job=mandatory-conformance%20%28grpc%29&label=grpc%20TCK%20%28main%29)](https://github.com/mistervvp/a2a-cpp/actions/workflows/tck.yml?query=branch%3Amain+job%3A%22mandatory-conformance+%28grpc%29%22)
-[![http-json TCK (main)](https://img.shields.io/github/actions/workflow/status/mistervvp/a2a-cpp/tck.yml?branch=main&job=mandatory-conformance%20%28http-json%29&label=http-json%20TCK%20%28main%29)](https://github.com/mistervvp/a2a-cpp/actions/workflows/tck.yml?query=branch%3Amain+job%3A%22mandatory-conformance+%28http-json%29%22)
-[![json-rpc TCK (main)](https://img.shields.io/github/actions/workflow/status/mistervvp/a2a-cpp/tck.yml?branch=main&job=mandatory-conformance%20%28jsonrpc%29&label=json-rpc%20TCK%20%28main%29)](https://github.com/mistervvp/a2a-cpp/actions/workflows/tck.yml?query=branch%3Amain+job%3A%22mandatory-conformance+%28jsonrpc%29%22)
+[![TCK conformance (main)](https://img.shields.io/github/actions/workflow/status/mistervvp/a2a-cpp/tck.yml?branch=main&label=TCK%20conformance%20%28main%29)](https://github.com/mistervvp/a2a-cpp/actions/workflows/tck.yml?query=branch%3Amain+job%3Amandatory-conformance)
 
 **a2a-cpp** is a modern C++ SDK for building Agent2Agent protocol clients and servers.
 
@@ -10,7 +8,7 @@ It supports core A2A workflows including client/server APIs, discovery, REST/JSO
 
 ## TCK Compliance Level
 
-[MUST](https://github.com/a2aproject/a2a-tck/blob/1.0-dev/README.md#compatibility-levels)
+[MUST](https://github.com/a2aproject/a2a-tck/blob/1.0-dev/README.md#compatibility-levels) (validated in CI via `--level must --transport grpc,jsonrpc,http_json` in `.github/workflows/tck.yml`).
 
 ## Documentation
 

@@ -18,17 +18,7 @@ env:
 
 jobs:
   mandatory-conformance:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - job_name: http-json
-            tck_transport: http_json
-          - job_name: jsonrpc
-            tck_transport: jsonrpc
-          - job_name: grpc
-            tck_transport: grpc
-    name: mandatory-conformance (${{ matrix.job_name }})
+    name: mandatory-conformance
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -58,7 +48,7 @@ jobs:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
-          TCK_TRANSPORT: ${{ matrix.tck_transport }}
+          TCK_TRANSPORTS: grpc,jsonrpc,http_json
         run: |
           set -euo pipefail
           mkdir -p "${TCK_REPORT_DIR}" "${TCK_LOG_DIR}"
@@ -101,7 +91,7 @@ jobs:
             fi
             python3 run_tck.py \
               --sut-host "${TCK_SUT_URL}" \
-              --transport "${TCK_TRANSPORT}" \
+              --transport "${TCK_TRANSPORTS}" \
               --level must \
               | tee "../${TCK_LOG_DIR}/tck-run.log"
             popd >/dev/null
