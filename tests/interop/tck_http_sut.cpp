@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <iostream>
@@ -160,8 +161,13 @@ int main(int argc, char** argv) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport grpc(&dispatcher);
-  a2a::server::RestServerTransport rest(&dispatcher, agent_card,
-                                        {.rest_api_base_path = "/a2a", .include_legacy_transport_fields = false});
+  a2a::server::RestServerTransport rest(
+      &dispatcher, agent_card,
+      {.rest_api_base_path = "/a2a",
+       .include_legacy_transport_fields = false,
+       .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+           .cache_control = "public, max-age=300",
+           .last_modified = std::chrono::system_clock::from_time_t(1704067200)}});
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
 
 #ifdef _WIN32

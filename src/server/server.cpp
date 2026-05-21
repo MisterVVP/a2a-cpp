@@ -68,7 +68,7 @@ void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
     task->clear_history();
     return;
   }
-  if (static_cast<std::size_t>(task->history_size()) <= keep) {
+  if (std::cmp_less_equal(task->history_size(), keep)) {
     return;
   }
   const auto history_size = static_cast<std::size_t>(task->history_size());
