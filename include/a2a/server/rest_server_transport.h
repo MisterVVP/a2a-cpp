@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -26,9 +28,15 @@ struct HttpServerResponse final {
 };
 
 struct RestServerTransportOptions final {
+  struct AgentCardCacheSettings final {
+    std::optional<std::string> cache_control;
+    std::optional<std::chrono::system_clock::time_point> last_modified;
+  };
+
   std::string rest_api_base_path = "/";
   bool require_version_header = true;
   bool include_legacy_transport_fields = true;
+  std::optional<AgentCardCacheSettings> agent_card_cache_settings;
 };
 
 class RestServerTransport final {

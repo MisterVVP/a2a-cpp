@@ -220,6 +220,14 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (wants_message_response) {
       // Keep message payload set.
     } else {
+      if (request.has_configuration() && request.configuration().has_history_length()) {
+        const int keep = request.configuration().history_length();
+        if (keep <= 0) {
+          task.clear_history();
+        } else if (task.history_size() > keep) {
+          task.mutable_history()->DeleteSubrange(0, task.history_size() - keep);
+        }
+      }
       *response.mutable_task() = task;
     }
     return response;

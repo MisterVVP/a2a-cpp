@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <string>
 
 #include "a2a/core/protocol_bindings.h"
@@ -85,6 +86,9 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
+  EXPECT_FALSE(response.value().headers.contains("Cache-Control"));
+  EXPECT_FALSE(response.value().headers.contains("Last-Modified"));
+  EXPECT_TRUE(response.value().headers.contains("ETag"));
 
   lf::a2a::v1::AgentCard parsed;
   ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &parsed, {.ignore_unknown_fields = true}).ok());
@@ -92,6 +96,26 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   EXPECT_EQ(parsed.supported_interfaces(0).protocol_version(), "1.0");
   ASSERT_EQ(parsed.supported_interfaces_size(), 1);
   EXPECT_EQ(parsed.supported_interfaces(0).url(), "http://localhost:8080/a2a");
+}
+
+TEST(RestServerTransportTest, UsesConfigurableAgentCardCacheHeaders) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(
+      &dispatcher, BuildCard(),
+      {.rest_api_base_path = "/a2a",
+       .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+           .cache_control = "public, max-age=60, stale-while-revalidate=30",
+           .last_modified = std::chrono::system_clock::from_time_t(1704067200)}});
+
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_EQ(response.value().headers.at("Cache-Control"), "public, max-age=60, stale-while-revalidate=30");
+  EXPECT_EQ(response.value().headers.at("Last-Modified"), "Mon, 01 Jan 2024 00:00:00 GMT");
+  EXPECT_TRUE(response.value().headers.contains("ETag"));
 }
 
 TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {

@@ -1,7 +1,12 @@
 #include "a2a/server/rest_server_transport.h"
 
 #include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+#include <iomanip>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,6 +24,8 @@ constexpr int kHttpBadRequest = 400;
 constexpr int kHttpNotFound = 404;
 constexpr int kHttpOk = 200;
 constexpr int kHexAlphabetOffset = 10;
+constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 struct ErrorBodySpec final {
   int status_code = kHttpBadRequest;
@@ -95,6 +102,36 @@ HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view mess
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   response.body = ErrorBody({.status_code = status_code, .message = message, .reason = reason});
   return response;
+}
+
+std::uint64_t ComputeEtagHash(std::string_view data) {
+  std::uint64_t hash = kFnvOffsetBasis;
+  for (const char ch : data) {
+    hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(ch));
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
+
+std::string FormatHttpDate(std::chrono::system_clock::time_point time_point) {
+  const std::time_t timestamp = std::chrono::system_clock::to_time_t(time_point);
+  const std::tm* utc_tm = std::gmtime(&timestamp);
+  if (utc_tm == nullptr) {
+    return {};
+  }
+  std::ostringstream stream;
+  stream << std::put_time(utc_tm, "%a, %d %b %Y %H:%M:%S GMT");
+  return stream.str();
+}
+
+std::string BuildQuotedEtag(std::uint64_t hash_value) {
+  const std::string hash = std::to_string(hash_value);
+  std::string etag;
+  etag.reserve(hash.size() + 2);
+  etag.push_back('"');
+  etag.append(hash);
+  etag.push_back('"');
+  return etag;
 }
 
 google::protobuf::Value* EnsureStructField(google::protobuf::Struct* object, std::string key) {
@@ -387,6 +424,18 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   HttpServerResponse response;
   response.status_code = kHttpOk;
   response.headers["Content-Type"] = "application/json";
+  if (options_.agent_card_cache_settings.has_value()) {
+    if (options_.agent_card_cache_settings->cache_control.has_value()) {
+      response.headers["Cache-Control"] = *options_.agent_card_cache_settings->cache_control;
+    }
+    if (options_.agent_card_cache_settings->last_modified.has_value()) {
+      const std::string formatted = FormatHttpDate(*options_.agent_card_cache_settings->last_modified);
+      if (!formatted.empty()) {
+        response.headers["Last-Modified"] = formatted;
+      }
+    }
+  }
+  response.headers["ETag"] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   response.body = normalized.value();
   return response;
