@@ -171,6 +171,16 @@ TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreserve
   ASSERT_TRUE(task.ok());
   EXPECT_EQ(task.value().history_size(), 2);
 
+  lf::a2a::v1::Message same_id_different_body = first;
+  same_id_different_body.mutable_parts(0)->set_text("hello-updated");
+  ASSERT_TRUE(store.AppendTaskHistory(kTaskId, same_id_different_body,
+                                      a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId)
+                  .ok());
+  task = store.Get(kTaskId);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().history_size(), 3);
+  EXPECT_EQ(task.value().history(2).parts(0).text(), "hello-updated");
+
   lf::a2a::v1::Message no_id;
   no_id.set_task_id(std::string(kTaskId));
   no_id.set_role(lf::a2a::v1::ROLE_USER);
@@ -183,8 +193,8 @@ TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreserve
           .ok());
   task = store.Get(kTaskId);
   ASSERT_TRUE(task.ok());
-  EXPECT_EQ(task.value().history_size(), 3);
-  EXPECT_EQ(task.value().history(2).parts(0).text(), "same-without-id");
+  EXPECT_EQ(task.value().history_size(), 4);
+  EXPECT_EQ(task.value().history(3).parts(0).text(), "same-without-id");
 }
 
 }  // namespace

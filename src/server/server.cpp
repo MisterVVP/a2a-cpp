@@ -363,14 +363,16 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
   bool should_append = true;
   if (policy == HistoryAppendPolicy::kDedupByMessageId && has_message_id) {
     for (const auto& existing : it->second.history()) {
-      if (!existing.message_id().empty() && existing.message_id() == message.message_id()) {
+      if (!existing.message_id().empty() && existing.message_id() == message.message_id() &&
+          same_fingerprint(existing)) {
         should_append = false;
         break;
       }
     }
   } else if (policy == HistoryAppendPolicy::kDedupByIdOrFingerprint) {
     for (const auto& existing : it->second.history()) {
-      if (has_message_id && !existing.message_id().empty() && existing.message_id() == message.message_id()) {
+      if (has_message_id && !existing.message_id().empty() && existing.message_id() == message.message_id() &&
+          same_fingerprint(existing)) {
         should_append = false;
         break;
       }
