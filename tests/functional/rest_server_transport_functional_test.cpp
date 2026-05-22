@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
 
 #include "../support/rest_server_test_utils.h"
