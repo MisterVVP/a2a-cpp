@@ -94,7 +94,6 @@ class ExampleExecutor final : public server::AgentExecutor {
         task.set_context_id("ctx-" + task_id);
       }
     }
-    *task.add_history() = request.message();
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
@@ -209,6 +208,16 @@ class ExampleExecutor final : public server::AgentExecutor {
       std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[3]);
     }
 
+    tasks_[task_id] = task;
+    if (const auto upsert = store_.CreateOrUpdate(task); !upsert.ok()) {
+      return upsert.error();
+    }
+    const auto append = store_.AppendTaskHistory(task_id, request.message(),
+                                                 server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint);
+    if (!append.ok()) {
+      return append.error();
+    }
+    task = append.value();
     tasks_[task_id] = task;
 
     lf::a2a::v1::SendMessageResponse response;
@@ -368,6 +377,7 @@ class ExampleExecutor final : public server::AgentExecutor {
  private:
   std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
   std::vector<std::string> ordered_ids_;
+  server::InMemoryTaskStore store_;
   std::uint64_t generated_task_counter_ = 0;
   std::uint64_t status_timestamp_counter_ = 0;
 };
