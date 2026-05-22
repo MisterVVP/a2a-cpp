@@ -195,11 +195,11 @@ std::optional<TaskStore::HistoryDedupeEvent::Reason> FindIdOrFingerprintDedupeRe
 
 std::optional<TaskStore::HistoryDedupeEvent::Reason> FindHistoryDedupeReason(
     const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message,
-    HistoryAppendPolicy policy) {
-  if (policy == HistoryAppendPolicy::kDedupByMessageId && !message.message_id().empty()) {
+    TaskStore::HistoryAppendPolicy policy) {
+  if (policy == TaskStore::HistoryAppendPolicy::kDedupByMessageId && !message.message_id().empty()) {
     return FindMessageIdDedupeReason(history, message);
   }
-  if (policy == HistoryAppendPolicy::kDedupByIdOrFingerprint) {
+  if (policy == TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint) {
     return FindIdOrFingerprintDedupeReason(history, message);
   }
   return std::nullopt;
