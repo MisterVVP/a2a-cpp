@@ -94,7 +94,6 @@ class ExampleExecutor final : public server::AgentExecutor {
         task.set_context_id("ctx-" + task_id);
       }
     }
-    *task.add_history() = request.message();
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
@@ -210,6 +209,16 @@ class ExampleExecutor final : public server::AgentExecutor {
     }
 
     tasks_[task_id] = task;
+    if (const auto upsert = store_.CreateOrUpdate(task); !upsert.ok()) {
+      return upsert.error();
+    }
+    const auto append = store_.AppendTaskHistory(task_id, request.message(),
+                                                 server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
+    if (!append.ok()) {
+      return append.error();
+    }
+    task = append.value();
+    tasks_[task_id] = task;
 
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
@@ -220,6 +229,14 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (wants_message_response) {
       // Keep message payload set.
     } else {
+      if (request.has_configuration() && request.configuration().has_history_length()) {
+        const int keep = request.configuration().history_length();
+        if (keep <= 0) {
+          task.clear_history();
+        } else if (task.history_size() > keep) {
+          task.mutable_history()->DeleteSubrange(0, task.history_size() - keep);
+        }
+      }
       *response.mutable_task() = task;
     }
     return response;
@@ -360,6 +377,7 @@ class ExampleExecutor final : public server::AgentExecutor {
  private:
   std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
   std::vector<std::string> ordered_ids_;
+  server::InMemoryTaskStore store_;
   std::uint64_t generated_task_counter_ = 0;
   std::uint64_t status_timestamp_counter_ = 0;
 };

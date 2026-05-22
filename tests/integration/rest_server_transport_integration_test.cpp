@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -13,6 +14,13 @@
 #include "a2a/server/server.h"
 
 namespace {
+
+a2a::server::RestServerTransportOptions RestOptions(std::string rest_api_base_path) {
+  return {.rest_api_base_path = std::move(rest_api_base_path),
+          .require_version_header = true,
+          .include_legacy_transport_fields = true,
+          .agent_card_cache_settings = std::nullopt};
+}
 
 std::string UrlToTarget(std::string_view url) {
   const std::size_t scheme = url.find("://");
@@ -34,7 +42,7 @@ class RestIntegrationHarness final {
         dispatcher_(&executor_),
         server_(&dispatcher_,
                 a2a::tests::support::BuildRestAgentCard("Integration REST Agent", "http://agent.local/a2a"),
-                {.rest_api_base_path = "/a2a"}) {}
+                RestOptions("/a2a")) {}
 
   a2a::client::DiscoveryClient CreateDiscoveryClient() {
     return a2a::client::DiscoveryClient([this](std::string_view url) { return FetchAgentCard(url); });
@@ -197,7 +205,7 @@ TEST(RestServerTransportIntegrationTest, AuthHeadersPropagateToServerContext) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
       &dispatcher, a2a::tests::support::BuildRestAgentCard("Integration REST Auth Agent", "http://agent.local/a2a"),
-      {.rest_api_base_path = "/a2a"});
+      RestOptions("/a2a"));
 
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kRest,

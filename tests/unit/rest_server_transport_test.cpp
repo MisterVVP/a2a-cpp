@@ -2,12 +2,17 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <optional>
 #include <string>
+#include <utility>
 
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 
 namespace {
+
+constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -74,10 +79,19 @@ lf::a2a::v1::AgentCard BuildCard() {
   return card;
 }
 
+a2a::server::RestServerTransportOptions RestOptions(
+    std::string rest_api_base_path,
+    std::optional<a2a::server::RestServerTransportOptions::AgentCardCacheSettings> cache_settings = std::nullopt) {
+  return {.rest_api_base_path = std::move(rest_api_base_path),
+          .require_version_header = true,
+          .include_legacy_transport_fields = true,
+          .agent_card_cache_settings = std::move(cache_settings)};
+}
+
 TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
       {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
@@ -85,6 +99,9 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
+  EXPECT_FALSE(response.value().headers.contains("Cache-Control"));
+  EXPECT_FALSE(response.value().headers.contains("Last-Modified"));
+  EXPECT_TRUE(response.value().headers.contains("ETag"));
 
   lf::a2a::v1::AgentCard parsed;
   ASSERT_TRUE(a2a::core::JsonToMessage(response.value().body, &parsed, {.ignore_unknown_fields = true}).ok());
@@ -94,10 +111,29 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   EXPECT_EQ(parsed.supported_interfaces(0).url(), "http://localhost:8080/a2a");
 }
 
+TEST(RestServerTransportTest, UsesConfigurableAgentCardCacheHeaders) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(
+      &dispatcher, BuildCard(),
+      RestOptions("/a2a", a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+                              .cache_control = "public, max-age=60, stale-while-revalidate=30",
+                              .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)}));
+
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_EQ(response.value().headers.at("Cache-Control"), "public, max-age=60, stale-while-revalidate=30");
+  EXPECT_EQ(response.value().headers.at("Last-Modified"), "Mon, 01 Jan 2024 00:00:00 GMT");
+  EXPECT_TRUE(response.value().headers.contains("ETag"));
+}
+
 TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
       {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
@@ -109,7 +145,7 @@ TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
 TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
       {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
@@ -127,7 +163,7 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
 TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -145,7 +181,7 @@ TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
 TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response =
       server.Handle({.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
@@ -158,7 +194,7 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
 TEST(RestServerTransportTest, ParsesAndDecodesQueryString) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle({.method = "GET",
                                        .target = "/a2a/tasks/task-3?historyLength=20",
@@ -174,7 +210,7 @@ TEST(RestServerTransportTest, ParsesAndDecodesQueryString) {
 TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
   EchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), {.rest_api_base_path = "/a2a"});
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
       {.method = "POST",

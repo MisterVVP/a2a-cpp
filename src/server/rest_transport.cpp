@@ -304,7 +304,7 @@ std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& re
   }
 
   lf::a2a::v1::SendMessageRequest payload;
-  const auto parse = core::JsonToMessage(request.body, &payload);
+  const auto parse = core::JsonToMessage(request.body, &payload, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
     return std::nullopt;
   }

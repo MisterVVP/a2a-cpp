@@ -199,25 +199,71 @@ class Dispatcher final {
 
 class TaskStore {
  public:
+  enum class HistoryAppendPolicy {
+    // Appends every request in arrival order (no dedupe).
+    kNoDedup,
+    // Drops a request only when message_id is present and both message_id + message fingerprint match.
+    kDedupByMessageId,
+    // Drops by message_id+fingerprint when message_id is present; otherwise drops by fingerprint alone.
+    kDedupByIdOrFingerprint,
+  };
+
+  struct HistoryDedupeEvent final {
+    enum class Reason : std::uint8_t {
+      kDuplicateMessageIdAndFingerprint,
+      kDuplicateFingerprintWithoutMessageId,
+    };
+
+    std::string task_id;
+    std::string message_id;
+    HistoryAppendPolicy policy = HistoryAppendPolicy::kNoDedup;
+    Reason reason = Reason::kDuplicateMessageIdAndFingerprint;
+  };
+
+  struct HistoryTelemetrySnapshot final {
+    std::size_t dedupe_dropped_total = 0;
+    std::size_t dedupe_dropped_by_message_id_and_fingerprint = 0;
+    std::size_t dedupe_dropped_by_fingerprint_without_message_id = 0;
+  };
+
   virtual ~TaskStore() = default;
 
   [[nodiscard]] virtual core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Get(std::string_view id) const = 0;
   [[nodiscard]] virtual core::Result<ListTasksResponse> List(const ListTasksRequest& request) const = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) = 0;
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                          const lf::a2a::v1::Message& message,
+                                                                          HistoryAppendPolicy policy) = 0;
+  [[nodiscard]] virtual HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const = 0;
 };
 
 class InMemoryTaskStore final : public TaskStore {
  public:
+  class HistoryTelemetrySink {
+   public:
+    virtual ~HistoryTelemetrySink() = default;
+    virtual void OnDedupedHistoryMessage(const HistoryDedupeEvent& event) = 0;
+  };
+
+  InMemoryTaskStore() = default;
+  explicit InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink);
+
   [[nodiscard]] core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override;
   [[nodiscard]] core::Result<ListTasksResponse> List(const ListTasksRequest& request) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                  const lf::a2a::v1::Message& message,
+                                                                  HistoryAppendPolicy policy) override;
+  [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override;
 
  private:
   static std::optional<std::size_t> ParsePageToken(std::string_view token);
 
   mutable std::mutex mutex_;
+  std::shared_ptr<HistoryTelemetrySink> telemetry_sink_;
+  HistoryTelemetrySnapshot telemetry_snapshot_;
   std::vector<std::string> ordered_ids_;
   std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
 };

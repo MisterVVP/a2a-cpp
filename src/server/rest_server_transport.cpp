@@ -1,7 +1,12 @@
 #include "a2a/server/rest_server_transport.h"
 
 #include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <ctime>
+#include <iomanip>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,12 +24,16 @@ constexpr int kHttpBadRequest = 400;
 constexpr int kHttpNotFound = 404;
 constexpr int kHttpOk = 200;
 constexpr int kHexAlphabetOffset = 10;
+constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
+constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 struct ErrorBodySpec final {
   int status_code = kHttpBadRequest;
   std::string_view message;
   std::string_view reason;
 };
+
+void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1::AgentCard& agent_card);
 
 std::string ToLower(std::string_view value) {
   std::string lowered;
@@ -97,6 +106,36 @@ HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view mess
   return response;
 }
 
+std::uint64_t ComputeEtagHash(std::string_view data) {
+  std::uint64_t hash = kFnvOffsetBasis;
+  for (const char ch : data) {
+    hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(ch));
+    hash *= kFnvPrime;
+  }
+  return hash;
+}
+
+std::string FormatHttpDate(std::chrono::system_clock::time_point time_point) {
+  const std::time_t timestamp = std::chrono::system_clock::to_time_t(time_point);
+  const std::tm* utc_tm = std::gmtime(&timestamp);
+  if (utc_tm == nullptr) {
+    return {};
+  }
+  std::ostringstream stream;
+  stream << std::put_time(utc_tm, "%a, %d %b %Y %H:%M:%S GMT");
+  return stream.str();
+}
+
+std::string BuildQuotedEtag(std::uint64_t hash_value) {
+  const std::string hash = std::to_string(hash_value);
+  std::string etag;
+  etag.reserve(hash.size() + 2);
+  etag.push_back('"');
+  etag.append(hash);
+  etag.push_back('"');
+  return etag;
+}
+
 google::protobuf::Value* EnsureStructField(google::protobuf::Struct* object, std::string key) {
   auto& value = (*object->mutable_fields())[std::move(key)];
   if (!value.has_struct_value()) {
@@ -111,6 +150,99 @@ google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::
     value.mutable_list_value();
   }
   return &value;
+}
+
+void EnsureStringField(google::protobuf::Struct* object, std::string_view key, std::string_view fallback) {
+  auto* fields = object->mutable_fields();
+  if (fields->find(std::string(key)) == fields->end()) {
+    (*fields)[std::string(key)].set_string_value(std::string(fallback));
+  }
+}
+
+void EnsureBoolField(google::protobuf::Struct* object, std::string_view key, bool fallback) {
+  auto* fields = object->mutable_fields();
+  if (fields->find(std::string(key)) == fields->end()) {
+    (*fields)[std::string(key)].set_bool_value(fallback);
+  }
+}
+
+void EnsureDefaultModeField(google::protobuf::Struct* card, std::string_view key) {
+  auto* fields = card->mutable_fields();
+  if (fields->find(std::string(key)) != fields->end()) {
+    return;
+  }
+  auto* modes = EnsureListField(card, std::string(key))->mutable_list_value();
+  modes->add_values()->set_string_value("text/plain");
+}
+
+void EnsureSkillTags(google::protobuf::Struct* card) {
+  auto* fields = card->mutable_fields();
+  if (fields->find("skills") == fields->end()) {
+    EnsureListField(card, "skills");
+  }
+
+  auto skills_it = fields->find("skills");
+  if (skills_it == fields->end() || !skills_it->second.has_list_value()) {
+    return;
+  }
+
+  for (auto& skill : *skills_it->second.mutable_list_value()->mutable_values()) {
+    if (!skill.has_struct_value()) {
+      continue;
+    }
+    EnsureListField(skill.mutable_struct_value(), "tags");
+  }
+}
+
+void NormalizeAgentCardFields(google::protobuf::Struct* card) {
+  EnsureStringField(card, "version", "0.1.0");
+  EnsureStringField(card, "description", "");
+
+  auto* capabilities = EnsureStructField(card, "capabilities")->mutable_struct_value();
+  EnsureBoolField(capabilities, "streaming", false);
+  EnsureBoolField(capabilities, "pushNotifications", false);
+
+  EnsureDefaultModeField(card, "defaultInputModes");
+  EnsureDefaultModeField(card, "defaultOutputModes");
+  EnsureSkillTags(card);
+}
+
+void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::AgentCardCacheSettings>& settings,
+                                HttpServerResponse* response) {
+  if (!settings.has_value()) {
+    return;
+  }
+  if (settings->cache_control.has_value()) {
+    response->headers["Cache-Control"] = *settings->cache_control;
+  }
+  if (!settings->last_modified.has_value()) {
+    return;
+  }
+
+  const std::string formatted = FormatHttpDate(*settings->last_modified);
+  if (!formatted.empty()) {
+    response->headers["Last-Modified"] = formatted;
+  }
+}
+
+core::Result<google::protobuf::Struct> BuildNormalizedAgentCard(const lf::a2a::v1::AgentCard& agent_card,
+                                                                bool include_legacy_transport_fields) {
+  const auto body = core::MessageToJson(agent_card);
+  if (!body.ok()) {
+    return body.error();
+  }
+
+  google::protobuf::Struct card;
+  const auto parsed = core::JsonToMessage(body.value(), &card, {.ignore_unknown_fields = false});
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+
+  NormalizeAgentCardFields(&card);
+  if (include_legacy_transport_fields) {
+    AddLegacyTransportFields(&card, agent_card);
+  }
+  return card;
 }
 
 core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
@@ -329,57 +461,12 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
     return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed", "UNSUPPORTED_OPERATION");
   }
 
-  const auto body = core::MessageToJson(agent_card_);
-  if (!body.ok()) {
-    return body.error();
+  const auto card = BuildNormalizedAgentCard(agent_card_, options_.include_legacy_transport_fields);
+  if (!card.ok()) {
+    return card.error();
   }
 
-  google::protobuf::Struct card;
-  const auto parsed = core::JsonToMessage(body.value(), &card, {.ignore_unknown_fields = false});
-  if (!parsed.ok()) {
-    return parsed.error();
-  }
-  auto* fields = card.mutable_fields();
-  if (fields->find("version") == fields->end()) {
-    (*fields)["version"].set_string_value("0.1.0");
-  }
-  if (fields->find("description") == fields->end()) {
-    (*fields)["description"].set_string_value("");
-  }
-  auto* capabilities = EnsureStructField(&card, "capabilities")->mutable_struct_value();
-  auto* cap_fields = capabilities->mutable_fields();
-  if (cap_fields->find("streaming") == cap_fields->end()) {
-    (*cap_fields)["streaming"].set_bool_value(false);
-  }
-  if (cap_fields->find("pushNotifications") == cap_fields->end()) {
-    (*cap_fields)["pushNotifications"].set_bool_value(false);
-  }
-  if (fields->find("defaultInputModes") == fields->end()) {
-    auto* modes = EnsureListField(&card, "defaultInputModes")->mutable_list_value();
-    modes->add_values()->set_string_value("text/plain");
-  }
-  if (fields->find("defaultOutputModes") == fields->end()) {
-    auto* modes = EnsureListField(&card, "defaultOutputModes")->mutable_list_value();
-    modes->add_values()->set_string_value("text/plain");
-  }
-  if (fields->find("skills") == fields->end()) {
-    EnsureListField(&card, "skills");
-  }
-  auto skills_it = fields->find("skills");
-  if (skills_it != fields->end() && skills_it->second.has_list_value()) {
-    for (auto& skill : *skills_it->second.mutable_list_value()->mutable_values()) {
-      if (!skill.has_struct_value()) {
-        continue;
-      }
-      EnsureListField(skill.mutable_struct_value(), "tags");
-    }
-  }
-
-  if (options_.include_legacy_transport_fields) {
-    AddLegacyTransportFields(&card, agent_card_);
-  }
-
-  const auto normalized = core::MessageToJson(card);
+  const auto normalized = core::MessageToJson(card.value());
   if (!normalized.ok()) {
     return normalized.error();
   }
@@ -387,6 +474,8 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   HttpServerResponse response;
   response.status_code = kHttpOk;
   response.headers["Content-Type"] = "application/json";
+  ApplyAgentCardCacheHeaders(options_.agent_card_cache_settings, &response);
+  response.headers["ETag"] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   response.body = normalized.value();
   return response;

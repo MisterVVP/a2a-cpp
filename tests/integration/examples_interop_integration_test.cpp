@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
@@ -16,12 +18,19 @@ namespace {
 
 constexpr int kInternalServerErrorStatusCode = 500;
 
+a2a::server::RestServerTransportOptions RestOptions(std::string rest_api_base_path) {
+  return {.rest_api_base_path = std::move(rest_api_base_path),
+          .require_version_header = true,
+          .include_legacy_transport_fields = true,
+          .agent_card_cache_settings = std::nullopt};
+}
+
 TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
       &dispatcher, a2a::examples::BuildRestAgentCard("Interop Example Agent", "http://agent.local/a2a"),
-      {.rest_api_base_path = "/a2a"});
+      RestOptions("/a2a"));
 
   a2a::client::DiscoveryClient discovery([&server](std::string_view url) {
     const auto response = server.Handle(

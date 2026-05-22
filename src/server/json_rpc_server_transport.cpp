@@ -191,7 +191,7 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
     return params_json.error();
   }
   T payload;
-  const auto parse_payload = core::JsonToMessage(params_json.value(), &payload);
+  const auto parse_payload = core::JsonToMessage(params_json.value(), &payload, {.ignore_unknown_fields = true});
   if (!parse_payload.ok()) {
     return parse_payload.error();
   }
@@ -199,8 +199,7 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
 }
 
 core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params,
-                                          const JsonRpcServerTransportOptions& options,
-                                          ListTasksRequest* payload) {
+                                          const JsonRpcServerTransportOptions& options, ListTasksRequest* payload) {
   const auto& fields = params.fields();
   const auto it = fields.find("pageSize");
   if (it == fields.end()) {
@@ -328,8 +327,7 @@ core::Result<void> ParseListTasksIncludeArtifacts(const google::protobuf::Struct
 }
 
 core::Result<void> ApplyListTasksParsers(const google::protobuf::Struct& params,
-                                         const JsonRpcServerTransportOptions& options,
-                                         ListTasksRequest* payload) {
+                                         const JsonRpcServerTransportOptions& options, ListTasksRequest* payload) {
   const auto page_size = ParseListTasksPageSize(params, options, payload);
   if (!page_size.ok()) {
     return page_size.error();

@@ -92,7 +92,6 @@ jobs:
             python3 run_tck.py \
               --sut-host "${TCK_SUT_URL}" \
               --transport "${TCK_TRANSPORTS}" \
-              --level must \
               | tee "../${TCK_LOG_DIR}/tck-run.log"
             popd >/dev/null
             exit 0
