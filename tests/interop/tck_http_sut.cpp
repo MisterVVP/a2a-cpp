@@ -41,6 +41,7 @@ constexpr int kListenBacklog = 128;
 constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
+constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 volatile std::sig_atomic_t kKeepRunning = 1;
 
 void SignalHandler(int signal_number) {
@@ -167,7 +168,7 @@ int main(int argc, char** argv) {
        .include_legacy_transport_fields = false,
        .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
            .cache_control = "public, max-age=300",
-           .last_modified = std::chrono::system_clock::from_time_t(1704067200)}});
+           .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)}});
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
 
 #ifdef _WIN32
