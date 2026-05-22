@@ -19,3 +19,5 @@ See runnable examples:
 - `examples/rest_client.cpp`
 - `examples/json_rpc_client.cpp`
 - `examples/streaming_client.cpp`
+
+See `docs/sdk-idempotency.md` for the normative duplicate/retry behavior and telemetry model.
