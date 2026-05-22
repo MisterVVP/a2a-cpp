@@ -1,0 +1,10 @@
+Checks: >
+  bugprone-*,
+  performance-*,
+  readability-*,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(include|src|tests)/'
+FormatStyle: file

@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'book/**'
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+      - 'LICENSE'
+      - '.gitignore'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - 'book/**'
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+      - 'LICENSE'
+      - '.gitignore'
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format clang-tidy cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3-pip
+          python3 -m pip install --upgrade gcovr
+      - name: Verify changes
+        run: ./scripts/verify_changes.sh
+
+  examples-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev
+      - name: Run examples smoke
+        run: ./scripts/run_examples.sh build-examples
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3-pip
+          python3 -m pip install --upgrade gcovr
+      - name: Coverage gate
+        run: ./scripts/run_coverage.sh
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-report
+          path: build-coverage/coverage
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev
+      - name: Configure and test ASan/UBSan
+        run: |
+          cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake --build build-asan --parallel
+          ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
+
+  python-cross-sdk-interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-grpcio python3-grpc-tools git
+      - name: Run pinned Python cross-SDK interop
+        env:
+          A2A_PYTHON_REF: main
+        run: ./scripts/run_python_cross_sdk_interop.sh
+
+
+  python-server-cpp-client-interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-grpcio python3-grpc-tools
+      - name: Run mixed-runtime interop (Python server -> C++ client)
+        env:
+          SCENARIO: python-server-cpp-client
+        run: ./scripts/run_mixed_runtime_interop.sh
+
+  cpp-server-python-client-interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3 python3-grpcio python3-grpc-tools
+      - name: Run mixed-runtime interop (C++ server -> Python client)
+        env:
+          SCENARIO: cpp-server-python-client
+        run: ./scripts/run_mixed_runtime_interop.sh
+
+  macos-build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+      - run: |
+          brew install cmake ninja protobuf grpc re2 abseil
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+          cmake --build build --parallel
+
+  windows-build:
+    runs-on: windows-2022
+    env:
+      VCPKG_ROOT: C:/vcpkg
+      CI_VCPKG_ROOT: C:/vcpkg
+      VCPKG_DEFAULT_TRIPLET: ci-x64-windows-release
+      VCPKG_HOST_TRIPLET: ci-x64-windows-release
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+      VCPKG_BINARY_SOURCES: clear;files,C:/vcpkg-binary-cache,readwrite
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore vcpkg source cache
+        uses: actions/cache@v5
+        with:
+          path: C:/vcpkg
+          key: ${{ runner.os }}-vcpkg-tool-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
+
+      - name: Setup vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          }
+          & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat"
+
+
+      - name: Restore vcpkg downloads cache
+        uses: actions/cache@v5
+        with:
+          path: C:/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-downloads-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-downloads-
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v5
+        with:
+          path: C:/vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-
+
+      - name: Install manifest dependencies
+        shell: pwsh
+        run: |
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET
+          $sw.Stop()
+          "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "vcpkg_host_triplet=$env:VCPKG_HOST_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: deps
+
+      - name: Setup MSVC build environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          $vcpkgRoot = $env:CI_VCPKG_ROOT
+          $env:VCPKG_ROOT = $vcpkgRoot
+          $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
+          $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
+          $hostTriplet = $env:VCPKG_HOST_TRIPLET
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet"
+          cmake --build build --config RelWithDebInfo --parallel
+
+      - name: Publish Windows stage timings
+        shell: pwsh
+        run: |
+          "## Windows dependency timing" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg triplet: ${{ steps.deps.outputs.vcpkg_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- vcpkg host triplet: ${{ steps.deps.outputs.vcpkg_host_triplet }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- Install manifest dependencies: ${{ steps.deps.outputs.dependency_install_seconds }}s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

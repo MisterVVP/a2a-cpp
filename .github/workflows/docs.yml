@@ -1,0 +1,97 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'book/**'
+      - 'docs/**'
+      - 'include/a2a/**'
+      - 'scripts/generate_api_reference.sh'
+      - 'Doxyfile'
+      - '.github/workflows/docs.yml'
+      - 'mdbook-admonish.css'
+      - 'mdbook-transparent.css'
+      - 'mermaid-init.js'
+  pull_request:
+    paths:
+      - 'book/**'
+      - 'docs/**'
+      - 'include/a2a/**'
+      - 'scripts/generate_api_reference.sh'
+      - 'Doxyfile'
+      - '.github/workflows/docs.yml'
+      - 'mdbook-admonish.css'
+      - 'mdbook-transparent.css'
+      - 'mermaid-init.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: mdbook-${{ runner.os }}-${{ hashFiles('book/**', '**/Cargo.lock') }}
+          restore-keys: |
+            mdbook-${{ runner.os }}-
+
+      - name: Install mdBook
+        run: cargo install mdbook --locked --force
+
+      - name: Build book
+        run: mdbook build book
+
+      - name: Install Doxygen and Graphviz
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Generate C++ API reference
+        run: ./scripts/generate_api_reference.sh
+
+      - name: Verify docs output paths
+        run: |
+          test -d book-build
+          test -f book-build/api/cpp/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: book-build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

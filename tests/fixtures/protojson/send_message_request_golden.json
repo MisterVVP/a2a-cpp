@@ -1,0 +1,1 @@
+{"message":{"taskId":"golden-task","role":"ROLE_USER","parts":[{"text":"hello"}]},"configuration":{"acceptedOutputModes":["text/plain"],"returnImmediately":true}}

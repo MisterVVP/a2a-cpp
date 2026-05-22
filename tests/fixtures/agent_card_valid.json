@@ -1,0 +1,24 @@
+{
+  "name": "Fixture Agent",
+  "description": "Fixture",
+  "version": "1.0.0",
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "supportedInterfaces": [
+    {"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"},
+    {"protocolBinding":"JSONRPC","protocolVersion":"1.0","url":"https://agent.example.com/rpc"}
+  ],
+  "securitySchemes": {
+    "oauth2": {
+      "oauth2SecurityScheme": {
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://issuer.example.com/oauth/token",
+            "scopes": {"agent.read":"Read access"}
+          }
+        }
+      }
+    }
+  },
+  "securityRequirements": [{"schemes":{"oauth2":{"list":[]}}}]
+}
