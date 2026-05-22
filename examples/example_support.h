@@ -212,8 +212,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (const auto upsert = store_.CreateOrUpdate(task); !upsert.ok()) {
       return upsert.error();
     }
-    const auto append =
-        store_.AppendTaskHistory(task_id, request.message(), server::TaskStore::HistoryAppendPolicy::kNoDedup);
+    const auto append = store_.AppendTaskHistory(task_id, request.message(),
+                                                 server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
     if (!append.ok()) {
       return append.error();
     }
