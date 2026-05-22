@@ -9,6 +9,10 @@ Typical flow:
 3. Build a transport and pass it to `A2AClient`.
 4. Call `SendMessage`, `GetTask`, `CancelTask`, or streaming APIs.
 
+For server-side task history updates, SDK-managed executors now route history appends through
+`TaskStore::AppendTaskHistory(task_id, message, policy)`, which centralizes chronological ordering
+and deduplication policy handling (`NoDedup`, `DedupByMessageId`, `DedupByIdOrFingerprint`).
+
 See runnable examples:
 
 - `examples/discovery_only_client.cpp`

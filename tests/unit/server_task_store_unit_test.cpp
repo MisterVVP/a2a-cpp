@@ -15,6 +15,7 @@ constexpr std::size_t kFirstPageSize = 1;
 constexpr std::size_t kTwoHistoryEntries = 2;
 constexpr int64_t kTimestampBaseSeconds = 100;
 constexpr int32_t kTimestampNanos = 1;
+constexpr std::string_view kTaskId = "task-append";
 
 lf::a2a::v1::Task MakeTask(std::string id, std::string context_id, lf::a2a::v1::TaskState state,
                            int64_t timestamp_seconds, bool include_artifact,
@@ -142,6 +143,58 @@ TEST(InMemoryTaskStoreUnitTest, CancelUpdatesStateAndRejectsTerminalTasks) {
 
   const auto second_cancel_result = store.Cancel("task-1");
   ASSERT_FALSE(second_cancel_result.ok());
+}
+
+TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreservesOrder) {
+  a2a::server::InMemoryTaskStore store;
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kTaskId), std::string(kContextAlpha),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, true, 0))
+                  .ok());
+
+  lf::a2a::v1::Message first;
+  first.set_message_id("m-1");
+  first.set_task_id(std::string(kTaskId));
+  first.add_parts()->set_text("hello");
+  ASSERT_TRUE(store.AppendTaskHistory(kTaskId, first, a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup).ok());
+  ASSERT_TRUE(store.AppendTaskHistory(kTaskId, first, a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup).ok());
+
+  auto task = store.Get(kTaskId);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().history_size(), 2);
+  EXPECT_EQ(task.value().history(0).message_id(), "m-1");
+  EXPECT_EQ(task.value().history(1).message_id(), "m-1");
+
+  ASSERT_TRUE(
+      store.AppendTaskHistory(kTaskId, first, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId).ok());
+  task = store.Get(kTaskId);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().history_size(), 2);
+
+  lf::a2a::v1::Message same_id_different_body = first;
+  same_id_different_body.mutable_parts(0)->set_text("hello-updated");
+  ASSERT_TRUE(store.AppendTaskHistory(kTaskId, same_id_different_body,
+                                      a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId)
+                  .ok());
+  task = store.Get(kTaskId);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().history_size(), 3);
+  EXPECT_EQ(task.value().history(2).parts(0).text(), "hello-updated");
+
+  lf::a2a::v1::Message no_id;
+  no_id.set_task_id(std::string(kTaskId));
+  no_id.set_role(lf::a2a::v1::ROLE_USER);
+  no_id.add_parts()->set_text("same-without-id");
+  ASSERT_TRUE(
+      store.AppendTaskHistory(kTaskId, no_id, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint)
+          .ok());
+  ASSERT_TRUE(
+      store.AppendTaskHistory(kTaskId, no_id, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint)
+          .ok());
+  task = store.Get(kTaskId);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().history_size(), 4);
+  EXPECT_EQ(task.value().history(3).parts(0).text(), "same-without-id");
 }
 
 }  // namespace

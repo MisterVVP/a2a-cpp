@@ -333,4 +333,60 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   return it->second;
 }
 
+core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string_view task_id,
+                                                                     const lf::a2a::v1::Message& message,
+                                                                     HistoryAppendPolicy policy) {
+  if (task_id.empty()) {
+    return core::Error::Validation("Task id is required");
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = tasks_.find(std::string(task_id));
+  if (it == tasks_.end()) {
+    return core::protocol_errors::TaskNotFound("Task not found");
+  }
+
+  const auto has_message_id = !message.message_id().empty();
+  const auto same_fingerprint = [&message](const lf::a2a::v1::Message& existing) {
+    if (existing.task_id() != message.task_id() || existing.context_id() != message.context_id() ||
+        existing.role() != message.role() || existing.parts_size() != message.parts_size()) {
+      return false;
+    }
+    for (int index = 0; index < existing.parts_size(); ++index) {
+      if (existing.parts(index).SerializeAsString() != message.parts(index).SerializeAsString()) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  bool should_append = true;
+  if (policy == HistoryAppendPolicy::kDedupByMessageId && has_message_id) {
+    for (const auto& existing : it->second.history()) {
+      if (!existing.message_id().empty() && existing.message_id() == message.message_id() &&
+          same_fingerprint(existing)) {
+        should_append = false;
+        break;
+      }
+    }
+  } else if (policy == HistoryAppendPolicy::kDedupByIdOrFingerprint) {
+    for (const auto& existing : it->second.history()) {
+      if (has_message_id && !existing.message_id().empty() && existing.message_id() == message.message_id() &&
+          same_fingerprint(existing)) {
+        should_append = false;
+        break;
+      }
+      if (!has_message_id && same_fingerprint(existing)) {
+        should_append = false;
+        break;
+      }
+    }
+  }
+
+  if (should_append) {
+    *it->second.add_history() = message;
+  }
+  return it->second;
+}
+
 }  // namespace a2a::server

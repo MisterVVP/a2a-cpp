@@ -199,12 +199,21 @@ class Dispatcher final {
 
 class TaskStore {
  public:
+  enum class HistoryAppendPolicy {
+    kNoDedup,
+    kDedupByMessageId,
+    kDedupByIdOrFingerprint,
+  };
+
   virtual ~TaskStore() = default;
 
   [[nodiscard]] virtual core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Get(std::string_view id) const = 0;
   [[nodiscard]] virtual core::Result<ListTasksResponse> List(const ListTasksRequest& request) const = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) = 0;
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                          const lf::a2a::v1::Message& message,
+                                                                          HistoryAppendPolicy policy) = 0;
 };
 
 class InMemoryTaskStore final : public TaskStore {
@@ -213,6 +222,9 @@ class InMemoryTaskStore final : public TaskStore {
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override;
   [[nodiscard]] core::Result<ListTasksResponse> List(const ListTasksRequest& request) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                  const lf::a2a::v1::Message& message,
+                                                                  HistoryAppendPolicy policy) override;
 
  private:
   static std::optional<std::size_t> ParsePageToken(std::string_view token);
