@@ -235,6 +235,20 @@ target_link_libraries(rest_transport_test
 
 gtest_discover_tests(rest_transport_test)
 
+
+add_executable(http_adapter_test
+  unit/http_adapter_test.cpp
+)
+
+target_link_libraries(http_adapter_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(http_adapter_test)
 add_executable(rest_server_transport_test
   unit/rest_server_transport_test.cpp
 )

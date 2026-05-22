@@ -26,20 +26,17 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/server/grpc_server_transport.h"
+#include "a2a/server/http_adapter.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
 #include "example_support.h"
 
 namespace {
-constexpr std::size_t kInitialRequestCapacity = 8192;
-constexpr std::size_t kBufferSize = 4096;
-constexpr std::size_t kRequestSizeUnit = 1024;
-constexpr std::size_t kMaxRequestSize = kRequestSizeUnit * kRequestSizeUnit;
-constexpr std::size_t kContentLengthPrefixSize = std::string_view("Content-Length:").size();
 constexpr int kListenBacklog = 128;
 constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
@@ -52,71 +49,29 @@ void SignalHandler(int signal_number) {
   kKeepRunning = 0;
 }
 
-void CloseSocket(int fd) {
-#ifdef _WIN32
-  closesocket(fd);
-#else
-  close(fd);
-#endif
-}
+class SocketTransport final : public a2a::server::HttpByteTransport {
+ public:
+  explicit SocketTransport(int fd) : fd_(fd) {}
 
-std::optional<std::string> ReadRequest(int fd) {
-  std::string request;
-  request.reserve(kInitialRequestCapacity);
-  std::array<char, kBufferSize> buffer{};
-  while (request.find("\r\n\r\n") == std::string::npos) {
-    const auto n = ::recv(fd, buffer.data(), buffer.size(), 0);
-    if (n <= 0) {
-      return std::nullopt;
+  a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+    const auto bytes = ::recv(fd_, buffer, size, 0);
+    if (bytes < 0) {
+      return a2a::core::Error::Internal("Socket recv failed");
     }
-    request.append(buffer.data(), static_cast<std::size_t>(n));
-    if (request.size() > kMaxRequestSize) {
-      return std::nullopt;
-    }
+    return static_cast<std::size_t>(bytes);
   }
-  const auto header_end = request.find("\r\n\r\n");
-  const auto headers = request.substr(0, header_end);
-  std::size_t content_length = 0;
-  std::istringstream stream(headers);
-  std::string line;
-  std::getline(stream, line);
-  while (std::getline(stream, line)) {
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
-    if (line.starts_with("Content-Length:")) {
-      content_length = static_cast<std::size_t>(std::stoul(line.substr(kContentLengthPrefixSize)));
-    }
-  }
-  const auto body_start = header_end + std::string_view("\r\n\r\n").size();
-  while (request.size() < body_start + content_length) {
-    const auto n = ::recv(fd, buffer.data(), buffer.size(), 0);
-    if (n <= 0) {
-      return std::nullopt;
-    }
-    request.append(buffer.data(), static_cast<std::size_t>(n));
-  }
-  return request;
-}
 
-void WriteResponse(int fd, const a2a::server::HttpServerResponse& response) {
-  std::ostringstream out;
-  out << "HTTP/1.1 " << response.status_code << " OK\r\n";
-  bool has_length = false;
-  for (const auto& [k, v] : response.headers) {
-    if (k == "Content-Length" || k == "content-length") {
-      has_length = true;
+  a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    const auto bytes = ::send(fd_, buffer, size, 0);
+    if (bytes < 0) {
+      return a2a::core::Error::Internal("Socket send failed");
     }
-    out << k << ": " << v << "\r\n";
+    return static_cast<std::size_t>(bytes);
   }
-  if (!has_length) {
-    out << "Content-Length: " << response.body.size() << "\r\n";
-  }
-  out << "Connection: close\r\n\r\n";
-  out << response.body;
-  const auto payload = out.str();
-  (void)::send(fd, payload.data(), payload.size(), 0);
-}
+
+ private:
+  int fd_;
+};
 
 }  // namespace
 
@@ -210,48 +165,27 @@ int main(int argc, char** argv) {
     if (fd < 0) {
       continue;
     }
-    const auto req_opt = ReadRequest(fd);
-    if (!req_opt) {
-      CloseSocket(fd);
+    SocketTransport socket_transport(fd);
+    const a2a::server::HttpAdapter adapter;
+    auto parsed = adapter.ReadRequest(socket_transport, "localhost");
+    if (!parsed.ok()) {
+      a2a::server::CloseSocketCrossPlatform(fd);
       continue;
     }
-    const std::string& req = *req_opt;
-    const auto line_end = req.find("\r\n");
-    const auto first_line = req.substr(0, line_end);
-    std::istringstream fl(first_line);
-    std::string method;
-    std::string target;
-    fl >> method >> target;
 
-    std::unordered_map<std::string, std::string> headers;
-    const auto header_end = req.find("\r\n\r\n");
-    std::istringstream hs(req.substr(line_end + 2, header_end - (line_end + 2)));
-    std::string hline;
-    while (std::getline(hs, hline)) {
-      if (!hline.empty() && hline.back() == '\r') {
-        hline.pop_back();
-      }
-      const auto c = hline.find(':');
-      if (c != std::string::npos) {
-        headers[hline.substr(0, c)] = hline.substr(c + 2);
-      }
-    }
-    const std::string body = req.substr(header_end + std::string_view("\r\n\r\n").size());
-
-    a2a::server::HttpServerRequest request{
-        .method = method, .target = target, .headers = headers, .body = body, .remote_address = "localhost"};
+    a2a::server::HttpServerRequest request = std::move(parsed.value());
     auto response = rest.Handle(request);
-    if (target == "/rpc" || target == "/") {
+    if (request.target == "/rpc" || request.target == "/") {
       request.target = "/rpc";
       response = jsonrpc.Handle(request);
     }
     if (response.ok()) {
-      WriteResponse(fd, response.value());
+      (void)adapter.WriteResponse(socket_transport, response.value());
     }
-    CloseSocket(fd);
+    a2a::server::CloseSocketCrossPlatform(fd);
   }
   grpc_server->Shutdown();
-  CloseSocket(server_fd);
+  a2a::server::CloseSocketCrossPlatform(server_fd);
 #ifdef _WIN32
   WSACleanup();
 #endif

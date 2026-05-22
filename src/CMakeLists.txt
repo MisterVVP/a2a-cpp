@@ -45,6 +45,7 @@ target_link_libraries(a2a_client
 
 add_library(a2a_server STATIC
   server/grpc_server_transport.cpp
+  server/http_adapter.cpp
   server/rest_server_transport.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp
