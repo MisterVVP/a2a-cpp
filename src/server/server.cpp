@@ -150,6 +150,70 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
   return core::Error::Validation("Unsupported dispatcher operation");
 }
 
+bool HasSameMessageFingerprint(const lf::a2a::v1::Message& existing, const lf::a2a::v1::Message& message) {
+  if (existing.task_id() != message.task_id() || existing.context_id() != message.context_id() ||
+      existing.role() != message.role() || existing.parts_size() != message.parts_size()) {
+    return false;
+  }
+
+  for (int index = 0; index < existing.parts_size(); ++index) {
+    if (existing.parts(index).SerializeAsString() != message.parts(index).SerializeAsString()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool HasSameMessageIdAndFingerprint(const lf::a2a::v1::Message& existing, const lf::a2a::v1::Message& message) {
+  return !existing.message_id().empty() && existing.message_id() == message.message_id() &&
+         HasSameMessageFingerprint(existing, message);
+}
+
+std::optional<TaskStore::HistoryDedupeEvent::Reason> FindMessageIdDedupeReason(
+    const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message) {
+  for (const auto& existing : history) {
+    if (HasSameMessageIdAndFingerprint(existing, message)) {
+      return TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<TaskStore::HistoryDedupeEvent::Reason> FindIdOrFingerprintDedupeReason(
+    const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message) {
+  const bool has_message_id = !message.message_id().empty();
+  for (const auto& existing : history) {
+    if (has_message_id && HasSameMessageIdAndFingerprint(existing, message)) {
+      return TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
+    }
+    if (!has_message_id && HasSameMessageFingerprint(existing, message)) {
+      return TaskStore::HistoryDedupeEvent::Reason::kDuplicateFingerprintWithoutMessageId;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<TaskStore::HistoryDedupeEvent::Reason> FindHistoryDedupeReason(
+    const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message,
+    HistoryAppendPolicy policy) {
+  if (policy == HistoryAppendPolicy::kDedupByMessageId && !message.message_id().empty()) {
+    return FindMessageIdDedupeReason(history, message);
+  }
+  if (policy == HistoryAppendPolicy::kDedupByIdOrFingerprint) {
+    return FindIdOrFingerprintDedupeReason(history, message);
+  }
+  return std::nullopt;
+}
+
+void UpdateDedupeSnapshot(TaskStore::HistoryTelemetrySnapshot* snapshot, TaskStore::HistoryDedupeEvent::Reason reason) {
+  snapshot->dedupe_dropped_total += 1;
+  if (reason == TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint) {
+    snapshot->dedupe_dropped_by_message_id_and_fingerprint += 1;
+    return;
+  }
+  snapshot->dedupe_dropped_by_fingerprint_without_message_id += 1;
+}
+
 }  // namespace
 
 std::unordered_map<std::string, std::string> ExtractAuthMetadata(
@@ -349,54 +413,9 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
     return core::protocol_errors::TaskNotFound("Task not found");
   }
 
-  const auto has_message_id = !message.message_id().empty();
-  const auto same_fingerprint = [&message](const lf::a2a::v1::Message& existing) {
-    if (existing.task_id() != message.task_id() || existing.context_id() != message.context_id() ||
-        existing.role() != message.role() || existing.parts_size() != message.parts_size()) {
-      return false;
-    }
-    for (int index = 0; index < existing.parts_size(); ++index) {
-      if (existing.parts(index).SerializeAsString() != message.parts(index).SerializeAsString()) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  bool should_append = true;
-  std::optional<TaskStore::HistoryDedupeEvent::Reason> dedupe_reason;
-  if (policy == HistoryAppendPolicy::kDedupByMessageId && has_message_id) {
-    for (const auto& existing : it->second.history()) {
-      if (!existing.message_id().empty() && existing.message_id() == message.message_id() &&
-          same_fingerprint(existing)) {
-        should_append = false;
-        dedupe_reason = TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
-        break;
-      }
-    }
-  } else if (policy == HistoryAppendPolicy::kDedupByIdOrFingerprint) {
-    for (const auto& existing : it->second.history()) {
-      if (has_message_id && !existing.message_id().empty() && existing.message_id() == message.message_id() &&
-          same_fingerprint(existing)) {
-        should_append = false;
-        dedupe_reason = TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
-        break;
-      }
-      if (!has_message_id && same_fingerprint(existing)) {
-        should_append = false;
-        dedupe_reason = TaskStore::HistoryDedupeEvent::Reason::kDuplicateFingerprintWithoutMessageId;
-        break;
-      }
-    }
-  }
-
-  if (!should_append && dedupe_reason.has_value()) {
-    telemetry_snapshot_.dedupe_dropped_total += 1;
-    if (*dedupe_reason == TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint) {
-      telemetry_snapshot_.dedupe_dropped_by_message_id_and_fingerprint += 1;
-    } else {
-      telemetry_snapshot_.dedupe_dropped_by_fingerprint_without_message_id += 1;
-    }
+  const auto dedupe_reason = FindHistoryDedupeReason(it->second.history(), message, policy);
+  if (dedupe_reason.has_value()) {
+    UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
     if (telemetry_sink_ != nullptr) {
       telemetry_sink_->OnDedupedHistoryMessage(TaskStore::HistoryDedupeEvent{
           .task_id = std::string(task_id),
@@ -405,11 +424,10 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
           .reason = *dedupe_reason,
       });
     }
+    return it->second;
   }
 
-  if (should_append) {
-    *it->second.add_history() = message;
-  }
+  *it->second.add_history() = message;
   return it->second;
 }
 
