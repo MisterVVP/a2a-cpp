@@ -234,6 +234,9 @@ void Dispatcher::RunAfterInterceptors(const DispatchRequest& request, RequestCon
   }
 }
 
+InMemoryTaskStore::InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink)
+    : telemetry_sink_(std::move(telemetry_sink)) {}
+
 core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& task) {
   if (task.id().empty()) {
     return core::Error::Validation("Task.id is required");
@@ -361,11 +364,13 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
   };
 
   bool should_append = true;
+  std::optional<TaskStore::HistoryDedupeEvent::Reason> dedupe_reason;
   if (policy == HistoryAppendPolicy::kDedupByMessageId && has_message_id) {
     for (const auto& existing : it->second.history()) {
       if (!existing.message_id().empty() && existing.message_id() == message.message_id() &&
           same_fingerprint(existing)) {
         should_append = false;
+        dedupe_reason = TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
         break;
       }
     }
@@ -374,12 +379,31 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
       if (has_message_id && !existing.message_id().empty() && existing.message_id() == message.message_id() &&
           same_fingerprint(existing)) {
         should_append = false;
+        dedupe_reason = TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
         break;
       }
       if (!has_message_id && same_fingerprint(existing)) {
         should_append = false;
+        dedupe_reason = TaskStore::HistoryDedupeEvent::Reason::kDuplicateFingerprintWithoutMessageId;
         break;
       }
+    }
+  }
+
+  if (!should_append && dedupe_reason.has_value()) {
+    telemetry_snapshot_.dedupe_dropped_total += 1;
+    if (*dedupe_reason == TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint) {
+      telemetry_snapshot_.dedupe_dropped_by_message_id_and_fingerprint += 1;
+    } else {
+      telemetry_snapshot_.dedupe_dropped_by_fingerprint_without_message_id += 1;
+    }
+    if (telemetry_sink_ != nullptr) {
+      telemetry_sink_->OnDedupedHistoryMessage(TaskStore::HistoryDedupeEvent{
+          .task_id = std::string(task_id),
+          .message_id = message.message_id(),
+          .policy = policy,
+          .reason = *dedupe_reason,
+      });
     }
   }
 
@@ -387,6 +411,11 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
     *it->second.add_history() = message;
   }
   return it->second;
+}
+
+TaskStore::HistoryTelemetrySnapshot InMemoryTaskStore::GetHistoryTelemetrySnapshot() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return telemetry_snapshot_;
 }
 
 }  // namespace a2a::server

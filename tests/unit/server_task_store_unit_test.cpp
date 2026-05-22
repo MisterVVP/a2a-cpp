@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "a2a/server/server.h"
 
@@ -16,6 +18,15 @@ constexpr std::size_t kTwoHistoryEntries = 2;
 constexpr int64_t kTimestampBaseSeconds = 100;
 constexpr int32_t kTimestampNanos = 1;
 constexpr std::string_view kTaskId = "task-append";
+
+class RecordingHistoryTelemetrySink final : public a2a::server::InMemoryTaskStore::HistoryTelemetrySink {
+ public:
+  void OnDedupedHistoryMessage(const a2a::server::TaskStore::HistoryDedupeEvent& event) override {
+    events.push_back(event);
+  }
+
+  std::vector<a2a::server::TaskStore::HistoryDedupeEvent> events;
+};
 
 lf::a2a::v1::Task MakeTask(std::string id, std::string context_id, lf::a2a::v1::TaskState state,
                            int64_t timestamp_seconds, bool include_artifact,
@@ -173,8 +184,9 @@ TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreserve
 
   lf::a2a::v1::Message same_id_different_body = first;
   same_id_different_body.mutable_parts(0)->set_text("hello-updated");
-  ASSERT_TRUE(store.AppendTaskHistory(kTaskId, same_id_different_body,
-                                      a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId)
+  ASSERT_TRUE(store
+                  .AppendTaskHistory(kTaskId, same_id_different_body,
+                                     a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId)
                   .ok());
   task = store.Get(kTaskId);
   ASSERT_TRUE(task.ok());
@@ -195,6 +207,81 @@ TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreserve
   ASSERT_TRUE(task.ok());
   EXPECT_EQ(task.value().history_size(), 4);
   EXPECT_EQ(task.value().history(3).parts(0).text(), "same-without-id");
+}
+
+TEST(InMemoryTaskStoreUnitTest, EmitsStructuredTelemetryForDedupedRetries) {
+  auto sink = std::make_shared<RecordingHistoryTelemetrySink>();
+  a2a::server::InMemoryTaskStore store(sink);
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kTaskId), std::string(kContextAlpha),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, true, 0))
+                  .ok());
+
+  lf::a2a::v1::Message message;
+  message.set_message_id("telemetry-1");
+  message.set_task_id(std::string(kTaskId));
+  message.add_parts()->set_text("payload");
+
+  ASSERT_TRUE(
+      store.AppendTaskHistory(kTaskId, message, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId).ok());
+  ASSERT_TRUE(
+      store.AppendTaskHistory(kTaskId, message, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId).ok());
+
+  const auto snapshot = store.GetHistoryTelemetrySnapshot();
+  EXPECT_EQ(snapshot.dedupe_dropped_total, 1U);
+  EXPECT_EQ(snapshot.dedupe_dropped_by_message_id_and_fingerprint, 1U);
+  EXPECT_EQ(snapshot.dedupe_dropped_by_fingerprint_without_message_id, 0U);
+  ASSERT_EQ(sink->events.size(), 1U);
+  EXPECT_EQ(sink->events.front().task_id, kTaskId);
+  EXPECT_EQ(sink->events.front().message_id, "telemetry-1");
+}
+
+TEST(InMemoryTaskStoreUnitTest, HandlesOutOfOrderAndMixedReplayScenarios) {
+  a2a::server::InMemoryTaskStore store;
+  constexpr std::string_view kReplayTaskId = "task-replay";
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kReplayTaskId), std::string(kContextAlpha),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, true, 0))
+                  .ok());
+
+  lf::a2a::v1::Message first;
+  first.set_message_id("m-1");
+  first.set_task_id(std::string(kReplayTaskId));
+  first.add_parts()->set_text("first");
+  lf::a2a::v1::Message second;
+  second.set_message_id("m-2");
+  second.set_task_id(std::string(kReplayTaskId));
+  second.add_parts()->set_text("second");
+
+  ASSERT_TRUE(
+      store
+          .AppendTaskHistory(kReplayTaskId, first, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint)
+          .ok());
+  ASSERT_TRUE(store
+                  .AppendTaskHistory(kReplayTaskId, second,
+                                     a2a::server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint)
+                  .ok());
+  ASSERT_TRUE(
+      store
+          .AppendTaskHistory(kReplayTaskId, first, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint)
+          .ok());
+
+  lf::a2a::v1::Message first_without_id = first;
+  first_without_id.clear_message_id();
+  ASSERT_TRUE(
+      store.AppendTaskHistory(kReplayTaskId, first_without_id, a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup)
+          .ok());
+  ASSERT_TRUE(store
+                  .AppendTaskHistory(kReplayTaskId, first_without_id,
+                                     a2a::server::TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint)
+                  .ok());
+
+  const auto result = store.Get(kReplayTaskId);
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result.value().history_size(), 3);
+  EXPECT_EQ(result.value().history(0).message_id(), "m-1");
+  EXPECT_EQ(result.value().history(1).message_id(), "m-2");
+  EXPECT_EQ(result.value().history(2).message_id(), "");
 }
 
 }  // namespace
