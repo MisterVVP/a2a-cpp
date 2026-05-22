@@ -33,6 +33,8 @@ struct ErrorBodySpec final {
   std::string_view reason;
 };
 
+void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1::AgentCard& agent_card);
+
 std::string ToLower(std::string_view value) {
   std::string lowered;
   lowered.reserve(value.size());
