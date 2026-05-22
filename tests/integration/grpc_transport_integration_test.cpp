@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
+
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>

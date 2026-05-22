@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
+
 #pragma once
 
 #include <algorithm>
@@ -212,8 +215,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (const auto upsert = store_.CreateOrUpdate(task); !upsert.ok()) {
       return upsert.error();
     }
-    const auto append = store_.AppendTaskHistory(task_id, request.message(),
-                                                 server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
+    const auto append =
+        store_.AppendTaskHistory(task_id, request.message(), server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
     if (!append.ok()) {
       return append.error();
     }

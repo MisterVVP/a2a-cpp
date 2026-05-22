@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
+
 #include "a2a/server/grpc_server_transport.h"
 
 #if __has_include(<grpcpp/test/server_context_test_spouse.h>)

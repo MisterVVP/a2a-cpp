@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
+
 #include "a2a/client/grpc_transport.h"
 
 #include <grpcpp/create_channel.h>
