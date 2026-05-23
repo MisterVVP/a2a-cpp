@@ -99,7 +99,7 @@ core::Result<std::size_t> ParseContentLength(std::string_view value) {
   if (ec != std::errc() || ptr != trimmed.data() + trimmed.size()) {
     return core::Error::Validation("Content-Length header is not a valid unsigned integer");
   }
-  if (parsed > std::numeric_limits<std::size_t>::max()) {
+  if (parsed > (std::numeric_limits<std::size_t>::max)()) {
     return core::Error::Validation("Content-Length value overflows platform size_t");
   }
   return static_cast<std::size_t>(parsed);
