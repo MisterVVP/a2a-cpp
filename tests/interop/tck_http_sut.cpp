@@ -175,12 +175,12 @@ int main(int argc, char** argv) {
 
     a2a::server::HttpServerRequest request = std::move(parsed.value());
     auto response = rest.Handle(request);
-    if (request.target == "/rpc" || request.target == "/") {
+    if (request.target == "/" || request.target.starts_with("/rpc")) {
       request.target = "/rpc";
       response = jsonrpc.Handle(request);
     }
     if (response.ok()) {
-      (void)adapter.WriteResponse(socket_transport, response.value());
+      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
     }
     a2a::server::CloseSocketCrossPlatform(fd);
   }

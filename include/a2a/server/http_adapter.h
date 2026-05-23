@@ -31,8 +31,8 @@ class HttpAdapter final {
 
   [[nodiscard]] core::Result<HttpServerRequest> ReadRequest(HttpByteTransport& transport,
                                                             std::string remote_address) const;
-  [[nodiscard]] core::Result<void> WriteResponse(HttpByteTransport& transport,
-                                                 const HttpServerResponse& response) const;
+  [[nodiscard]] static core::Result<void> WriteResponse(HttpByteTransport& transport,
+                                                        const HttpServerResponse& response);
 
   [[nodiscard]] static std::string ReasonPhrase(int status_code);
 

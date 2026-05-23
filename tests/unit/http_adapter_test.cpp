@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "a2a/server/http_adapter.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -8,7 +10,6 @@
 #include <string_view>
 
 #include "a2a/core/error.h"
-#include "a2a/server/http_adapter.h"
 
 namespace {
 
@@ -40,10 +41,10 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
 };
 
 constexpr std::string_view kBody = "hello";
+constexpr int kHttpOk = 200;
 
 TEST(HttpAdapterTest, ParsesContentLengthCaseInsensitive) {
-  BufferTransport transport(
-      "POST /rpc HTTP/1.1\r\nHost: localhost\r\ncontent-length: 5\r\nX-Test: true\r\n\r\nhello");
+  BufferTransport transport("POST /rpc HTTP/1.1\r\nHost: localhost\r\ncontent-length: 5\r\nX-Test: true\r\n\r\nhello");
   const a2a::server::HttpAdapter adapter;
   auto request = adapter.ReadRequest(transport, "127.0.0.1");
   ASSERT_TRUE(request.ok());
@@ -65,11 +66,11 @@ TEST(HttpAdapterTest, WriteResponseAddsContentLengthAndStatusText) {
   BufferTransport transport("");
   const a2a::server::HttpAdapter adapter;
   a2a::server::HttpServerResponse response;
-  response.status_code = 200;
+  response.status_code = kHttpOk;
   response.headers["Content-Type"] = "application/json";
   response.body = "{}";
 
-  auto write = adapter.WriteResponse(transport, response);
+  auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
   ASSERT_TRUE(write.ok());
   EXPECT_NE(transport.output().find("HTTP/1.1 200 OK\r\n"), std::string::npos);
   EXPECT_NE(transport.output().find("Content-Length: 2\r\n"), std::string::npos);
@@ -79,11 +80,11 @@ TEST(HttpAdapterTest, WriteResponseRejectsMismatchedContentLength) {
   BufferTransport transport("");
   const a2a::server::HttpAdapter adapter;
   a2a::server::HttpServerResponse response;
-  response.status_code = 200;
+  response.status_code = kHttpOk;
   response.headers["Content-Length"] = "99";
   response.body = "{}";
 
-  auto write = adapter.WriteResponse(transport, response);
+  auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
   ASSERT_FALSE(write.ok());
   EXPECT_EQ(write.error().code(), a2a::core::ErrorCode::kValidation);
 }
