@@ -105,7 +105,7 @@ std::string TransportMux::NormalizePath(std::string_view path) const {
 
 std::string TransportMux::NormalizeTargetForHandler(std::string_view target) const {
   const auto query_start = target.find('?');
-  const std::string normalized_path = NormalizePath(target);
+  std::string normalized_path = NormalizePath(target);
   if (query_start == std::string_view::npos) {
     return normalized_path;
   }
