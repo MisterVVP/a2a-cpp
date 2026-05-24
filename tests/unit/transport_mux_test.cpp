@@ -52,17 +52,19 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
 
 TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
   TransportMux mux;
-  mux.RegisterRoute(
-      {.name = "rest",
-       .matcher = [](std::string_view method,
-                     std::string_view path) { return (method == "GET" || method == "*") && path == "/a2a/tasks/task-1"; },
-       .handler =
-           [](const HttpServerRequest& routed_request) {
-             HttpServerResponse response;
-             response.status_code = routed_request.target == kHistoryQueryTarget ? kHttpOk : kHttpInternalServerError;
-             return response;
-           },
-       .priority = kLowPriority});
+  mux.RegisterRoute({.name = "rest",
+                     .matcher =
+                         [](std::string_view method, std::string_view path) {
+                           return (method == "GET" || method == "*") && path == "/a2a/tasks/task-1";
+                         },
+                     .handler =
+                         [](const HttpServerRequest& routed_request) {
+                           HttpServerResponse response;
+                           response.status_code =
+                               routed_request.target == kHistoryQueryTarget ? kHttpOk : kHttpInternalServerError;
+                           return response;
+                         },
+                     .priority = kLowPriority});
 
   HttpServerRequest request{
       .method = "GET", .target = "/a2a/tasks/task-1/?historyLength=0", .headers = {}, .body = "", .remote_address = ""};

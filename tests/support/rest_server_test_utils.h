@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
@@ -69,23 +70,11 @@ class StoreExecutor final : public server::AgentExecutor {
 };
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {
-  lf::a2a::v1::AgentCard card;
-  card.set_name(std::string(name));
-  auto* iface = card.add_supported_interfaces();
-  iface->set_protocol_binding("HTTP+JSON");
-  iface->set_protocol_version("1.0");
-  iface->set_url(std::string(url));
-  return card;
+  return a2a::core::AgentCardBuilder::RestPreset(name, url).Build();
 }
 
 inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::string_view url) {
-  lf::a2a::v1::AgentCard card;
-  card.set_name(std::string(name));
-  auto* iface = card.add_supported_interfaces();
-  iface->set_protocol_binding("JSONRPC");
-  iface->set_protocol_version("1.0");
-  iface->set_url(std::string(url));
-  return card;
+  return a2a::core::AgentCardBuilder::JsonRpcPreset(name, url).Build();
 }
 
 inline server::HttpServerRequest MakeHttpRequest(std::string method, std::string target,

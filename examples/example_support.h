@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
@@ -386,31 +387,11 @@ class ExampleExecutor final : public server::AgentExecutor {
 };
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {
-  lf::a2a::v1::AgentCard card;
-  card.set_name(std::string(name));
-  card.set_description("example rest agent");
-  card.set_version("1.0.0");
-  card.add_default_input_modes("text/plain");
-  card.add_default_output_modes("text/plain");
-  auto* iface = card.add_supported_interfaces();
-  iface->set_url(std::string(url));
-  iface->set_protocol_binding("HTTP+JSON");
-  iface->set_protocol_version("1.0");
-  return card;
+  return a2a::core::AgentCardBuilder::RestPreset(name, url).Build();
 }
 
 inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::string_view url) {
-  lf::a2a::v1::AgentCard card;
-  card.set_name(std::string(name));
-  card.set_description("example json-rpc agent");
-  card.set_version("1.0.0");
-  card.add_default_input_modes("text/plain");
-  card.add_default_output_modes("text/plain");
-  auto* iface = card.add_supported_interfaces();
-  iface->set_url(std::string(url));
-  iface->set_protocol_binding("JSONRPC");
-  iface->set_protocol_version("1.0");
-  return card;
+  return a2a::core::AgentCardBuilder::JsonRpcPreset(name, url).Build();
 }
 
 }  // namespace a2a::examples

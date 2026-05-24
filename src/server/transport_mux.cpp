@@ -4,6 +4,7 @@
 #include "a2a/server/transport_mux.h"
 
 #include <algorithm>
+#include <ranges>
 
 namespace a2a::server {
 
@@ -15,8 +16,7 @@ TransportMux::TransportMux(Options options) : options_(std::move(options)) {
 
 void TransportMux::RegisterRoute(Route route) {
   routes_.push_back(std::move(route));
-  std::stable_sort(routes_.begin(), routes_.end(),
-                   [](const Route& lhs, const Route& rhs) { return lhs.priority > rhs.priority; });
+  std::ranges::stable_sort(routes_, [](const Route& lhs, const Route& rhs) { return lhs.priority > rhs.priority; });
 }
 
 void TransportMux::SetNotFoundHandler(Handler handler) { not_found_handler_ = std::move(handler); }

@@ -24,6 +24,19 @@ target_link_libraries(generated_proto_smoke_test
 
 gtest_discover_tests(generated_proto_smoke_test)
 
+add_executable(agent_card_builder_test
+  unit/agent_card_builder_test.cpp
+)
+
+target_link_libraries(agent_card_builder_test
+  PRIVATE
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(agent_card_builder_test)
+
 add_executable(core_helpers_test
   unit/core_helpers_test.cpp
 )

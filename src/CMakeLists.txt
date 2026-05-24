@@ -1,4 +1,5 @@
 add_library(a2a_core STATIC
+  core/agent_card_builder.cpp
   core/core.cpp
   core/error.cpp
   core/extensions.cpp
