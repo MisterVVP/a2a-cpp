@@ -271,4 +271,29 @@ class InMemoryTaskStore final : public TaskStore {
   std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
 };
 
+class TaskLifecycleService final {
+ public:
+  explicit TaskLifecycleService(TaskStore* store) : store_(store) {}
+
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> CreateOrUpdateTask(const lf::a2a::v1::Task& task) const;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> TransitionTaskStatus(std::string_view task_id,
+                                                                     lf::a2a::v1::TaskState next_state) const;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> AppendHistory(std::string_view task_id,
+                                                              const lf::a2a::v1::Message& message,
+                                                              TaskStore::HistoryAppendPolicy policy) const;
+
+ private:
+  TaskStore* store_ = nullptr;
+};
+
+[[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);
+[[nodiscard]] core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size);
+void ApplyHistoryRetention(lf::a2a::v1::Task* task, std::optional<std::size_t> history_length);
+void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts);
+
+class TimestampDescTaskOrdering final {
+ public:
+  static void Sort(std::vector<const lf::a2a::v1::Task*>* tasks);
+};
+
 }  // namespace a2a::server

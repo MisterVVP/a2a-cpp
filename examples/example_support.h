@@ -70,24 +70,20 @@ class ExampleExecutor final : public server::AgentExecutor {
         task_id = "example-task-default";
       }
     }
-    if (has_explicit_task_id && !tasks_.contains(task_id)) {
-      return core::protocol_errors::TaskNotFound();
-    }
     if (has_explicit_task_id) {
-      const auto existing_task = tasks_.find(task_id);
-      if (existing_task != tasks_.end()) {
-        if (!request.message().context_id().empty() && !existing_task->second.context_id().empty() &&
-            request.message().context_id() != existing_task->second.context_id()) {
-          return core::protocol_errors::UnsupportedOperation("contextId does not match task");
-        }
-        if (core::IsTerminalTaskState(existing_task->second.status().state())) {
-          return core::protocol_errors::UnsupportedOperation("task is already terminal");
-        }
+      const auto existing_task = store_.Get(task_id);
+      if (!existing_task.ok()) {
+        return core::protocol_errors::TaskNotFound();
+      }
+      if (!request.message().context_id().empty() && !existing_task.value().context_id().empty() &&
+          request.message().context_id() != existing_task.value().context_id()) {
+        return core::protocol_errors::UnsupportedOperation("contextId does not match task");
       }
     }
 
-    lf::a2a::v1::Task task = tasks_.contains(task_id) ? tasks_.at(task_id) : lf::a2a::v1::Task{};
-    if (!tasks_.contains(task_id)) {
+    auto existing = store_.Get(task_id);
+    lf::a2a::v1::Task task = existing.ok() ? existing.value() : lf::a2a::v1::Task{};
+    if (!existing.ok()) {
       ordered_ids_.push_back(task_id);
     }
     task.set_id(task_id);
@@ -212,17 +208,20 @@ class ExampleExecutor final : public server::AgentExecutor {
       std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[3]);
     }
 
-    tasks_[task_id] = task;
-    if (const auto upsert = store_.CreateOrUpdate(task); !upsert.ok()) {
-      return upsert.error();
+    if (const auto transitioned = lifecycle_.TransitionTaskStatus(task_id, task.status().state());
+        existing.ok() && !transitioned.ok()) {
+      return transitioned.error();
+    }
+    const auto stored = lifecycle_.CreateOrUpdateTask(task);
+    if (!stored.ok()) {
+      return stored.error();
     }
     const auto append =
-        store_.AppendTaskHistory(task_id, request.message(), server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
+        lifecycle_.AppendHistory(task_id, request.message(), server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
     if (!append.ok()) {
       return append.error();
     }
     task = append.value();
-    tasks_[task_id] = task;
 
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
@@ -235,11 +234,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     } else {
       if (request.has_configuration() && request.configuration().has_history_length()) {
         const int keep = request.configuration().history_length();
-        if (keep <= 0) {
-          task.clear_history();
-        } else if (task.history_size() > keep) {
-          task.mutable_history()->DeleteSubrange(0, task.history_size() - keep);
-        }
+        server::ApplyHistoryRetention(&task, keep <= 0 ? std::optional<std::size_t>{0}
+                                                       : std::optional<std::size_t>{static_cast<std::size_t>(keep)});
       }
       *response.mutable_task() = task;
     }
@@ -258,23 +254,23 @@ class ExampleExecutor final : public server::AgentExecutor {
       }
     }
 
-    if (!tasks_.contains(task_id)) {
+    if (!store_.Get(task_id).ok()) {
       lf::a2a::v1::Task task;
       task.set_id(task_id);
       task.set_context_id("ctx-" + task_id);
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-      tasks_[task_id] = task;
+      (void)lifecycle_.CreateOrUpdateTask(task);
       ordered_ids_.push_back(task_id);
     }
 
     lf::a2a::v1::StreamResponse working;
     working.mutable_status_update()->set_task_id(task_id);
-    working.mutable_status_update()->set_context_id(tasks_.at(task_id).context_id());
+    working.mutable_status_update()->set_context_id(store_.Get(task_id).value().context_id());
     working.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
 
     lf::a2a::v1::StreamResponse completed;
     completed.mutable_status_update()->set_task_id(task_id);
-    completed.mutable_status_update()->set_context_id(tasks_.at(task_id).context_id());
+    completed.mutable_status_update()->set_context_id(store_.Get(task_id).value().context_id());
     completed.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
 
     std::vector<lf::a2a::v1::StreamResponse> events;
@@ -288,100 +284,33 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                           server::RequestContext& context) override {
     (void)context;
-    if (!tasks_.contains(request.id())) {
-      return core::protocol_errors::TaskNotFound();
-    }
-    lf::a2a::v1::Task task = tasks_.at(request.id());
-    if (request.has_history_length()) {
-      const int keep = request.history_length();
-      if (keep <= 0) {
-        task.clear_history();
-      } else if (task.history_size() > keep) {
-        task.mutable_history()->DeleteSubrange(0, task.history_size() - keep);
-      }
-    }
+    auto task_result = store_.Get(request.id());
+    if (!task_result.ok()) return task_result.error();
+    lf::a2a::v1::Task task = task_result.value();
+    if (request.has_history_length())
+      server::ApplyHistoryRetention(
+          &task, request.history_length() <= 0
+                     ? std::optional<std::size_t>{0}
+                     : std::optional<std::size_t>{static_cast<std::size_t>(request.history_length())});
     return task;
   }
 
   core::Result<server::ListTasksResponse> ListTasks(const server::ListTasksRequest& request,
                                                     server::RequestContext& context) override {
     (void)context;
-    std::vector<lf::a2a::v1::Task> filtered;
-    for (const auto& id : ordered_ids_) {
-      const auto it = tasks_.find(id);
-      if (it == tasks_.end()) continue;
-      const auto& task = it->second;
-      if (!request.context_id.empty() && task.context_id() != request.context_id) continue;
-      if (request.status_filter.has_value() && task.status().state() != *request.status_filter) continue;
-      filtered.push_back(task);
-    }
-
-    std::stable_sort(filtered.begin(), filtered.end(), [](const lf::a2a::v1::Task& lhs, const lf::a2a::v1::Task& rhs) {
-      const auto lhs_s = lhs.status().has_timestamp() ? lhs.status().timestamp().seconds() : 0;
-      const auto rhs_s = rhs.status().has_timestamp() ? rhs.status().timestamp().seconds() : 0;
-      return lhs_s > rhs_s;
-    });
-
-    std::size_t offset = 0;
-    if (!request.page_token.empty()) {
-      const auto* b = request.page_token.data();
-      const auto* e = b + request.page_token.size();
-      const auto p = std::from_chars(b, e, offset);
-      if (p.ec != std::errc() || p.ptr != e) {
-        return core::Error::Validation("ListTasksRequest.page_token must be a non-negative integer");
-      }
-    }
-    if (offset > filtered.size()) {
-      return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
-    }
-
-    const std::size_t page_size = request.page_size == 0 ? 50U : request.page_size;
-    server::ListTasksResponse response;
-    response.total_size = filtered.size();
-
-    for (std::size_t i = offset; i < filtered.size(); ++i) {
-      if (response.tasks.size() >= page_size) {
-        response.next_page_token = std::to_string(i);
-        break;
-      }
-      auto task = filtered[i];
-      if (!request.include_artifacts) {
-        task.clear_artifacts();
-      }
-      if (request.history_length.has_value()) {
-        const auto keep = *request.history_length;
-        if (keep == 0) {
-          task.clear_history();
-        } else if (static_cast<std::size_t>(task.history_size()) > keep) {
-          task.mutable_history()->DeleteSubrange(
-              0, static_cast<int>(static_cast<std::size_t>(task.history_size()) - keep));
-        }
-      }
-      response.tasks.push_back(std::move(task));
-    }
-    response.page_size = response.tasks.size();
-    return response;
+    return store_.List(request);
   }
 
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                              server::RequestContext& context) override {
     (void)context;
-    if (!tasks_.contains(request.id())) {
-      return core::protocol_errors::TaskNotFound();
-    }
-    auto task = tasks_.at(request.id());
-    if (core::IsTerminalTaskState(task.status().state())) {
-      return core::protocol_errors::TaskNotCancelable();
-    }
-    task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
-    tasks_[request.id()] = task;
-    return task;
+    return lifecycle_.TransitionTaskStatus(request.id(), lf::a2a::v1::TASK_STATE_CANCELED);
   }
 
  private:
-  std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
   std::vector<std::string> ordered_ids_;
   server::InMemoryTaskStore store_;
+  server::TaskLifecycleService lifecycle_{&store_};
   std::uint64_t generated_task_counter_ = 0;
   std::uint64_t status_timestamp_counter_ = 0;
 };
