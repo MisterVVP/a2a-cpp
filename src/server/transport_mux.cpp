@@ -61,7 +61,7 @@ core::Result<HttpServerResponse> TransportMux::RouteRequest(const HttpServerRequ
   for (const auto& route : routes_) {
     if (route.matcher(request.method, normalized_path)) {
       HttpServerRequest normalized_request = request;
-      normalized_request.target = normalized_path;
+      normalized_request.target = NormalizeTargetForHandler(request.target);
       return route.handler(normalized_request);
     }
     if (route.matcher("*", normalized_path)) {
@@ -101,6 +101,17 @@ std::string TransportMux::NormalizePath(std::string_view path) const {
     normalized = options_.default_path;
   }
   return normalized;
+}
+
+std::string TransportMux::NormalizeTargetForHandler(std::string_view target) const {
+  const auto query_start = target.find('?');
+  const std::string normalized_path = NormalizePath(target);
+  if (query_start == std::string_view::npos) {
+    return normalized_path;
+  }
+  std::string normalized_target = normalized_path;
+  normalized_target.append(target.substr(query_start));
+  return normalized_target;
 }
 
 HttpServerResponse TransportMux::BuildDefaultNotFound(const RouteMiss& miss) {
