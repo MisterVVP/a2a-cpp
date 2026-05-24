@@ -8,8 +8,8 @@
 namespace {
 
 TEST(ServerUtilsTest, ConcatBuildsExpectedString) {
-  const std::string result = a2a::server::Concat("{\"k\":\"", "v", "\"}");
-  EXPECT_EQ(result, "{\"k\":\"v\"}");
+  const std::string result = a2a::server::Concat(R"({"k":")", "v", R"("})");
+  EXPECT_EQ(result, R"({"k":"v"})");
 }
 
 TEST(ServerUtilsTest, ConcatAcceptsStringViewsAndStrings) {
