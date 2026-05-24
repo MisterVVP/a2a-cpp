@@ -12,6 +12,7 @@ using a2a::server::HttpServerResponse;
 using a2a::server::TransportMux;
 
 constexpr int kHttpOk = 200;
+constexpr std::string_view kHistoryQueryTarget = "/a2a/tasks/task-1?historyLength=0";
 
 TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
   TransportMux mux(
@@ -46,7 +47,6 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
 }
 
 TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
-  constexpr std::string_view kExpectedTarget = "/a2a/tasks/task-1?historyLength=0";
   TransportMux mux;
   mux.RegisterRoute(
       {.name = "rest",
@@ -55,7 +55,7 @@ TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
        .handler =
            [](const HttpServerRequest& routed_request) {
              HttpServerResponse response;
-             response.status_code = routed_request.target == kExpectedTarget ? kHttpOk : 500;
+             response.status_code = routed_request.target == kHistoryQueryTarget ? kHttpOk : 500;
              return response;
            },
        .priority = 1});
