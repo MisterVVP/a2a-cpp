@@ -89,6 +89,7 @@ class TransportMux final {
 
  private:
   [[nodiscard]] std::string NormalizePath(std::string_view path) const;
+  [[nodiscard]] std::string NormalizeTargetForHandler(std::string_view target) const;
   [[nodiscard]] static HttpServerResponse BuildDefaultNotFound(const RouteMiss& miss);
 
   Options options_;
