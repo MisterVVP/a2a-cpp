@@ -26,3 +26,4 @@ This document defines repository-wide C++ implementation conventions for maintai
 - Use `std::string_view` for read-only string parameters where ownership is not needed.
 - Keep headers self-contained and include only what you use.
 - Prefer named `constexpr` constants over magic literals.
+- Define shared `constexpr` constants in headers (or namespace scope), not inside function bodies, to improve readability and discoverability.

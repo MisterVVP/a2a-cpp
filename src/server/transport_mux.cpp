@@ -6,6 +6,30 @@
 #include <algorithm>
 
 namespace a2a::server {
+namespace {
+constexpr std::string_view kErrorPrefix = "{\"error\":\"";
+constexpr std::string_view kCodePrefix = "\",\"code\":\"";
+constexpr std::string_view kPathPrefix = "\",\"path\":\"";
+constexpr std::string_view kMethodPrefix = "\",\"method\":\"";
+constexpr std::string_view kJsonSuffix = "\"}";
+
+inline std::string BuildRouteMissBody(std::string_view message, std::string_view code, std::string_view normalized_path,
+                                      std::string_view method) {
+  std::string body;
+  body.reserve(kErrorPrefix.size() + message.size() + kCodePrefix.size() + code.size() + kPathPrefix.size() +
+               normalized_path.size() + kMethodPrefix.size() + method.size() + kJsonSuffix.size());
+  body.append(kErrorPrefix);
+  body.append(message);
+  body.append(kCodePrefix);
+  body.append(code);
+  body.append(kPathPrefix);
+  body.append(normalized_path);
+  body.append(kMethodPrefix);
+  body.append(method);
+  body.append(kJsonSuffix);
+  return body;
+}
+}  // namespace
 
 TransportMux::TransportMux() : TransportMux(Options{}) {}
 
@@ -46,7 +70,8 @@ void TransportMux::RegisterRestRoute(RestServerTransport& transport, RestRouteOp
       .matcher =
           [rest_api_prefix = std::move(options.rest_api_prefix),
            well_known_prefix = std::move(options.well_known_prefix)](std::string_view method, std::string_view path) {
-            return method == "*" && (path.starts_with(rest_api_prefix) || path.starts_with(well_known_prefix));
+            (void)method;
+            return path.starts_with(rest_api_prefix) || path.starts_with(well_known_prefix);
           },
       .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },
       .priority = options.priority,
@@ -107,28 +132,10 @@ HttpServerResponse TransportMux::BuildDefaultNotFound(const RouteMiss& miss) {
   HttpServerResponse response;
   response.status_code = method_not_allowed ? kHttpMethodNotAllowed : kHttpNotFound;
   response.headers["content-type"] = "application/json";
-  constexpr std::string_view kErrorPrefix = "{\"error\":\"";
-  constexpr std::string_view kCodePrefix = "\",\"code\":\"";
-  constexpr std::string_view kPathPrefix = "\",\"path\":\"";
-  constexpr std::string_view kMethodPrefix = "\",\"method\":\"";
-  constexpr std::string_view kJsonSuffix = "\"}";
   const std::string_view message =
       method_not_allowed ? "No route matched HTTP method for normalized path" : "No route matched normalized path";
   const std::string_view code = method_not_allowed ? kRouteMethodNotAllowedCode : kRouteNotFoundCode;
-
-  std::string body;
-  body.reserve(kErrorPrefix.size() + message.size() + kCodePrefix.size() + code.size() + kPathPrefix.size() +
-               miss.normalized_path.size() + kMethodPrefix.size() + miss.method.size() + kJsonSuffix.size());
-  body.append(kErrorPrefix);
-  body.append(message);
-  body.append(kCodePrefix);
-  body.append(code);
-  body.append(kPathPrefix);
-  body.append(miss.normalized_path);
-  body.append(kMethodPrefix);
-  body.append(miss.method);
-  body.append(kJsonSuffix);
-  response.body = std::move(body);
+  response.body = BuildRouteMissBody(message, code, miss.normalized_path, miss.method);
   return response;
 }
 
