@@ -278,6 +278,20 @@ target_link_libraries(json_rpc_server_transport_test
 
 gtest_discover_tests(json_rpc_server_transport_test)
 
+add_executable(transport_mux_test
+  unit/transport_mux_test.cpp
+)
+
+target_link_libraries(transport_mux_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(transport_mux_test)
+
 add_executable(grpc_server_transport_test
   unit/grpc_server_transport_test.cpp
 )
