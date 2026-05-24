@@ -6,30 +6,6 @@
 #include <algorithm>
 
 namespace a2a::server {
-namespace {
-constexpr std::string_view kErrorPrefix = "{\"error\":\"";
-constexpr std::string_view kCodePrefix = "\",\"code\":\"";
-constexpr std::string_view kPathPrefix = "\",\"path\":\"";
-constexpr std::string_view kMethodPrefix = "\",\"method\":\"";
-constexpr std::string_view kJsonSuffix = "\"}";
-
-inline std::string BuildRouteMissBody(std::string_view message, std::string_view code, std::string_view normalized_path,
-                                      std::string_view method) {
-  std::string body;
-  body.reserve(kErrorPrefix.size() + message.size() + kCodePrefix.size() + code.size() + kPathPrefix.size() +
-               normalized_path.size() + kMethodPrefix.size() + method.size() + kJsonSuffix.size());
-  body.append(kErrorPrefix);
-  body.append(message);
-  body.append(kCodePrefix);
-  body.append(code);
-  body.append(kPathPrefix);
-  body.append(normalized_path);
-  body.append(kMethodPrefix);
-  body.append(method);
-  body.append(kJsonSuffix);
-  return body;
-}
-}  // namespace
 
 TransportMux::TransportMux() : TransportMux(Options{}) {}
 
@@ -135,7 +111,8 @@ HttpServerResponse TransportMux::BuildDefaultNotFound(const RouteMiss& miss) {
   const std::string_view message =
       method_not_allowed ? "No route matched HTTP method for normalized path" : "No route matched normalized path";
   const std::string_view code = method_not_allowed ? kRouteMethodNotAllowedCode : kRouteNotFoundCode;
-  response.body = BuildRouteMissBody(message, code, miss.normalized_path, miss.method);
+  response.body = Concat(kRouteMissErrorPrefix, message, kRouteMissCodePrefix, code, kRouteMissPathPrefix,
+                         miss.normalized_path, kRouteMissMethodPrefix, miss.method, kRouteMissJsonSuffix);
   return response;
 }
 

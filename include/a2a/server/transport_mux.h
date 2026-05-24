@@ -11,8 +11,15 @@
 #include "a2a/core/result.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
+#include "a2a/server/server_utils.h"
 
 namespace a2a::server {
+
+inline constexpr std::string_view kRouteMissErrorPrefix = "{\"error\":\"";
+inline constexpr std::string_view kRouteMissCodePrefix = "\",\"code\":\"";
+inline constexpr std::string_view kRouteMissPathPrefix = "\",\"path\":\"";
+inline constexpr std::string_view kRouteMissMethodPrefix = "\",\"method\":\"";
+inline constexpr std::string_view kRouteMissJsonSuffix = "\"}";
 
 class TransportMux final {
  public:
