@@ -12,6 +12,10 @@ using a2a::server::HttpServerResponse;
 using a2a::server::TransportMux;
 
 constexpr int kHttpOk = 200;
+constexpr int kHttpCreated = 201;
+constexpr int kHttpInternalServerError = 500;
+constexpr int kLowPriority = 1;
+constexpr int kHighPriority = 10;
 constexpr std::string_view kHistoryQueryTarget = "/a2a/tasks/task-1?historyLength=0";
 
 TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
@@ -24,10 +28,10 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
        .handler =
            [](const HttpServerRequest&) {
              HttpServerResponse response;
-             response.status_code = 201;
+             response.status_code = kHttpCreated;
              return response;
            },
-       .priority = 1});
+       .priority = kLowPriority});
   mux.RegisterRoute(
       {.name = "high",
        .matcher = [](std::string_view method,
@@ -38,7 +42,7 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
              response.status_code = kHttpOk;
              return response;
            },
-       .priority = 10});
+       .priority = kHighPriority});
 
   HttpServerRequest request{.method = "POST", .target = "/", .headers = {}, .body = "", .remote_address = ""};
   auto result = mux.RouteRequest(request);
@@ -55,10 +59,10 @@ TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
        .handler =
            [](const HttpServerRequest& routed_request) {
              HttpServerResponse response;
-             response.status_code = routed_request.target == kHistoryQueryTarget ? kHttpOk : 500;
+             response.status_code = routed_request.target == kHistoryQueryTarget ? kHttpOk : kHttpInternalServerError;
              return response;
            },
-       .priority = 1});
+       .priority = kLowPriority});
 
   HttpServerRequest request{
       .method = "GET", .target = "/a2a/tasks/task-1/?historyLength=0", .headers = {}, .body = "", .remote_address = ""};
@@ -79,12 +83,12 @@ TEST(TransportMuxTest, ReturnsStructuredRouteMissForMethodMismatch) {
              response.status_code = kHttpOk;
              return response;
            },
-       .priority = 1});
+       .priority = kLowPriority});
 
   HttpServerRequest request{.method = "GET", .target = "/rpc", .headers = {}, .body = "", .remote_address = ""};
   auto result = mux.RouteRequest(request);
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, 405);
+  EXPECT_EQ(result.value().status_code, TransportMux::kHttpMethodNotAllowed);
   EXPECT_NE(result.value().body.find("ROUTE_METHOD_NOT_ALLOWED"), std::string::npos);
 }
 
