@@ -61,6 +61,8 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+    task.add_history()->set_task_id("h1");
+    task.add_history()->set_task_id("h2");
     return task;
   }
 
@@ -249,3 +251,20 @@ TEST(ServerDispatcherTest, InterceptorFailureShortCircuitsDispatchAndTriggersAft
 }
 
 }  // namespace
+
+TEST(ServerDispatcherTest, GetTaskAppliesHistoryLengthLimit) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("task-7");
+  request.set_history_length(1);
+  const auto result =
+      dispatcher.Dispatch({.operation = a2a::server::DispatcherOperation::kGetTask, .payload = request}, context);
+
+  ASSERT_TRUE(result.ok());
+  ASSERT_TRUE(std::holds_alternative<lf::a2a::v1::Task>(result.value().payload()));
+  const auto& task = std::get<lf::a2a::v1::Task>(result.value().payload());
+  EXPECT_EQ(task.history_size(), 1);
+}

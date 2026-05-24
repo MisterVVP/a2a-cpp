@@ -34,6 +34,7 @@
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
+#include "a2a/server/transport_mux.h"
 #include "example_support.h"
 
 namespace {
@@ -158,6 +159,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  a2a::server::TransportMux mux(
+      {.normalization_policy = a2a::server::TransportMux::PathNormalizationPolicy::kRootToDefaultPath,
+       .default_path = "/rpc"});
+  mux.RegisterJsonRpcRoute(jsonrpc);
+  mux.RegisterRestRoute(rest);
+
   while (kKeepRunning != 0) {
     sockaddr_in client{};
     socklen_t len = sizeof(client);
@@ -174,11 +181,7 @@ int main(int argc, char** argv) {
     }
 
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = rest.Handle(request);
-    if (request.target == "/" || request.target.starts_with("/rpc")) {
-      request.target = "/rpc";
-      response = jsonrpc.Handle(request);
-    }
+    auto response = mux.RouteRequest(request);
     if (response.ok()) {
       (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
     }

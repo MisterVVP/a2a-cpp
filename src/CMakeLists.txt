@@ -49,6 +49,7 @@ add_library(a2a_server STATIC
   server/rest_server_transport.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp
+  server/transport_mux.cpp
   server/server.cpp
 )
 add_library(a2a::server ALIAS a2a_server)
