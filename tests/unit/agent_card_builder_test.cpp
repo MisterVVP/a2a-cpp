@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#include "a2a/core/agent_card_builder.h"
+
+#include <gtest/gtest.h>
+
+#include "a2a/core/protocol_bindings.h"
+
+namespace {
+
+constexpr std::string_view kVersion = "1.0.0";
+constexpr std::string_view kDescription = "desc";
+constexpr std::string_view kName = "agent";
+
+TEST(AgentCardBuilderTest, RestPresetBuildsExpectedInterface) {
+  const auto card = a2a::core::AgentCardBuilder::RestPreset("REST Agent", "http://agent.local/a2a").Build();
+
+  ASSERT_EQ(card.supported_interfaces_size(), 1);
+  EXPECT_EQ(card.name(), "REST Agent");
+  EXPECT_EQ(card.supported_interfaces(0).protocol_binding(), a2a::core::protocol_bindings::kHttpJson);
+}
+
+TEST(AgentCardBuilderTest, PresetsValidateSuccessfully) {
+  EXPECT_TRUE(a2a::core::AgentCardBuilder::RestPreset("r", "https://agent.local/a2a").Validate().ok());
+  EXPECT_TRUE(a2a::core::AgentCardBuilder::JsonRpcPreset("j", "http://agent.local/rpc").Validate().ok());
+  EXPECT_TRUE(a2a::core::AgentCardBuilder::GrpcPreset("g", "dns:///agent.local:50051").Validate().ok());
+}
+
+TEST(AgentCardBuilderTest, ValidateRejectsMissingRequiredFields) {
+  EXPECT_FALSE(a2a::core::AgentCardBuilder().Validate().ok());
+  EXPECT_FALSE(a2a::core::AgentCardBuilder().SetName(kName).Validate().ok());
+  EXPECT_FALSE(a2a::core::AgentCardBuilder().SetName(kName).SetVersion(kVersion).Validate().ok());
+}
+
+TEST(AgentCardBuilderTest, ValidateRejectsInterfaceWithoutVersion) {
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName(kName)
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kHttpJson, .version = "", .url = "http://agent.local/a2a"});
+
+  EXPECT_FALSE(builder.Validate().ok());
+}
+
+TEST(AgentCardBuilderTest, ValidateRejectsDuplicateInterfaces) {
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName("dup")
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kHttpJson, .version = "1.0", .url = "http://agent.local/a2a"})
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kHttpJson, .version = "1.0", .url = "http://agent.local/a2a"});
+
+  EXPECT_FALSE(builder.Validate().ok());
+}
+
+TEST(AgentCardBuilderTest, ValidateRejectsInvalidUrl) {
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName("invalid")
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kJsonRpc, .version = "1.0", .url = "localhost:8080/rpc"});
+
+  EXPECT_FALSE(builder.Validate().ok());
+}
+
+TEST(AgentCardBuilderTest, ValidateAcceptsGrpcHostPortUrl) {
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName("grpc")
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface({.binding = a2a::core::protocol_bindings::kGrpc, .version = "1.0", .url = "localhost:50051"});
+
+  EXPECT_TRUE(builder.Validate().ok());
+}
+
+}  // namespace
