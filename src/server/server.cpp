@@ -120,11 +120,15 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
       if (payload == nullptr) {
         return core::Error::Validation("Dispatch payload type mismatch for GetTask");
       }
-      const auto response = executor.GetTask(*payload, context);
+      auto response = executor.GetTask(*payload, context);
       if (!response.ok()) {
         return response.error();
       }
-      return DispatchResponse(response.value());
+      lf::a2a::v1::Task task = std::move(response.value());
+      if (payload->has_history_length()) {
+        ApplyHistoryLimit(&task, static_cast<std::size_t>(payload->history_length()));
+      }
+      return DispatchResponse(std::move(task));
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksRequest>(&request.payload);
