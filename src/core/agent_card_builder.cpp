@@ -28,12 +28,12 @@ bool HasGrpcScheme(std::string_view url) {
 
 bool HasHostPortShape(std::string_view endpoint) { return endpoint.find(':') != std::string_view::npos; }
 
-bool IsValidInterfaceEndpoint(std::string_view protocol_binding, std::string_view endpoint) {
-  if (protocol_binding == kHttpJson || protocol_binding == kJsonRpc) {
-    return HasHttpScheme(endpoint);
+bool IsValidInterfaceEndpoint(const AgentCardBuilder::InterfaceSpec& spec) {
+  if (spec.binding == kHttpJson || spec.binding == kJsonRpc) {
+    return HasHttpScheme(spec.url);
   }
-  if (protocol_binding == kGrpc) {
-    return HasGrpcScheme(endpoint) || HasHttpScheme(endpoint) || HasHostPortShape(endpoint);
+  if (spec.binding == kGrpc) {
+    return HasGrpcScheme(spec.url) || HasHttpScheme(spec.url) || HasHostPortShape(spec.url);
   }
   return false;
 }
@@ -65,11 +65,11 @@ AgentCardBuilder& AgentCardBuilder::AddDefaultOutputMode(std::string_view mode) 
   return *this;
 }
 
-AgentCardBuilder& AgentCardBuilder::AddInterface(std::string_view binding, std::string_view version, std::string_view url) {
+AgentCardBuilder& AgentCardBuilder::AddInterface(const InterfaceSpec& spec) {
   auto* iface = card_.add_supported_interfaces();
-  iface->set_protocol_binding(std::string(binding));
-  iface->set_protocol_version(std::string(version));
-  iface->set_url(std::string(url));
+  iface->set_protocol_binding(std::string(spec.binding));
+  iface->set_protocol_version(std::string(spec.version));
+  iface->set_url(std::string(spec.url));
   return *this;
 }
 
@@ -98,7 +98,8 @@ Result<void> AgentCardBuilder::Validate() const {
     if (iface.url().empty()) {
       return Error::Validation("Agent card interface URL is required");
     }
-    if (!IsValidInterfaceEndpoint(iface.protocol_binding(), iface.url())) {
+    if (!IsValidInterfaceEndpoint(
+            {.binding = iface.protocol_binding(), .version = iface.protocol_version(), .url = iface.url()})) {
       return Error::Validation("Agent card interface URL is invalid for its protocol binding");
     }
     const std::string key = iface.protocol_binding() + "|" + iface.protocol_version() + "|" + iface.url();
@@ -119,18 +120,19 @@ AgentCardBuilder AgentCardBuilder::RestPreset(std::string_view name, std::string
       .SetDescription(kRestDescription)
       .AddDefaultInputMode(kDefaultModeTextPlain)
       .AddDefaultOutputMode(kDefaultModeTextPlain)
-      .AddInterface(kHttpJson, kDefaultProtocolVersion, url);
+      .AddInterface({.binding = kHttpJson, .version = kDefaultProtocolVersion, .url = url});
   return builder;
 }
 
-AgentCardBuilder AgentCardBuilder::JsonRpcPreset(std::string_view name, std::string_view url, std::string_view version) {
+AgentCardBuilder AgentCardBuilder::JsonRpcPreset(std::string_view name, std::string_view url,
+                                                 std::string_view version) {
   AgentCardBuilder builder;
   builder.SetName(name)
       .SetVersion(version)
       .SetDescription(kJsonRpcDescription)
       .AddDefaultInputMode(kDefaultModeTextPlain)
       .AddDefaultOutputMode(kDefaultModeTextPlain)
-      .AddInterface(kJsonRpc, kDefaultProtocolVersion, url);
+      .AddInterface({.binding = kJsonRpc, .version = kDefaultProtocolVersion, .url = url});
   return builder;
 }
 
@@ -141,7 +143,7 @@ AgentCardBuilder AgentCardBuilder::GrpcPreset(std::string_view name, std::string
       .SetDescription(kGrpcDescription)
       .AddDefaultInputMode(kDefaultModeTextPlain)
       .AddDefaultOutputMode(kDefaultModeTextPlain)
-      .AddInterface(kGrpc, kDefaultProtocolVersion, url);
+      .AddInterface({.binding = kGrpc, .version = kDefaultProtocolVersion, .url = url});
   return builder;
 }
 

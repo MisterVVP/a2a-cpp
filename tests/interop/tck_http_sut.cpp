@@ -90,19 +90,22 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  auto agent_card =
-      a2a::core::AgentCardBuilder()
-          .SetName("TCK HTTP SUT")
-          .SetVersion("0.1.0")
-          .SetDescription("Conformance-focused local SUT for A2A")
-          .AddDefaultInputMode("text/plain")
-          .AddDefaultOutputMode("text/plain")
-          .AddInterface(a2a::core::protocol_bindings::kJsonRpc, "1.0",
-                        "http://localhost:" + std::to_string(port) + "/rpc")
-          .AddInterface(a2a::core::protocol_bindings::kHttpJson, "1.0",
-                        "http://localhost:" + std::to_string(port) + "/a2a")
-          .AddInterface(a2a::core::protocol_bindings::kGrpc, "1.0", "localhost:" + std::to_string(grpc_port))
-          .Build();
+  auto agent_card = a2a::core::AgentCardBuilder()
+                        .SetName("TCK HTTP SUT")
+                        .SetVersion("0.1.0")
+                        .SetDescription("Conformance-focused local SUT for A2A")
+                        .AddDefaultInputMode("text/plain")
+                        .AddDefaultOutputMode("text/plain")
+                        .AddInterface({.binding = a2a::core::protocol_bindings::kJsonRpc,
+                                       .version = "1.0",
+                                       .url = "http://localhost:" + std::to_string(port) + "/rpc"})
+                        .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
+                                       .version = "1.0",
+                                       .url = "http://localhost:" + std::to_string(port) + "/a2a"})
+                        .AddInterface({.binding = a2a::core::protocol_bindings::kGrpc,
+                                       .version = "1.0",
+                                       .url = "localhost:" + std::to_string(grpc_port)})
+                        .Build();
   auto* capabilities = agent_card.mutable_capabilities();
   capabilities->set_streaming(true);
   capabilities->set_push_notifications(false);

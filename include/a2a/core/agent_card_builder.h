@@ -21,7 +21,13 @@ class AgentCardBuilder final {
   AgentCardBuilder& AddDefaultInputMode(std::string_view mode);
   AgentCardBuilder& AddDefaultOutputMode(std::string_view mode);
 
-  AgentCardBuilder& AddInterface(std::string_view binding, std::string_view version, std::string_view url);
+  struct InterfaceSpec final {
+    std::string_view binding;
+    std::string_view version;
+    std::string_view url;
+  };
+
+  AgentCardBuilder& AddInterface(const InterfaceSpec& spec);
 
   [[nodiscard]] Result<void> Validate() const;
   [[nodiscard]] lf::a2a::v1::AgentCard Build() const;
