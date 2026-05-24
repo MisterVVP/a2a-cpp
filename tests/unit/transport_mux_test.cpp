@@ -45,6 +45,28 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
   EXPECT_EQ(result.value().status_code, kHttpOk);
 }
 
+TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
+  constexpr std::string_view kExpectedTarget = "/a2a/tasks/task-1?historyLength=0";
+  TransportMux mux;
+  mux.RegisterRoute(
+      {.name = "rest",
+       .matcher = [](std::string_view method,
+                     std::string_view path) { return (method == "GET" || method == "*") && path == "/a2a/tasks/task-1"; },
+       .handler =
+           [](const HttpServerRequest& routed_request) {
+             HttpServerResponse response;
+             response.status_code = routed_request.target == kExpectedTarget ? kHttpOk : 500;
+             return response;
+           },
+       .priority = 1});
+
+  HttpServerRequest request{
+      .method = "GET", .target = "/a2a/tasks/task-1/?historyLength=0", .headers = {}, .body = "", .remote_address = ""};
+  const auto result = mux.RouteRequest(request);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().status_code, kHttpOk);
+}
+
 TEST(TransportMuxTest, ReturnsStructuredRouteMissForMethodMismatch) {
   TransportMux mux;
   mux.RegisterRoute(
