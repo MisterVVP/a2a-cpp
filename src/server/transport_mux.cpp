@@ -107,11 +107,28 @@ HttpServerResponse TransportMux::BuildDefaultNotFound(const RouteMiss& miss) {
   HttpServerResponse response;
   response.status_code = method_not_allowed ? kHttpMethodNotAllowed : kHttpNotFound;
   response.headers["content-type"] = "application/json";
-  response.body =
-      std::string("{\"error\":\"") +
-      (method_not_allowed ? "No route matched HTTP method for normalized path" : "No route matched normalized path") +
-      "\",\"code\":\"" + std::string(method_not_allowed ? kRouteMethodNotAllowedCode : kRouteNotFoundCode) +
-      "\",\"path\":\"" + miss.normalized_path + "\",\"method\":\"" + miss.method + "\"}";
+  constexpr std::string_view kErrorPrefix = "{\"error\":\"";
+  constexpr std::string_view kCodePrefix = "\",\"code\":\"";
+  constexpr std::string_view kPathPrefix = "\",\"path\":\"";
+  constexpr std::string_view kMethodPrefix = "\",\"method\":\"";
+  constexpr std::string_view kJsonSuffix = "\"}";
+  const std::string_view message =
+      method_not_allowed ? "No route matched HTTP method for normalized path" : "No route matched normalized path";
+  const std::string_view code = method_not_allowed ? kRouteMethodNotAllowedCode : kRouteNotFoundCode;
+
+  std::string body;
+  body.reserve(kErrorPrefix.size() + message.size() + kCodePrefix.size() + code.size() + kPathPrefix.size() +
+               miss.normalized_path.size() + kMethodPrefix.size() + miss.method.size() + kJsonSuffix.size());
+  body.append(kErrorPrefix);
+  body.append(message);
+  body.append(kCodePrefix);
+  body.append(code);
+  body.append(kPathPrefix);
+  body.append(miss.normalized_path);
+  body.append(kMethodPrefix);
+  body.append(miss.method);
+  body.append(kJsonSuffix);
+  response.body = std::move(body);
   return response;
 }
 

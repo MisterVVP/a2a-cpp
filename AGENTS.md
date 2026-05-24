@@ -3,6 +3,10 @@
 ## Scope and intent
 These instructions apply to the entire repository. Follow them for all changes unless a more specific nested `AGENTS.md` overrides them.
 
+## C++ conventions reference
+- Contributors and AI agents must follow `cpp_conventions.md` for additional C++ conventions and performance tips.
+- In case of overlap, apply the stricter rule between this file and `cpp_conventions.md`.
+
 ## C++ engineering principles
 - Prefer modern C++ (C++20 or newer where available) and standard library facilities before third-party abstractions.
 - Keep headers minimal and self-contained; include only what is used.
