@@ -67,7 +67,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        task_id = "example-stream-default";
+        task_id = "example-task-auto-" + std::to_string(status_timestamp_counter_ + 1);
       }
     }
     if (has_explicit_task_id) {
@@ -249,7 +249,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        task_id = "example-task-" + std::to_string(++generated_task_counter_);
+        task_id = "example-stream-default";
       }
     }
 
@@ -310,7 +310,6 @@ class ExampleExecutor final : public server::AgentExecutor {
   std::vector<std::string> ordered_ids_;
   server::InMemoryTaskStore store_;
   server::TaskLifecycleService lifecycle_{&store_};
-  std::uint64_t generated_task_counter_ = 0;
   std::uint64_t status_timestamp_counter_ = 0;
 };
 
