@@ -3,6 +3,7 @@ set -euo pipefail
 
 BUILD_DIR="${1:-build}"
 CHECK_PROFILE_FILE="${CLANG_TIDY_CHECK_PROFILE_FILE:-${BUILD_DIR}/clang-tidy-check-profile.txt}"
+ENABLE_CHECK_PROFILE="${CLANG_TIDY_ENABLE_CHECK_PROFILE:-0}"
 
 if ! command -v clang-tidy >/dev/null 2>&1; then
   echo "clang-tidy is required but not installed." >&2
@@ -22,11 +23,19 @@ if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-mkdir -p "$(dirname "${CHECK_PROFILE_FILE}")"
-echo "[run_clang_tidy] Writing check profile to ${CHECK_PROFILE_FILE}" >&2
+CLANG_TIDY_ARGS=(
+  -p "${BUILD_DIR}"
+)
 
-clang-tidy \
-  -p "${BUILD_DIR}" \
-  --enable-check-profile \
-  --store-check-profile="${CHECK_PROFILE_FILE}" \
-  "${TARGET_FILES[@]}"
+if [[ "${ENABLE_CHECK_PROFILE}" == "1" || "${ENABLE_CHECK_PROFILE}" == "true" ]]; then
+  mkdir -p "$(dirname "${CHECK_PROFILE_FILE}")"
+  echo "[run_clang_tidy] Check profile enabled: ${CHECK_PROFILE_FILE}" >&2
+  CLANG_TIDY_ARGS+=(
+    --enable-check-profile
+    --store-check-profile="${CHECK_PROFILE_FILE}"
+  )
+else
+  echo "[run_clang_tidy] Check profile disabled (set CLANG_TIDY_ENABLE_CHECK_PROFILE=1 to enable)." >&2
+fi
+
+clang-tidy "${CLANG_TIDY_ARGS[@]}" "${TARGET_FILES[@]}"
