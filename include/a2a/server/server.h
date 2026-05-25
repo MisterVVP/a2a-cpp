@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "a2a/core/result.h"
+#include "a2a/server/task_id_generator.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
@@ -273,9 +274,13 @@ class InMemoryTaskStore final : public TaskStore {
 
 class TaskLifecycleService final {
  public:
-  explicit TaskLifecycleService(TaskStore* store) : store_(store) {}
+  explicit TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator = nullptr);
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CreateOrUpdateTask(const lf::a2a::v1::Task& task) const;
+  // Returns an owning string because the id may be newly generated and must outlive this call.
+  // Returning string_view would be unsafe for generated values due to temporary lifetime.
+  [[nodiscard]] core::Result<std::string> ResolveTaskIdForSendRequest(const lf::a2a::v1::SendMessageRequest& request,
+                                                                      const RequestContext& context) const;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> TransitionTaskStatus(std::string_view task_id,
                                                                      lf::a2a::v1::TaskState next_state) const;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> AppendHistory(std::string_view task_id,
@@ -284,6 +289,7 @@ class TaskLifecycleService final {
 
  private:
   TaskStore* store_ = nullptr;
+  std::shared_ptr<TaskIdGenerator> task_id_generator_;
 };
 
 [[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);

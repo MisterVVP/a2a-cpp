@@ -454,6 +454,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
 
   lf::a2a::v1::StreamResponse current_event;
   *current_event.mutable_task() = *task;
+  current_event.mutable_task()->clear_artifacts();
+  current_event.mutable_task()->clear_history();
   if (!writer->Write(current_event)) {
     return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
   }

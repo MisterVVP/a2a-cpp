@@ -23,10 +23,10 @@ TEST(ExampleSupportTest, ExampleExecutorHandlesSendAndCancelFlow) {
   send.mutable_message()->add_parts()->set_text("hello");
   const auto send_result = executor.SendMessage(send, context);
   ASSERT_TRUE(send_result.ok());
-  EXPECT_EQ(send_result.value().task().id(), "task-unit-example-task");
+  EXPECT_EQ(send_result.value().task().id(), "task-test-1");
 
   lf::a2a::v1::CancelTaskRequest cancel;
-  cancel.set_id("task-unit-example-task");
+  cancel.set_id("task-test-1");
   const auto cancel_result = executor.CancelTask(cancel, context);
   ASSERT_TRUE(cancel_result.ok());
   EXPECT_EQ(cancel_result.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
@@ -91,13 +91,13 @@ TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
   for (int i = 0; i < 2; ++i) {
     lf::a2a::v1::SendMessageRequest send;
     send.mutable_message()->set_message_id("h" + std::to_string(i));
-    send.mutable_message()->set_task_id("task-history-task");
+    send.mutable_message()->set_task_id("task-test-1");
     send.mutable_message()->add_parts()->set_text("entry");
     ASSERT_TRUE(executor.SendMessage(send, context).ok());
   }
 
   lf::a2a::v1::GetTaskRequest get;
-  get.set_id("task-history-task");
+  get.set_id("task-test-1");
   get.set_history_length(1);
   const auto loaded = executor.GetTask(get, context);
   ASSERT_TRUE(loaded.ok());
@@ -141,10 +141,14 @@ TEST(ExampleSupportTest, StreamingWithoutIdsIsDeterministicAcrossSessions) {
   const auto first_b = stream_b.value()->Next();
   ASSERT_TRUE(first_a.ok());
   ASSERT_TRUE(first_b.ok());
-  ASSERT_TRUE(first_a.value().has_value());
-  ASSERT_TRUE(first_b.value().has_value());
-  EXPECT_EQ(first_a.value()->status_update().task_id(), first_b.value()->status_update().task_id());
-  EXPECT_EQ(first_a.value()->status_update().context_id(), first_b.value()->status_update().context_id());
+  const auto& first_a_maybe = first_a.value();
+  const auto& first_b_maybe = first_b.value();
+  ASSERT_TRUE(first_a_maybe.has_value());
+  ASSERT_TRUE(first_b_maybe.has_value());
+  auto first_a_event = first_a_maybe.value_or(lf::a2a::v1::StreamResponse{});
+  auto first_b_event = first_b_maybe.value_or(lf::a2a::v1::StreamResponse{});
+  EXPECT_EQ(first_a_event.status_update().task_id(), first_b_event.status_update().task_id());
+  EXPECT_EQ(first_a_event.status_update().context_id(), first_b_event.status_update().context_id());
 }
 
 }  // namespace
