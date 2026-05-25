@@ -18,24 +18,14 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
+#include "a2a/core/url_utils.h"
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_constants.h"
 
 namespace a2a::examples {
 
-inline std::string UrlToTarget(std::string_view url) {
-  const std::size_t scheme = url.find("://");
-  if (scheme == std::string_view::npos) {
-    return std::string(url);
-  }
-
-  const std::size_t path_start = url.find('/', scheme + 3);
-  if (path_start == std::string_view::npos) {
-    return "/";
-  }
-  return std::string(url.substr(path_start));
-}
+inline std::string UrlToTarget(std::string_view url) { return core::ExtractTargetPath(url); }
 
 class SequenceStreamSession final : public server::ServerStreamSession {
  public:

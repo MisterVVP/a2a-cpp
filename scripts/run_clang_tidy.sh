@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BUILD_DIR="${1:-build}"
+CHECK_PROFILE_FILE="${CLANG_TIDY_CHECK_PROFILE_FILE:-${BUILD_DIR}/clang-tidy-check-profile.txt}"
 
 if ! command -v clang-tidy >/dev/null 2>&1; then
   echo "clang-tidy is required but not installed." >&2
@@ -21,4 +22,11 @@ if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-clang-tidy -p "${BUILD_DIR}" "${TARGET_FILES[@]}"
+mkdir -p "$(dirname "${CHECK_PROFILE_FILE}")"
+echo "[run_clang_tidy] Writing check profile to ${CHECK_PROFILE_FILE}" >&2
+
+clang-tidy \
+  -p "${BUILD_DIR}" \
+  --enable-check-profile \
+  --store-check-profile="${CHECK_PROFILE_FILE}" \
+  "${TARGET_FILES[@]}"
