@@ -104,4 +104,25 @@ TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
   EXPECT_EQ(loaded.value().history_size(), 1);
 }
 
+TEST(ExampleSupportTest, SendMessageRejectsTerminalTaskFollowup) {
+  a2a::examples::ExampleExecutor executor;
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest create;
+  create.mutable_message()->set_message_id("complete-task-case");
+  create.mutable_message()->set_task_id("task-terminal");
+  create.mutable_message()->add_parts()->set_text("complete task");
+  const auto created = executor.SendMessage(create, context);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(created.value().has_task());
+  EXPECT_EQ(created.value().task().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+
+  lf::a2a::v1::SendMessageRequest followup;
+  followup.mutable_message()->set_message_id("followup-message");
+  followup.mutable_message()->set_task_id("task-terminal");
+  followup.mutable_message()->add_parts()->set_text("another message");
+  const auto result = executor.SendMessage(followup, context);
+  ASSERT_FALSE(result.ok());
+}
+
 }  // namespace
