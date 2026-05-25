@@ -20,6 +20,11 @@ constexpr std::size_t kFirstPageSize = 1;
 constexpr std::size_t kTwoHistoryEntries = 2;
 constexpr int64_t kTimestampBaseSeconds = 100;
 constexpr int32_t kTimestampNanos = 1;
+constexpr int64_t kOrderOlderSeconds = 10;
+constexpr int64_t kOrderNewestSeconds = 11;
+constexpr int32_t kOrderOlderNanos = 2;
+constexpr int32_t kOrderNewestNanos = 1;
+constexpr int32_t kOrderTieHigherNanos = 9;
 constexpr std::string_view kTaskId = "task-append";
 
 class RecordingHistoryTelemetrySink final : public a2a::server::InMemoryTaskStore::HistoryTelemetrySink {
@@ -307,7 +312,8 @@ TEST(ServerTaskUtilitiesTest, LifecycleServiceEnforcesTerminalStateGuard) {
   a2a::server::InMemoryTaskStore store;
   a2a::server::TaskLifecycleService lifecycle(&store);
 
-  auto task = MakeTask("terminal-task", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, 10, false, 0);
+  auto task = MakeTask("terminal-task", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, kOrderOlderSeconds,
+                       false, 0);
   ASSERT_TRUE(lifecycle.CreateOrUpdateTask(task).ok());
   ASSERT_TRUE(lifecycle.TransitionTaskStatus("terminal-task", lf::a2a::v1::TASK_STATE_COMPLETED).ok());
   const auto rejected = lifecycle.TransitionTaskStatus("terminal-task", lf::a2a::v1::TASK_STATE_CANCELED);
@@ -327,13 +333,15 @@ TEST(ServerTaskUtilitiesTest, AppliesHistoryAndArtifactProjectionHelpers) {
 }
 
 TEST(ServerTaskUtilitiesTest, OrdersTasksByTimestampWithNanosTiebreaker) {
-  auto older = MakeTask("task-older", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, 10, false, 0);
-  older.mutable_status()->mutable_timestamp()->set_nanos(2);
-  auto newest = MakeTask("task-new", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, 11, false, 0);
-  newest.mutable_status()->mutable_timestamp()->set_nanos(1);
-  auto tie_higher_nanos =
-      MakeTask("task-tie-high", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, 10, false, 0);
-  tie_higher_nanos.mutable_status()->mutable_timestamp()->set_nanos(9);
+  auto older =
+      MakeTask("task-older", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, kOrderOlderSeconds, false, 0);
+  older.mutable_status()->mutable_timestamp()->set_nanos(kOrderOlderNanos);
+  auto newest =
+      MakeTask("task-new", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, kOrderNewestSeconds, false, 0);
+  newest.mutable_status()->mutable_timestamp()->set_nanos(kOrderNewestNanos);
+  auto tie_higher_nanos = MakeTask("task-tie-high", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                                   kOrderOlderSeconds, false, 0);
+  tie_higher_nanos.mutable_status()->mutable_timestamp()->set_nanos(kOrderTieHigherNanos);
 
   std::vector<const lf::a2a::v1::Task*> ordered = {&older, &newest, &tie_higher_nanos};
   a2a::server::TimestampDescTaskOrdering::Sort(&ordered);

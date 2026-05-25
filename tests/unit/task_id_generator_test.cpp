@@ -9,8 +9,10 @@ namespace {
 
 class FailingTaskIdGenerator final : public a2a::server::TaskLifecycleService::TaskIdGenerator {
  public:
-  [[nodiscard]] a2a::core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest&,
-                                                              const a2a::server::RequestContext&) override {
+  [[nodiscard]] a2a::core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
+                                                              const a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
     return a2a::core::Error::Internal("boom");
   }
 };

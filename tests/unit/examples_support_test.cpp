@@ -143,8 +143,10 @@ TEST(ExampleSupportTest, StreamingWithoutIdsIsDeterministicAcrossSessions) {
   ASSERT_TRUE(first_b.ok());
   ASSERT_TRUE(first_a.value().has_value());
   ASSERT_TRUE(first_b.value().has_value());
-  EXPECT_EQ(first_a.value()->status_update().task_id(), first_b.value()->status_update().task_id());
-  EXPECT_EQ(first_a.value()->status_update().context_id(), first_b.value()->status_update().context_id());
+  const auto first_a_event = first_a.value().value();
+  const auto first_b_event = first_b.value().value();
+  EXPECT_EQ(first_a_event.status_update().task_id(), first_b_event.status_update().task_id());
+  EXPECT_EQ(first_a_event.status_update().context_id(), first_b_event.status_update().context_id());
 }
 
 }  // namespace

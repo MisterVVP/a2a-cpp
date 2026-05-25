@@ -83,17 +83,6 @@ void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
   task->mutable_history()->DeleteSubrange(0, remove_count);
 }
 
-lf::a2a::v1::Task BuildListTask(const lf::a2a::v1::Task& source, const ListTasksRequest& request) {
-  lf::a2a::v1::Task task = source;
-  if (!request.include_artifacts) {
-    task.clear_artifacts();
-  }
-  if (request.history_length.has_value()) {
-    ApplyHistoryLimit(&task, *request.history_length);
-  }
-  return task;
-}
-
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context) {
   switch (request.operation) {
@@ -356,7 +345,9 @@ std::optional<std::size_t> InMemoryTaskStore::ParsePageToken(std::string_view to
 
 core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& request) const {
   const auto offset = ParseListPageToken(request.page_token);
-  if (!offset.ok()) return offset.error();
+  if (!offset.ok()) {
+    return offset.error();
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
 
@@ -371,7 +362,9 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
 
   const std::size_t start = offset.value();
   const auto valid_offset = ValidateListPageOffset(start, filtered.size());
-  if (!valid_offset.ok()) return valid_offset.error();
+  if (!valid_offset.ok()) {
+    return valid_offset.error();
+  }
 
   const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
   ListTasksResponse response;
@@ -393,9 +386,13 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
 }
 
 core::Result<lf::a2a::v1::Task> TaskLifecycleService::CreateOrUpdateTask(const lf::a2a::v1::Task& task) const {
-  if (store_ == nullptr) return core::Error::Internal("TaskLifecycleService store is not configured");
+  if (store_ == nullptr) {
+    return core::Error::Internal("TaskLifecycleService store is not configured");
+  }
   const auto upsert = store_->CreateOrUpdate(task);
-  if (!upsert.ok()) return upsert.error();
+  if (!upsert.ok()) {
+    return upsert.error();
+  }
   return store_->Get(task.id());
 }
 
@@ -436,48 +433,67 @@ core::Result<std::string> TaskLifecycleService::UuidV7TaskIdGenerator::GenerateT
     const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context) {
   (void)request;
   (void)context;
+  static constexpr std::size_t kUuidByteCount = 16;
+  static constexpr std::uint8_t kByteMask = 0xFFU;
+  static constexpr std::uint8_t kVersionNibbleMask = 0x0FU;
+  static constexpr std::uint8_t kVersion7Nibble = 0x70U;
+  static constexpr std::uint8_t kVariantKeepMask = 0x3FU;
+  static constexpr std::uint8_t kVariantRfcBits = 0x80U;
+  static constexpr std::size_t kUuidStringSize = 36;
+  static constexpr std::size_t kUuidWithNullSize = kUuidStringSize + 1;
+  static constexpr std::uint32_t kTimestampShift40 = 40U;
+  static constexpr std::uint32_t kTimestampShift32 = 32U;
+  static constexpr std::uint32_t kTimestampShift24 = 24U;
+  static constexpr std::uint32_t kTimestampShift16 = 16U;
+  static constexpr std::uint32_t kTimestampShift8 = 8U;
   static constexpr std::string_view kPrefix = "task-";
   static constexpr std::uint64_t kTimestampMask = 0x0000FFFFFFFFFFFFULL;
   static constexpr std::uint64_t kSequenceMask = 0x0000000000000FFFULL;
-  std::array<std::uint8_t, 16> bytes{};
+  std::array<std::uint8_t, kUuidByteCount> bytes{};
   const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
   const auto current_ms = static_cast<std::uint64_t>(now.time_since_epoch().count());
   std::uint64_t effective_ms = current_ms;
   std::uint64_t sequence_value = 0;
   {
     std::scoped_lock<std::mutex> lock(mutex_);
-    if (effective_ms < last_timestamp_ms_) effective_ms = last_timestamp_ms_;
+    if (effective_ms < last_timestamp_ms_) {
+      effective_ms = last_timestamp_ms_;
+    }
     if (effective_ms > last_timestamp_ms_) {
       last_timestamp_ms_ = effective_ms;
       std::random_device rd;
       sequence_ = static_cast<std::uint64_t>(rd()) & kSequenceMask;
     } else {
       sequence_ = (sequence_ + 1U) & kSequenceMask;
-      if (sequence_ == 0U) return core::Error::Internal("UUIDv7 sequence overflow within one millisecond");
+      if (sequence_ == 0U) {
+        return core::Error::Internal("UUIDv7 sequence overflow within one millisecond");
+      }
     }
     sequence_value = sequence_;
   }
   std::random_device rd;
   for (auto& byte : bytes) {
-    byte = static_cast<std::uint8_t>(rd() & 0xFFU);
+    byte = static_cast<std::uint8_t>(rd() & kByteMask);
   }
   const std::uint64_t ts = effective_ms & kTimestampMask;
-  bytes[0] = static_cast<std::uint8_t>((ts >> 40U) & 0xFFU);
-  bytes[1] = static_cast<std::uint8_t>((ts >> 32U) & 0xFFU);
-  bytes[2] = static_cast<std::uint8_t>((ts >> 24U) & 0xFFU);
-  bytes[3] = static_cast<std::uint8_t>((ts >> 16U) & 0xFFU);
-  bytes[4] = static_cast<std::uint8_t>((ts >> 8U) & 0xFFU);
-  bytes[5] = static_cast<std::uint8_t>(ts & 0xFFU);
-  bytes[6] = static_cast<std::uint8_t>(0x70U | ((sequence_value >> 8U) & 0x0FU));
-  bytes[7] = static_cast<std::uint8_t>(sequence_value & 0xFFU);
-  bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3FU) | 0x80U);
-  char uuid[37];
+  bytes[0] = static_cast<std::uint8_t>((ts >> kTimestampShift40) & kByteMask);
+  bytes[1] = static_cast<std::uint8_t>((ts >> kTimestampShift32) & kByteMask);
+  bytes[2] = static_cast<std::uint8_t>((ts >> kTimestampShift24) & kByteMask);
+  bytes[3] = static_cast<std::uint8_t>((ts >> kTimestampShift16) & kByteMask);
+  bytes[4] = static_cast<std::uint8_t>((ts >> kTimestampShift8) & kByteMask);
+  bytes[5] = static_cast<std::uint8_t>(ts & kByteMask);
+  bytes[6] = static_cast<std::uint8_t>(kVersion7Nibble | ((sequence_value >> kTimestampShift8) & kVersionNibbleMask));
+  bytes[7] = static_cast<std::uint8_t>(sequence_value & kByteMask);
+  bytes[8] = static_cast<std::uint8_t>((bytes[8] & kVariantKeepMask) | kVariantRfcBits);
+  std::array<char, kUuidWithNullSize> uuid{};
   const int written =
-      std::snprintf(uuid, sizeof(uuid), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      std::snprintf(uuid.data(), uuid.size(), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
                     bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9],
                     bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
-  if (written != 36) return core::Error::Internal("Failed to format UUIDv7");
-  return std::string(kPrefix) + uuid;
+  if (written != static_cast<int>(kUuidStringSize)) {
+    return core::Error::Internal("Failed to format UUIDv7");
+  }
+  return std::string(kPrefix) + std::string(uuid.data(), kUuidStringSize);
 }
 
 core::Result<std::string> TaskLifecycleService::SequentialTaskIdGenerator::GenerateTaskId(
@@ -490,27 +506,37 @@ core::Result<std::string> TaskLifecycleService::SequentialTaskIdGenerator::Gener
 
 core::Result<lf::a2a::v1::Task> TaskLifecycleService::TransitionTaskStatus(std::string_view task_id,
                                                                            lf::a2a::v1::TaskState next_state) const {
-  if (store_ == nullptr) return core::Error::Internal("TaskLifecycleService store is not configured");
+  if (store_ == nullptr) {
+    return core::Error::Internal("TaskLifecycleService store is not configured");
+  }
   auto current = store_->Get(task_id);
-  if (!current.ok()) return current.error();
+  if (!current.ok()) {
+    return current.error();
+  }
   if (core::IsTerminalTaskState(current.value().status().state())) {
     return core::protocol_errors::UnsupportedOperation("task is already terminal");
   }
   current.value().mutable_status()->set_state(next_state);
   const auto upsert = store_->CreateOrUpdate(current.value());
-  if (!upsert.ok()) return upsert.error();
+  if (!upsert.ok()) {
+    return upsert.error();
+  }
   return current.value();
 }
 
 core::Result<lf::a2a::v1::Task> TaskLifecycleService::AppendHistory(std::string_view task_id,
                                                                     const lf::a2a::v1::Message& message,
                                                                     TaskStore::HistoryAppendPolicy policy) const {
-  if (store_ == nullptr) return core::Error::Internal("TaskLifecycleService store is not configured");
+  if (store_ == nullptr) {
+    return core::Error::Internal("TaskLifecycleService store is not configured");
+  }
   return store_->AppendTaskHistory(task_id, message, policy);
 }
 
 core::Result<std::size_t> ParseListPageToken(std::string_view page_token) {
-  if (page_token.empty()) return std::size_t{0};
+  if (page_token.empty()) {
+    return std::size_t{0};
+  }
   std::size_t parsed = 0;
   const auto* begin = page_token.data();
   const auto* end = page_token.data() + page_token.size();
@@ -522,24 +548,32 @@ core::Result<std::size_t> ParseListPageToken(std::string_view page_token) {
 }
 
 core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size) {
-  if (offset > size) return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
+  if (offset > size) {
+    return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
+  }
   return {};
 }
 
 void ApplyHistoryRetention(lf::a2a::v1::Task* task, std::optional<std::size_t> history_length) {
-  if (!history_length.has_value()) return;
+  if (!history_length.has_value()) {
+    return;
+  }
   ApplyHistoryLimit(task, *history_length);
 }
 
 void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts) {
-  if (!include_artifacts) task->clear_artifacts();
+  if (!include_artifacts) {
+    task->clear_artifacts();
+  }
 }
 
 void TimestampDescTaskOrdering::Sort(std::vector<const lf::a2a::v1::Task*>* tasks) {
   std::stable_sort(tasks->begin(), tasks->end(), [](const lf::a2a::v1::Task* lhs, const lf::a2a::v1::Task* rhs) {
     const int64_t lhs_seconds = lhs->status().has_timestamp() ? lhs->status().timestamp().seconds() : 0;
     const int64_t rhs_seconds = rhs->status().has_timestamp() ? rhs->status().timestamp().seconds() : 0;
-    if (lhs_seconds != rhs_seconds) return lhs_seconds > rhs_seconds;
+    if (lhs_seconds != rhs_seconds) {
+      return lhs_seconds > rhs_seconds;
+    }
     const int32_t lhs_nanos = lhs->status().has_timestamp() ? lhs->status().timestamp().nanos() : 0;
     const int32_t rhs_nanos = rhs->status().has_timestamp() ? rhs->status().timestamp().nanos() : 0;
     return lhs_nanos > rhs_nanos;

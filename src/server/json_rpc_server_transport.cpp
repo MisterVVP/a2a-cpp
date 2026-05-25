@@ -617,6 +617,8 @@ core::Result<HttpServerResponse> BuildSubscribeSseResponse(const google::protobu
 
   lf::a2a::v1::StreamResponse current_event;
   *current_event.mutable_task() = task;
+  current_event.mutable_task()->clear_artifacts();
+  current_event.mutable_task()->clear_history();
   const auto current_append = AppendSseJsonRpcEvent(response.body, id, current_event);
   if (!current_append.ok()) {
     return current_append.error();
