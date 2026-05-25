@@ -87,6 +87,20 @@ target_link_libraries(examples_support_test
 
 gtest_discover_tests(examples_support_test)
 
+add_executable(task_id_generator_test
+  unit/task_id_generator_test.cpp
+)
+
+target_link_libraries(task_id_generator_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(task_id_generator_test)
+
 add_executable(discovery_test
   unit/discovery_test.cpp
 )
@@ -554,4 +568,3 @@ target_link_libraries(cpp_grpc_interop_server
 add_executable(tck_http_sut interop/tck_http_sut.cpp)
 target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/examples)
 target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
-

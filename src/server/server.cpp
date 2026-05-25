@@ -4,9 +4,13 @@
 #include "a2a/server/server.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
+#include <cstdio>
 #include <limits>
+#include <random>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -393,6 +397,95 @@ core::Result<lf::a2a::v1::Task> TaskLifecycleService::CreateOrUpdateTask(const l
   const auto upsert = store_->CreateOrUpdate(task);
   if (!upsert.ok()) return upsert.error();
   return store_->Get(task.id());
+}
+
+TaskLifecycleService::TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator)
+    : store_(store), task_id_generator_(std::move(task_id_generator)) {
+  if (task_id_generator_ == nullptr) {
+    task_id_generator_ = std::make_shared<UuidV7TaskIdGenerator>();
+  }
+}
+
+core::Result<std::string> TaskLifecycleService::ResolveTaskIdForSendRequest(
+    const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context) const {
+  if (!request.has_message()) {
+    return core::Error::Validation("message is required");
+  }
+  const auto& message = request.message();
+  if (!message.task_id().empty()) {
+    const auto existing = store_->Get(message.task_id());
+    if (!existing.ok()) {
+      return core::protocol_errors::TaskNotFound();
+    }
+    if (!message.context_id().empty() && !existing.value().context_id().empty() &&
+        message.context_id() != existing.value().context_id()) {
+      return core::protocol_errors::UnsupportedOperation("contextId does not match task");
+    }
+    if (core::IsTerminalTaskState(existing.value().status().state())) {
+      return core::protocol_errors::UnsupportedOperation("task is already terminal");
+    }
+    return message.task_id();
+  }
+  if (message.message_id().empty()) {
+    return core::Error::Validation("message.messageId is required when message.taskId is absent");
+  }
+  return task_id_generator_->GenerateTaskId(request, context);
+}
+
+core::Result<std::string> TaskLifecycleService::UuidV7TaskIdGenerator::GenerateTaskId(
+    const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context) {
+  (void)request;
+  (void)context;
+  static constexpr std::string_view kPrefix = "task-";
+  static constexpr std::uint64_t kTimestampMask = 0x0000FFFFFFFFFFFFULL;
+  static constexpr std::uint64_t kSequenceMask = 0x0000000000000FFFULL;
+  std::array<std::uint8_t, 16> bytes{};
+  const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+  const auto current_ms = static_cast<std::uint64_t>(now.time_since_epoch().count());
+  std::uint64_t effective_ms = current_ms;
+  std::uint64_t sequence_value = 0;
+  {
+    std::scoped_lock<std::mutex> lock(mutex_);
+    if (effective_ms < last_timestamp_ms_) effective_ms = last_timestamp_ms_;
+    if (effective_ms > last_timestamp_ms_) {
+      last_timestamp_ms_ = effective_ms;
+      std::random_device rd;
+      sequence_ = static_cast<std::uint64_t>(rd()) & kSequenceMask;
+    } else {
+      sequence_ = (sequence_ + 1U) & kSequenceMask;
+      if (sequence_ == 0U) return core::Error::Internal("UUIDv7 sequence overflow within one millisecond");
+    }
+    sequence_value = sequence_;
+  }
+  std::random_device rd;
+  for (auto& byte : bytes) {
+    byte = static_cast<std::uint8_t>(rd() & 0xFFU);
+  }
+  const std::uint64_t ts = effective_ms & kTimestampMask;
+  bytes[0] = static_cast<std::uint8_t>((ts >> 40U) & 0xFFU);
+  bytes[1] = static_cast<std::uint8_t>((ts >> 32U) & 0xFFU);
+  bytes[2] = static_cast<std::uint8_t>((ts >> 24U) & 0xFFU);
+  bytes[3] = static_cast<std::uint8_t>((ts >> 16U) & 0xFFU);
+  bytes[4] = static_cast<std::uint8_t>((ts >> 8U) & 0xFFU);
+  bytes[5] = static_cast<std::uint8_t>(ts & 0xFFU);
+  bytes[6] = static_cast<std::uint8_t>(0x70U | ((sequence_value >> 8U) & 0x0FU));
+  bytes[7] = static_cast<std::uint8_t>(sequence_value & 0xFFU);
+  bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3FU) | 0x80U);
+  char uuid[37];
+  const int written =
+      std::snprintf(uuid, sizeof(uuid), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9],
+                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
+  if (written != 36) return core::Error::Internal("Failed to format UUIDv7");
+  return std::string(kPrefix) + uuid;
+}
+
+core::Result<std::string> TaskLifecycleService::SequentialTaskIdGenerator::GenerateTaskId(
+    const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context) {
+  (void)request;
+  (void)context;
+  std::scoped_lock<std::mutex> lock(mutex_);
+  return "task-test-" + std::to_string(next_++);
 }
 
 core::Result<lf::a2a::v1::Task> TaskLifecycleService::TransitionTaskStatus(std::string_view task_id,

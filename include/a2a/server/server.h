@@ -273,9 +273,41 @@ class InMemoryTaskStore final : public TaskStore {
 
 class TaskLifecycleService final {
  public:
-  explicit TaskLifecycleService(TaskStore* store) : store_(store) {}
+  class TaskIdGenerator {
+   public:
+    virtual ~TaskIdGenerator() = default;
+    [[nodiscard]] virtual core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
+                                                                   const RequestContext& context) = 0;
+  };
+
+  class UuidV7TaskIdGenerator final : public TaskIdGenerator {
+   public:
+    [[nodiscard]] core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
+                                                           const RequestContext& context) override;
+
+   private:
+    std::mutex mutex_;
+    std::uint64_t last_timestamp_ms_ = 0;
+    std::uint64_t sequence_ = 0;
+  };
+
+  class SequentialTaskIdGenerator final : public TaskIdGenerator {
+   public:
+    [[nodiscard]] core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
+                                                           const RequestContext& context) override;
+
+   private:
+    std::mutex mutex_;
+    std::uint64_t next_ = 1;
+  };
+
+  explicit TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator = nullptr);
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CreateOrUpdateTask(const lf::a2a::v1::Task& task) const;
+  // Returns an owning string because the id may be newly generated and must outlive this call.
+  // Returning string_view would be unsafe for generated values due to temporary lifetime.
+  [[nodiscard]] core::Result<std::string> ResolveTaskIdForSendRequest(const lf::a2a::v1::SendMessageRequest& request,
+                                                                      const RequestContext& context) const;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> TransitionTaskStatus(std::string_view task_id,
                                                                      lf::a2a::v1::TaskState next_state) const;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> AppendHistory(std::string_view task_id,
@@ -284,6 +316,7 @@ class TaskLifecycleService final {
 
  private:
   TaskStore* store_ = nullptr;
+  std::shared_ptr<TaskIdGenerator> task_id_generator_;
 };
 
 [[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);

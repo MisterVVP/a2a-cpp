@@ -57,32 +57,14 @@ class ExampleExecutor final : public server::AgentExecutor {
  public:
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                              server::RequestContext& context) override {
-    (void)context;
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
-    const bool has_explicit_task_id = !request.message().task_id().empty();
-    std::string task_id = request.message().task_id();
-    if (task_id.empty()) {
-      if (!request.message().message_id().empty()) {
-        task_id = "task-" + request.message().message_id();
-      } else {
-        task_id = "example-task-auto-" + std::to_string(status_timestamp_counter_ + 1);
-      }
+    auto task_id_result = lifecycle_.ResolveTaskIdForSendRequest(request, context);
+    if (!task_id_result.ok()) {
+      return task_id_result.error();
     }
-    if (has_explicit_task_id) {
-      const auto existing_task = store_.Get(task_id);
-      if (!existing_task.ok()) {
-        return core::protocol_errors::TaskNotFound();
-      }
-      if (!request.message().context_id().empty() && !existing_task.value().context_id().empty() &&
-          request.message().context_id() != existing_task.value().context_id()) {
-        return core::protocol_errors::UnsupportedOperation("contextId does not match task");
-      }
-      if (core::IsTerminalTaskState(existing_task.value().status().state())) {
-        return core::protocol_errors::UnsupportedOperation("task is already terminal");
-      }
-    }
+    std::string task_id = task_id_result.value();
 
     auto existing = store_.Get(task_id);
     lf::a2a::v1::Task task = existing.ok() ? existing.value() : lf::a2a::v1::Task{};
@@ -243,13 +225,16 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
-    (void)context;
-    std::string task_id = request.message().task_id();
+    std::string task_id = request.has_message() ? request.message().task_id() : "";
     if (task_id.empty()) {
-      if (!request.message().message_id().empty()) {
-        task_id = "task-" + request.message().message_id();
+      if (request.has_message() && !request.message().message_id().empty()) {
+        auto task_id_result = lifecycle_.ResolveTaskIdForSendRequest(request, context);
+        if (!task_id_result.ok()) {
+          return task_id_result.error();
+        }
+        task_id = task_id_result.value();
       } else {
-        task_id = "example-stream-default";
+        task_id = "task-test-stream-default";
       }
     }
 
@@ -309,7 +294,9 @@ class ExampleExecutor final : public server::AgentExecutor {
  private:
   std::vector<std::string> ordered_ids_;
   server::InMemoryTaskStore store_;
-  server::TaskLifecycleService lifecycle_{&store_};
+  std::shared_ptr<server::TaskLifecycleService::TaskIdGenerator> task_id_generator_{
+      std::make_shared<server::TaskLifecycleService::SequentialTaskIdGenerator>()};
+  server::TaskLifecycleService lifecycle_{&store_, task_id_generator_};
   std::uint64_t status_timestamp_counter_ = 0;
 };
 
