@@ -125,4 +125,26 @@ TEST(ExampleSupportTest, SendMessageRejectsTerminalTaskFollowup) {
   ASSERT_FALSE(result.ok());
 }
 
+TEST(ExampleSupportTest, StreamingWithoutIdsIsDeterministicAcrossSessions) {
+  a2a::examples::ExampleExecutor executor;
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest stream_request;
+  stream_request.mutable_message()->add_parts()->set_text("no ids");
+
+  const auto stream_a = executor.SendStreamingMessage(stream_request, context);
+  const auto stream_b = executor.SendStreamingMessage(stream_request, context);
+  ASSERT_TRUE(stream_a.ok());
+  ASSERT_TRUE(stream_b.ok());
+
+  const auto first_a = stream_a.value()->Next();
+  const auto first_b = stream_b.value()->Next();
+  ASSERT_TRUE(first_a.ok());
+  ASSERT_TRUE(first_b.ok());
+  ASSERT_TRUE(first_a.value().has_value());
+  ASSERT_TRUE(first_b.value().has_value());
+  EXPECT_EQ(first_a.value()->status_update().task_id(), first_b.value()->status_update().task_id());
+  EXPECT_EQ(first_a.value()->status_update().context_id(), first_b.value()->status_update().context_id());
+}
+
 }  // namespace

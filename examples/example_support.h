@@ -67,7 +67,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        task_id = "example-task-" + std::to_string(++generated_task_counter_);
+        task_id = "example-stream-default";
       }
     }
     if (has_explicit_task_id) {
