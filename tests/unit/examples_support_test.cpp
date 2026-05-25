@@ -8,10 +8,10 @@
 
 namespace {
 
-TEST(ExampleSupportTest, UrlToTargetExtractsPath) {
-  EXPECT_EQ(a2a::examples::UrlToTarget("http://agent.local/a2a/tasks"), "/a2a/tasks");
+TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
+  EXPECT_EQ(a2a::examples::UrlToTarget("http://agent.local/a2a/tasks?limit=1#frag"), "/a2a/tasks");
   EXPECT_EQ(a2a::examples::UrlToTarget("https://agent.local"), "/");
-  EXPECT_EQ(a2a::examples::UrlToTarget("/already/path"), "/already/path");
+  EXPECT_EQ(a2a::examples::UrlToTarget("already/path"), "/already/path");
 }
 
 TEST(ExampleSupportTest, ExampleExecutorHandlesSendAndCancelFlow) {

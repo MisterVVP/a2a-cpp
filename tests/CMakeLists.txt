@@ -50,6 +50,18 @@ target_link_libraries(core_helpers_test
 
 gtest_discover_tests(core_helpers_test)
 
+add_executable(url_utils_test
+  unit/url_utils_test.cpp
+)
+
+target_link_libraries(url_utils_test
+  PRIVATE
+    a2a::core
+    GTest::gtest_main
+)
+
+gtest_discover_tests(url_utils_test)
+
 add_executable(core_protojson_golden_test
   unit/core_protojson_golden_test.cpp
 )

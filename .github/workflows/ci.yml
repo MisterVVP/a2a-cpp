@@ -1,6 +1,13 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      profiling:
+        description: 'Enable clang-tidy check profiling and upload its artifact'
+        required: false
+        default: false
+        type: boolean
   pull_request:
     paths-ignore:
       - 'docs/**'
@@ -23,6 +30,8 @@ on:
 jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
+    env:
+      CLANG_TIDY_ENABLE_CHECK_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profiling && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
       - name: Install deps
@@ -32,6 +41,14 @@ jobs:
           python3 -m pip install --upgrade gcovr
       - name: Verify changes
         run: ./scripts/verify_changes.sh
+
+      - name: Upload clang-tidy check profile artifact
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.profiling
+        uses: actions/upload-artifact@v6
+        with:
+          name: clang-tidy-check-profile
+          path: build/clang-tidy-check-profile.txt
+          if-no-files-found: warn
 
   examples-smoke:
     runs-on: ubuntu-24.04
