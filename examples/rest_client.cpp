@@ -11,6 +11,7 @@
 #include "example_support.h"
 
 int main() {
+  constexpr const char* kRestExampleMessageId = "rest-example-message-1";
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(
@@ -39,6 +40,7 @@ int main() {
   a2a::client::A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  request.mutable_message()->set_message_id(kRestExampleMessageId);
   *request.mutable_message()->add_parts()->mutable_text() = "hello from REST example";
 
   const auto send = client.SendMessage(request);
