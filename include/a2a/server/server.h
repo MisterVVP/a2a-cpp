@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "a2a/core/result.h"
+#include "a2a/server/task_id_generator.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
@@ -273,34 +274,6 @@ class InMemoryTaskStore final : public TaskStore {
 
 class TaskLifecycleService final {
  public:
-  class TaskIdGenerator {
-   public:
-    virtual ~TaskIdGenerator() = default;
-    [[nodiscard]] virtual core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                                   const RequestContext& context) = 0;
-  };
-
-  class UuidV7TaskIdGenerator final : public TaskIdGenerator {
-   public:
-    [[nodiscard]] core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                           const RequestContext& context) override;
-
-   private:
-    std::mutex mutex_;
-    std::uint64_t last_timestamp_ms_ = 0;
-    std::uint64_t sequence_ = 0;
-  };
-
-  class SequentialTaskIdGenerator final : public TaskIdGenerator {
-   public:
-    [[nodiscard]] core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                           const RequestContext& context) override;
-
-   private:
-    std::mutex mutex_;
-    std::uint64_t next_ = 1;
-  };
-
   explicit TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator = nullptr);
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CreateOrUpdateTask(const lf::a2a::v1::Task& task) const;

@@ -7,7 +7,7 @@
 
 namespace {
 
-class FailingTaskIdGenerator final : public a2a::server::TaskLifecycleService::TaskIdGenerator {
+class FailingTaskIdGenerator final : public a2a::server::TaskIdGenerator {
  public:
   [[nodiscard]] a2a::core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
                                                               const a2a::server::RequestContext& context) override {
@@ -18,7 +18,7 @@ class FailingTaskIdGenerator final : public a2a::server::TaskLifecycleService::T
 };
 
 TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesPrefixedUuidV7AndUniqueValues) {
-  a2a::server::TaskLifecycleService::UuidV7TaskIdGenerator generator;
+  a2a::server::UuidV7TaskIdGenerator generator;
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_message_id("m-1");
   a2a::server::RequestContext context;
@@ -39,7 +39,7 @@ TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesPrefixedUuidV7AndUniqueValues) 
 }
 
 TEST(TaskIdGeneratorTest, SequentialTaskIdGeneratorIsDeterministic) {
-  a2a::server::TaskLifecycleService::SequentialTaskIdGenerator generator;
+  a2a::server::SequentialTaskIdGenerator generator;
   lf::a2a::v1::SendMessageRequest request;
   a2a::server::RequestContext context;
   EXPECT_EQ(generator.GenerateTaskId(request, context).value(), "task-test-1");

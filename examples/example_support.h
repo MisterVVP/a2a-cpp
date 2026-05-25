@@ -294,8 +294,7 @@ class ExampleExecutor final : public server::AgentExecutor {
  private:
   std::vector<std::string> ordered_ids_;
   server::InMemoryTaskStore store_;
-  std::shared_ptr<server::TaskLifecycleService::TaskIdGenerator> task_id_generator_{
-      std::make_shared<server::TaskLifecycleService::SequentialTaskIdGenerator>()};
+  std::shared_ptr<server::TaskIdGenerator> task_id_generator_{std::make_shared<server::SequentialTaskIdGenerator>()};
   server::TaskLifecycleService lifecycle_{&store_, task_id_generator_};
   std::uint64_t status_timestamp_counter_ = 0;
 };
