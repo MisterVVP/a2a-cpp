@@ -20,6 +20,11 @@ constexpr std::size_t kFirstPageSize = 1;
 constexpr std::size_t kTwoHistoryEntries = 2;
 constexpr int64_t kTimestampBaseSeconds = 100;
 constexpr int32_t kTimestampNanos = 1;
+constexpr int64_t kOrderOlderSeconds = 10;
+constexpr int64_t kOrderNewestSeconds = 11;
+constexpr int32_t kOrderOlderNanos = 2;
+constexpr int32_t kOrderNewestNanos = 1;
+constexpr int32_t kOrderTieHigherNanos = 9;
 constexpr std::string_view kTaskId = "task-append";
 
 class RecordingHistoryTelemetrySink final : public a2a::server::InMemoryTaskStore::HistoryTelemetrySink {
@@ -285,6 +290,65 @@ TEST(InMemoryTaskStoreUnitTest, HandlesOutOfOrderAndMixedReplayScenarios) {
   EXPECT_EQ(result.value().history(0).message_id(), "m-1");
   EXPECT_EQ(result.value().history(1).message_id(), "m-2");
   EXPECT_EQ(result.value().history(2).message_id(), "");
+}
+
+TEST(ServerTaskUtilitiesTest, ValidatesPageTokensAndOffsets) {
+  const auto empty = a2a::server::ParseListPageToken("");
+  ASSERT_TRUE(empty.ok());
+  EXPECT_EQ(empty.value(), 0U);
+
+  const auto valid = a2a::server::ParseListPageToken("12");
+  ASSERT_TRUE(valid.ok());
+  EXPECT_EQ(valid.value(), 12U);
+
+  const auto invalid = a2a::server::ParseListPageToken("12x");
+  ASSERT_FALSE(invalid.ok());
+
+  EXPECT_TRUE(a2a::server::ValidateListPageOffset(2, 2).ok());
+  EXPECT_FALSE(a2a::server::ValidateListPageOffset(3, 2).ok());
+}
+
+TEST(ServerTaskUtilitiesTest, LifecycleServiceEnforcesTerminalStateGuard) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::server::TaskLifecycleService lifecycle(&store);
+
+  auto task = MakeTask("terminal-task", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, kOrderOlderSeconds,
+                       false, 0);
+  ASSERT_TRUE(lifecycle.CreateOrUpdateTask(task).ok());
+  ASSERT_TRUE(lifecycle.TransitionTaskStatus("terminal-task", lf::a2a::v1::TASK_STATE_COMPLETED).ok());
+  const auto rejected = lifecycle.TransitionTaskStatus("terminal-task", lf::a2a::v1::TASK_STATE_CANCELED);
+  ASSERT_FALSE(rejected.ok());
+}
+
+TEST(ServerTaskUtilitiesTest, AppliesHistoryAndArtifactProjectionHelpers) {
+  lf::a2a::v1::Task task = MakeTask("projection-task", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                                    kTimestampBaseSeconds, true, 3);
+  a2a::server::ApplyArtifactProjection(&task, false);
+  EXPECT_EQ(task.artifacts_size(), 0);
+
+  a2a::server::ApplyHistoryRetention(&task, std::size_t{2});
+  EXPECT_EQ(task.history_size(), 2);
+  EXPECT_EQ(task.history(0).message_id(), "message-1");
+  EXPECT_EQ(task.history(1).message_id(), "message-2");
+}
+
+TEST(ServerTaskUtilitiesTest, OrdersTasksByTimestampWithNanosTiebreaker) {
+  auto older =
+      MakeTask("task-older", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, kOrderOlderSeconds, false, 0);
+  older.mutable_status()->mutable_timestamp()->set_nanos(kOrderOlderNanos);
+  auto newest =
+      MakeTask("task-new", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING, kOrderNewestSeconds, false, 0);
+  newest.mutable_status()->mutable_timestamp()->set_nanos(kOrderNewestNanos);
+  auto tie_higher_nanos = MakeTask("task-tie-high", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                                   kOrderOlderSeconds, false, 0);
+  tie_higher_nanos.mutable_status()->mutable_timestamp()->set_nanos(kOrderTieHigherNanos);
+
+  std::vector<const lf::a2a::v1::Task*> ordered = {&older, &newest, &tie_higher_nanos};
+  a2a::server::TimestampDescTaskOrdering::Sort(&ordered);
+  ASSERT_EQ(ordered.size(), 3U);
+  EXPECT_EQ(ordered[0]->id(), "task-new");
+  EXPECT_EQ(ordered[1]->id(), "task-tie-high");
+  EXPECT_EQ(ordered[2]->id(), "task-older");
 }
 
 }  // namespace

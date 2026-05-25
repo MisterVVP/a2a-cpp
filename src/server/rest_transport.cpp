@@ -283,6 +283,8 @@ core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task)
 
   lf::a2a::v1::StreamResponse current_event;
   *current_event.mutable_task() = task;
+  current_event.mutable_task()->clear_artifacts();
+  current_event.mutable_task()->clear_history();
   const auto current_append = AppendSseEvent(response, current_event);
   if (!current_append.ok()) {
     return current_append.error();

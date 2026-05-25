@@ -79,17 +79,6 @@ void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
   task->mutable_history()->DeleteSubrange(0, remove_count);
 }
 
-lf::a2a::v1::Task BuildListTask(const lf::a2a::v1::Task& source, const ListTasksRequest& request) {
-  lf::a2a::v1::Task task = source;
-  if (!request.include_artifacts) {
-    task.clear_artifacts();
-  }
-  if (request.history_length.has_value()) {
-    ApplyHistoryLimit(&task, *request.history_length);
-  }
-  return task;
-}
-
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context) {
   switch (request.operation) {
@@ -351,9 +340,9 @@ std::optional<std::size_t> InMemoryTaskStore::ParsePageToken(std::string_view to
 }
 
 core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& request) const {
-  const auto offset = ParsePageToken(request.page_token);
-  if (!offset.has_value()) {
-    return core::Error::Validation("ListTasksRequest.page_token must be a non-negative integer");
+  const auto offset = ParseListPageToken(request.page_token);
+  if (!offset.ok()) {
+    return offset.error();
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
@@ -368,8 +357,9 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
   }
 
   const std::size_t start = offset.value();
-  if (start > filtered.size()) {
-    return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
+  const auto valid_offset = ValidateListPageOffset(start, filtered.size());
+  if (!valid_offset.ok()) {
+    return valid_offset.error();
   }
 
   const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
@@ -382,10 +372,133 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
       response.next_page_token = std::to_string(idx);
       break;
     }
-    response.tasks.push_back(BuildListTask(*filtered[idx], request));
+    lf::a2a::v1::Task projected = *filtered[idx];
+    ApplyArtifactProjection(&projected, request.include_artifacts);
+    ApplyHistoryRetention(&projected, request.history_length);
+    response.tasks.push_back(std::move(projected));
   }
 
   return response;
+}
+
+core::Result<lf::a2a::v1::Task> TaskLifecycleService::CreateOrUpdateTask(const lf::a2a::v1::Task& task) const {
+  if (store_ == nullptr) {
+    return core::Error::Internal("TaskLifecycleService store is not configured");
+  }
+  const auto upsert = store_->CreateOrUpdate(task);
+  if (!upsert.ok()) {
+    return upsert.error();
+  }
+  return store_->Get(task.id());
+}
+
+TaskLifecycleService::TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator)
+    : store_(store), task_id_generator_(std::move(task_id_generator)) {
+  if (task_id_generator_ == nullptr) {
+    task_id_generator_ = std::make_shared<UuidV7TaskIdGenerator>();
+  }
+}
+
+core::Result<std::string> TaskLifecycleService::ResolveTaskIdForSendRequest(
+    const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context) const {
+  if (!request.has_message()) {
+    return core::Error::Validation("message is required");
+  }
+  const auto& message = request.message();
+  if (!message.task_id().empty()) {
+    const auto existing = store_->Get(message.task_id());
+    if (!existing.ok()) {
+      return core::protocol_errors::TaskNotFound();
+    }
+    if (!message.context_id().empty() && !existing.value().context_id().empty() &&
+        message.context_id() != existing.value().context_id()) {
+      return core::protocol_errors::UnsupportedOperation("contextId does not match task");
+    }
+    if (core::IsTerminalTaskState(existing.value().status().state())) {
+      return core::protocol_errors::UnsupportedOperation("task is already terminal");
+    }
+    return message.task_id();
+  }
+  if (message.message_id().empty()) {
+    return core::Error::Validation("message.messageId is required when message.taskId is absent");
+  }
+  return task_id_generator_->GenerateTaskId(request, context);
+}
+
+core::Result<lf::a2a::v1::Task> TaskLifecycleService::TransitionTaskStatus(std::string_view task_id,
+                                                                           lf::a2a::v1::TaskState next_state) const {
+  if (store_ == nullptr) {
+    return core::Error::Internal("TaskLifecycleService store is not configured");
+  }
+  auto current = store_->Get(task_id);
+  if (!current.ok()) {
+    return current.error();
+  }
+  if (core::IsTerminalTaskState(current.value().status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+  current.value().mutable_status()->set_state(next_state);
+  const auto upsert = store_->CreateOrUpdate(current.value());
+  if (!upsert.ok()) {
+    return upsert.error();
+  }
+  return current.value();
+}
+
+core::Result<lf::a2a::v1::Task> TaskLifecycleService::AppendHistory(std::string_view task_id,
+                                                                    const lf::a2a::v1::Message& message,
+                                                                    TaskStore::HistoryAppendPolicy policy) const {
+  if (store_ == nullptr) {
+    return core::Error::Internal("TaskLifecycleService store is not configured");
+  }
+  return store_->AppendTaskHistory(task_id, message, policy);
+}
+
+core::Result<std::size_t> ParseListPageToken(std::string_view page_token) {
+  if (page_token.empty()) {
+    return std::size_t{0};
+  }
+  std::size_t parsed = 0;
+  const auto* begin = page_token.data();
+  const auto* end = page_token.data() + page_token.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end) {
+    return core::Error::Validation("ListTasksRequest.page_token must be a non-negative integer");
+  }
+  return parsed;
+}
+
+core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size) {
+  if (offset > size) {
+    return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
+  }
+  return {};
+}
+
+void ApplyHistoryRetention(lf::a2a::v1::Task* task, std::optional<std::size_t> history_length) {
+  if (!history_length.has_value()) {
+    return;
+  }
+  ApplyHistoryLimit(task, *history_length);
+}
+
+void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts) {
+  if (!include_artifacts) {
+    task->clear_artifacts();
+  }
+}
+
+void TimestampDescTaskOrdering::Sort(std::vector<const lf::a2a::v1::Task*>* tasks) {
+  std::stable_sort(tasks->begin(), tasks->end(), [](const lf::a2a::v1::Task* lhs, const lf::a2a::v1::Task* rhs) {
+    const int64_t lhs_seconds = lhs->status().has_timestamp() ? lhs->status().timestamp().seconds() : 0;
+    const int64_t rhs_seconds = rhs->status().has_timestamp() ? rhs->status().timestamp().seconds() : 0;
+    if (lhs_seconds != rhs_seconds) {
+      return lhs_seconds > rhs_seconds;
+    }
+    const int32_t lhs_nanos = lhs->status().has_timestamp() ? lhs->status().timestamp().nanos() : 0;
+    const int32_t rhs_nanos = rhs->status().has_timestamp() ? rhs->status().timestamp().nanos() : 0;
+    return lhs_nanos > rhs_nanos;
+  });
 }
 
 core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {

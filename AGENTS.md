@@ -117,6 +117,14 @@ Run this command before opening or updating a PR:
 Exception: for documentation-only/README-only changes covered by the rule above, AI agents are not required to run `./scripts/verify_changes.sh` and should run only the scoped documentation validation steps.
 ```
 
+## Mandatory TCK conformance gate
+- Contributors and AI agents must run the same TCK flow used in CI locally before committing:
+  1. Start SUT: `./scripts/run_tck_sut.sh`
+  2. Run TCK mandatory suite via `.github/workflows/tck.yml` equivalent entrypoint (for example the detected script in checked out TCK repo, such as `scripts/run_tck.sh` / `scripts/run_mandatory.sh`).
+  3. Stop SUT: `./scripts/stop_tck_sut.sh`
+- Do not commit or push code unless TCK mandatory compliance is **100%** (all mandatory requirements passing).
+- If TCK tooling or fixtures are unavailable locally, treat that as a blocking issue and resolve environment parity before committing.
+
 ## AI agent pre-commit hygiene
 AI agents must proactively tidy up touched code before every commit:
 - Run clang-format using the repository's required CI-compatible command.

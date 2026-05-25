@@ -23,10 +23,10 @@ TEST(ExampleSupportTest, ExampleExecutorHandlesSendAndCancelFlow) {
   send.mutable_message()->add_parts()->set_text("hello");
   const auto send_result = executor.SendMessage(send, context);
   ASSERT_TRUE(send_result.ok());
-  EXPECT_EQ(send_result.value().task().id(), "task-unit-example-task");
+  EXPECT_EQ(send_result.value().task().id(), "task-test-1");
 
   lf::a2a::v1::CancelTaskRequest cancel;
-  cancel.set_id("task-unit-example-task");
+  cancel.set_id("task-test-1");
   const auto cancel_result = executor.CancelTask(cancel, context);
   ASSERT_TRUE(cancel_result.ok());
   EXPECT_EQ(cancel_result.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
@@ -91,17 +91,64 @@ TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
   for (int i = 0; i < 2; ++i) {
     lf::a2a::v1::SendMessageRequest send;
     send.mutable_message()->set_message_id("h" + std::to_string(i));
-    send.mutable_message()->set_task_id("task-history-task");
+    send.mutable_message()->set_task_id("task-test-1");
     send.mutable_message()->add_parts()->set_text("entry");
     ASSERT_TRUE(executor.SendMessage(send, context).ok());
   }
 
   lf::a2a::v1::GetTaskRequest get;
-  get.set_id("task-history-task");
+  get.set_id("task-test-1");
   get.set_history_length(1);
   const auto loaded = executor.GetTask(get, context);
   ASSERT_TRUE(loaded.ok());
   EXPECT_EQ(loaded.value().history_size(), 1);
+}
+
+TEST(ExampleSupportTest, SendMessageRejectsTerminalTaskFollowup) {
+  a2a::examples::ExampleExecutor executor;
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest create;
+  create.mutable_message()->set_message_id("complete-task-case");
+  create.mutable_message()->add_parts()->set_text("complete task");
+  const auto created = executor.SendMessage(create, context);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(created.value().has_task());
+  EXPECT_EQ(created.value().task().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  const std::string created_task_id = created.value().task().id();
+
+  lf::a2a::v1::SendMessageRequest followup;
+  followup.mutable_message()->set_message_id("followup-message");
+  followup.mutable_message()->set_task_id(created_task_id);
+  followup.mutable_message()->add_parts()->set_text("another message");
+  const auto result = executor.SendMessage(followup, context);
+  ASSERT_FALSE(result.ok());
+}
+
+TEST(ExampleSupportTest, StreamingWithoutIdsIsDeterministicAcrossSessions) {
+  a2a::examples::ExampleExecutor executor;
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest stream_request;
+  stream_request.mutable_message()->add_parts()->set_text("no ids");
+
+  const auto stream_a = executor.SendStreamingMessage(stream_request, context);
+  const auto stream_b = executor.SendStreamingMessage(stream_request, context);
+  ASSERT_TRUE(stream_a.ok());
+  ASSERT_TRUE(stream_b.ok());
+
+  const auto first_a = stream_a.value()->Next();
+  const auto first_b = stream_b.value()->Next();
+  ASSERT_TRUE(first_a.ok());
+  ASSERT_TRUE(first_b.ok());
+  const auto& first_a_maybe = first_a.value();
+  const auto& first_b_maybe = first_b.value();
+  ASSERT_TRUE(first_a_maybe.has_value());
+  ASSERT_TRUE(first_b_maybe.has_value());
+  auto first_a_event = first_a_maybe.value_or(lf::a2a::v1::StreamResponse{});
+  auto first_b_event = first_b_maybe.value_or(lf::a2a::v1::StreamResponse{});
+  EXPECT_EQ(first_a_event.status_update().task_id(), first_b_event.status_update().task_id());
+  EXPECT_EQ(first_a_event.status_update().context_id(), first_b_event.status_update().context_id());
 }
 
 }  // namespace
