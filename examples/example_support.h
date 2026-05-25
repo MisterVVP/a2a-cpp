@@ -79,12 +79,12 @@ class ExampleExecutor final : public server::AgentExecutor {
           request.message().context_id() != existing_task.value().context_id()) {
         return core::protocol_errors::UnsupportedOperation("contextId does not match task");
       }
+      if (core::IsTerminalTaskState(existing_task.value().status().state())) {
+        return core::protocol_errors::UnsupportedOperation("task is already terminal");
+      }
     }
 
     auto existing = store_.Get(task_id);
-    if (existing.ok() && core::IsTerminalTaskState(existing.value().status().state())) {
-      return core::protocol_errors::UnsupportedOperation("task is already terminal");
-    }
     lf::a2a::v1::Task task = existing.ok() ? existing.value() : lf::a2a::v1::Task{};
     if (!existing.ok()) {
       ordered_ids_.push_back(task_id);
