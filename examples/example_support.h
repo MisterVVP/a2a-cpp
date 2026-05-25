@@ -67,7 +67,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        task_id = "example-task-default";
+        task_id = "example-task-" + std::to_string(++generated_task_counter_);
       }
     }
     if (has_explicit_task_id) {
@@ -208,10 +208,6 @@ class ExampleExecutor final : public server::AgentExecutor {
       std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[3]);
     }
 
-    if (const auto transitioned = lifecycle_.TransitionTaskStatus(task_id, task.status().state());
-        existing.ok() && !transitioned.ok()) {
-      return transitioned.error();
-    }
     const auto stored = lifecycle_.CreateOrUpdateTask(task);
     if (!stored.ok()) {
       return stored.error();
@@ -250,7 +246,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!request.message().message_id().empty()) {
         task_id = "task-" + request.message().message_id();
       } else {
-        task_id = "example-task-default";
+        task_id = "example-task-" + std::to_string(++generated_task_counter_);
       }
     }
 
