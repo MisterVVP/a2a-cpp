@@ -40,6 +40,15 @@ class UuidV7TaskIdGenerator final : public TaskIdGenerator {
   static constexpr std::uint32_t kTimestampShift24 = 24U;
   static constexpr std::uint32_t kTimestampShift16 = 16U;
   static constexpr std::uint32_t kTimestampShift8 = 8U;
+  static constexpr std::size_t kTimestampByteIndex0 = 0;
+  static constexpr std::size_t kTimestampByteIndex1 = 1;
+  static constexpr std::size_t kTimestampByteIndex2 = 2;
+  static constexpr std::size_t kTimestampByteIndex3 = 3;
+  static constexpr std::size_t kTimestampByteIndex4 = 4;
+  static constexpr std::size_t kTimestampByteIndex5 = 5;
+  static constexpr std::size_t kVersionByteIndex = 6;
+  static constexpr std::size_t kSequenceByteIndex = 7;
+  static constexpr std::size_t kVariantByteIndex = 8;
   static constexpr std::string_view kPrefix = "task-";
   static constexpr std::uint64_t kTimestampMask = 0x0000FFFFFFFFFFFFULL;
   static constexpr std::uint64_t kSequenceMask = 0x0000000000000FFFULL;

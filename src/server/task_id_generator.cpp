@@ -13,7 +13,7 @@
 namespace a2a::server {
 
 core::Result<std::string> UuidV7TaskIdGenerator::GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                                 const RequestContext& context) {
+                                                                const RequestContext& context) {
   (void)request;
   (void)context;
   std::array<std::uint8_t, kUuidByteCount> bytes{};
@@ -43,15 +43,16 @@ core::Result<std::string> UuidV7TaskIdGenerator::GenerateTaskId(const lf::a2a::v
     byte = static_cast<std::uint8_t>(rd() & kByteMask);
   }
   const std::uint64_t ts = effective_ms & kTimestampMask;
-  bytes[0] = static_cast<std::uint8_t>((ts >> kTimestampShift40) & kByteMask);
-  bytes[1] = static_cast<std::uint8_t>((ts >> kTimestampShift32) & kByteMask);
-  bytes[2] = static_cast<std::uint8_t>((ts >> kTimestampShift24) & kByteMask);
-  bytes[3] = static_cast<std::uint8_t>((ts >> kTimestampShift16) & kByteMask);
-  bytes[4] = static_cast<std::uint8_t>((ts >> kTimestampShift8) & kByteMask);
-  bytes[5] = static_cast<std::uint8_t>(ts & kByteMask);
-  bytes[6] = static_cast<std::uint8_t>(kVersion7Nibble | ((sequence_value >> kTimestampShift8) & kVersionNibbleMask));
-  bytes[7] = static_cast<std::uint8_t>(sequence_value & kByteMask);
-  bytes[8] = static_cast<std::uint8_t>((bytes[8] & kVariantKeepMask) | kVariantRfcBits);
+  bytes[kTimestampByteIndex0] = static_cast<std::uint8_t>((ts >> kTimestampShift40) & kByteMask);
+  bytes[kTimestampByteIndex1] = static_cast<std::uint8_t>((ts >> kTimestampShift32) & kByteMask);
+  bytes[kTimestampByteIndex2] = static_cast<std::uint8_t>((ts >> kTimestampShift24) & kByteMask);
+  bytes[kTimestampByteIndex3] = static_cast<std::uint8_t>((ts >> kTimestampShift16) & kByteMask);
+  bytes[kTimestampByteIndex4] = static_cast<std::uint8_t>((ts >> kTimestampShift8) & kByteMask);
+  bytes[kTimestampByteIndex5] = static_cast<std::uint8_t>(ts & kByteMask);
+  bytes[kVersionByteIndex] =
+      static_cast<std::uint8_t>(kVersion7Nibble | ((sequence_value >> kTimestampShift8) & kVersionNibbleMask));
+  bytes[kSequenceByteIndex] = static_cast<std::uint8_t>(sequence_value & kByteMask);
+  bytes[kVariantByteIndex] = static_cast<std::uint8_t>((bytes[kVariantByteIndex] & kVariantKeepMask) | kVariantRfcBits);
   std::array<char, kUuidWithNullSize> uuid{};
   const int written =
       std::snprintf(uuid.data(), uuid.size(), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
@@ -64,7 +65,7 @@ core::Result<std::string> UuidV7TaskIdGenerator::GenerateTaskId(const lf::a2a::v
 }
 
 core::Result<std::string> SequentialTaskIdGenerator::GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                                     const RequestContext& context) {
+                                                                    const RequestContext& context) {
   (void)request;
   (void)context;
   std::scoped_lock<std::mutex> lock(mutex_);
