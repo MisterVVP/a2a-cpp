@@ -145,11 +145,10 @@ TEST(ExampleSupportTest, StreamingWithoutIdsIsDeterministicAcrossSessions) {
   const auto& first_b_maybe = first_b.value();
   ASSERT_TRUE(first_a_maybe.has_value());
   ASSERT_TRUE(first_b_maybe.has_value());
-  const lf::a2a::v1::StreamResponse empty_event;
-  const auto& first_a_status = first_a_maybe.value_or(empty_event).status_update();
-  const auto& first_b_status = first_b_maybe.value_or(empty_event).status_update();
-  EXPECT_EQ(first_a_status.task_id(), first_b_status.task_id());
-  EXPECT_EQ(first_a_status.context_id(), first_b_status.context_id());
+  auto first_a_event = first_a_maybe.value_or(lf::a2a::v1::StreamResponse{});
+  auto first_b_event = first_b_maybe.value_or(lf::a2a::v1::StreamResponse{});
+  EXPECT_EQ(first_a_event.status_update().task_id(), first_b_event.status_update().task_id());
+  EXPECT_EQ(first_a_event.status_update().context_id(), first_b_event.status_update().context_id());
 }
 
 }  // namespace
