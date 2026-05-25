@@ -33,6 +33,14 @@ jobs:
       - name: Verify changes
         run: ./scripts/verify_changes.sh
 
+      - name: Upload clang-tidy check profile artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: clang-tidy-check-profile
+          path: build/clang-tidy-check-profile.txt
+          if-no-files-found: warn
+
   examples-smoke:
     runs-on: ubuntu-24.04
     steps:
