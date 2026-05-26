@@ -50,6 +50,19 @@ target_link_libraries(core_helpers_test
 
 gtest_discover_tests(core_helpers_test)
 
+add_executable(response_builders_test
+  unit/response_builders_test.cpp
+)
+
+target_link_libraries(response_builders_test
+  PRIVATE
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(response_builders_test)
+
 add_executable(url_utils_test
   unit/url_utils_test.cpp
 )

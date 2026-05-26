@@ -7,6 +7,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/response_builders.h"
 #include "a2a/core/result.h"
 #include "a2a/core/version.h"
 

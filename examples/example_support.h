@@ -17,6 +17,7 @@
 #include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/core/response_builders.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/url_utils.h"
 #include "a2a/server/server.h"
@@ -26,6 +27,17 @@
 namespace a2a::examples {
 
 inline std::string UrlToTarget(std::string_view url) { return core::ExtractTargetPath(url); }
+
+namespace {
+
+constexpr std::string_view kGeneratedFileContent = "generated file content";
+constexpr std::string_view kOutputFileUrl = "https://example.test/output.txt";
+constexpr std::string_view kStructuredDataKey = "key";
+constexpr std::string_view kStructuredDataValue = "value";
+constexpr std::string_view kStructuredDataCountKey = "count";
+constexpr double kStructuredDataCount = 42.0;
+
+}  // namespace
 
 class SequenceStreamSession final : public server::ServerStreamSession {
  public:
@@ -147,40 +159,38 @@ class ExampleExecutor final : public server::AgentExecutor {
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
     }
 
-    auto* text_artifact = task.add_artifacts();
-    text_artifact->set_artifact_id("artifact-text-" + task_id);
-    text_artifact->set_name("text-artifact");
-    text_artifact->add_parts()->set_text(std::string(constants::kGeneratedTextContent));
+    google::protobuf::Value structured_data;
+    auto* data_fields = structured_data.mutable_struct_value()->mutable_fields();
+    (*data_fields)[std::string{kStructuredDataKey}].set_string_value(std::string{kStructuredDataValue});
+    (*data_fields)[std::string{kStructuredDataCountKey}].set_number_value(kStructuredDataCount);
 
-    auto* file_artifact = task.add_artifacts();
-    file_artifact->set_artifact_id("artifact-file-" + task_id);
-    file_artifact->set_name("file-artifact");
-    auto* file_part = file_artifact->add_parts();
-    file_part->set_raw("generated file content");
-    file_part->set_filename(std::string(constants::kOutputFilename));
-    file_part->set_media_type(std::string(constants::kTextPlainMediaType));
+    const auto text_artifact = core::ResponseBuilders::TextArtifact(
+        constants::kGeneratedTextContent, {.artifact_id = "artifact-text-" + task_id, .name = "text-artifact"});
+    const auto file_artifact =
+        core::ResponseBuilders::RawFileArtifact(kGeneratedFileContent,
+                                                {.filename = std::string(constants::kOutputFilename),
+                                                 .media_type = std::string(constants::kTextPlainMediaType)},
+                                                {.artifact_id = "artifact-file-" + task_id, .name = "file-artifact"});
+    const auto file_url_artifact = core::ResponseBuilders::FileUrlArtifact(
+        kOutputFileUrl,
+        {.filename = std::string(constants::kOutputFilename),
+         .media_type = std::string(constants::kTextPlainMediaType)},
+        {.artifact_id = "artifact-file-url-" + task_id, .name = "file-url-artifact"});
+    const auto data_artifact = core::ResponseBuilders::StructuredDataArtifact(
+        structured_data, {.artifact_id = "artifact-data-" + task_id, .name = "data-artifact"});
 
-    auto* file_url_artifact = task.add_artifacts();
-    file_url_artifact->set_artifact_id("artifact-file-url-" + task_id);
-    file_url_artifact->set_name("file-url-artifact");
-    auto* file_url_part = file_url_artifact->add_parts();
-    file_url_part->set_url("https://example.test/output.txt");
-    file_url_part->set_filename(std::string(constants::kOutputFilename));
-    file_url_part->set_media_type(std::string(constants::kTextPlainMediaType));
-
-    auto* data_artifact = task.add_artifacts();
-    data_artifact->set_artifact_id("artifact-data-" + task_id);
-    data_artifact->set_name("data-artifact");
-    auto* data_part = data_artifact->add_parts();
-    auto* data_fields = data_part->mutable_data()->mutable_struct_value()->mutable_fields();
-    (*data_fields)["key"].set_string_value("value");
-    (*data_fields)["count"].set_number_value(42);
     if (wants_file_url_artifact) {
-      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[2]);
+      core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_url_artifact,
+                                                      {text_artifact, file_artifact, data_artifact});
     } else if (wants_file_artifact) {
-      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[1]);
+      core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_artifact,
+                                                      {text_artifact, file_url_artifact, data_artifact});
     } else if (wants_data_artifact) {
-      std::swap((*task.mutable_artifacts())[0], (*task.mutable_artifacts())[3]);
+      core::ResponseBuilders::AddArtifactsWithPrimary(&task, data_artifact,
+                                                      {text_artifact, file_artifact, file_url_artifact});
+    } else {
+      core::ResponseBuilders::AddArtifactsWithPrimary(&task, text_artifact,
+                                                      {file_artifact, file_url_artifact, data_artifact});
     }
 
     const auto stored = lifecycle_.CreateOrUpdateTask(task);

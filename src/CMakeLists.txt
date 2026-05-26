@@ -4,6 +4,7 @@ add_library(a2a_core STATIC
   core/error.cpp
   core/extensions.cpp
   core/protojson.cpp
+  core/response_builders.cpp
   core/version.cpp
 )
 add_library(a2a::core ALIAS a2a_core)
