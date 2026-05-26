@@ -14,14 +14,14 @@
 namespace a2a::core {
 
 struct ArtifactOptions final {
-  std::string artifact_id;
-  std::string name;
-  std::string description;
+  std::string artifact_id{};
+  std::string name{};
+  std::string description{};
 };
 
 struct FilePartOptions final {
-  std::string filename;
-  std::string media_type;
+  std::string filename{};
+  std::string media_type{};
 };
 
 class ResponseBuilders final {

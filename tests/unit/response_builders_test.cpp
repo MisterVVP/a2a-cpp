@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
+#include "a2a/core/response_builders.h"
+
 #include <gtest/gtest.h>
 
-#include "a2a/core/response_builders.h"
 #include "google/protobuf/struct.pb.h"
 
 namespace {
@@ -31,8 +32,7 @@ TEST(ResponseBuildersTest, TextArtifactBuildsSingleTextPart) {
 
 TEST(ResponseBuildersTest, RawFileArtifactBuildsRawPartAndFileMetadata) {
   const auto artifact = a2a::core::ResponseBuilders::RawFileArtifact(
-      kFilePayload,
-      {.filename = std::string{kFilename}, .media_type = std::string{kMediaType}},
+      kFilePayload, {.filename = std::string{kFilename}, .media_type = std::string{kMediaType}},
       {.artifact_id = std::string{kArtifactId},
        .name = std::string{kArtifactName},
        .description = std::string{kArtifactDescription}});
@@ -46,8 +46,7 @@ TEST(ResponseBuildersTest, RawFileArtifactBuildsRawPartAndFileMetadata) {
 
 TEST(ResponseBuildersTest, FileUrlArtifactBuildsUrlPartAndFileMetadata) {
   const auto artifact = a2a::core::ResponseBuilders::FileUrlArtifact(
-      kFileUrl,
-      {.filename = std::string{kFilename}, .media_type = std::string{kMediaType}},
+      kFileUrl, {.filename = std::string{kFilename}, .media_type = std::string{kMediaType}},
       {.artifact_id = std::string{kArtifactId}, .name = std::string{kArtifactName}});
 
   ASSERT_EQ(artifact.parts_size(), 1);
@@ -62,8 +61,7 @@ TEST(ResponseBuildersTest, StructuredDataArtifactBuildsDataPart) {
       std::string{kDataValue});
 
   const auto artifact = a2a::core::ResponseBuilders::StructuredDataArtifact(
-      structured_data,
-      {.artifact_id = std::string{kArtifactId}, .name = std::string{kArtifactName}},
+      structured_data, {.artifact_id = std::string{kArtifactId}, .name = std::string{kArtifactName}},
       {.media_type = std::string{kMediaType}});
 
   ASSERT_EQ(artifact.parts_size(), 1);
