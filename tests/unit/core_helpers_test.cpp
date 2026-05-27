@@ -5,12 +5,37 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/interop_intent.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/result.h"
 #include "a2a/core/version.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace {
+
+TEST(CoreInteropIntentTest, DetectsMessageModeAndTerminalStateAndArtifact) {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_message_id("message-response-complete-task");
+  request.mutable_message()->add_parts()->set_text("please return file_url_artifact and message response");
+
+  const a2a::core::InteropIntent intent = a2a::core::ExtractInteropIntent(request, "task-id");
+
+  EXPECT_EQ(intent.primary_artifact, a2a::core::InteropPrimaryArtifactType::kFileUrl);
+  EXPECT_EQ(intent.response_mode, a2a::core::InteropResponseMode::kMessage);
+  EXPECT_EQ(intent.terminal_state, lf::a2a::v1::TASK_STATE_COMPLETED);
+}
+
+TEST(CoreInteropIntentTest, DetectsInputRequiredFromTaskIdentifier) {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_message_id("plain-id");
+  request.mutable_message()->add_parts()->set_text("hello");
+
+  const a2a::core::InteropIntent intent = a2a::core::ExtractInteropIntent(request, "unit-input_required-task");
+
+  EXPECT_EQ(intent.primary_artifact, a2a::core::InteropPrimaryArtifactType::kText);
+  EXPECT_EQ(intent.response_mode, a2a::core::InteropResponseMode::kTask);
+  EXPECT_EQ(intent.terminal_state, lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+}
 
 TEST(CoreVersionTest, EmitsAndValidatesA2AVersion10) {
   EXPECT_EQ(a2a::core::Version::kHeaderName, "A2A-Version");
