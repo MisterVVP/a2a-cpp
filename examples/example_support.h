@@ -16,7 +16,6 @@
 
 #include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
-#include "a2a/core/interop_intent.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/response_builders.h"
 #include "a2a/core/task_states.h"
@@ -24,6 +23,7 @@
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_constants.h"
+#include "example_intent.h"
 
 namespace a2a::examples {
 
@@ -90,7 +90,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp_counter_));
 
     task.clear_artifacts();
-    const core::InteropIntent interop_intent = core::ExtractInteropIntent(request, task_id);
+    const ExampleIntent interop_intent = ExtractExampleIntent(request, task_id);
 
     if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_COMPLETED) {
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
@@ -118,13 +118,13 @@ class ExampleExecutor final : public server::AgentExecutor {
     const auto data_artifact = core::ResponseBuilders::StructuredDataArtifact(
         structured_data, {.artifact_id = "artifact-data-" + task_id, .name = "data-artifact"});
 
-    if (interop_intent.primary_artifact == core::InteropPrimaryArtifactType::kFileUrl) {
+    if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFileUrl) {
       core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_url_artifact,
                                                       {text_artifact, file_artifact, data_artifact});
-    } else if (interop_intent.primary_artifact == core::InteropPrimaryArtifactType::kFile) {
+    } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFile) {
       core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_artifact,
                                                       {text_artifact, file_url_artifact, data_artifact});
-    } else if (interop_intent.primary_artifact == core::InteropPrimaryArtifactType::kData) {
+    } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kData) {
       core::ResponseBuilders::AddArtifactsWithPrimary(&task, data_artifact,
                                                       {text_artifact, file_artifact, file_url_artifact});
     } else {
@@ -148,7 +148,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     response.mutable_message()->set_message_id("response-" + task_id);
     response.mutable_message()->set_task_id(task_id);
     response.mutable_message()->set_context_id(task.context_id());
-    const bool wants_message_response = interop_intent.response_mode == core::InteropResponseMode::kMessage;
+    const bool wants_message_response = interop_intent.response_mode == ExampleResponseMode::kMessage;
     response.mutable_message()->add_parts()->set_text(wants_message_response ? "Direct message response" : "ack");
     if (wants_message_response) {
       // Keep message payload set.
