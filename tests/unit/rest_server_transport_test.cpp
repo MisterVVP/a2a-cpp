@@ -12,6 +12,7 @@
 
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/version.h"
 
 namespace {
 
@@ -72,7 +73,7 @@ lf::a2a::v1::AgentCard BuildCard() {
   lf::a2a::v1::AgentCard card;
   card.set_name("Unit Agent");
   card.set_description("Unit test agent");
-  card.set_version("1.0.0");
+  card.set_version(std::string(a2a::core::Version::kAgentCardVersion));
   card.add_default_input_modes("text/plain");
   card.add_default_output_modes("text/plain");
   auto* iface = card.add_supported_interfaces();

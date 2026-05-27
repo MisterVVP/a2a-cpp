@@ -29,7 +29,6 @@
 #include <vector>
 
 #include "a2a/core/agent_card_builder.h"
-#include "a2a/core/protocol_bindings.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/json_rpc_server_transport.h"
@@ -90,32 +89,12 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
-  auto agent_card = a2a::core::AgentCardBuilder()
-                        .SetName("TCK HTTP SUT")
-                        .SetVersion("0.1.0")
-                        .SetDescription("Conformance-focused local SUT for A2A")
-                        .AddDefaultInputMode("text/plain")
-                        .AddDefaultOutputMode("text/plain")
-                        .AddInterface({.binding = a2a::core::protocol_bindings::kJsonRpc,
-                                       .version = "1.0",
-                                       .url = "http://localhost:" + std::to_string(port) + "/rpc"})
-                        .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
-                                       .version = "1.0",
-                                       .url = "http://localhost:" + std::to_string(port) + "/a2a"})
-                        .AddInterface({.binding = a2a::core::protocol_bindings::kGrpc,
-                                       .version = "1.0",
-                                       .url = "localhost:" + std::to_string(grpc_port)})
+  auto agent_card = a2a::core::AgentCardBuilder::ConformancePreset(
+                        {.rest_url = "http://localhost:" + std::to_string(port) + "/a2a",
+                         .json_rpc_url = "http://localhost:" + std::to_string(port) + "/rpc",
+                         .grpc_url = "localhost:" + std::to_string(grpc_port)},
+                        "TCK HTTP SUT", "0.1.0", "Conformance-focused local SUT for A2A")
                         .Build();
-  auto* capabilities = agent_card.mutable_capabilities();
-  capabilities->set_streaming(true);
-  capabilities->set_push_notifications(false);
-  auto* skill = agent_card.add_skills();
-  skill->set_id("echo");
-  skill->set_name("Echo Skill");
-  skill->set_description("Echoes incoming text for conformance validation");
-  skill->add_input_modes("text/plain");
-  skill->add_output_modes("text/plain");
-  skill->add_tags("conformance");
 
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);

@@ -375,7 +375,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults)
   EXPECT_TRUE(status.ok());
   EXPECT_EQ(response.name(), "A2A C++ SDK Agent");
   EXPECT_EQ(response.description(), "Default agent card for compatibility checks");
-  EXPECT_EQ(response.version(), "1.0.0");
+  EXPECT_EQ(response.version(), a2a::core::Version::kAgentCardVersion);
   ASSERT_EQ(response.default_input_modes_size(), 1);
   ASSERT_EQ(response.default_output_modes_size(), 1);
   EXPECT_EQ(response.default_input_modes(0), "text/plain");

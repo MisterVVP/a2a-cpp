@@ -5,10 +5,11 @@
 #include <gtest/gtest.h>
 
 #include "a2a/core/protocol_bindings.h"
+#include "a2a/core/version.h"
 
 namespace {
 
-constexpr std::string_view kVersion = "1.0.0";
+constexpr std::string_view kVersion = a2a::core::Version::kAgentCardVersion;
 constexpr std::string_view kDescription = "desc";
 constexpr std::string_view kName = "agent";
 
@@ -24,6 +25,21 @@ TEST(AgentCardBuilderTest, PresetsValidateSuccessfully) {
   EXPECT_TRUE(a2a::core::AgentCardBuilder::RestPreset("r", "https://agent.local/a2a").Validate().ok());
   EXPECT_TRUE(a2a::core::AgentCardBuilder::JsonRpcPreset("j", "http://agent.local/rpc").Validate().ok());
   EXPECT_TRUE(a2a::core::AgentCardBuilder::GrpcPreset("g", "dns:///agent.local:50051").Validate().ok());
+}
+
+TEST(AgentCardBuilderTest, ConformancePresetBuildsExpectedDefaults) {
+  const auto card = a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = "http://agent.local/a2a",
+                                                                    .json_rpc_url = "http://agent.local/rpc",
+                                                                    .grpc_url = "agent.local:50051"})
+                        .Build();
+
+  EXPECT_EQ(card.supported_interfaces_size(), 3);
+  EXPECT_TRUE(card.capabilities().streaming());
+  EXPECT_FALSE(card.capabilities().push_notifications());
+  ASSERT_EQ(card.skills_size(), 1);
+  EXPECT_EQ(card.skills(0).id(), "echo");
+  EXPECT_EQ(card.skills(0).tags_size(), 1);
+  EXPECT_EQ(card.skills(0).tags(0), "conformance");
 }
 
 TEST(AgentCardBuilderTest, ValidateRejectsMissingRequiredFields) {

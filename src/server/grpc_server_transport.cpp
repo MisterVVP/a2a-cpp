@@ -514,7 +514,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
 
   response->set_name("A2A C++ SDK Agent");
   response->set_description("Default agent card for compatibility checks");
-  response->set_version("1.0.0");
+  response->set_version(std::string(core::Version::kAgentCardVersion));
   response->add_default_input_modes("text/plain");
   response->add_default_output_modes("text/plain");
   response->mutable_capabilities()->set_push_notifications(false);

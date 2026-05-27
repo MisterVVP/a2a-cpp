@@ -9,6 +9,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/result.h"
+#include "a2a/core/version.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::core {
@@ -33,11 +34,21 @@ class AgentCardBuilder final {
   [[nodiscard]] lf::a2a::v1::AgentCard Build() const;
 
   [[nodiscard]] static AgentCardBuilder RestPreset(std::string_view name, std::string_view url,
-                                                   std::string_view version = "1.0.0");
+                                                   std::string_view version = Version::kAgentCardVersion);
   [[nodiscard]] static AgentCardBuilder JsonRpcPreset(std::string_view name, std::string_view url,
-                                                      std::string_view version = "1.0.0");
+                                                      std::string_view version = Version::kAgentCardVersion);
   [[nodiscard]] static AgentCardBuilder GrpcPreset(std::string_view name, std::string_view url,
-                                                   std::string_view version = "1.0.0");
+                                                   std::string_view version = Version::kAgentCardVersion);
+  struct ConformancePresetSpec final {
+    std::string_view rest_url;
+    std::string_view json_rpc_url;
+    std::string_view grpc_url;
+  };
+
+  [[nodiscard]] static AgentCardBuilder ConformancePreset(const ConformancePresetSpec& spec,
+                                                          std::string_view name = "Conformance SUT",
+                                                          std::string_view version = Version::kAgentCardVersion,
+                                                          std::string_view description = "A2A conformance agent");
 
  private:
   lf::a2a::v1::AgentCard card_;
