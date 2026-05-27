@@ -19,6 +19,10 @@ constexpr std::string_view kDefaultModeTextPlain = "text/plain";
 constexpr std::string_view kRestDescription = "example rest agent";
 constexpr std::string_view kJsonRpcDescription = "example json-rpc agent";
 constexpr std::string_view kGrpcDescription = "example grpc agent";
+constexpr std::string_view kConformanceSkillId = "echo";
+constexpr std::string_view kConformanceSkillName = "Echo Skill";
+constexpr std::string_view kConformanceSkillDescription = "Echoes incoming text for conformance validation";
+constexpr std::string_view kConformanceTag = "conformance";
 
 bool HasHttpScheme(std::string_view url) { return url.starts_with("http://") || url.starts_with("https://"); }
 
@@ -144,6 +148,34 @@ AgentCardBuilder AgentCardBuilder::GrpcPreset(std::string_view name, std::string
       .AddDefaultInputMode(kDefaultModeTextPlain)
       .AddDefaultOutputMode(kDefaultModeTextPlain)
       .AddInterface({.binding = kGrpc, .version = kDefaultProtocolVersion, .url = url});
+  return builder;
+}
+
+AgentCardBuilder AgentCardBuilder::ConformancePreset(const ConformancePresetSpec& spec, std::string_view name,
+                                                     std::string_view version, std::string_view description) {
+  AgentCardBuilder builder;
+  auto card = builder.SetName(name)
+                  .SetVersion(version)
+                  .SetDescription(description)
+                  .AddDefaultInputMode(kDefaultModeTextPlain)
+                  .AddDefaultOutputMode(kDefaultModeTextPlain)
+                  .AddInterface({.binding = kJsonRpc, .version = kDefaultProtocolVersion, .url = spec.json_rpc_url})
+                  .AddInterface({.binding = kHttpJson, .version = kDefaultProtocolVersion, .url = spec.rest_url})
+                  .AddInterface({.binding = kGrpc, .version = kDefaultProtocolVersion, .url = spec.grpc_url})
+                  .Build();
+  auto* capabilities = card.mutable_capabilities();
+  capabilities->set_streaming(true);
+  capabilities->set_push_notifications(false);
+
+  auto* skill = card.add_skills();
+  skill->set_id(std::string(kConformanceSkillId));
+  skill->set_name(std::string(kConformanceSkillName));
+  skill->set_description(std::string(kConformanceSkillDescription));
+  skill->add_input_modes(std::string(kDefaultModeTextPlain));
+  skill->add_output_modes(std::string(kDefaultModeTextPlain));
+  skill->add_tags(std::string(kConformanceTag));
+
+  builder.card_ = std::move(card);
   return builder;
 }
 

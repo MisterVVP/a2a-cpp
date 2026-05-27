@@ -11,6 +11,7 @@ namespace a2a::core {
 class Version final {
  public:
   static constexpr std::string_view kProtocolVersion = "1.0";
+  static constexpr std::string_view kAgentCardVersion = "1.0.0";
   static constexpr std::string_view kHeaderName = "A2A-Version";
 
   [[nodiscard]] static std::string HeaderValue();
