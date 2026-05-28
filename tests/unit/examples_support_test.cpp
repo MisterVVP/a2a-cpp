@@ -104,6 +104,44 @@ TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
   EXPECT_EQ(loaded.value().history_size(), 1);
 }
 
+TEST(ExampleSupportTest, MessageIdPrefixesDriveArtifactAndMessageResponse) {
+  a2a::examples::ExampleExecutor executor;
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_message_id("message-response-artifact-file-url");
+  send.mutable_message()->add_parts()->set_text("plain text without heuristic keywords");
+  const auto response = executor.SendMessage(send, context);
+
+  ASSERT_TRUE(response.ok());
+  ASSERT_TRUE(response.value().has_message());
+  EXPECT_FALSE(response.value().has_task());
+  EXPECT_EQ(response.value().message().parts(0).text(), "Direct message response");
+}
+
+TEST(ExampleSupportTest, MessageIdPrefixesDriveTaskTerminalStates) {
+  a2a::examples::ExampleExecutor executor;
+  a2a::server::RequestContext context;
+
+  lf::a2a::v1::SendMessageRequest completed;
+  completed.mutable_message()->set_message_id("artifact-data-complete-task");
+  completed.mutable_message()->add_parts()->set_text("no keywords");
+  const auto completed_result = executor.SendMessage(completed, context);
+
+  ASSERT_TRUE(completed_result.ok());
+  ASSERT_TRUE(completed_result.value().has_task());
+  EXPECT_EQ(completed_result.value().task().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+
+  lf::a2a::v1::SendMessageRequest input_required;
+  input_required.mutable_message()->set_message_id("artifact-file-input-required");
+  input_required.mutable_message()->add_parts()->set_text("no keywords");
+  const auto input_required_result = executor.SendMessage(input_required, context);
+
+  ASSERT_TRUE(input_required_result.ok());
+  ASSERT_TRUE(input_required_result.value().has_task());
+  EXPECT_EQ(input_required_result.value().task().status().state(), lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+}
+
 TEST(ExampleSupportTest, SendMessageRejectsTerminalTaskFollowup) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::RequestContext context;

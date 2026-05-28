@@ -23,6 +23,7 @@
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_constants.h"
+#include "example_intent.h"
 
 namespace a2a::examples {
 
@@ -89,73 +90,11 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp_counter_));
 
     task.clear_artifacts();
-    const std::string request_text = request.message().parts(0).text();
-    std::string normalized_request_text;
-    normalized_request_text.reserve(request_text.size());
-    for (const char ch : request_text) {
-      normalized_request_text.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
-    const std::string request_message_id = request.message().message_id();
-    std::string normalized_message_id;
-    normalized_message_id.reserve(request_message_id.size());
-    for (const char ch : request_message_id) {
-      normalized_message_id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
-    std::string normalized_task_id;
-    normalized_task_id.reserve(task_id.size());
-    for (const char ch : task_id) {
-      normalized_task_id.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
+    const ExampleIntent interop_intent = ExtractExampleIntent(request, task_id);
 
-    const bool wants_file_url_artifact = normalized_request_text.find("file_url_artifact") != std::string::npos ||
-                                         normalized_request_text.find("file-url-artifact") != std::string::npos ||
-                                         normalized_request_text.find("file url artifact") != std::string::npos ||
-                                         normalized_request_text.find("file_url") != std::string::npos ||
-                                         normalized_request_text.find("file-url") != std::string::npos ||
-                                         normalized_message_id.find("file_url") != std::string::npos ||
-                                         normalized_message_id.find("file-url") != std::string::npos ||
-                                         normalized_task_id.find("file_url") != std::string::npos ||
-                                         normalized_task_id.find("file-url") != std::string::npos ||
-                                         (normalized_request_text.find("file") != std::string::npos &&
-                                          normalized_request_text.find("url") != std::string::npos);
-    const bool wants_file_artifact = normalized_request_text.find("file_artifact") != std::string::npos ||
-                                     normalized_request_text.find("file-artifact") != std::string::npos ||
-                                     normalized_request_text.find("file artifact") != std::string::npos ||
-                                     normalized_message_id.find("file") != std::string::npos ||
-                                     normalized_task_id.find("file") != std::string::npos ||
-                                     normalized_request_text.find("output.txt") != std::string::npos;
-    const bool wants_data_artifact = normalized_request_text.find("data_artifact") != std::string::npos ||
-                                     normalized_request_text.find("data-artifact") != std::string::npos ||
-                                     normalized_request_text.find("data artifact") != std::string::npos ||
-                                     normalized_message_id.find("data") != std::string::npos ||
-                                     normalized_task_id.find("data") != std::string::npos ||
-                                     normalized_request_text.find("json") != std::string::npos ||
-                                     normalized_request_text.find("structured data") != std::string::npos;
-    const bool wants_message_response = normalized_request_text.find("message response") != std::string::npos ||
-                                        normalized_request_text.find("return a message") != std::string::npos ||
-                                        normalized_request_text.find("respond with message") != std::string::npos ||
-                                        normalized_message_id.find("message-response") != std::string::npos ||
-                                        normalized_message_id.find("message_response") != std::string::npos ||
-                                        normalized_message_id.find("message") != std::string::npos ||
-                                        normalized_task_id.find("message-response") != std::string::npos ||
-                                        normalized_task_id.find("message_response") != std::string::npos ||
-                                        normalized_task_id.find("message") != std::string::npos ||
-                                        normalized_request_text.find("message with text") != std::string::npos;
-    const bool wants_completed_task = normalized_message_id.find("complete-task") != std::string::npos ||
-                                      normalized_message_id.find("complete_task") != std::string::npos ||
-                                      normalized_task_id.find("complete-task") != std::string::npos ||
-                                      normalized_task_id.find("complete_task") != std::string::npos ||
-                                      normalized_request_text.find("complete task") != std::string::npos ||
-                                      normalized_request_text.find("complete after history") != std::string::npos;
-    const bool wants_input_required_task = normalized_message_id.find("input-required") != std::string::npos ||
-                                           normalized_message_id.find("input_required") != std::string::npos ||
-                                           normalized_task_id.find("input-required") != std::string::npos ||
-                                           normalized_task_id.find("input_required") != std::string::npos ||
-                                           normalized_request_text.find("input required") != std::string::npos;
-
-    if (wants_completed_task) {
+    if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_COMPLETED) {
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-    } else if (wants_input_required_task) {
+    } else if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_INPUT_REQUIRED) {
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
     }
 
@@ -179,13 +118,13 @@ class ExampleExecutor final : public server::AgentExecutor {
     const auto data_artifact = core::ResponseBuilders::StructuredDataArtifact(
         structured_data, {.artifact_id = "artifact-data-" + task_id, .name = "data-artifact"});
 
-    if (wants_file_url_artifact) {
+    if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFileUrl) {
       core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_url_artifact,
                                                       {text_artifact, file_artifact, data_artifact});
-    } else if (wants_file_artifact) {
+    } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFile) {
       core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_artifact,
                                                       {text_artifact, file_url_artifact, data_artifact});
-    } else if (wants_data_artifact) {
+    } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kData) {
       core::ResponseBuilders::AddArtifactsWithPrimary(&task, data_artifact,
                                                       {text_artifact, file_artifact, file_url_artifact});
     } else {
@@ -209,6 +148,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     response.mutable_message()->set_message_id("response-" + task_id);
     response.mutable_message()->set_task_id(task_id);
     response.mutable_message()->set_context_id(task.context_id());
+    const bool wants_message_response = interop_intent.response_mode == ExampleResponseMode::kMessage;
     response.mutable_message()->add_parts()->set_text(wants_message_response ? "Direct message response" : "ack");
     if (wants_message_response) {
       // Keep message payload set.
