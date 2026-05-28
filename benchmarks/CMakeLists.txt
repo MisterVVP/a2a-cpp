@@ -1,10 +1,15 @@
 include(FetchContent)
 
+option(A2A_BENCHMARK_USE_SYSTEM_BENCHMARK "Use an installed Google Benchmark package instead of FetchContent" ON)
+
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
 
-find_package(benchmark CONFIG QUIET)
+if(A2A_BENCHMARK_USE_SYSTEM_BENCHMARK)
+  find_package(benchmark CONFIG QUIET)
+endif()
+
 if(NOT benchmark_FOUND)
   FetchContent_Declare(
     google_benchmark
