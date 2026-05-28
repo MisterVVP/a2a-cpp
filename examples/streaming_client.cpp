@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
+#include <condition_variable>
 #include <iostream>
 #include <memory>
+#include <mutex>
 
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
@@ -12,15 +14,39 @@ namespace {
 
 class PrintingObserver final : public a2a::client::StreamObserver {
  public:
+  void WaitForCompletion() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    completion_cv_.wait(lock, [this]() { return completed_; });
+  }
+
   void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
     if (response.has_status_update()) {
       std::cout << "status event: " << response.status_update().status().state() << '\n';
     }
   }
 
-  void OnError(const a2a::core::Error& error) override { std::cerr << error.message() << '\n'; }
+  void OnError(const a2a::core::Error& error) override {
+    std::cerr << error.message() << '\n';
+    MarkCompleted();
+  }
 
-  void OnCompleted() override { std::cout << "stream completed\n"; }
+  void OnCompleted() override {
+    std::cout << "stream completed\n";
+    MarkCompleted();
+  }
+
+ private:
+  void MarkCompleted() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      completed_ = true;
+    }
+    completion_cv_.notify_all();
+  }
+
+  std::mutex mutex_;
+  std::condition_variable completion_cv_;
+  bool completed_{false};
 };
 
 }  // namespace
@@ -74,6 +100,8 @@ int main() {
     std::cerr << "stream failed: " << handle.error().message() << '\n';
     return 1;
   }
+
+  observer.WaitForCompletion();
 
   return 0;
 }

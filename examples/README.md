@@ -31,4 +31,15 @@ cmake --build build --parallel
 ./scripts/run_examples.sh
 ```
 
+## Windows (Git Bash) note
+
+- Use `./scripts/windows_build_local.sh` from Git Bash for local Windows builds.
+- When working on a PR branch, set `UPDATE_REPO=0` to prevent branch update logic from running:
+
+```bash
+UPDATE_REPO=0 ./scripts/windows_build_local.sh
+```
+
+- If `UPDATE_REPO=1`, the script now requires the current branch to already be `main` and fails fast otherwise.
+
 See also: `docs/quickstart.md` for first-run setup and `docs/client-usage.md`/`docs/server-usage.md` for API details.
