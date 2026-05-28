@@ -31,6 +31,7 @@ jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
     env:
+      CLANG_TIDY_CONFIG_FILE: ${{ github.event_name == 'pull_request' && '.clang-tidy.ci-fast' || '.clang-tidy' }}
       CLANG_TIDY_ENABLE_CHECK_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profiling && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
