@@ -145,11 +145,23 @@ ensure_vcpkg() {
 need_cmd git
 need_cmd cmake
 
+ensure_main_branch_when_updating() {
+  local branch
+  branch="$(git branch --show-current)"
+  if [[ -z "$branch" ]]; then
+    fail "Could not determine current git branch. Set UPDATE_REPO=0 to skip branch update steps."
+  fi
+
+  if [[ "$branch" != "main" ]]; then
+    fail "Refusing to update from branch '$branch'. Re-run with UPDATE_REPO=0 on PR branches, or switch to main explicitly."
+  fi
+}
+
 if [[ -f "CMakeLists.txt" && -f "vcpkg.json" && -d ".git" ]]; then
   log "Using existing repository: $(pwd)"
   if [[ "$UPDATE_REPO" == "1" ]]; then
+    ensure_main_branch_when_updating
     git fetch origin main
-    git checkout main
     git pull --ff-only origin main
   else
     log "Skipping git fetch/pull because UPDATE_REPO=0"
@@ -159,8 +171,8 @@ else
     log "Using existing clone: $REPO_DIR"
     cd "$REPO_DIR"
     if [[ "$UPDATE_REPO" == "1" ]]; then
+      ensure_main_branch_when_updating
       git fetch origin main
-      git checkout main
       git pull --ff-only origin main
     else
       log "Skipping git fetch/pull because UPDATE_REPO=0"
