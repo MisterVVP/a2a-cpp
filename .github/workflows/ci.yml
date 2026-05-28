@@ -8,6 +8,16 @@ on:
         required: false
         default: false
         type: boolean
+      clang_tidy_profile:
+        description: 'clang-tidy profile to run'
+        required: false
+        default: 'split'
+        type: choice
+        options:
+          - split
+          - strict
+  schedule:
+    - cron: '17 4 * * 1'
   pull_request:
     paths-ignore:
       - 'docs/**'
@@ -31,7 +41,7 @@ jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
     env:
-      CLANG_TIDY_CONFIG_FILE: ${{ github.event_name == 'pull_request' && '.clang-tidy.ci-fast' || '.clang-tidy' }}
+      CLANG_TIDY_PROFILE: ${{ github.event_name == 'schedule' && 'strict' || (github.event_name == 'workflow_dispatch' && inputs.clang_tidy_profile || 'split') }}
       CLANG_TIDY_ENABLE_CHECK_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profiling && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
@@ -48,7 +58,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: clang-tidy-check-profile
-          path: build/clang-tidy-check-profile.txt
+          path: |
+            build/clang-tidy-check-profile*.txt
           if-no-files-found: warn
 
   examples-smoke:

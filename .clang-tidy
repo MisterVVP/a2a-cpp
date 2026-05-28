@@ -6,5 +6,5 @@ Checks: >
   -modernize-use-trailing-return-type,
   -readability-identifier-length
 WarningsAsErrors: '*'
-HeaderFilterRegex: '^(include|src|tests)/'
+HeaderFilterRegex: '^(include|src|tests|examples)/'
 FormatStyle: file
