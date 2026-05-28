@@ -158,7 +158,7 @@
   "BM_UuidV7TaskIdGenerator_Generate": {
     "max_time_ns": 100000000
   },
-  "BM_UuidV7TaskIdGenerator_GenerateMultiThreaded": {
+  "BM_UuidV7TaskIdGenerator_GenerateMultiThreaded/threads:4": {
     "max_time_ns": 100000000
   }
 }
