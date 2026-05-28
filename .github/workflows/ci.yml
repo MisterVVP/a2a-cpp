@@ -59,12 +59,14 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev libbenchmark-dev golang-go
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev golang-go
       - name: Configure benchmark build
         run: |
           cmake -S . -B build-bench -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS_RELEASE='-O3 -DNDEBUG' \
             -DA2A_BUILD_BENCHMARKS=ON \
+            -DA2A_BENCHMARK_USE_SYSTEM_BENCHMARK=OFF \
             -DA2A_ENABLE_TESTING=OFF \
             -DA2A_BUILD_EXAMPLES=OFF
       - name: Build benchmarks
