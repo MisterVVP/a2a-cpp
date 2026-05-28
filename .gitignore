@@ -42,3 +42,5 @@
 
 # build dirs
 build*
+vcpkg_installed*
+.vcpkg
