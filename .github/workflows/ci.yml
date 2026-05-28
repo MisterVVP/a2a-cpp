@@ -50,6 +50,51 @@ jobs:
           path: build/clang-tidy-check-profile.txt
           if-no-files-found: warn
 
+
+  benchmarks:
+    name: benchmarks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev libbenchmark-dev golang-go
+      - name: Configure benchmark build
+        run: |
+          cmake -S . -B build-bench -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DA2A_BUILD_BENCHMARKS=ON \
+            -DA2A_ENABLE_TESTING=OFF \
+            -DA2A_BUILD_EXAMPLES=OFF
+      - name: Build benchmarks
+        run: cmake --build build-bench --target a2a_benchmarks --parallel
+      - name: Run benchmarks
+        run: |
+          ./build-bench/benchmarks/a2a_benchmarks \
+            --benchmark_out=benchmark-results.json \
+            --benchmark_out_format=json \
+            --benchmark_repetitions=5 \
+            --benchmark_report_aggregates_only=true \
+            | tee benchmark-output.log
+      - name: Check benchmark thresholds
+        run: |
+          go run ./tools/bench_runner/cmd/a2a-bench-runner \
+            --results benchmark-results.json \
+            --thresholds benchmarks/thresholds.json \
+            --summary benchmark-summary.md
+          cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-results.json
+            benchmark-summary.md
+            benchmark-output.log
+          if-no-files-found: warn
+
   examples-smoke:
     runs-on: ubuntu-24.04
     steps:

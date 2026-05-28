@@ -24,3 +24,38 @@ It supports core A2A workflows including client/server APIs, discovery, REST/JSO
 - `tests/` unit and integration tests
 - `proto/` protocol definitions
 - `scripts/` local tooling and CI helpers
+- `benchmarks/` optional Google Benchmark performance suite
+- `tools/bench_runner/` Go benchmark threshold/report utility
+
+## Performance benchmarks
+
+The SDK includes C++ microbenchmarks for core hot paths. Benchmarks are run in CI with threshold checks to catch performance regressions.
+
+Google Benchmark measures SDK internals directly, including proto/JSON serialization, task store operations, task lifecycle logic, transport routing, server transport handling, UUIDv7 task ID generation, Agent Card generation, and HTTP adapter parsing/serialization. A Go-based benchmark runner parses Google Benchmark JSON output, compares fixed thresholds from `benchmarks/thresholds.json`, and generates CI summaries.
+
+Benchmarks are optional and should be run in Release mode:
+
+```bash
+cmake -S . -B build-bench \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DA2A_BUILD_BENCHMARKS=ON
+cmake --build build-bench --target a2a_benchmarks -j"$(nproc)"
+./build-bench/benchmarks/a2a_benchmarks
+```
+
+To run the CI-style threshold check locally:
+
+```bash
+./build-bench/benchmarks/a2a_benchmarks \
+  --benchmark_out=benchmark-results.json \
+  --benchmark_out_format=json \
+  --benchmark_repetitions=5 \
+  --benchmark_report_aggregates_only=true
+
+go run ./tools/bench_runner/cmd/a2a-bench-runner \
+  --results benchmark-results.json \
+  --thresholds benchmarks/thresholds.json \
+  --summary benchmark-summary.md
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for threshold strategy, Release-mode guidance, and instructions for adding benchmarks.
