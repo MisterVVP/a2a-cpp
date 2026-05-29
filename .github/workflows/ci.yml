@@ -45,13 +45,34 @@ jobs:
       CLANG_TIDY_ENABLE_CHECK_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profiling && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Install deps
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-format clang-tidy cmake ninja-build protobuf-compiler libprotobuf-dev protobuf-compiler-grpc libgrpc++-dev python3-pip
           python3 -m pip install --upgrade gcovr
-      - name: Verify changes
-        run: ./scripts/verify_changes.sh
+      - name: Check formatting
+        run: |
+          mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
+          if [ "${#CPP_FILES[@]}" -gt 0 ]; then
+            clang-format --dry-run --Werror "${CPP_FILES[@]}"
+          fi
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Run clang-tidy on changed files with fast profile
+        if: github.event_name == 'pull_request'
+        run: ./scripts/run_clang_tidy_changed.sh origin/${{ github.base_ref }} build
+      - name: Run clang-tidy on all source files with fast profile
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.clang_tidy_profile == 'split')
+        run: ./scripts/run_clang_tidy.sh --profile split build
+      - name: Run full strict clang-tidy on all files
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.clang_tidy_profile == 'strict')
+        run: ./scripts/run_clang_tidy.sh --profile strict build
 
       - name: Upload clang-tidy check profile artifact
         if: always() && github.event_name == 'workflow_dispatch' && inputs.profiling
