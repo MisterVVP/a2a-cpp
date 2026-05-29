@@ -71,7 +71,7 @@ func run() int {
 	}
 
 	evaluation := report.Evaluate(measurements, thresholdSet, *tolerance, *failOnUntracked)
-	summary := report.Markdown(evaluation)
+	summary := report.Markdown(evaluation, *timeField)
 	fmt.Print(summary)
 	if err := os.WriteFile(*summaryPath, []byte(summary), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write summary: %v\n", err)
