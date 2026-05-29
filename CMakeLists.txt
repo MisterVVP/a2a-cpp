@@ -12,6 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(A2A_ENABLE_TESTING "Build tests" ON)
 option(A2A_BUILD_EXAMPLES "Build example binaries" ON)
+option(A2A_BUILD_BENCHMARKS "Build a2a-cpp performance benchmarks" OFF)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
@@ -28,6 +29,10 @@ add_subdirectory(src)
 
 if(A2A_BUILD_EXAMPLES)
   add_subdirectory(examples)
+endif()
+
+if(A2A_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
 endif()
 
 if(A2A_ENABLE_TESTING)
