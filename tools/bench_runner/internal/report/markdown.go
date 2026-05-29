@@ -10,17 +10,17 @@ import (
 )
 
 type Row struct {
-	Benchmark string
-	ActualNS  int64
-	MedianNS  *int64
-	MaxNS     int64
-	Ratio     float64
-	Status    string
+	Benchmark   string
+	ActualNS    int64
+	MedianNS    *int64
+	ThresholdNS int64
+	Ratio       float64
+	Status      string
 }
 
 type MissingRow struct {
-	Benchmark string
-	MaxNS     int64
+	Benchmark   string
+	ThresholdNS int64
 }
 
 type UntrackedRow struct {
@@ -41,7 +41,7 @@ func Evaluate(measurements map[string]results.Measurement, thresholdSet threshol
 		threshold := thresholdSet[name]
 		measurement, ok := measurements[name]
 		if !ok {
-			evaluation.Missing = append(evaluation.Missing, MissingRow{Benchmark: name, MaxNS: threshold.MaxTimeNS})
+			evaluation.Missing = append(evaluation.Missing, MissingRow{Benchmark: name, ThresholdNS: threshold.MaxTimeNS})
 			evaluation.Failures++
 			continue
 		}
@@ -51,7 +51,7 @@ func Evaluate(measurements map[string]results.Measurement, thresholdSet threshol
 			status = "FAIL"
 			evaluation.Failures++
 		}
-		evaluation.Rows = append(evaluation.Rows, Row{Benchmark: name, ActualNS: measurement.ActualNS, MedianNS: measurement.MedianNS, MaxNS: threshold.MaxTimeNS, Ratio: float64(measurement.ActualNS) / float64(threshold.MaxTimeNS), Status: status})
+		evaluation.Rows = append(evaluation.Rows, Row{Benchmark: name, ActualNS: measurement.ActualNS, MedianNS: measurement.MedianNS, ThresholdNS: threshold.MaxTimeNS, Ratio: float64(measurement.ActualNS) / float64(threshold.MaxTimeNS), Status: status})
 	}
 	for _, name := range results.Names(measurements) {
 		if _, ok := thresholdSet[name]; ok {
@@ -65,29 +65,30 @@ func Evaluate(measurements map[string]results.Measurement, thresholdSet threshol
 	return evaluation
 }
 
-func Markdown(evaluation Evaluation) string {
+func Markdown(evaluation Evaluation, timeField string) string {
 	var builder strings.Builder
 	builder.WriteString("# Benchmark threshold check\n\n")
-	builder.WriteString("| Benchmark | Actual ns | Median ns | Max ns | Ratio | Status |\n")
+	builder.WriteString(fmt.Sprintf("Measured field: `%s`. Thresholds are in nanoseconds.\n\n", timeField))
+	builder.WriteString(fmt.Sprintf("| Benchmark | Actual %s, ns | Median %s, ns | Threshold, ns | Ratio | Status |\n", timeField, timeField))
 	builder.WriteString("|---|---:|---:|---:|---:|---|\n")
 	for _, row := range evaluation.Rows {
 		median := ""
 		if row.MedianNS != nil {
 			median = FormatInt(*row.MedianNS)
 		}
-		builder.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %.2f | %s |\n", row.Benchmark, FormatInt(row.ActualNS), median, FormatInt(row.MaxNS), row.Ratio, row.Status))
+		builder.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %.2f | %s |\n", row.Benchmark, FormatInt(row.ActualNS), median, FormatInt(row.ThresholdNS), row.Ratio, row.Status))
 	}
 	if len(evaluation.Missing) > 0 {
 		builder.WriteString("\n## Missing benchmark results\n\n")
-		builder.WriteString("| Benchmark | Max ns |\n")
+		builder.WriteString("| Benchmark | Threshold, ns |\n")
 		builder.WriteString("|---|---:|\n")
 		for _, row := range evaluation.Missing {
-			builder.WriteString(fmt.Sprintf("| %s | %s |\n", row.Benchmark, FormatInt(row.MaxNS)))
+			builder.WriteString(fmt.Sprintf("| %s | %s |\n", row.Benchmark, FormatInt(row.ThresholdNS)))
 		}
 	}
 	if len(evaluation.Untracked) > 0 {
 		builder.WriteString("\n## Untracked benchmarks\n\n")
-		builder.WriteString("| Benchmark | Actual ns |\n")
+		builder.WriteString(fmt.Sprintf("| Benchmark | Actual %s, ns |\n", timeField))
 		builder.WriteString("|---|---:|\n")
 		sort.Slice(evaluation.Untracked, func(left int, right int) bool {
 			return evaluation.Untracked[left].Benchmark < evaluation.Untracked[right].Benchmark
