@@ -31,9 +31,15 @@ func TestEvaluateDetectsFailuresMissingAndUntracked(t *testing.T) {
 	}
 }
 
-func TestMarkdownFormatsThousandsSeparators(t *testing.T) {
-	evaluation := Evaluation{Rows: []Row{{Benchmark: "BM_Test", ActualNS: 14200, MaxNS: 20000, Ratio: 0.71, Status: "PASS"}}}
-	summary := Markdown(evaluation)
+func TestMarkdownFormatsThresholdColumnAndThousandsSeparators(t *testing.T) {
+	evaluation := Evaluation{Rows: []Row{{Benchmark: "BM_Test", ActualNS: 14200, ThresholdNS: 20000, Ratio: 0.71, Status: "PASS"}}}
+	summary := Markdown(evaluation, results.RealTimeField)
+	if !strings.Contains(summary, "| Benchmark | Actual real_time, ns | Median real_time, ns | Threshold, ns | Ratio | Status |") {
+		t.Fatalf("summary does not contain explicit threshold header: %s", summary)
+	}
+	if !strings.Contains(summary, "Measured field: `real_time`.") {
+		t.Fatalf("summary does not describe measured field: %s", summary)
+	}
 	if !strings.Contains(summary, "14,200") || !strings.Contains(summary, "20,000") {
 		t.Fatalf("summary does not contain formatted values: %s", summary)
 	}
