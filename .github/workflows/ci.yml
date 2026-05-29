@@ -54,6 +54,8 @@ jobs:
   benchmarks:
     name: benchmarks
     runs-on: ubuntu-24.04
+    env:
+      A2A_BENCHMARK_THREADS: 4
     steps:
       - uses: actions/checkout@v6
       - name: Install deps
