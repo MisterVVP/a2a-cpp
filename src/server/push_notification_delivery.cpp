@@ -26,6 +26,7 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/protojson.h"
 #include "a2a/server/server_utils.h"
+#include "a2a/server/socket_utils.h"
 
 namespace a2a::server {
 namespace {
@@ -70,10 +71,6 @@ core::Result<ParsedUrl> ParseUrl(std::string_view url) {
   return parsed;
 }
 
-#ifndef _WIN32
-void CloseSocket(int fd) { ::close(fd); }
-#endif
-
 core::Result<int> ConnectTcp(const ParsedUrl& url, std::chrono::milliseconds timeout) {
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
@@ -101,7 +98,7 @@ core::Result<int> ConnectTcp(const ParsedUrl& url, std::chrono::milliseconds tim
     if (::connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0) {
       break;
     }
-    CloseSocket(fd);
+    CloseSocketCrossPlatform(fd);
     fd = -1;
   }
   ::freeaddrinfo(addresses);
@@ -158,7 +155,7 @@ std::string BuildAuthorizationHeader(const lf::a2a::v1::TaskPushNotificationConf
   header.reserve(config.authentication().scheme().size() + config.authentication().credentials().size() +
                  core::http::kAuthorizationHeaderReserveOverhead);
   header.append(core::http::kAuthorizationHeaderName);
-  header.append(": ");
+  header.append(core::http::kHeaderNameValueSeparator);
   header.append(config.authentication().scheme());
   if (!config.authentication().credentials().empty()) {
     header.push_back(' ');
@@ -170,7 +167,7 @@ std::string BuildAuthorizationHeader(const lf::a2a::v1::TaskPushNotificationConf
 
 std::string BuildHeaderLine(std::string_view name, std::string_view value) {
   std::ostringstream header;
-  header << name << ": " << value << core::http::kLineTerminator;
+  header << name << core::http::kHeaderNameValueSeparator << value << core::http::kLineTerminator;
   return header.str();
 }
 
@@ -211,11 +208,11 @@ core::Result<PushDeliveryResult> DeliverHttpRequest(const PushDeliveryRequest& r
       BuildHttpRequest(url, request.config, body, RequestHttpVersion{.value = http_version});
   const auto send_result = SendAll(fd.value(), http_request);
   if (!send_result.ok()) {
-    CloseSocket(fd.value());
+    CloseSocketCrossPlatform(fd.value());
     return send_result.error();
   }
   const auto response = ReceiveResponse(fd.value());
-  CloseSocket(fd.value());
+  CloseSocketCrossPlatform(fd.value());
   if (!response.ok()) {
     return response.error();
   }

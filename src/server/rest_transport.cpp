@@ -15,6 +15,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
@@ -626,7 +627,9 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
       const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch_response.value().payload());
       if (task == nullptr) {
         return BuildErrorResponse(
-            core::Error::Internal("Unexpected dispatch payload type for SubscribeToTask").WithTransport("rest"));
+            core::Error::Internal(core::protocol_error_messages::ToString(
+                                      core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask))
+                .WithTransport("rest"));
       }
       const auto subscribe_response = BuildSubscribeResponse(*task);
       if (!subscribe_response.ok()) {

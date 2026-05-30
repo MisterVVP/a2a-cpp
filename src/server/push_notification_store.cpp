@@ -56,11 +56,11 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto task_it = configs_.find(std::string(task_id));
+  const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
     return core::protocol_errors::TaskNotFound("push notification task config not found");
   }
-  const auto config_it = task_it->second.find(std::string(config_id));
+  const auto config_it = task_it->second.find(config_id);
   if (config_it == task_it->second.end()) {
     return core::Error::Validation("push notification config not found");
   }
@@ -75,10 +75,11 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
 
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto task_it = configs_.find(std::string(task_id));
+  const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
     return response;
   }
+  response.mutable_configs()->Reserve(static_cast<int>(task_it->second.size()));
   for (const auto& [unused_id, config] : task_it->second) {
     (void)unused_id;
     *response.add_configs() = config;
@@ -93,11 +94,14 @@ core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_i
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto task_it = configs_.find(std::string(task_id));
+  const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
     return {};
   }
-  task_it->second.erase(std::string(config_id));
+  const auto config_it = task_it->second.find(config_id);
+  if (config_it != task_it->second.end()) {
+    task_it->second.erase(config_it);
+  }
   if (task_it->second.empty()) {
     configs_.erase(task_it);
   }

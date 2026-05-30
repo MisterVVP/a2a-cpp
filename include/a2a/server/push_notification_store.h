@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -26,6 +27,26 @@ class PushNotificationStore {
   [[nodiscard]] virtual core::Result<void> Delete(std::string_view task_id, std::string_view config_id) = 0;
 };
 
+struct TransparentStringHash final {
+  using is_transparent = void;
+
+  [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
+    return std::hash<std::string_view>{}(value);
+  }
+
+  [[nodiscard]] std::size_t operator()(const std::string& value) const noexcept {
+    return (*this)(std::string_view(value));
+  }
+
+  [[nodiscard]] std::size_t operator()(const char* value) const noexcept { return (*this)(std::string_view(value)); }
+};
+
+struct TransparentStringEqual final {
+  using is_transparent = void;
+
+  [[nodiscard]] bool operator()(std::string_view lhs, std::string_view rhs) const noexcept { return lhs == rhs; }
+};
+
 class InMemoryPushNotificationStore final : public PushNotificationStore {
  public:
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdate(
@@ -37,8 +58,11 @@ class InMemoryPushNotificationStore final : public PushNotificationStore {
   [[nodiscard]] core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override;
 
  private:
+  using ConfigMap = std::unordered_map<std::string, lf::a2a::v1::TaskPushNotificationConfig, TransparentStringHash,
+                                       TransparentStringEqual>;
+
   mutable std::mutex mutex_;
-  std::unordered_map<std::string, std::unordered_map<std::string, lf::a2a::v1::TaskPushNotificationConfig>> configs_;
+  std::unordered_map<std::string, ConfigMap, TransparentStringHash, TransparentStringEqual> configs_;
 };
 
 }  // namespace a2a::server

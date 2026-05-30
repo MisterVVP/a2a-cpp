@@ -54,6 +54,7 @@ add_library(a2a_server STATIC
   server/push_notification_delivery.cpp
   server/push_notification_service.cpp
   server/push_notification_store.cpp
+  server/socket_utils.cpp
   server/task_id_generator.cpp
   server/transport_mux.cpp
   server/server.cpp

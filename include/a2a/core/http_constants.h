@@ -15,6 +15,7 @@ inline constexpr std::array<char, 2> kLineTerminatorBytes{kCarriageReturn, kLine
 inline constexpr std::array<char, 4> kHeaderDelimiterBytes{kCarriageReturn, kLineFeed, kCarriageReturn, kLineFeed};
 inline constexpr std::string_view kLineTerminator{kLineTerminatorBytes.data(), kLineTerminatorBytes.size()};
 inline constexpr std::string_view kHeaderDelimiter{kHeaderDelimiterBytes.data(), kHeaderDelimiterBytes.size()};
+inline constexpr std::string_view kHeaderNameValueSeparator = ": ";
 
 inline constexpr std::string_view kHttpScheme = "http://";
 inline constexpr std::string_view kHttpsScheme = "https://";

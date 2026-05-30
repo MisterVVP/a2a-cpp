@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -19,36 +18,10 @@
 
 #include "a2a/core/http_constants.h"
 
-#ifdef _WIN32
-#include <winsock2.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace a2a::server {
 namespace {
-using core::http::kContentLengthHeader;
-using core::http::kHeaderDelimiter;
-using core::http::kHttpVersion11;
-using core::http::kLineTerminator;
-using core::http::kStatusAccepted;
-using core::http::kStatusBadGateway;
-using core::http::kStatusBadRequest;
-using core::http::kStatusConflict;
-using core::http::kStatusCreated;
-using core::http::kStatusForbidden;
-using core::http::kStatusInternalServerError;
-using core::http::kStatusMethodNotAllowed;
-using core::http::kStatusNoContent;
-using core::http::kStatusNotFound;
-using core::http::kStatusNotImplemented;
-using core::http::kStatusOk;
-using core::http::kStatusPayloadTooLarge;
-using core::http::kStatusServiceUnavailable;
-using core::http::kStatusTooManyRequests;
-using core::http::kStatusUnauthorized;
-using core::http::kStatusUnprocessableEntity;
-using core::http::kStatusUnsupportedMediaType;
+constexpr std::size_t kResponsePayloadReserveSlackBytes = 32;
+constexpr std::size_t kResponsePayloadReserveSlackLineCount = 3;
 
 struct RequestLine final {
   std::string method;
@@ -67,10 +40,32 @@ std::string Trim(std::string_view value) {
   return std::string(value.substr(start, end - start));
 }
 
-std::string ToLower(std::string_view value) {
-  std::string out(value);
-  std::ranges::transform(out, out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return out;
+[[nodiscard]] bool EqualsAsciiCaseInsensitive(std::string_view lhs, std::string_view rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < lhs.size(); ++index) {
+    const auto lhs_char = static_cast<unsigned char>(lhs[index]);
+    const auto rhs_char = static_cast<unsigned char>(rhs[index]);
+    if (std::tolower(lhs_char) != std::tolower(rhs_char)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] std::size_t ResponsePayloadReserveSize(const HttpServerResponse& response,
+                                                     std::string_view reason_phrase) {
+  std::size_t size = core::http::kHttpVersion11.size() + reason_phrase.size() + core::http::kLineTerminator.size() +
+                     response.body.size() + core::http::kConnectionCloseHeaderName.size() +
+                     core::http::kConnectionCloseHeaderValue.size() + core::http::kContentLengthHeaderName.size() +
+                     (core::http::kLineTerminator.size() * kResponsePayloadReserveSlackLineCount) +
+                     kResponsePayloadReserveSlackBytes;
+  for (const auto& [name, value] : response.headers) {
+    size +=
+        name.size() + value.size() + core::http::kLineTerminator.size() + core::http::kHeaderNameValueSeparator.size();
+  }
+  return size;
 }
 
 std::string NormalizeRequestTarget(std::string_view target) {
@@ -107,7 +102,7 @@ core::Result<std::size_t> ParseContentLength(std::string_view value) {
 
 core::Result<void> ReadUntilHeadersComplete(HttpByteTransport& transport, std::size_t max_request_size,
                                             std::vector<char>& buffer, std::string& raw) {
-  while (raw.find(kHeaderDelimiter) == std::string::npos) {
+  while (raw.find(core::http::kHeaderDelimiter) == std::string::npos) {
     const auto read = transport.Read(buffer.data(), buffer.size());
     if (!read.ok()) {
       return read.error();
@@ -124,7 +119,7 @@ core::Result<void> ReadUntilHeadersComplete(HttpByteTransport& transport, std::s
 }
 
 core::Result<RequestLine> ParseRequestLine(std::string_view header_block) {
-  const std::size_t first_line_end = header_block.find(kLineTerminator);
+  const std::size_t first_line_end = header_block.find(core::http::kLineTerminator);
   if (first_line_end == std::string_view::npos) {
     return core::Error::Validation("HTTP request line is missing");
   }
@@ -137,7 +132,7 @@ core::Result<RequestLine> ParseRequestLine(std::string_view header_block) {
   if (method.empty() || target.empty() || version.empty()) {
     return core::Error::Validation("Malformed HTTP request line");
   }
-  if (version != kHttpVersion11) {
+  if (version != core::http::kHttpVersion11) {
     return core::Error::Validation("Unsupported HTTP version in request line");
   }
 
@@ -157,7 +152,7 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
     return core::Error::Validation("HTTP header name cannot be empty");
   }
 
-  if (ToLower(name) == kContentLengthHeader) {
+  if (EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
     const auto parsed_length = ParseContentLength(value);
     if (!parsed_length.ok()) {
       return parsed_length.error();
@@ -174,12 +169,12 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
 
 core::Result<std::optional<std::size_t>> ParseHeaders(std::string_view header_block,
                                                       std::unordered_map<std::string, std::string>* headers) {
-  const std::size_t first_line_end = header_block.find(kLineTerminator);
-  std::size_t offset = first_line_end + kLineTerminator.size();
+  const std::size_t first_line_end = header_block.find(core::http::kLineTerminator);
+  std::size_t offset = first_line_end + core::http::kLineTerminator.size();
   std::optional<std::size_t> content_length;
 
   while (offset < header_block.size()) {
-    const std::size_t line_end = header_block.find(kLineTerminator, offset);
+    const std::size_t line_end = header_block.find(core::http::kLineTerminator, offset);
     const std::size_t next = (line_end == std::string::npos) ? header_block.size() : line_end;
     const std::string_view line = header_block.substr(offset, next - offset);
     if (!line.empty()) {
@@ -191,7 +186,7 @@ core::Result<std::optional<std::size_t>> ParseHeaders(std::string_view header_bl
     if (line_end == std::string::npos) {
       break;
     }
-    offset = line_end + kLineTerminator.size();
+    offset = line_end + core::http::kLineTerminator.size();
   }
 
   return content_length;
@@ -241,7 +236,7 @@ core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& tran
     return headers_read.error();
   }
 
-  const std::size_t header_end = raw.find(kHeaderDelimiter);
+  const std::size_t header_end = raw.find(core::http::kHeaderDelimiter);
   const std::string_view header_block(raw.data(), header_end);
 
   const auto request_line = ParseRequestLine(header_block);
@@ -255,7 +250,7 @@ core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& tran
     return content_length.error();
   }
 
-  const std::size_t body_start = header_end + kHeaderDelimiter.size();
+  const std::size_t body_start = header_end + core::http::kHeaderDelimiter.size();
   const std::size_t expected_body_size = content_length.value().value_or(0);
   if (expected_body_size > options_.max_request_size) {
     return core::Error::Validation("Content-Length exceeds max_request_size");
@@ -282,41 +277,41 @@ core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& tran
 
 std::string HttpAdapter::ReasonPhrase(int status_code) {
   switch (status_code) {
-    case kStatusOk:
+    case core::http::kStatusOk:
       return "OK";
-    case kStatusCreated:
+    case core::http::kStatusCreated:
       return "Created";
-    case kStatusAccepted:
+    case core::http::kStatusAccepted:
       return "Accepted";
-    case kStatusNoContent:
+    case core::http::kStatusNoContent:
       return "No Content";
-    case kStatusBadRequest:
+    case core::http::kStatusBadRequest:
       return "Bad Request";
-    case kStatusUnauthorized:
+    case core::http::kStatusUnauthorized:
       return "Unauthorized";
-    case kStatusForbidden:
+    case core::http::kStatusForbidden:
       return "Forbidden";
-    case kStatusNotFound:
+    case core::http::kStatusNotFound:
       return "Not Found";
-    case kStatusMethodNotAllowed:
+    case core::http::kStatusMethodNotAllowed:
       return "Method Not Allowed";
-    case kStatusConflict:
+    case core::http::kStatusConflict:
       return "Conflict";
-    case kStatusPayloadTooLarge:
+    case core::http::kStatusPayloadTooLarge:
       return "Payload Too Large";
-    case kStatusUnsupportedMediaType:
+    case core::http::kStatusUnsupportedMediaType:
       return "Unsupported Media Type";
-    case kStatusUnprocessableEntity:
+    case core::http::kStatusUnprocessableEntity:
       return "Unprocessable Entity";
-    case kStatusTooManyRequests:
+    case core::http::kStatusTooManyRequests:
       return "Too Many Requests";
-    case kStatusInternalServerError:
+    case core::http::kStatusInternalServerError:
       return "Internal Server Error";
-    case kStatusNotImplemented:
+    case core::http::kStatusNotImplemented:
       return "Not Implemented";
-    case kStatusBadGateway:
+    case core::http::kStatusBadGateway:
       return "Bad Gateway";
-    case kStatusServiceUnavailable:
+    case core::http::kStatusServiceUnavailable:
       return "Service Unavailable";
     default:
       return "Unknown";
@@ -324,13 +319,19 @@ std::string HttpAdapter::ReasonPhrase(int status_code) {
 }
 
 core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response) {
-  std::ostringstream stream;
-  stream << kHttpVersion11 << ' ' << response.status_code << ' ' << ReasonPhrase(response.status_code)
-         << kLineTerminator;
+  const std::string reason_phrase = ReasonPhrase(response.status_code);
+  std::string payload;
+  payload.reserve(ResponsePayloadReserveSize(response, reason_phrase));
+  payload += core::http::kHttpVersion11;
+  payload.push_back(' ');
+  payload += std::to_string(response.status_code);
+  payload.push_back(' ');
+  payload += reason_phrase;
+  payload += core::http::kLineTerminator;
 
   bool has_content_length = false;
   for (const auto& [name, value] : response.headers) {
-    if (ToLower(name) == kContentLengthHeader) {
+    if (EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
       has_content_length = true;
       const auto parsed_length = ParseContentLength(value);
       if (!parsed_length.ok()) {
@@ -340,16 +341,24 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
         return core::Error::Validation("Response Content-Length header does not match body size");
       }
     }
-    stream << name << ": " << value << kLineTerminator;
+    payload += name;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += value;
+    payload += core::http::kLineTerminator;
   }
   if (!has_content_length) {
-    stream << core::http::kContentLengthHeaderName << ": " << response.body.size() << kLineTerminator;
+    payload += core::http::kContentLengthHeaderName;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += std::to_string(response.body.size());
+    payload += core::http::kLineTerminator;
   }
-  stream << core::http::kConnectionCloseHeaderName << ": " << core::http::kConnectionCloseHeaderValue << kLineTerminator
-         << kLineTerminator;
-  stream << response.body;
+  payload += core::http::kConnectionCloseHeaderName;
+  payload += core::http::kHeaderNameValueSeparator;
+  payload += core::http::kConnectionCloseHeaderValue;
+  payload += core::http::kLineTerminator;
+  payload += core::http::kLineTerminator;
+  payload += response.body;
 
-  const std::string payload = stream.str();
   std::size_t sent = 0;
   while (sent < payload.size()) {
     const auto written = transport.Write(payload.data() + sent, payload.size() - sent);
@@ -362,14 +371,6 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     sent += written.value();
   }
   return {};
-}
-
-void CloseSocketCrossPlatform(int fd) noexcept {
-#ifdef _WIN32
-  closesocket(fd);
-#else
-  close(fd);
-#endif
 }
 
 }  // namespace a2a::server

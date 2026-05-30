@@ -46,51 +46,65 @@ inline constexpr std::string_view kBody = R"({"hello":"benchmark"})";
 inline constexpr std::string_view kTaskPath = "/tasks/task-bench-1";
 inline constexpr std::string_view kMessageSendPath = "/message:send";
 inline constexpr int kManyHeaderCount = 50;
+inline constexpr std::string_view kGetMethod = "GET";
+inline constexpr std::string_view kPostMethod = "POST";
+inline constexpr std::string_view kLocalhost = "localhost";
+inline constexpr std::string_view kHeaderNamePrefix = "X-Bench-Header-";
+inline constexpr std::string_view kHeaderValue = "value";
+inline constexpr std::size_t kMaxBenchmarkHeaderIndexDigits = 2;
+inline constexpr std::size_t kSmallRequestReserveSize = 96;
+inline constexpr std::size_t kBodyRequestReserveSize = 128;
+inline constexpr std::size_t kManyHeadersReserveSize = 1600;
 
 void AppendRequestLine(std::string* request, std::string_view method, std::string_view target) {
-  request->append(method);
+  *request += method;
   request->push_back(' ');
-  request->append(target);
+  *request += target;
   request->push_back(' ');
-  request->append(a2a::core::http::kHttpVersion11);
-  request->append(a2a::core::http::kLineTerminator);
+  *request += a2a::core::http::kHttpVersion11;
+  *request += a2a::core::http::kLineTerminator;
 }
 
 void AppendHeader(std::string* request, std::string_view name, std::string_view value) {
-  request->append(name);
-  request->append(": ");
-  request->append(value);
-  request->append(a2a::core::http::kLineTerminator);
+  *request += name;
+  *request += a2a::core::http::kHeaderNameValueSeparator;
+  *request += value;
+  *request += a2a::core::http::kLineTerminator;
 }
 
 std::string BuildSmallRequest() {
   std::string request;
-  AppendRequestLine(&request, "GET", kTaskPath);
-  AppendHeader(&request, a2a::core::http::kHostHeaderName, "localhost");
-  request.append(a2a::core::http::kLineTerminator);
+  request.reserve(kSmallRequestReserveSize);
+  AppendRequestLine(&request, kGetMethod, kTaskPath);
+  AppendHeader(&request, a2a::core::http::kHostHeaderName, kLocalhost);
+  request += a2a::core::http::kLineTerminator;
   return request;
 }
 
 std::string BuildManyHeadersRequest() {
   std::string request;
-  AppendRequestLine(&request, "GET", kTaskPath);
-  AppendHeader(&request, a2a::core::http::kHostHeaderName, "localhost");
+  request.reserve(kManyHeadersReserveSize);
+  AppendRequestLine(&request, kGetMethod, kTaskPath);
+  AppendHeader(&request, a2a::core::http::kHostHeaderName, kLocalhost);
   for (int index = 0; index < kManyHeaderCount; ++index) {
-    std::string header_name = "X-Bench-Header-";
-    header_name.append(std::to_string(index));
-    AppendHeader(&request, header_name, "value");
+    std::string header_name;
+    header_name.reserve(kHeaderNamePrefix.size() + kMaxBenchmarkHeaderIndexDigits);
+    header_name += kHeaderNamePrefix;
+    header_name += std::to_string(index);
+    AppendHeader(&request, header_name, kHeaderValue);
   }
-  request.append(a2a::core::http::kLineTerminator);
+  request += a2a::core::http::kLineTerminator;
   return request;
 }
 
 std::string BuildBodyRequest() {
   std::string request;
-  AppendRequestLine(&request, "POST", kMessageSendPath);
-  AppendHeader(&request, a2a::core::http::kHostHeaderName, "localhost");
+  request.reserve(kBodyRequestReserveSize);
+  AppendRequestLine(&request, kPostMethod, kMessageSendPath);
+  AppendHeader(&request, a2a::core::http::kHostHeaderName, kLocalhost);
   AppendHeader(&request, a2a::core::http::kContentLengthHeaderName, std::to_string(kBody.size()));
-  request.append(a2a::core::http::kLineTerminator);
-  request.append(kBody);
+  request += a2a::core::http::kLineTerminator;
+  request += kBody;
   return request;
 }
 

@@ -34,6 +34,7 @@
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
+#include "a2a/server/socket_utils.h"
 #include "a2a/server/transport_mux.h"
 #include "example_support.h"
 

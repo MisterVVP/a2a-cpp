@@ -5,7 +5,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -14,6 +17,8 @@ constexpr std::string_view kOtherTaskId = "task-2";
 constexpr std::string_view kConfigId = "push-1";
 constexpr std::string_view kOtherConfigId = "push-2";
 constexpr std::string_view kWebhookUrl = "http://127.0.0.1/webhook";
+constexpr std::string_view kUpdatedWebhookUrl = "http://127.0.0.1/updated";
+constexpr int kBulkConfigCount = 1000;
 
 struct PushConfigIds final {
   std::string_view task_id;
@@ -26,6 +31,19 @@ lf::a2a::v1::TaskPushNotificationConfig BuildConfig(PushConfigIds ids) {
   config.set_id(std::string(ids.config_id));
   config.set_url(std::string(kWebhookUrl));
   return config;
+}
+
+[[nodiscard]] std::vector<std::string> ConfigIds(const lf::a2a::v1::ListTaskPushNotificationConfigsResponse& response) {
+  std::vector<std::string> ids;
+  ids.reserve(static_cast<std::size_t>(response.configs_size()));
+  for (const auto& config : response.configs()) {
+    ids.push_back(config.id());
+  }
+  return ids;
+}
+
+[[nodiscard]] bool ContainsId(const std::vector<std::string>& ids, std::string_view expected_id) {
+  return std::ranges::find(ids, expected_id) != ids.end();
 }
 
 }  // namespace
@@ -79,4 +97,50 @@ TEST(PushNotificationStoreTest, PreservesMultipleConfigsAndScopesByTask) {
   ASSERT_TRUE(other_task.ok());
   ASSERT_EQ(other_task.value().configs_size(), 1);
   EXPECT_EQ(other_task.value().configs(0).task_id(), kOtherTaskId);
+}
+
+TEST(PushNotificationStoreTest, UpdatingExistingConfigReplacesValueWithoutDuplicatingListEntry) {
+  a2a::server::InMemoryPushNotificationStore store;
+  auto config = BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = kConfigId});
+  ASSERT_TRUE(store.CreateOrUpdate(config).ok());
+
+  config.set_url(std::string(kUpdatedWebhookUrl));
+  ASSERT_TRUE(store.CreateOrUpdate(config).ok());
+
+  const auto fetched = store.Get(kTaskId, kConfigId);
+  ASSERT_TRUE(fetched.ok());
+  EXPECT_EQ(fetched.value().url(), kUpdatedWebhookUrl);
+  const auto listed = store.List(kTaskId);
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), 1);
+}
+
+TEST(PushNotificationStoreTest, LookupValidationAndMissingConfigBranchesAreCovered) {
+  a2a::server::InMemoryPushNotificationStore store;
+  ASSERT_TRUE(store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = kConfigId})).ok());
+
+  EXPECT_FALSE(store.Get({}, kConfigId).ok());
+  EXPECT_FALSE(store.Get(kTaskId, {}).ok());
+  EXPECT_FALSE(store.Get(kOtherTaskId, kConfigId).ok());
+  EXPECT_FALSE(store.Get(kTaskId, kOtherConfigId).ok());
+  EXPECT_FALSE(store.List({}).ok());
+  EXPECT_FALSE(store.Delete({}, kConfigId).ok());
+  EXPECT_FALSE(store.Delete(kTaskId, {}).ok());
+}
+
+TEST(PushNotificationStoreTest, ListsLargeConfigSetAndDeleteOnlyRemovesTargetConfig) {
+  a2a::server::InMemoryPushNotificationStore store;
+  for (int index = 0; index < kBulkConfigCount; ++index) {
+    const std::string config_id = std::string(kConfigId) + std::to_string(index);
+    ASSERT_TRUE(store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = config_id})).ok());
+  }
+
+  const std::string deleted_config_id = std::string(kConfigId) + std::to_string(kBulkConfigCount / 2);
+  ASSERT_TRUE(store.Delete(kTaskId, deleted_config_id).ok());
+
+  const auto listed = store.List(kTaskId);
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), kBulkConfigCount - 1);
+  const std::vector<std::string> ids = ConfigIds(listed.value());
+  EXPECT_FALSE(ContainsId(ids, deleted_config_id));
 }
