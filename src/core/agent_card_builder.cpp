@@ -69,6 +69,11 @@ AgentCardBuilder& AgentCardBuilder::AddDefaultOutputMode(std::string_view mode) 
   return *this;
 }
 
+AgentCardBuilder& AgentCardBuilder::WithPushNotifications(bool enabled) {
+  card_.mutable_capabilities()->set_push_notifications(enabled);
+  return *this;
+}
+
 AgentCardBuilder& AgentCardBuilder::AddInterface(const InterfaceSpec& spec) {
   auto* iface = card_.add_supported_interfaces();
   iface->set_protocol_binding(std::string(spec.binding));

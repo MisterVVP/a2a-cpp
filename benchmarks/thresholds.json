@@ -68,6 +68,15 @@
   "BM_ProtoJson_MessageToJson_Task": {
     "max_time_ns": 20000
   },
+  "BM_PushNotificationService_Notify_1000Configs": {
+    "max_time_ns": 1500000
+  },
+  "BM_PushNotificationStore_CreateOrUpdate": {
+    "max_time_ns": 2500
+  },
+  "BM_PushNotificationStore_List_1000Configs": {
+    "max_time_ns": 300000
+  },
   "BM_RestTransport_AgentCardResponse": {
     "max_time_ns": 90000
   },

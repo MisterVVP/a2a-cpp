@@ -17,6 +17,7 @@
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -31,7 +32,7 @@ struct EndpointMap final {
   static constexpr std::string_view kSendMessage = "/message:send";
   static constexpr std::string_view kSendStreamingMessage = "/message:stream";
   static constexpr std::string_view kTaskCollection = "/tasks";
-  static constexpr std::string_view kPushConfigCollection = "/pushNotificationConfigs";
+  static constexpr std::string_view kPushConfigCollection = core::protocol_methods::kPushNotificationConfigsSegment;
 };
 
 std::string ToLower(std::string_view value) {

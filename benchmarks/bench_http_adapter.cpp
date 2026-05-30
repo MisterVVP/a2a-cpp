@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
 #include <benchmark/benchmark.h>
 
@@ -8,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "a2a/core/http_constants.h"
 #include "a2a/server/http_adapter.h"
 #include "bench_common.h"
 
@@ -40,27 +42,62 @@ class MemoryTransport final : public a2a::server::HttpByteTransport {
   std::string output_;
 };
 
-inline constexpr std::string_view kSmallRequest = "GET /tasks/task-bench-1 HTTP/1.1\r\nHost: localhost\r\n\r\n";
 inline constexpr std::string_view kBody = R"({"hello":"benchmark"})";
+inline constexpr std::string_view kTaskPath = "/tasks/task-bench-1";
+inline constexpr std::string_view kMessageSendPath = "/message:send";
+inline constexpr int kManyHeaderCount = 50;
+
+void AppendRequestLine(std::string* request, std::string_view method, std::string_view target) {
+  request->append(method);
+  request->push_back(' ');
+  request->append(target);
+  request->push_back(' ');
+  request->append(a2a::core::http::kHttpVersion11);
+  request->append(a2a::core::http::kLineTerminator);
+}
+
+void AppendHeader(std::string* request, std::string_view name, std::string_view value) {
+  request->append(name);
+  request->append(": ");
+  request->append(value);
+  request->append(a2a::core::http::kLineTerminator);
+}
+
+std::string BuildSmallRequest() {
+  std::string request;
+  AppendRequestLine(&request, "GET", kTaskPath);
+  AppendHeader(&request, a2a::core::http::kHostHeaderName, "localhost");
+  request.append(a2a::core::http::kLineTerminator);
+  return request;
+}
 
 std::string BuildManyHeadersRequest() {
-  std::string request = "GET /tasks/task-bench-1 HTTP/1.1\r\nHost: localhost\r\n";
-  for (int index = 0; index < 50; ++index) {
-    request += "X-Bench-Header-" + std::to_string(index) + ": value\r\n";
+  std::string request;
+  AppendRequestLine(&request, "GET", kTaskPath);
+  AppendHeader(&request, a2a::core::http::kHostHeaderName, "localhost");
+  for (int index = 0; index < kManyHeaderCount; ++index) {
+    std::string header_name = "X-Bench-Header-";
+    header_name.append(std::to_string(index));
+    AppendHeader(&request, header_name, "value");
   }
-  request += "\r\n";
+  request.append(a2a::core::http::kLineTerminator);
   return request;
 }
 
 std::string BuildBodyRequest() {
-  return "POST /message:send HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(kBody.size()) +
-         "\r\n\r\n" + std::string(kBody);
+  std::string request;
+  AppendRequestLine(&request, "POST", kMessageSendPath);
+  AppendHeader(&request, a2a::core::http::kHostHeaderName, "localhost");
+  AppendHeader(&request, a2a::core::http::kContentLengthHeaderName, std::to_string(kBody.size()));
+  request.append(a2a::core::http::kLineTerminator);
+  request.append(kBody);
+  return request;
 }
 
 void BM_HttpAdapter_ParseSmallRequest(benchmark::State& state) {
   const a2a::server::HttpAdapter adapter;
   for (auto _ : state) {
-    MemoryTransport transport{std::string(kSmallRequest)};
+    MemoryTransport transport{BuildSmallRequest()};
     auto request = adapter.ReadRequest(transport, "127.0.0.1");
     benchmark::DoNotOptimize(request);
   }

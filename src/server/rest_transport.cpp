@@ -16,6 +16,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
 
@@ -31,9 +32,8 @@ constexpr int kHttpServiceUnavailable = 503;
 constexpr int kHttpInternalServerError = 500;
 constexpr std::size_t kDecimalBase = 10;
 constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
-constexpr std::string_view kPushNotificationConfigsSegment = "/pushNotificationConfigs";
 
-const std::array<RestRoute, 6> kRoutes = {
+const std::array<RestRoute, 10> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
@@ -46,6 +46,18 @@ const std::array<RestRoute, 6> kRoutes = {
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = "POST",
+              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
+              .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
+    RestRoute{.method = "GET",
+              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
+              .operation = DispatcherOperation::kGetTaskPushNotificationConfig},
+    RestRoute{.method = "GET",
+              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
+              .operation = DispatcherOperation::kListTaskPushNotificationConfigs},
+    RestRoute{.method = "DELETE",
+              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
+              .operation = DispatcherOperation::kDeleteTaskPushNotificationConfig},
 };
 
 std::optional<std::string> ParseTaskIdFromPath(std::string_view path, bool for_cancel) {
@@ -88,16 +100,39 @@ std::optional<std::string> ParseTaskIdFromActionPath(std::string_view path, std:
   return task_id;
 }
 
-bool IsPushNotificationConfigPath(const RestRequest& request) {
-  if (request.method != "POST" && request.method != "GET" && request.method != "DELETE") {
-    return false;
+struct PushConfigPathParts final {
+  std::string task_id;
+  std::string config_id;
+  bool collection = false;
+};
+
+std::optional<PushConfigPathParts> ParsePushConfigPath(std::string_view path) {
+  if (!path.starts_with(RestEndpointPaths::kTaskResourcePrefix)) {
+    return std::nullopt;
   }
-  if (!request.path.starts_with(RestEndpointPaths::kTaskResourcePrefix)) {
-    return false;
+  const auto suffix = path.substr(RestEndpointPaths::kTaskResourcePrefix.size());
+  const auto segment_pos = suffix.find(core::protocol_methods::kPushNotificationConfigsSegment);
+  if (segment_pos == std::string_view::npos || segment_pos == 0) {
+    return std::nullopt;
   }
-  const auto suffix = request.path.substr(RestEndpointPaths::kTaskResourcePrefix.size());
-  const auto push_segment = suffix.find(kPushNotificationConfigsSegment);
-  return push_segment != std::string_view::npos && push_segment > 0;
+  PushConfigPathParts parts;
+  parts.task_id = std::string(suffix.substr(0, segment_pos));
+  const auto remainder = suffix.substr(segment_pos + core::protocol_methods::kPushNotificationConfigsSegment.size());
+  if (parts.task_id.find('/') != std::string::npos) {
+    return std::nullopt;
+  }
+  if (remainder.empty()) {
+    parts.collection = true;
+    return parts;
+  }
+  if (!remainder.starts_with('/') || remainder.size() == 1U) {
+    return std::nullopt;
+  }
+  parts.config_id = std::string(remainder.substr(1));
+  if (parts.config_id.find('/') != std::string::npos) {
+    return std::nullopt;
+  }
+  return parts;
 }
 
 int ParsePageSize(std::string_view raw_page_size) {
@@ -390,6 +425,46 @@ std::optional<DispatchRequest> BuildCancelTaskDispatchRequest(const RestRequest&
   return DispatchRequest{.operation = DispatcherOperation::kCancelTask, .payload = payload};
 }
 
+std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest& request) {
+  const auto path = ParsePushConfigPath(request.path);
+  if (!path.has_value()) {
+    return std::nullopt;
+  }
+  if (request.method == "POST" && path->collection) {
+    lf::a2a::v1::TaskPushNotificationConfig payload;
+    const auto parse = core::JsonToMessage(request.body, &payload, {.ignore_unknown_fields = true});
+    if (!parse.ok()) {
+      return std::nullopt;
+    }
+    payload.set_task_id(path->task_id);
+    return DispatchRequest{.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = payload};
+  }
+  if (request.method == "GET" && path->collection) {
+    lf::a2a::v1::ListTaskPushNotificationConfigsRequest payload;
+    payload.set_task_id(path->task_id);
+    if (const auto page_size = LookupQuery(request, "pageSize"); page_size.has_value()) {
+      payload.set_page_size(ParsePageSize(*page_size));
+    }
+    if (const auto page_token = LookupQuery(request, "pageToken"); page_token.has_value()) {
+      payload.set_page_token(*page_token);
+    }
+    return DispatchRequest{.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = payload};
+  }
+  if (request.method == "GET" && !path->collection) {
+    lf::a2a::v1::GetTaskPushNotificationConfigRequest payload;
+    payload.set_task_id(path->task_id);
+    payload.set_id(path->config_id);
+    return DispatchRequest{.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = payload};
+  }
+  if (request.method == "DELETE" && !path->collection) {
+    lf::a2a::v1::DeleteTaskPushNotificationConfigRequest payload;
+    payload.set_task_id(path->task_id);
+    payload.set_id(path->config_id);
+    return DispatchRequest{.operation = DispatcherOperation::kDeleteTaskPushNotificationConfig, .payload = payload};
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 RestTransport::RestTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
@@ -400,6 +475,9 @@ const std::vector<RestRoute>& RestTransport::Routes() {
 }
 
 std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestRequest& request) {
+  if (auto dispatch_request = BuildPushConfigDispatchRequest(request); dispatch_request.has_value()) {
+    return dispatch_request;
+  }
   if (auto dispatch_request = BuildMessageDispatchRequest(request); dispatch_request.has_value()) {
     return dispatch_request;
   }
@@ -436,6 +514,25 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
         return core::Error::Internal("Task response payload mismatch");
       }
       return BuildJsonResponse(*payload);
+    }
+    case DispatcherOperation::kCreateTaskPushNotificationConfig:
+    case DispatcherOperation::kGetTaskPushNotificationConfig: {
+      const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&response.payload());
+      if (payload == nullptr) {
+        return core::Error::Internal("Push config response payload mismatch");
+      }
+      return BuildJsonResponse(*payload);
+    }
+    case DispatcherOperation::kListTaskPushNotificationConfigs: {
+      const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&response.payload());
+      if (payload == nullptr) {
+        return core::Error::Internal("Push config list response payload mismatch");
+      }
+      return BuildJsonResponse(*payload);
+    }
+    case DispatcherOperation::kDeleteTaskPushNotificationConfig: {
+      google::protobuf::Struct empty;
+      return BuildJsonResponse(empty);
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
@@ -513,10 +610,6 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
 core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) const {
   if (dispatcher_ == nullptr) {
     return core::Error::Internal("REST transport dispatcher is not configured");
-  }
-
-  if (IsPushNotificationConfigPath(request)) {
-    return BuildErrorResponse(core::protocol_errors::PushNotificationNotSupported().WithTransport("rest"));
   }
 
   if (request.method == "POST") {

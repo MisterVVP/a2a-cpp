@@ -43,3 +43,19 @@ UPDATE_REPO=0 ./scripts/windows_build_local.sh
 - If `UPDATE_REPO=1`, the script now requires the current branch to already be `main` and fails fast otherwise.
 
 See also: `docs/quickstart.md` for first-run setup and `docs/client-usage.md`/`docs/server-usage.md` for API details.
+
+## Push notifications
+
+Examples that use `ExampleExecutor` enable SDK-backed push notifications in their Agent Card and route CRUD calls through `PushNotificationService`.
+
+To enable push in an SDK server:
+
+1. Store tasks in a `TaskStore` implementation.
+2. Create a `PushNotificationStore` such as `InMemoryPushNotificationStore`, or inject your own durable implementation.
+3. Create a `PushNotificationDeliveryClient` such as `HttpPushNotificationDeliveryClient`, or inject your own queued/retrying sender.
+4. Construct `PushNotificationService` with those dependencies and forward push CRUD methods from your executor.
+5. Advertise support with `AgentCardBuilder::WithPushNotifications(true)` only after the store and delivery client are wired.
+
+`HttpPushNotificationDeliveryClient` sends webhook payloads as JSON `StreamResponse` HTTP POST requests with `Content-Type: application/json`. When `AuthenticationInfo.scheme` is set, it adds `Authorization: <scheme> <credentials>`; for example, scheme `Bearer` and credentials `abc` produce `Authorization: Bearer abc`.
+
+The in-memory store and synchronous HTTP delivery client are intended for local development, tests, examples, and single-process deployments. Production deployments should provide durable config storage, retry queues, backoff, observability, and outbound webhook security controls. Validate webhook URLs, prefer HTTPS, protect credentials, consider host allowlists to reduce SSRF risk, treat task IDs as opaque identifiers, and validate received task IDs on clients.

@@ -75,13 +75,15 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
 TEST(RestTransportTest, ExposesCentralRouteTable) {
   const auto& routes = a2a::server::RestTransport::Routes();
 
-  ASSERT_EQ(routes.size(), 6U);
+  ASSERT_EQ(routes.size(), 10U);
   EXPECT_EQ(routes[0].method, "POST");
   EXPECT_EQ(routes[0].path_pattern, "/message:send");
   EXPECT_EQ(routes[1].path_pattern, "/message:stream");
   EXPECT_EQ(routes[2].path_pattern, "/tasks/{id}");
   EXPECT_EQ(routes[3].path_pattern, "/tasks");
   EXPECT_EQ(routes[4].path_pattern, "/tasks/{id}:cancel");
+  EXPECT_EQ(routes[6].path_pattern, "/tasks/{task_id}/pushNotificationConfigs");
+  EXPECT_EQ(routes[7].path_pattern, "/tasks/{task_id}/pushNotificationConfigs/{id}");
 }
 
 TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
@@ -206,6 +208,7 @@ TEST(RestTransportTest, RejectsUnsupportedPushNotificationEndpoints) {
   a2a::server::RestRequest request;
   request.method = "POST";
   request.path = "/tasks/task-1/pushNotificationConfigs";
+  request.body = R"({"id":"push-1","url":"http://127.0.0.1/webhook"})";
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());

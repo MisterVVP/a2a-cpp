@@ -474,33 +474,91 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
 ::grpc::Status GrpcServerTransport::CreateTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
-  (void)request;
-  (void)response;
-  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = *request},
+                            request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+  const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for CreateTaskPushNotificationConfig"};
+  }
+  *response = *payload;
+  return ::grpc::Status::OK;
 }
 
 ::grpc::Status GrpcServerTransport::GetTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
-  (void)request;
-  (void)response;
-  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+  const auto dispatch = dispatcher_->Dispatch(
+      {.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = *request}, request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+  const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for GetTaskPushNotificationConfig"};
+  }
+  *response = *payload;
+  return ::grpc::Status::OK;
 }
 
 ::grpc::Status GrpcServerTransport::ListTaskPushNotificationConfigs(
     ::grpc::ServerContext* context, const lf::a2a::v1::ListTaskPushNotificationConfigsRequest* request,
     lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response) {
-  (void)request;
-  (void)response;
-  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = *request},
+                            request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+  const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "Unexpected dispatch payload type for ListTaskPushNotificationConfigs"};
+  }
+  *response = *payload;
+  return ::grpc::Status::OK;
 }
 
 ::grpc::Status GrpcServerTransport::DeleteTaskPushNotificationConfig(
     ::grpc::ServerContext* context, const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest* request,
     google::protobuf::Empty* response) {
-  (void)request;
-  (void)response;
-  return ToGrpcStatus(core::protocol_errors::PushNotificationNotSupported(), context);
+  if (request == nullptr || response == nullptr) {
+    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+  }
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kDeleteTaskPushNotificationConfig, .payload = *request},
+                            request_context.value());
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context);
+  }
+  return ::grpc::Status::OK;
 }
 
 ::grpc::Status GrpcServerTransport::GetExtendedAgentCard(::grpc::ServerContext* context,

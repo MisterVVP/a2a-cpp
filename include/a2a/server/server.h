@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/result.h"
 #include "a2a/server/task_id_generator.h"
 #include "a2a/v1/a2a.pb.h"
@@ -129,6 +130,35 @@ class AgentExecutor {
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                                    RequestContext& context) = 0;
+
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, RequestContext& context) {
+    (void)request;
+    (void)context;
+    return core::protocol_errors::PushNotificationNotSupported();
+  }
+
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, RequestContext& context) {
+    (void)request;
+    (void)context;
+    return core::protocol_errors::PushNotificationNotSupported();
+  }
+
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>
+  ListTaskPushNotificationConfigs(const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+                                  RequestContext& context) {
+    (void)request;
+    (void)context;
+    return core::protocol_errors::PushNotificationNotSupported();
+  }
+
+  [[nodiscard]] virtual core::Result<void> DeleteTaskPushNotificationConfig(
+      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, RequestContext& context) {
+    (void)request;
+    (void)context;
+    return core::protocol_errors::PushNotificationNotSupported();
+  }
 };
 
 enum class DispatcherOperation : std::uint8_t {
@@ -137,17 +167,24 @@ enum class DispatcherOperation : std::uint8_t {
   kGetTask,
   kListTasks,
   kCancelTask,
+  kCreateTaskPushNotificationConfig,
+  kGetTaskPushNotificationConfig,
+  kListTaskPushNotificationConfigs,
+  kDeleteTaskPushNotificationConfig,
 };
 
 struct DispatchRequest final {
   DispatcherOperation operation = DispatcherOperation::kSendMessage;
   std::variant<lf::a2a::v1::SendMessageRequest, lf::a2a::v1::GetTaskRequest, ListTasksRequest,
-               lf::a2a::v1::CancelTaskRequest>
+               lf::a2a::v1::CancelTaskRequest, lf::a2a::v1::TaskPushNotificationConfig,
+               lf::a2a::v1::GetTaskPushNotificationConfigRequest, lf::a2a::v1::ListTaskPushNotificationConfigsRequest,
+               lf::a2a::v1::DeleteTaskPushNotificationConfigRequest>
       payload = ListTasksRequest{};
 };
 
 using DispatchPayload = std::variant<lf::a2a::v1::SendMessageResponse, std::unique_ptr<ServerStreamSession>,
-                                     lf::a2a::v1::Task, ListTasksResponse>;
+                                     lf::a2a::v1::Task, ListTasksResponse, lf::a2a::v1::TaskPushNotificationConfig,
+                                     lf::a2a::v1::ListTaskPushNotificationConfigsResponse, std::monostate>;
 
 class DispatchResponse final {
  public:
@@ -158,6 +195,12 @@ class DispatchResponse final {
   explicit DispatchResponse(lf::a2a::v1::Task&& payload) : payload_(std::move(payload)) {}
   explicit DispatchResponse(const ListTasksResponse& payload) : payload_(payload) {}
   explicit DispatchResponse(ListTasksResponse&& payload) : payload_(std::move(payload)) {}
+  explicit DispatchResponse(const lf::a2a::v1::TaskPushNotificationConfig& payload) : payload_(payload) {}
+  explicit DispatchResponse(lf::a2a::v1::TaskPushNotificationConfig&& payload) : payload_(std::move(payload)) {}
+  explicit DispatchResponse(const lf::a2a::v1::ListTaskPushNotificationConfigsResponse& payload) : payload_(payload) {}
+  explicit DispatchResponse(lf::a2a::v1::ListTaskPushNotificationConfigsResponse&& payload)
+      : payload_(std::move(payload)) {}
+  DispatchResponse() : payload_(std::monostate{}) {}
 
   [[nodiscard]] const DispatchPayload& payload() const noexcept { return payload_; }
   [[nodiscard]] DispatchPayload& payload() noexcept { return payload_; }

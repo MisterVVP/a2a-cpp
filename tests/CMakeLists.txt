@@ -372,6 +372,35 @@ target_link_libraries(grpc_server_transport_test
 
 gtest_discover_tests(grpc_server_transport_test)
 
+
+add_executable(push_notification_store_test
+  unit/push_notification_store_test.cpp
+)
+
+target_link_libraries(push_notification_store_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(push_notification_store_test)
+
+add_executable(push_notification_service_test
+  unit/push_notification_service_test.cpp
+)
+
+target_link_libraries(push_notification_service_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(push_notification_service_test)
+
 add_executable(server_task_store_unit_test
   unit/server_task_store_unit_test.cpp
 )

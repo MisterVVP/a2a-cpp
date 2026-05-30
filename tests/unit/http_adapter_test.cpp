@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
 #include "a2a/server/http_adapter.h"
 
@@ -8,8 +9,11 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/http_constants.h"
 
 namespace {
 
@@ -43,8 +47,46 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
 constexpr std::string_view kBody = "hello";
 constexpr int kHttpOk = 200;
 
+std::string BuildRequest(std::string_view method, std::string_view target,
+                         const std::vector<std::pair<std::string_view, std::string_view>>& headers,
+                         std::string_view body = {}) {
+  std::string request;
+  request.append(method);
+  request.push_back(' ');
+  request.append(target);
+  request.push_back(' ');
+  request.append(a2a::core::http::kHttpVersion11);
+  request.append(a2a::core::http::kLineTerminator);
+  for (const auto& [name, value] : headers) {
+    request.append(name);
+    request.append(": ");
+    request.append(value);
+    request.append(a2a::core::http::kLineTerminator);
+  }
+  request.append(a2a::core::http::kLineTerminator);
+  request.append(body);
+  return request;
+}
+
+std::string BuildExpectedStatusLine() {
+  std::string line;
+  line.append(a2a::core::http::kHttpVersion11);
+  line.append(" 200 OK");
+  line.append(a2a::core::http::kLineTerminator);
+  return line;
+}
+
+std::string BuildExpectedContentLengthLine() {
+  std::string line;
+  line.append(a2a::core::http::kContentLengthHeaderName);
+  line.append(": 2");
+  line.append(a2a::core::http::kLineTerminator);
+  return line;
+}
+
 TEST(HttpAdapterTest, ParsesContentLengthCaseInsensitive) {
-  BufferTransport transport("POST /rpc HTTP/1.1\r\nHost: localhost\r\ncontent-length: 5\r\nX-Test: true\r\n\r\nhello");
+  BufferTransport transport(
+      BuildRequest("POST", "/rpc", {{"Host", "localhost"}, {"content-length", "5"}, {"X-Test", "true"}}, kBody));
   const a2a::server::HttpAdapter adapter;
   auto request = adapter.ReadRequest(transport, "127.0.0.1");
   ASSERT_TRUE(request.ok());
@@ -55,7 +97,7 @@ TEST(HttpAdapterTest, ParsesContentLengthCaseInsensitive) {
 
 TEST(HttpAdapterTest, RejectsOverflowContentLength) {
   BufferTransport transport(
-      "POST /rpc HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999999999999999999\r\n\r\n");
+      BuildRequest("POST", "/rpc", {{"Host", "localhost"}, {"Content-Length", "999999999999999999999999"}}));
   const a2a::server::HttpAdapter adapter;
   auto request = adapter.ReadRequest(transport, "127.0.0.1");
   ASSERT_FALSE(request.ok());
@@ -72,8 +114,8 @@ TEST(HttpAdapterTest, WriteResponseAddsContentLengthAndStatusText) {
 
   auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
   ASSERT_TRUE(write.ok());
-  EXPECT_NE(transport.output().find("HTTP/1.1 200 OK\r\n"), std::string::npos);
-  EXPECT_NE(transport.output().find("Content-Length: 2\r\n"), std::string::npos);
+  EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
+  EXPECT_NE(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
 }
 
 TEST(HttpAdapterTest, WriteResponseRejectsMismatchedContentLength) {
