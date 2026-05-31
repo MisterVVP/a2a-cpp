@@ -3,6 +3,7 @@
 
 #include "a2a/server/push_notification_store.h"
 
+#include <memory>
 #include <string>
 
 #include "a2a/core/error.h"
@@ -36,6 +37,10 @@ core::Result<void> ValidateLookup(std::string_view task_id, std::string_view con
 
 }  // namespace
 
+void InMemoryPushNotificationStore::RefreshSnapshot(TaskConfigs* task_configs) {
+  task_configs->list_snapshot = std::make_shared<ListResponse>(task_configs->list_response);
+}
+
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {
   const auto validation = ValidateConfig(config);
@@ -50,12 +55,14 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
   const auto config_it = task_configs.config_indices.find(config.id());
   if (config_it != task_configs.config_indices.end()) {
     *task_configs.list_response.mutable_configs(config_it->second) = config;
+    RefreshSnapshot(&task_configs);
     return config;
   }
 
   const int config_index = task_configs.list_response.configs_size();
   *task_configs.list_response.add_configs() = config;
   task_configs.config_indices.emplace(config.id(), config_index);
+  RefreshSnapshot(&task_configs);
   return config;
 }
 
@@ -84,12 +91,16 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
     return core::Error::Validation("push notification task_id is required");
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto task_it = configs_.find(task_id);
-  if (task_it == configs_.end()) {
-    return lf::a2a::v1::ListTaskPushNotificationConfigsResponse{};
+  std::shared_ptr<const ListResponse> list_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto task_it = configs_.find(task_id);
+    if (task_it == configs_.end()) {
+      return lf::a2a::v1::ListTaskPushNotificationConfigsResponse{};
+    }
+    list_snapshot = task_it->second.list_snapshot;
   }
-  return task_it->second.list_response;
+  return *list_snapshot;
 }
 
 core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_id, std::string_view config_id) {
@@ -121,7 +132,10 @@ core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_i
 
   if (task_configs.config_indices.empty()) {
     configs_.erase(task_it);
+    return {};
   }
+
+  RefreshSnapshot(&task_configs);
   return {};
 }
 
