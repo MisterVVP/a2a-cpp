@@ -315,6 +315,20 @@ target_link_libraries(rest_server_transport_test
 
 gtest_discover_tests(rest_server_transport_test)
 
+add_executable(rest_push_notification_transport_test
+  unit/rest_push_notification_transport_test.cpp
+)
+
+target_link_libraries(rest_push_notification_transport_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(rest_push_notification_transport_test)
+
 
 add_executable(json_rpc_server_transport_test
   unit/json_rpc_server_transport_test.cpp
@@ -632,7 +646,3 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::core
     a2a::proto_generated
 )
-
-add_executable(tck_http_sut interop/tck_http_sut.cpp)
-target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/examples)
-target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
