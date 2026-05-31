@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -59,10 +60,15 @@ class InMemoryPushNotificationStore final : public PushNotificationStore {
   [[nodiscard]] core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override;
 
  private:
+  using ListResponse = lf::a2a::v1::ListTaskPushNotificationConfigsResponse;
+
   struct TaskConfigs final {
-    lf::a2a::v1::ListTaskPushNotificationConfigsResponse list_response;
+    ListResponse list_response;
+    std::shared_ptr<const ListResponse> list_snapshot = std::make_shared<ListResponse>();
     std::unordered_map<std::string, int, TransparentStringHash, TransparentStringEqual> config_indices;
   };
+
+  static void RefreshSnapshot(TaskConfigs* task_configs);
 
   mutable std::mutex mutex_;
   std::unordered_map<std::string, TaskConfigs, TransparentStringHash, TransparentStringEqual> configs_;
