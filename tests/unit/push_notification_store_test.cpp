@@ -19,6 +19,9 @@ constexpr std::string_view kOtherConfigId = "push-2";
 constexpr std::string_view kWebhookUrl = "http://127.0.0.1/webhook";
 constexpr std::string_view kUpdatedWebhookUrl = "http://127.0.0.1/updated";
 constexpr int kBulkConfigCount = 1000;
+constexpr int kSingleConfigCount = 1;
+constexpr int kTwoConfigCount = 2;
+constexpr int kEmptyConfigCount = 0;
 
 struct PushConfigIds final {
   std::string_view task_id;
@@ -66,12 +69,12 @@ TEST(PushNotificationStoreTest, CreateGetListAndDeleteConfig) {
 
   const auto listed = store.List(kTaskId);
   ASSERT_TRUE(listed.ok());
-  ASSERT_EQ(listed.value().configs_size(), 1);
+  ASSERT_EQ(listed.value().configs_size(), kSingleConfigCount);
   EXPECT_EQ(listed.value().configs(0).task_id(), kTaskId);
 
   EXPECT_TRUE(store.Delete(kTaskId, kConfigId).ok());
   EXPECT_TRUE(store.Delete(kTaskId, kConfigId).ok());
-  EXPECT_EQ(store.List(kTaskId).value().configs_size(), 0);
+  EXPECT_EQ(store.List(kTaskId).value().configs_size(), kEmptyConfigCount);
 }
 
 TEST(PushNotificationStoreTest, RejectsMissingRequiredFields) {
@@ -98,11 +101,11 @@ TEST(PushNotificationStoreTest, PreservesMultipleConfigsAndScopesByTask) {
 
   const auto first_task = store.List(kTaskId);
   ASSERT_TRUE(first_task.ok());
-  EXPECT_EQ(first_task.value().configs_size(), 2);
+  EXPECT_EQ(first_task.value().configs_size(), kTwoConfigCount);
 
   const auto other_task = store.List(kOtherTaskId);
   ASSERT_TRUE(other_task.ok());
-  ASSERT_EQ(other_task.value().configs_size(), 1);
+  ASSERT_EQ(other_task.value().configs_size(), kSingleConfigCount);
   EXPECT_EQ(other_task.value().configs(0).task_id(), kOtherTaskId);
 }
 
@@ -119,7 +122,7 @@ TEST(PushNotificationStoreTest, UpdatingExistingConfigReplacesValueWithoutDuplic
   EXPECT_EQ(fetched.value().url(), kUpdatedWebhookUrl);
   const auto listed = store.List(kTaskId);
   ASSERT_TRUE(listed.ok());
-  EXPECT_EQ(listed.value().configs_size(), 1);
+  EXPECT_EQ(listed.value().configs_size(), kSingleConfigCount);
 }
 
 TEST(PushNotificationStoreTest, LookupValidationAndMissingConfigBranchesAreCovered) {
@@ -133,6 +136,52 @@ TEST(PushNotificationStoreTest, LookupValidationAndMissingConfigBranchesAreCover
   EXPECT_FALSE(store.List({}).ok());
   EXPECT_FALSE(store.Delete({}, kConfigId).ok());
   EXPECT_FALSE(store.Delete(kTaskId, {}).ok());
+}
+
+TEST(PushNotificationStoreTest, ListsMissingTaskAsEmptyResponse) {
+  a2a::server::InMemoryPushNotificationStore store;
+
+  const auto listed = store.List(kOtherTaskId);
+
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), kEmptyConfigCount);
+}
+
+TEST(PushNotificationStoreTest, ListReturnsDefensiveCopy) {
+  a2a::server::InMemoryPushNotificationStore store;
+  ASSERT_TRUE(store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = kConfigId})).ok());
+
+  auto listed = store.List(kTaskId);
+  ASSERT_TRUE(listed.ok());
+  listed.value().mutable_configs(0)->set_url(std::string(kUpdatedWebhookUrl));
+
+  const auto fetched = store.Get(kTaskId, kConfigId);
+  ASSERT_TRUE(fetched.ok());
+  EXPECT_EQ(fetched.value().url(), kWebhookUrl);
+}
+
+TEST(PushNotificationStoreTest, DeleteMissingTaskAndMissingConfigAreIdempotent) {
+  a2a::server::InMemoryPushNotificationStore store;
+  ASSERT_TRUE(store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = kConfigId})).ok());
+
+  EXPECT_TRUE(store.Delete(kOtherTaskId, kConfigId).ok());
+  EXPECT_TRUE(store.Delete(kTaskId, kOtherConfigId).ok());
+
+  const auto listed = store.List(kTaskId);
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), kSingleConfigCount);
+}
+
+TEST(PushNotificationStoreTest, DeleteLastConfigRemovesTaskBucket) {
+  a2a::server::InMemoryPushNotificationStore store;
+  ASSERT_TRUE(store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = kConfigId})).ok());
+
+  ASSERT_TRUE(store.Delete(kTaskId, kConfigId).ok());
+
+  EXPECT_FALSE(store.Get(kTaskId, kConfigId).ok());
+  const auto listed = store.List(kTaskId);
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), kEmptyConfigCount);
 }
 
 TEST(PushNotificationStoreTest, ListsLargeConfigSetAndDeleteOnlyRemovesTargetConfig) {
