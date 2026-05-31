@@ -646,3 +646,7 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::core
     a2a::proto_generated
 )
+
+add_executable(tck_http_sut interop/tck_http_sut.cpp)
+target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/examples)
+target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
