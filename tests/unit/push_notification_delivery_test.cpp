@@ -30,6 +30,10 @@ constexpr std::string_view kAuthScheme = "Bearer";
 constexpr std::string_view kCredentials = "credential-value";
 constexpr std::string_view kMalformedUrl = "ftp://127.0.0.1/webhook";
 constexpr std::string_view kHttpsUrl = "https://127.0.0.1/webhook";
+constexpr std::string_view kMissingHostUrl = "http:///webhook";
+constexpr std::string_view kMissingPortUrl = "http://127.0.0.1:/webhook";
+constexpr std::string_view kUnresolvedUrl = "http://invalid.invalid/webhook";
+constexpr std::string_view kHttpVersion10 = "HTTP/1.0";
 constexpr std::string_view kHttpVersion11 = "HTTP/1.1";
 constexpr std::string_view kHttpOkResponse = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n";
 constexpr std::string_view kHttpErrorResponse = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
@@ -143,6 +147,36 @@ TEST(PushNotificationDeliveryTest, RejectsHttpsWithoutTlsClient) {
   EXPECT_FALSE(result.ok());
 }
 
+TEST(PushNotificationDeliveryTest, RejectsUrlWithoutHost) {
+  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kMissingHostUrl)),
+                                                 .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  EXPECT_FALSE(result.ok());
+}
+
+TEST(PushNotificationDeliveryTest, RejectsUrlWithoutPort) {
+  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kMissingPortUrl)),
+                                                 .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  EXPECT_FALSE(result.ok());
+}
+
+TEST(PushNotificationDeliveryTest, RejectsUnresolvedHost) {
+  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kUnresolvedUrl)),
+                                                 .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  EXPECT_FALSE(result.ok());
+}
+
 #ifndef _WIN32
 TEST(PushNotificationDeliveryTest, DeliversJsonPayloadWithAuthorizationHeader) {
   LoopbackHttpServer server{std::string(kHttpOkResponse)};
@@ -161,6 +195,39 @@ TEST(PushNotificationDeliveryTest, DeliversJsonPayloadWithAuthorizationHeader) {
   EXPECT_NE(server.request().find("POST /webhook HTTP/1.1"), std::string::npos);
   EXPECT_NE(server.request().find("Authorization: Bearer credential-value"), std::string::npos);
   EXPECT_NE(server.request().find("Content-Type: application/json"), std::string::npos);
+}
+
+TEST(PushNotificationDeliveryTest, OmitsAuthorizationHeaderWhenSchemeIsEmpty) {
+  LoopbackHttpServer server{std::string(kHttpOkResponse)};
+  a2a::server::HttpPushNotificationDeliveryOptions options;
+  options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
+  options.http_version = std::string(kHttpVersion11);
+  options.fallback_http_version.clear();
+  a2a::server::HttpPushNotificationDeliveryClient client(options);
+  auto config = BuildConfig(BuildLoopbackUrl(server.port()));
+  config.mutable_authentication()->clear_scheme();
+  const a2a::server::PushDeliveryRequest request{.config = config, .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(server.request().find("Authorization:"), std::string::npos);
+}
+
+TEST(PushNotificationDeliveryTest, RetriesWithFallbackHttpVersion) {
+  LoopbackHttpServer server{std::string(kHttpOkResponse)};
+  a2a::server::HttpPushNotificationDeliveryOptions options;
+  options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
+  options.http_version = std::string(kHttpVersion10);
+  options.fallback_http_version = std::string(kHttpVersion11);
+  a2a::server::HttpPushNotificationDeliveryClient client(options);
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(BuildLoopbackUrl(server.port())),
+                                                 .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_NE(server.request().find("POST /webhook HTTP/1.0"), std::string::npos);
 }
 
 TEST(PushNotificationDeliveryTest, RejectsNonSuccessWebhookStatus) {
