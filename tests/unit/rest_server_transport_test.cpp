@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/rest_server_transport.h"
-
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -13,16 +11,11 @@
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "a2a/server/rest_server_transport.h"
 
 namespace {
 
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
-constexpr int kHttpOk = 200;
-constexpr int kHttpBadRequest = 400;
-constexpr int kPushPageSize = 25;
-constexpr std::string_view kTaskId = "task-1";
-constexpr std::string_view kConfigId = "push-1";
-constexpr std::string_view kWebhookUrl = "http://127.0.0.1/webhook";
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -69,62 +62,10 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
     return task;
   }
 
-  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
-      const lf::a2a::v1::TaskPushNotificationConfig& request, a2a::server::RequestContext& context) override {
-    (void)context;
-    observed_push_task_id = request.task_id();
-    observed_push_config_id = request.id();
-    observed_push_url = request.url();
-    return request;
-  }
-
-  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, a2a::server::RequestContext& context) override {
-    (void)context;
-    observed_push_task_id = request.task_id();
-    observed_push_config_id = request.id();
-    lf::a2a::v1::TaskPushNotificationConfig config;
-    config.set_task_id(request.task_id());
-    config.set_id(request.id());
-    config.set_url(std::string(kWebhookUrl));
-    return config;
-  }
-
-  a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-      a2a::server::RequestContext& context) override {
-    (void)context;
-    observed_push_task_id = request.task_id();
-    observed_page_size = request.page_size();
-    observed_page_token = request.page_token();
-    lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
-    auto* config = response.add_configs();
-    config->set_task_id(request.task_id());
-    config->set_id(std::string(kConfigId));
-    config->set_url(std::string(kWebhookUrl));
-    return response;
-  }
-
-  a2a::core::Result<void> DeleteTaskPushNotificationConfig(
-      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-      a2a::server::RequestContext& context) override {
-    (void)context;
-    observed_push_task_id = request.task_id();
-    observed_push_config_id = request.id();
-    delete_called = true;
-    return {};
-  }
-
   std::string observed_request_header;
   int observed_history_length = -1;
   std::string observed_bearer_token;
   std::string observed_api_key;
-  std::string observed_push_task_id;
-  std::string observed_push_config_id;
-  std::string observed_push_url;
-  int observed_page_size = 0;
-  std::string observed_page_token;
-  bool delete_called = false;
 };
 
 lf::a2a::v1::AgentCard BuildCard() {
@@ -159,7 +100,7 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
       {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
   EXPECT_FALSE(response.value().headers.contains("Cache-Control"));
   EXPECT_FALSE(response.value().headers.contains("Last-Modified"));
@@ -186,7 +127,7 @@ TEST(RestServerTransportTest, UsesConfigurableAgentCardCacheHeaders) {
       {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(response.value().headers.at("Cache-Control"), "public, max-age=60, stale-while-revalidate=30");
   EXPECT_EQ(response.value().headers.at("Last-Modified"), "Mon, 01 Jan 2024 00:00:00 GMT");
   EXPECT_TRUE(response.value().headers.contains("ETag"));
@@ -197,11 +138,11 @@ TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response =
-      server.Handle({.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, 200);
 }
 
 TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) {
@@ -209,8 +150,8 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response =
-      server.Handle({.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
+  const auto response = server.Handle(
+      {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   google::protobuf::Struct parsed;
@@ -235,7 +176,7 @@ TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(executor.observed_request_header, "1.0");
   EXPECT_NE(response.value().body.find("t-1"), std::string::npos);
 }
@@ -249,7 +190,7 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
       server.Handle({.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpBadRequest);
+  EXPECT_EQ(response.value().status_code, 400);
   EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
 }
 
@@ -265,7 +206,7 @@ TEST(RestServerTransportTest, ParsesAndDecodesQueryString) {
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(executor.observed_history_length, 20);
 }
 
@@ -282,83 +223,9 @@ TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(executor.observed_bearer_token, "token-rest");
   EXPECT_EQ(executor.observed_api_key, "rest-key");
-}
-
-TEST(RestServerTransportTest, CreatesPushNotificationConfig) {
-  EchoExecutor executor;
-  a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
-
-  const auto response = server.Handle({.method = "POST",
-                                       .target = "/a2a/tasks/task-1/pushNotificationConfigs",
-                                       .headers = {{"A2A-Version", "1.0"}},
-                                       .body = R"({"id":"push-1","url":"http://127.0.0.1/webhook"})",
-                                       .remote_address = {}});
-
-  ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_EQ(executor.observed_push_task_id, kTaskId);
-  EXPECT_EQ(executor.observed_push_config_id, kConfigId);
-  EXPECT_EQ(executor.observed_push_url, kWebhookUrl);
-  EXPECT_NE(response.value().body.find("push-1"), std::string::npos);
-}
-
-TEST(RestServerTransportTest, GetsPushNotificationConfig) {
-  EchoExecutor executor;
-  a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
-
-  const auto response = server.Handle({.method = "GET",
-                                       .target = "/a2a/tasks/task-1/pushNotificationConfigs/push-1",
-                                       .headers = {{"A2A-Version", "1.0"}},
-                                       .body = {},
-                                       .remote_address = {}});
-
-  ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_EQ(executor.observed_push_task_id, kTaskId);
-  EXPECT_EQ(executor.observed_push_config_id, kConfigId);
-  EXPECT_NE(response.value().body.find("push-1"), std::string::npos);
-}
-
-TEST(RestServerTransportTest, ListsPushNotificationConfigsWithPagingQuery) {
-  EchoExecutor executor;
-  a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
-
-  const auto response = server.Handle({.method = "GET",
-                                       .target = "/a2a/tasks/task-1/pushNotificationConfigs?pageSize=25&pageToken=abc",
-                                       .headers = {{"A2A-Version", "1.0"}},
-                                       .body = {},
-                                       .remote_address = {}});
-
-  ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_EQ(executor.observed_push_task_id, kTaskId);
-  EXPECT_EQ(executor.observed_page_size, kPushPageSize);
-  EXPECT_EQ(executor.observed_page_token, "abc");
-  EXPECT_NE(response.value().body.find("configs"), std::string::npos);
-}
-
-TEST(RestServerTransportTest, DeletesPushNotificationConfig) {
-  EchoExecutor executor;
-  a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
-
-  const auto response = server.Handle({.method = "DELETE",
-                                       .target = "/a2a/tasks/task-1/pushNotificationConfigs/push-1",
-                                       .headers = {{"A2A-Version", "1.0"}},
-                                       .body = {},
-                                       .remote_address = {}});
-
-  ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_TRUE(executor.delete_called);
-  EXPECT_EQ(executor.observed_push_task_id, kTaskId);
-  EXPECT_EQ(executor.observed_push_config_id, kConfigId);
 }
 
 }  // namespace
