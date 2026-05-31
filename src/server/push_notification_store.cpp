@@ -91,7 +91,10 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
   }
 
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
-  response.mutable_configs()->MergeFrom(task_it->second.list_response.configs());
+  auto* configs = response.mutable_configs();
+  const auto& source_configs = task_it->second.list_response.configs();
+  configs->Reserve(source_configs.size());
+  configs->MergeFrom(source_configs);
   return response;
 }
 
