@@ -34,16 +34,6 @@ core::Result<void> ValidateLookup(std::string_view task_id, std::string_view con
   return {};
 }
 
-lf::a2a::v1::ListTaskPushNotificationConfigsResponse CopyListResponse(
-    const lf::a2a::v1::ListTaskPushNotificationConfigsResponse& source) {
-  lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
-  response.mutable_configs()->Reserve(source.configs_size());
-  for (const auto& config : source.configs()) {
-    *response.add_configs() = config;
-  }
-  return response;
-}
-
 }  // namespace
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationStore::CreateOrUpdate(
@@ -99,7 +89,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
   if (task_it == configs_.end()) {
     return lf::a2a::v1::ListTaskPushNotificationConfigsResponse{};
   }
-  return CopyListResponse(task_it->second.list_response);
+  return task_it->second.list_response;
 }
 
 core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_id, std::string_view config_id) {
