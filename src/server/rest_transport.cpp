@@ -24,6 +24,11 @@
 namespace a2a::server {
 namespace {
 
+template <std::size_t MessageSize>
+[[nodiscard]] core::Error InternalResponsePayloadMismatch(const std::array<char, MessageSize>& message) {
+  return core::Error::Internal(core::protocol_error_messages::ToString(message));
+}
+
 constexpr int kHttpOk = 200;
 constexpr int kHttpBadRequest = 400;
 constexpr int kHttpConflict = 409;
@@ -497,14 +502,15 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("SendMessage response payload mismatch");
+        return InternalResponsePayloadMismatch(core::protocol_error_messages::kResponsePayloadMismatchForSendMessage);
       }
       return BuildJsonResponse(*payload);
     }
     case DispatcherOperation::kSendStreamingMessage: {
       auto* payload = std::get_if<std::unique_ptr<ServerStreamSession>>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("SendStreamingMessage response payload mismatch");
+        return InternalResponsePayloadMismatch(
+            core::protocol_error_messages::kResponsePayloadMismatchForSendStreamingMessage);
       }
       return BuildStreamingResponse(*payload);
     }
@@ -512,7 +518,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::Task>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("Task response payload mismatch");
+        return InternalResponsePayloadMismatch(core::protocol_error_messages::kResponsePayloadMismatchForTask);
       }
       return BuildJsonResponse(*payload);
     }
@@ -520,14 +526,15 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
     case DispatcherOperation::kGetTaskPushNotificationConfig: {
       const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("Push config response payload mismatch");
+        return InternalResponsePayloadMismatch(core::protocol_error_messages::kResponsePayloadMismatchForPushConfig);
       }
       return BuildJsonResponse(*payload);
     }
     case DispatcherOperation::kListTaskPushNotificationConfigs: {
       const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("Push config list response payload mismatch");
+        return InternalResponsePayloadMismatch(
+            core::protocol_error_messages::kResponsePayloadMismatchForPushConfigList);
       }
       return BuildJsonResponse(*payload);
     }
@@ -538,7 +545,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::Error::Internal("ListTasks response payload mismatch");
+        return InternalResponsePayloadMismatch(core::protocol_error_messages::kResponsePayloadMismatchForListTasks);
       }
       const auto body = BuildListTasksJson(*payload);
       if (!body.ok()) {

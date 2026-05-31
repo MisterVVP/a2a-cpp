@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -58,11 +59,13 @@ class InMemoryPushNotificationStore final : public PushNotificationStore {
   [[nodiscard]] core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override;
 
  private:
-  using ConfigMap = std::unordered_map<std::string, lf::a2a::v1::TaskPushNotificationConfig, TransparentStringHash,
-                                       TransparentStringEqual>;
+  struct TaskConfigs final {
+    lf::a2a::v1::ListTaskPushNotificationConfigsResponse list_response;
+    std::unordered_map<std::string, int, TransparentStringHash, TransparentStringEqual> config_indices;
+  };
 
   mutable std::mutex mutex_;
-  std::unordered_map<std::string, ConfigMap, TransparentStringHash, TransparentStringEqual> configs_;
+  std::unordered_map<std::string, TaskConfigs, TransparentStringHash, TransparentStringEqual> configs_;
 };
 
 }  // namespace a2a::server

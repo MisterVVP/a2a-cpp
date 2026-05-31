@@ -4,6 +4,7 @@
 #include "a2a/server/server.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <limits>
@@ -12,12 +13,18 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
 
 namespace a2a::server {
 
 namespace {
+
+template <std::size_t MessageSize>
+[[nodiscard]] core::Error DispatchPayloadTypeMismatchError(const std::array<char, MessageSize>& message) {
+  return core::Error::Validation(core::protocol_error_messages::ToString(message));
+}
 
 std::string ToLower(std::string_view value) {
   std::string lowered(value);
@@ -92,7 +99,8 @@ core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, c
     case DispatcherOperation::kCreateTaskPushNotificationConfig: {
       const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for push config create");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForCreateTaskPushNotificationConfig);
       }
       const auto response = executor.CreateTaskPushNotificationConfig(*payload, context);
       if (!response.ok()) {
@@ -103,7 +111,8 @@ core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, c
     case DispatcherOperation::kGetTaskPushNotificationConfig: {
       const auto* payload = std::get_if<lf::a2a::v1::GetTaskPushNotificationConfigRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for push config get");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTaskPushNotificationConfig);
       }
       const auto response = executor.GetTaskPushNotificationConfig(*payload, context);
       if (!response.ok()) {
@@ -114,7 +123,8 @@ core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, c
     case DispatcherOperation::kListTaskPushNotificationConfigs: {
       const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for push config list");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForListTaskPushNotificationConfigs);
       }
       const auto response = executor.ListTaskPushNotificationConfigs(*payload, context);
       if (!response.ok()) {
@@ -125,7 +135,8 @@ core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, c
     case DispatcherOperation::kDeleteTaskPushNotificationConfig: {
       const auto* payload = std::get_if<lf::a2a::v1::DeleteTaskPushNotificationConfigRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for push config delete");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForDeleteTaskPushNotificationConfig);
       }
       const auto response = executor.DeleteTaskPushNotificationConfig(*payload, context);
       if (!response.ok()) {
@@ -153,7 +164,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for SendMessage");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendMessage);
       }
       const auto response = executor.SendMessage(*payload, context);
       if (!response.ok()) {
@@ -164,7 +176,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kSendStreamingMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for SendStreamingMessage");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendStreamingMessage);
       }
       auto response = executor.SendStreamingMessage(*payload, context);
       if (!response.ok()) {
@@ -175,7 +188,7 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kGetTask: {
       const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for GetTask");
+        return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask);
       }
       auto response = executor.GetTask(*payload, context);
       if (!response.ok()) {
@@ -190,7 +203,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for ListTasks");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForListTasks);
       }
       const auto response = executor.ListTasks(*payload, context);
       if (!response.ok()) {
@@ -201,7 +215,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::CancelTaskRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for CancelTask");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForCancelTask);
       }
       const auto response = executor.CancelTask(*payload, context);
       if (!response.ok()) {

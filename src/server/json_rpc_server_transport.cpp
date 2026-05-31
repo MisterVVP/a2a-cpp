@@ -5,6 +5,7 @@
 
 #include <google/protobuf/struct.pb.h>
 
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
@@ -25,6 +27,11 @@
 
 namespace a2a::server {
 namespace {
+
+template <std::size_t MessageSize>
+[[nodiscard]] core::Error InvalidJsonRpcResponsePayload(const std::array<char, MessageSize>& message) {
+  return core::protocol_errors::InvalidAgentResponse(core::protocol_error_messages::ToString(message));
+}
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpInternalServerError = 500;
@@ -748,8 +755,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   if (is_streaming) {
     auto* session = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
     if (session == nullptr) {
-      const auto error = core::protocol_errors::InvalidAgentResponse("JSON-RPC streaming response payload mismatch")
-                             .WithTransport("jsonrpc");
+      const auto error =
+          InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForStreaming)
+              .WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
@@ -765,8 +773,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   if (is_subscribe) {
     const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
     if (task == nullptr) {
-      const auto error = core::protocol_errors::InvalidAgentResponse("JSON-RPC subscribe response payload mismatch")
-                             .WithTransport("jsonrpc");
+      const auto error =
+          InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSubscribe)
+              .WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
@@ -846,7 +855,8 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC SendMessage response payload mismatch");
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSendMessage);
       }
       return BuildJsonValueFromMessage(*payload);
     }
@@ -854,14 +864,15 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::Task>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC Task response payload mismatch");
+        return InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForTask);
       }
       return BuildJsonValueFromMessage(*payload);
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC ListTasks response payload mismatch");
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForListTasks);
       }
       return BuildListTasksResult(*payload);
     }
@@ -869,14 +880,16 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kGetTaskPushNotificationConfig: {
       const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC push config response payload mismatch");
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForPushConfig);
       }
       return BuildJsonValueFromMessage(*payload);
     }
     case DispatcherOperation::kListTaskPushNotificationConfigs: {
       const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC push config list response payload mismatch");
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForPushConfigList);
       }
       return BuildJsonValueFromMessage(*payload);
     }

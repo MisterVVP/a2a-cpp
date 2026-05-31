@@ -46,6 +46,13 @@ lf::a2a::v1::TaskPushNotificationConfig BuildConfig(PushConfigIds ids) {
   return std::ranges::find(ids, expected_id) != ids.end();
 }
 
+void PopulateConfigs(a2a::server::InMemoryPushNotificationStore* store, int config_count) {
+  for (int index = 0; index < config_count; ++index) {
+    const std::string config_id = std::string(kConfigId) + std::to_string(index);
+    ASSERT_TRUE(store->CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = config_id})).ok());
+  }
+}
+
 }  // namespace
 
 TEST(PushNotificationStoreTest, CreateGetListAndDeleteConfig) {
@@ -130,13 +137,15 @@ TEST(PushNotificationStoreTest, LookupValidationAndMissingConfigBranchesAreCover
 
 TEST(PushNotificationStoreTest, ListsLargeConfigSetAndDeleteOnlyRemovesTargetConfig) {
   a2a::server::InMemoryPushNotificationStore store;
-  for (int index = 0; index < kBulkConfigCount; ++index) {
-    const std::string config_id = std::string(kConfigId) + std::to_string(index);
-    ASSERT_TRUE(store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = config_id})).ok());
-  }
+  PopulateConfigs(&store, kBulkConfigCount);
 
   const std::string deleted_config_id = std::string(kConfigId) + std::to_string(kBulkConfigCount / 2);
+  const std::string last_config_id = std::string(kConfigId) + std::to_string(kBulkConfigCount - 1);
   ASSERT_TRUE(store.Delete(kTaskId, deleted_config_id).ok());
+
+  const auto moved_config = store.Get(kTaskId, last_config_id);
+  ASSERT_TRUE(moved_config.ok());
+  EXPECT_EQ(moved_config.value().id(), last_config_id);
 
   const auto listed = store.List(kTaskId);
   ASSERT_TRUE(listed.ok());

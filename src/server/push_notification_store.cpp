@@ -44,7 +44,18 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  configs_[config.task_id()][config.id()] = config;
+  auto [task_it, unused_inserted] = configs_.try_emplace(config.task_id());
+  (void)unused_inserted;
+  auto& task_configs = task_it->second;
+  const auto config_it = task_configs.config_indices.find(config.id());
+  if (config_it != task_configs.config_indices.end()) {
+    *task_configs.list_response.mutable_configs(config_it->second) = config;
+    return config;
+  }
+
+  const int config_index = task_configs.list_response.configs_size();
+  *task_configs.list_response.add_configs() = config;
+  task_configs.config_indices.emplace(config.id(), config_index);
   return config;
 }
 
@@ -60,11 +71,11 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
   if (task_it == configs_.end()) {
     return core::protocol_errors::TaskNotFound("push notification task config not found");
   }
-  const auto config_it = task_it->second.find(config_id);
-  if (config_it == task_it->second.end()) {
+  const auto config_it = task_it->second.config_indices.find(config_id);
+  if (config_it == task_it->second.config_indices.end()) {
     return core::Error::Validation("push notification config not found");
   }
-  return config_it->second;
+  return task_it->second.list_response.configs(config_it->second);
 }
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushNotificationStore::List(
@@ -79,12 +90,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
   if (task_it == configs_.end()) {
     return response;
   }
-  response.mutable_configs()->Reserve(static_cast<int>(task_it->second.size()));
-  for (const auto& [unused_id, config] : task_it->second) {
-    (void)unused_id;
-    *response.add_configs() = config;
-  }
-  return response;
+  return task_it->second.list_response;
 }
 
 core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_id, std::string_view config_id) {
@@ -98,11 +104,23 @@ core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_i
   if (task_it == configs_.end()) {
     return {};
   }
-  const auto config_it = task_it->second.find(config_id);
-  if (config_it != task_it->second.end()) {
-    task_it->second.erase(config_it);
+  auto& task_configs = task_it->second;
+  const auto config_it = task_configs.config_indices.find(config_id);
+  if (config_it == task_configs.config_indices.end()) {
+    return {};
   }
-  if (task_it->second.empty()) {
+
+  const int config_index = config_it->second;
+  const int last_index = task_configs.list_response.configs_size() - 1;
+  if (config_index != last_index) {
+    const lf::a2a::v1::TaskPushNotificationConfig last_config = task_configs.list_response.configs(last_index);
+    *task_configs.list_response.mutable_configs(config_index) = last_config;
+    task_configs.config_indices[last_config.id()] = config_index;
+  }
+  task_configs.list_response.mutable_configs()->RemoveLast();
+  task_configs.config_indices.erase(config_it);
+
+  if (task_configs.config_indices.empty()) {
     configs_.erase(task_it);
   }
   return {};
