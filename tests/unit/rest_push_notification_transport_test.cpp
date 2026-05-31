@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/rest_server_transport.h"
-
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -11,6 +9,7 @@
 
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/version.h"
+#include "a2a/server/rest_server_transport.h"
 
 namespace {
 
