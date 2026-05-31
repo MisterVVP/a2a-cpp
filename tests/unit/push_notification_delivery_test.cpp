@@ -13,13 +13,13 @@
 #endif
 
 #include <chrono>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 
 #include "a2a/core/http_constants.h"
-#include "a2a/core/result.h"
 
 namespace {
 
@@ -36,6 +36,7 @@ constexpr std::string_view kHttpErrorResponse = "HTTP/1.1 500 Internal Server Er
 constexpr std::string_view kMalformedResponse = "not an http response\r\n\r\n";
 constexpr int kExpectedHttpStatusNoContent = 204;
 constexpr int kDeliveryTimeoutMs = 1000;
+constexpr int kSocketError = -1;
 
 lf::a2a::v1::StreamResponse BuildPayload() {
   lf::a2a::v1::StreamResponse payload;
@@ -63,21 +64,21 @@ class LoopbackHttpServer final {
  public:
   explicit LoopbackHttpServer(std::string response) : response_(std::move(response)) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    EXPECT_GE(fd_, 0);
+    EXPECT_NE(fd_, kSocketError);
     int reuse = 1;
-    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)), 0);
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
 
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = 0;
-    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
     EXPECT_EQ(::listen(fd_, 1), 0);
 
     sockaddr_in bound_address{};
-    socklen_t bound_size = sizeof(bound_address);
+    socklen_t bound_size = static_cast<socklen_t>(sizeof(bound_address));
     EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
-    port_ = ntohs(bound_address.sin_port);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
 
     worker_ = std::thread([this] { AcceptOnce(); });
   }
@@ -89,7 +90,7 @@ class LoopbackHttpServer final {
     if (worker_.joinable()) {
       worker_.join();
     }
-    if (fd_ >= 0) {
+    if (fd_ != kSocketError) {
       ::close(fd_);
     }
   }
@@ -100,7 +101,7 @@ class LoopbackHttpServer final {
  private:
   void AcceptOnce() {
     const int client = ::accept(fd_, nullptr, nullptr);
-    if (client < 0) {
+    if (client == kSocketError) {
       return;
     }
     char buffer[a2a::core::http::kReceiveBufferSize]{};
@@ -112,7 +113,7 @@ class LoopbackHttpServer final {
     ::close(client);
   }
 
-  int fd_ = -1;
+  int fd_ = kSocketError;
   int port_ = 0;
   std::string response_;
   std::string request_;
