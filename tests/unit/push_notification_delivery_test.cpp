@@ -27,7 +27,7 @@ constexpr std::string_view kTaskId = "task-1";
 constexpr std::string_view kContextId = "ctx-1";
 constexpr std::string_view kConfigId = "push-1";
 constexpr std::string_view kAuthScheme = "Bearer";
-constexpr std::string_view kCredentials = "secret-token";
+constexpr std::string_view kCredentials = "credential-value";
 constexpr std::string_view kMalformedUrl = "ftp://127.0.0.1/webhook";
 constexpr std::string_view kHttpsUrl = "https://127.0.0.1/webhook";
 constexpr std::string_view kHttpVersion11 = "HTTP/1.1";
@@ -57,9 +57,9 @@ lf::a2a::v1::TaskPushNotificationConfig BuildConfig(std::string url) {
   return config;
 }
 
+#ifndef _WIN32
 std::string BuildLoopbackUrl(int port) { return "http://127.0.0.1:" + std::to_string(port) + "/webhook"; }
 
-#ifndef _WIN32
 class LoopbackHttpServer final {
  public:
   explicit LoopbackHttpServer(std::string response) : response_(std::move(response)) {
@@ -124,7 +124,7 @@ class LoopbackHttpServer final {
 }  // namespace
 
 TEST(PushNotificationDeliveryTest, RejectsUnsupportedUrlScheme) {
-  a2a::server::HttpPushNotificationDeliveryClient client(std::chrono::milliseconds(kDeliveryTimeoutMs));
+  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
   const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kMalformedUrl)),
                                                  .payload = BuildPayload()};
 
@@ -134,7 +134,7 @@ TEST(PushNotificationDeliveryTest, RejectsUnsupportedUrlScheme) {
 }
 
 TEST(PushNotificationDeliveryTest, RejectsHttpsWithoutTlsClient) {
-  a2a::server::HttpPushNotificationDeliveryClient client(std::chrono::milliseconds(kDeliveryTimeoutMs));
+  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
   const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kHttpsUrl)),
                                                  .payload = BuildPayload()};
 
@@ -145,7 +145,7 @@ TEST(PushNotificationDeliveryTest, RejectsHttpsWithoutTlsClient) {
 
 #ifndef _WIN32
 TEST(PushNotificationDeliveryTest, DeliversJsonPayloadWithAuthorizationHeader) {
-  LoopbackHttpServer server(std::string(kHttpOkResponse));
+  LoopbackHttpServer server{std::string(kHttpOkResponse)};
   a2a::server::HttpPushNotificationDeliveryOptions options;
   options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
   options.http_version = std::string(kHttpVersion11);
@@ -159,12 +159,12 @@ TEST(PushNotificationDeliveryTest, DeliversJsonPayloadWithAuthorizationHeader) {
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(result.value().http_status, kExpectedHttpStatusNoContent);
   EXPECT_NE(server.request().find("POST /webhook HTTP/1.1"), std::string::npos);
-  EXPECT_NE(server.request().find("Authorization: Bearer secret-token"), std::string::npos);
+  EXPECT_NE(server.request().find("Authorization: Bearer credential-value"), std::string::npos);
   EXPECT_NE(server.request().find("Content-Type: application/json"), std::string::npos);
 }
 
 TEST(PushNotificationDeliveryTest, RejectsNonSuccessWebhookStatus) {
-  LoopbackHttpServer server(std::string(kHttpErrorResponse));
+  LoopbackHttpServer server{std::string(kHttpErrorResponse)};
   a2a::server::HttpPushNotificationDeliveryOptions options;
   options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
   options.http_version = std::string(kHttpVersion11);
@@ -179,7 +179,7 @@ TEST(PushNotificationDeliveryTest, RejectsNonSuccessWebhookStatus) {
 }
 
 TEST(PushNotificationDeliveryTest, RejectsMalformedWebhookResponse) {
-  LoopbackHttpServer server(std::string(kMalformedResponse));
+  LoopbackHttpServer server{std::string(kMalformedResponse)};
   a2a::server::HttpPushNotificationDeliveryOptions options;
   options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
   options.http_version = std::string(kHttpVersion11);
