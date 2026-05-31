@@ -20,14 +20,21 @@ constexpr std::string_view kAuthScheme = "Bearer";
 constexpr std::string_view kCredentials = "secret";
 constexpr std::string_view kMessageId = "message-1";
 constexpr int kAcceptedHttpStatus = 202;
+constexpr int kCreatedConfigCount = 2;
+constexpr int kRemainingConfigCount = 1;
+constexpr int kEmptyConfigCount = 0;
 
 class RecordingDeliveryClient final : public a2a::server::PushNotificationDeliveryClient {
  public:
   a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(const a2a::server::PushDeliveryRequest& request) override {
     requests.push_back(request);
+    if (fail_delivery) {
+      return a2a::core::Error::Network("delivery failed");
+    }
     return a2a::server::PushDeliveryResult{.http_status = kAcceptedHttpStatus, .error_message = {}};
   }
 
+  bool fail_delivery = false;
   std::vector<a2a::server::PushDeliveryRequest> requests;
 };
 
@@ -72,6 +79,18 @@ TEST(PushNotificationServiceTest, CreateConfigRequiresExistingTask) {
   EXPECT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
 }
 
+TEST(PushNotificationServiceTest, CreateConfigRequiresConfiguredStores) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+
+  a2a::server::PushNotificationService missing_task_store(nullptr, &push_store, &delivery);
+  EXPECT_FALSE(missing_task_store.CreateConfig(BuildConfig(kConfigId)).ok());
+
+  a2a::server::PushNotificationService missing_push_store(&task_store, nullptr, &delivery);
+  EXPECT_FALSE(missing_push_store.CreateConfig(BuildConfig(kConfigId)).ok());
+}
+
 TEST(PushNotificationServiceTest, InlineConfigResolvesTaskIdAndPreservesFields) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;
@@ -88,6 +107,44 @@ TEST(PushNotificationServiceTest, InlineConfigResolvesTaskIdAndPreservesFields) 
   EXPECT_EQ(stored.value().authentication().credentials(), kCredentials);
 }
 
+TEST(PushNotificationServiceTest, InlineConfigFailsWhenResolvedTaskDoesNotExist) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+
+  EXPECT_FALSE(service.RegisterInlineConfigIfPresent(BuildInlineRequest(), kTaskId).ok());
+}
+
+TEST(PushNotificationServiceTest, GetListAndDeleteConfigUseStore) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  ASSERT_TRUE(task_store.CreateOrUpdate(BuildTask()).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kOtherConfigId)).ok());
+
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
+  get_request.set_task_id(std::string(kTaskId));
+  get_request.set_id(std::string(kConfigId));
+  const auto fetched = service.GetConfig(get_request);
+  ASSERT_TRUE(fetched.ok());
+  EXPECT_EQ(fetched.value().id(), kConfigId);
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest list_request;
+  list_request.set_task_id(std::string(kTaskId));
+  const auto listed = service.ListConfigs(list_request);
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), kCreatedConfigCount);
+
+  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
+  delete_request.set_task_id(std::string(kTaskId));
+  delete_request.set_id(std::string(kConfigId));
+  ASSERT_TRUE(service.DeleteConfig(delete_request).ok());
+  EXPECT_EQ(service.ListConfigs(list_request).value().configs_size(), kRemainingConfigCount);
+}
+
 TEST(PushNotificationServiceTest, NotifyTaskUpdatedDeliversStatusUpdateToEachConfig) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;
@@ -99,7 +156,7 @@ TEST(PushNotificationServiceTest, NotifyTaskUpdatedDeliversStatusUpdateToEachCon
   ASSERT_TRUE(service.CreateConfig(BuildConfig(kOtherConfigId)).ok());
 
   ASSERT_TRUE(service.NotifyTaskUpdated(task).ok());
-  ASSERT_EQ(delivery.requests.size(), 2);
+  ASSERT_EQ(delivery.requests.size(), static_cast<std::size_t>(kCreatedConfigCount));
   const auto& update = delivery.requests.front().payload.status_update();
   EXPECT_EQ(update.task_id(), kTaskId);
   EXPECT_EQ(update.context_id(), kContextId);
@@ -111,8 +168,33 @@ TEST(PushNotificationServiceTest, NotifyTaskUpdatedDeliversStatusUpdateToEachCon
   ASSERT_TRUE(service.DeleteConfig(delete_request).ok());
   delivery.requests.clear();
   ASSERT_TRUE(service.NotifyTaskUpdated(task).ok());
-  ASSERT_EQ(delivery.requests.size(), 1);
+  ASSERT_EQ(delivery.requests.size(), static_cast<std::size_t>(kRemainingConfigCount));
   EXPECT_EQ(delivery.requests.front().config.id(), kOtherConfigId);
+}
+
+TEST(PushNotificationServiceTest, NotifyTaskUpdatedNoOpsWhenTaskHasNoConfigs) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+
+  ASSERT_TRUE(service.NotifyTaskUpdated(BuildTask()).ok());
+  EXPECT_TRUE(delivery.requests.empty());
+}
+
+TEST(PushNotificationServiceTest, NotifyTaskUpdatedIgnoresIndividualDeliveryFailures) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  const auto task = BuildTask();
+  ASSERT_TRUE(task_store.CreateOrUpdate(task).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
+  delivery.fail_delivery = true;
+
+  EXPECT_TRUE(service.NotifyTaskUpdated(task).ok());
+  ASSERT_EQ(delivery.requests.size(), static_cast<std::size_t>(kRemainingConfigCount));
+  EXPECT_EQ(delivery.requests.front().config.id(), kConfigId);
 }
 
 TEST(PushNotificationServiceTest, StoreOperationsReturnConfigurationErrorsWhenStoreMissing) {
@@ -136,6 +218,14 @@ TEST(PushNotificationServiceTest, StoreOperationsReturnConfigurationErrorsWhenSt
   EXPECT_FALSE(service.NotifyTaskUpdated(BuildTask()).ok());
 }
 
+TEST(PushNotificationServiceTest, NotifyTaskUpdatedRequiresDeliveryClient) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  a2a::server::PushNotificationService service(&task_store, &push_store, nullptr);
+
+  EXPECT_FALSE(service.NotifyTaskUpdated(BuildTask()).ok());
+}
+
 TEST(PushNotificationServiceTest, RegisterInlineConfigNoOpsWhenRequestHasNoPushConfig) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;
@@ -148,5 +238,5 @@ TEST(PushNotificationServiceTest, RegisterInlineConfigNoOpsWhenRequestHasNoPushC
 
   const auto listed = push_store.List(kTaskId);
   ASSERT_TRUE(listed.ok());
-  EXPECT_EQ(listed.value().configs_size(), 0);
+  EXPECT_EQ(listed.value().configs_size(), kEmptyConfigCount);
 }
