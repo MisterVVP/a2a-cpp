@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -64,11 +63,8 @@ class InMemoryPushNotificationStore final : public PushNotificationStore {
 
   struct TaskConfigs final {
     ListResponse list_response;
-    std::shared_ptr<const ListResponse> list_snapshot = std::make_shared<ListResponse>();
     std::unordered_map<std::string, int, TransparentStringHash, TransparentStringEqual> config_indices;
   };
-
-  static void RefreshSnapshot(TaskConfigs* task_configs);
 
   mutable std::mutex mutex_;
   std::unordered_map<std::string, TaskConfigs, TransparentStringHash, TransparentStringEqual> configs_;
