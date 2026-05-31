@@ -79,8 +79,7 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-      a2a::server::RequestContext& context) override {
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, a2a::server::RequestContext& context) override {
     (void)context;
     observed_push_task_id = request.task_id();
     observed_push_config_id = request.id();
@@ -199,11 +198,7 @@ TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response =
-      server.Handle({.method = "GET",
-                     .target = "/.well-known/agent.json",
-                     .headers = {},
-                     .body = {},
-                     .remote_address = {}});
+      server.Handle({.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
@@ -215,11 +210,7 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response =
-      server.Handle({.method = "GET",
-                     .target = "/.well-known/agent.json",
-                     .headers = {},
-                     .body = {},
-                     .remote_address = {}});
+      server.Handle({.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   google::protobuf::Struct parsed;
@@ -254,8 +245,8 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle(
-      {.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
+  const auto response =
+      server.Handle({.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpBadRequest);
