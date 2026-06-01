@@ -80,7 +80,7 @@ class LoopbackHttpServer final {
     EXPECT_EQ(::listen(fd_, 1), 0);
 
     sockaddr_in bound_address{};
-    socklen_t bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
     EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
     port_ = static_cast<int>(ntohs(bound_address.sin_port));
 
