@@ -88,16 +88,13 @@ void BM_PushNotificationStore_CreateOrUpdate(benchmark::State& state) {
 }
 BENCHMARK(BM_PushNotificationStore_CreateOrUpdate);
 
-void BM_PushNotificationStore_List_1000Configs(benchmark::State& state) {
-  state.PauseTiming();
+void BM_PushNotificationStore_List_ManyConfigs(benchmark::State& state) {
   const auto configs = BuildPushConfigs(kSeedConfigIdPrefix, a2a::bench::kTaskCount);
   a2a::server::InMemoryPushNotificationStore store;
   if (!SeedPushStore(store, configs)) {
     state.SkipWithError(kPushSeedError.data());
-    state.ResumeTiming();
     return;
   }
-  state.ResumeTiming();
 
   for (auto _ : state) {
     auto result = store.List(a2a::bench::kTaskId);
@@ -105,10 +102,9 @@ void BM_PushNotificationStore_List_1000Configs(benchmark::State& state) {
   }
   state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(configs.size()));
 }
-BENCHMARK(BM_PushNotificationStore_List_1000Configs);
+BENCHMARK(BM_PushNotificationStore_List_ManyConfigs);
 
-void BM_PushNotificationService_Notify_1000Configs(benchmark::State& state) {
-  state.PauseTiming();
+void BM_PushNotificationService_Notify_ManyConfigs(benchmark::State& state) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;
   BenchmarkDeliveryClient delivery;
@@ -117,16 +113,13 @@ void BM_PushNotificationService_Notify_1000Configs(benchmark::State& state) {
   const auto created_task = task_store.CreateOrUpdate(task);
   if (!created_task.ok()) {
     state.SkipWithError(kTaskSeedError.data());
-    state.ResumeTiming();
     return;
   }
   const auto configs = BuildPushConfigs(kSeedConfigIdPrefix, a2a::bench::kTaskCount);
   if (!SeedPushStore(push_store, configs)) {
     state.SkipWithError(kPushSeedError.data());
-    state.ResumeTiming();
     return;
   }
-  state.ResumeTiming();
 
   for (auto _ : state) {
     auto result = service.NotifyTaskUpdated(task);
@@ -134,6 +127,6 @@ void BM_PushNotificationService_Notify_1000Configs(benchmark::State& state) {
   }
   state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(configs.size()));
 }
-BENCHMARK(BM_PushNotificationService_Notify_1000Configs);
+BENCHMARK(BM_PushNotificationService_Notify_ManyConfigs);
 
 }  // namespace
