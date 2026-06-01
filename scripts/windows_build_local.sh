@@ -264,6 +264,7 @@ examples=(
   example_cancel_task_client
   example_interceptor_client
   example_auth_policy_server
+  example_push_notifications
 )
 
 if [[ "${RUN_PUSH_EXAMPLE:-0}" == "1" ]]; then
