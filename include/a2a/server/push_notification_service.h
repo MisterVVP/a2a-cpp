@@ -15,6 +15,9 @@ namespace a2a::server {
 
 class PushNotificationService final {
  public:
+  static constexpr std::string_view kPushDeliveryNonSuccessStatusMessage =
+      "push notification delivery returned non-2xx status";
+
   PushNotificationService(TaskStore* task_store, PushNotificationStore* push_store,
                           PushNotificationDeliveryClient* delivery_client);
 

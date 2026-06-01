@@ -11,12 +11,6 @@
 
 namespace a2a::server {
 
-namespace {
-
-constexpr std::string_view kPushDeliveryNonSuccessStatusMessage = "push notification delivery returned non-2xx status";
-
-}  // namespace
-
 PushNotificationService::PushNotificationService(TaskStore* task_store, PushNotificationStore* push_store,
                                                  PushNotificationDeliveryClient* delivery_client)
     : task_store_(task_store), push_store_(push_store), delivery_client_(delivery_client) {}

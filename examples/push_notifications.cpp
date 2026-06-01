@@ -30,8 +30,7 @@ constexpr int kExpectedDeliveryCount = 1;
 
 class RecordingPushDeliveryClient final : public a2a::server::PushNotificationDeliveryClient {
  public:
-  a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(
-      const a2a::server::PushDeliveryRequest& request) override {
+  a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(const a2a::server::PushDeliveryRequest& request) override {
     requests.push_back(request);
     return a2a::server::PushDeliveryResult{.http_status = kDeliveryHttpStatus, .error_message = {}};
   }
