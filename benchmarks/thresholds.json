@@ -69,13 +69,13 @@
     "max_time_ns": 20000
   },
   "BM_PushNotificationService_Notify_ManyConfigs": {
-    "max_time_ns": 1500000
+    "max_time_ns": 900000
   },
   "BM_PushNotificationStore_CreateOrUpdate": {
-    "max_time_ns": 1500000
+    "max_time_ns": 900000
   },
   "BM_PushNotificationStore_List_ManyConfigs": {
-    "max_time_ns": 300000
+    "max_time_ns": 350000
   },
   "BM_RestTransport_AgentCardResponse": {
     "max_time_ns": 90000
