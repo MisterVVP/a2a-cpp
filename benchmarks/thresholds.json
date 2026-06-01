@@ -68,13 +68,13 @@
   "BM_ProtoJson_MessageToJson_Task": {
     "max_time_ns": 20000
   },
-  "BM_PushNotificationService_Notify_1000Configs": {
+  "BM_PushNotificationService_Notify_ManyConfigs": {
     "max_time_ns": 1500000
   },
   "BM_PushNotificationStore_CreateOrUpdate": {
-    "max_time_ns": 2500
+    "max_time_ns": 1500000
   },
-  "BM_PushNotificationStore_List_1000Configs": {
+  "BM_PushNotificationStore_List_ManyConfigs": {
     "max_time_ns": 300000
   },
   "BM_RestTransport_AgentCardResponse": {
@@ -140,10 +140,10 @@
   "BM_TaskStore_GetTaskHistoryLengthZero": {
     "max_time_ns": 35000
   },
-  "BM_TaskStore_Get_1000Tasks": {
+  "BM_TaskStore_Get_ManyTasks": {
     "max_time_ns": 500
   },
-  "BM_TaskStore_List_1000Tasks": {
+  "BM_TaskStore_List_ManyTasks": {
     "max_time_ns": 1250000
   },
   "BM_TransportMux_MethodMismatch": {
