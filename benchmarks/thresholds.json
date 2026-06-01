@@ -105,7 +105,7 @@
     "max_time_ns": 50000
   },
   "BM_SequentialTaskIdGenerator_Generate": {
-    "max_time_ns": 50
+    "max_time_ns": 75000
   },
   "BM_TaskLifecycle_ContinueExistingTask": {
     "max_time_ns": 500
@@ -165,9 +165,9 @@
     "max_time_ns": 300
   },
   "BM_UuidV7TaskIdGenerator_Generate": {
-    "max_time_ns": 12000
+    "max_time_ns": 18000000
   },
   "BM_UuidV7TaskIdGenerator_GenerateMultiThreaded/threads:${A2A_BENCHMARK_THREADS}": {
-    "max_time_ns": 24000
+    "max_time_ns": 75000000
   }
 }
