@@ -16,6 +16,7 @@ examples=(
   example_cancel_task_client
   example_interceptor_client
   example_auth_policy_server
+  example_push_notifications
 )
 
 if [[ "${A2A_RUN_GRPC_EXAMPLE:-0}" == "1" ]]; then

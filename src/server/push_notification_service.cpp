@@ -3,7 +3,11 @@
 
 #include "a2a/server/push_notification_service.h"
 
+#include <string>
+#include <string_view>
+
 #include "a2a/core/error.h"
+#include "a2a/core/http_constants.h"
 
 namespace a2a::server {
 
@@ -79,7 +83,18 @@ core::Result<void> PushNotificationService::NotifyTaskUpdated(const lf::a2a::v1:
   for (const auto& config : configs.value().configs()) {
     PushDeliveryRequest request{.config = config, .payload = payload};
     const auto delivered = delivery_client_->Deliver(request);
-    (void)delivered;
+    if (!delivered.ok()) {
+      return delivered.error();
+    }
+    const auto& delivery_result = delivered.value();
+    if (!delivery_result.error_message.empty()) {
+      return core::Error::RemoteProtocol(delivery_result.error_message).WithHttpStatus(delivery_result.http_status);
+    }
+    if (delivery_result.http_status < core::http::kSuccessStatusMin ||
+        delivery_result.http_status > core::http::kSuccessStatusMax) {
+      return core::Error::RemoteProtocol(std::string{kPushDeliveryNonSuccessStatusMessage})
+          .WithHttpStatus(delivery_result.http_status);
+    }
   }
   return {};
 }

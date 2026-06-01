@@ -5,8 +5,11 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
 #include <string_view>
 #include <vector>
+
+#include "a2a/core/http_constants.h"
 
 namespace {
 
@@ -19,22 +22,32 @@ constexpr std::string_view kToken = "token-1";
 constexpr std::string_view kAuthScheme = "Bearer";
 constexpr std::string_view kCredentials = "secret";
 constexpr std::string_view kMessageId = "message-1";
-constexpr int kAcceptedHttpStatus = 202;
+constexpr int kAcceptedHttpStatus = a2a::core::http::kStatusAccepted;
+constexpr int kRejectedHttpStatus = a2a::core::http::kStatusInternalServerError;
 constexpr int kCreatedConfigCount = 2;
 constexpr int kRemainingConfigCount = 1;
 constexpr int kEmptyConfigCount = 0;
+constexpr int kMissingHttpStatus = 0;
+constexpr std::string_view kDeliveryFailureMessage = "delivery failed";
+constexpr std::string_view kWebhookRejectedMessage = "webhook rejected task update";
 
 class RecordingDeliveryClient final : public a2a::server::PushNotificationDeliveryClient {
  public:
   a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(const a2a::server::PushDeliveryRequest& request) override {
     requests.push_back(request);
     if (fail_delivery) {
-      return a2a::core::Error::Network("delivery failed");
+      return a2a::core::Error::Network(std::string(kDeliveryFailureMessage));
     }
-    return a2a::server::PushDeliveryResult{.http_status = kAcceptedHttpStatus, .error_message = {}};
+    if (return_delivery_error_result) {
+      return a2a::server::PushDeliveryResult{.http_status = kRejectedHttpStatus,
+                                             .error_message = std::string(kWebhookRejectedMessage)};
+    }
+    return a2a::server::PushDeliveryResult{.http_status = delivery_http_status, .error_message = {}};
   }
 
   bool fail_delivery = false;
+  bool return_delivery_error_result = false;
+  int delivery_http_status = kAcceptedHttpStatus;
   std::vector<a2a::server::PushDeliveryRequest> requests;
 };
 
@@ -182,7 +195,7 @@ TEST(PushNotificationServiceTest, NotifyTaskUpdatedNoOpsWhenTaskHasNoConfigs) {
   EXPECT_TRUE(delivery.requests.empty());
 }
 
-TEST(PushNotificationServiceTest, NotifyTaskUpdatedIgnoresIndividualDeliveryFailures) {
+TEST(PushNotificationServiceTest, NotifyTaskUpdatedPropagatesDeliveryFailures) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;
   RecordingDeliveryClient delivery;
@@ -190,9 +203,55 @@ TEST(PushNotificationServiceTest, NotifyTaskUpdatedIgnoresIndividualDeliveryFail
   const auto task = BuildTask();
   ASSERT_TRUE(task_store.CreateOrUpdate(task).ok());
   ASSERT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kOtherConfigId)).ok());
   delivery.fail_delivery = true;
 
-  EXPECT_TRUE(service.NotifyTaskUpdated(task).ok());
+  const auto notify = service.NotifyTaskUpdated(task);
+
+  ASSERT_FALSE(notify.ok());
+  EXPECT_EQ(notify.error().code(), a2a::core::ErrorCode::kNetwork);
+  EXPECT_EQ(notify.error().message(), kDeliveryFailureMessage);
+  ASSERT_EQ(delivery.requests.size(), static_cast<std::size_t>(kRemainingConfigCount));
+  EXPECT_EQ(delivery.requests.front().config.id(), kConfigId);
+}
+
+TEST(PushNotificationServiceTest, NotifyTaskUpdatedPropagatesDeliveryResultErrors) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  const auto task = BuildTask();
+  ASSERT_TRUE(task_store.CreateOrUpdate(task).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
+  delivery.return_delivery_error_result = true;
+
+  const auto notify = service.NotifyTaskUpdated(task);
+
+  ASSERT_FALSE(notify.ok());
+  EXPECT_EQ(notify.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(notify.error().message(), kWebhookRejectedMessage);
+  ASSERT_TRUE(notify.error().http_status().has_value());
+  EXPECT_EQ(notify.error().http_status().value_or(kMissingHttpStatus), kRejectedHttpStatus);
+  ASSERT_EQ(delivery.requests.size(), static_cast<std::size_t>(kRemainingConfigCount));
+  EXPECT_EQ(delivery.requests.front().config.id(), kConfigId);
+}
+
+TEST(PushNotificationServiceTest, NotifyTaskUpdatedRejectsNonSuccessDeliveryStatus) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  const auto task = BuildTask();
+  ASSERT_TRUE(task_store.CreateOrUpdate(task).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
+  delivery.delivery_http_status = kRejectedHttpStatus;
+
+  const auto notify = service.NotifyTaskUpdated(task);
+
+  ASSERT_FALSE(notify.ok());
+  EXPECT_EQ(notify.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  ASSERT_TRUE(notify.error().http_status().has_value());
+  EXPECT_EQ(notify.error().http_status().value_or(kMissingHttpStatus), kRejectedHttpStatus);
   ASSERT_EQ(delivery.requests.size(), static_cast<std::size_t>(kRemainingConfigCount));
   EXPECT_EQ(delivery.requests.front().config.id(), kConfigId);
 }
