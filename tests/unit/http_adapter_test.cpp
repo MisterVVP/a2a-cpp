@@ -69,9 +69,18 @@ constexpr std::string_view kTestHeaderName = "X-Test";
 constexpr std::string_view kTrueHeaderValue = "true";
 constexpr std::string_view kJsonContentType = "application/json";
 constexpr std::string_view kStatusOkSuffix = " 200 OK";
+constexpr std::string_view kHttp10Version = "HTTP/1.0";
+constexpr std::string_view kAbsoluteRpcUrl = "http://localhost/rpc?debug=1";
+constexpr std::string_view kAbsoluteUrlWithoutPath = "http://localhost";
+constexpr std::string_view kDebugRpcTarget = "/rpc?debug=1";
+constexpr std::string_view kEmptyContentLength = "   ";
+constexpr std::string_view kDifferentContentLength = "4";
+constexpr std::size_t kTinyReadBufferSize = 4U;
+constexpr std::size_t kTinyMaxRequestSize = 8U;
 constexpr std::size_t kPartialWriteLimit = 3;
 constexpr bool kEnableZeroByteWrites = true;
 constexpr int kHttpOk = 200;
+constexpr int kHttpUnknown = 599;
 
 std::string BuildRequest(std::string_view method, std::string_view target,
                          const std::vector<std::pair<std::string_view, std::string_view>>& headers,
@@ -111,6 +120,17 @@ std::string BuildExpectedContentLengthLine() {
   return line;
 }
 
+std::string BuildRequestWithVersion(std::string_view method, std::string_view target, std::string_view version) {
+  std::string request;
+  request.append(method);
+  request.push_back(' ');
+  request.append(target);
+  request.push_back(' ');
+  request.append(version);
+  request.append(a2a::core::http::kHeaderDelimiter);
+  return request;
+}
+
 TEST(HttpAdapterTest, ParsesContentLengthCaseInsensitive) {
   BufferTransport transport(BuildRequest(kPostMethod, kRpcPath,
                                          {{kHostHeaderName, kLocalhost},
@@ -133,6 +153,127 @@ TEST(HttpAdapterTest, RejectsOverflowContentLength) {
   auto request = adapter.ReadRequest(transport, "127.0.0.1");
   ASSERT_FALSE(request.ok());
   EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpAdapterTest, NormalizesAbsoluteRequestTargetWithPath) {
+  BufferTransport transport(BuildRequest(kPostMethod, kAbsoluteRpcUrl, {{kHostHeaderName, kLocalhost}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_TRUE(request.ok());
+  EXPECT_EQ(request.value().target, kDebugRpcTarget);
+}
+
+TEST(HttpAdapterTest, NormalizesAbsoluteRequestTargetWithoutPathToRoot) {
+  BufferTransport transport(BuildRequest(kPostMethod, kAbsoluteUrlWithoutPath, {{kHostHeaderName, kLocalhost}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_TRUE(request.ok());
+  EXPECT_EQ(request.value().target, "/");
+}
+
+TEST(HttpAdapterTest, RejectsUnsupportedHttpVersion) {
+  BufferTransport transport(BuildRequestWithVersion(kPostMethod, kRpcPath, kHttp10Version));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpAdapterTest, RejectsMalformedHeaderLine) {
+  BufferTransport transport(BuildRequest(kPostMethod, kRpcPath, {{"", kLocalhost}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpAdapterTest, RejectsEmptyContentLength) {
+  BufferTransport transport(
+      BuildRequest(kPostMethod, kRpcPath,
+                   {{kHostHeaderName, kLocalhost}, {a2a::core::http::kContentLengthHeaderName, kEmptyContentLength}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpAdapterTest, RejectsConflictingContentLengthHeaders) {
+  BufferTransport transport(BuildRequest(kPostMethod, kRpcPath,
+                                         {{a2a::core::http::kContentLengthHeaderName, kContentLengthFive},
+                                          {kLowerContentLengthHeaderName, kDifferentContentLength}},
+                                         kBody));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpAdapterTest, RejectsOversizedHeadersBeforeDelimiter) {
+  BufferTransport transport(BuildRequest(kPostMethod, kRpcPath, {{kHostHeaderName, kLocalhost}}));
+  const a2a::server::HttpAdapter adapter(
+      {.max_request_size = kTinyMaxRequestSize, .read_buffer_size = kTinyReadBufferSize});
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(HttpAdapterTest, RejectsMissingBodyBytes) {
+  BufferTransport transport(
+      BuildRequest(kPostMethod, kRpcPath, {{a2a::core::http::kContentLengthHeaderName, kContentLengthFive}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kInternal);
+}
+
+TEST(HttpAdapterTest, RejectsZeroReadBufferSize) {
+  BufferTransport transport(BuildRequest(kPostMethod, kRpcPath, {{kHostHeaderName, kLocalhost}}));
+  const a2a::server::HttpAdapter adapter({.read_buffer_size = 0U});
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kInternal);
+}
+
+TEST(HttpAdapterTest, ProvidesReasonPhrasesForCommonStatusCodes) {
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusCreated), "Created");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusAccepted), "Accepted");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusNoContent), "No Content");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusBadRequest), "Bad Request");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusUnauthorized), "Unauthorized");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusForbidden), "Forbidden");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusNotFound), "Not Found");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusMethodNotAllowed), "Method Not Allowed");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusConflict), "Conflict");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusPayloadTooLarge), "Payload Too Large");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusUnsupportedMediaType),
+            "Unsupported Media Type");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusUnprocessableEntity),
+            "Unprocessable Entity");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusTooManyRequests), "Too Many Requests");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusInternalServerError),
+            "Internal Server Error");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusNotImplemented), "Not Implemented");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusBadGateway), "Bad Gateway");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(a2a::core::http::kStatusServiceUnavailable), "Service Unavailable");
+  EXPECT_EQ(a2a::server::HttpAdapter::ReasonPhrase(kHttpUnknown), "Unknown");
 }
 
 TEST(HttpAdapterTest, WriteResponseAddsContentLengthAndStatusText) {

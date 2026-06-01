@@ -14,6 +14,9 @@ using a2a::server::TransportMux;
 constexpr int kHttpOk = 200;
 constexpr int kHttpCreated = 201;
 constexpr int kHttpInternalServerError = 500;
+constexpr std::string_view kRpcPath = "/rpc";
+constexpr std::string_view kNoRouteCode = "ROUTE_NOT_FOUND";
+constexpr std::string_view kCustomNotFoundBody = "custom not found";
 constexpr int kLowPriority = 1;
 constexpr int kHighPriority = 10;
 constexpr std::string_view kHistoryQueryTarget = "/a2a/tasks/task-1?historyLength=0";
@@ -71,6 +74,57 @@ TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
   const auto result = mux.RouteRequest(request);
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(result.value().status_code, kHttpOk);
+}
+
+TEST(TransportMuxTest, NormalizesRelativeTargetsAndTrimsTrailingSlash) {
+  TransportMux mux;
+  mux.RegisterRoute(
+      {.name = "rpc",
+       .matcher = [](std::string_view method,
+                     std::string_view path) { return (method == "POST" || method == "*") && path == kRpcPath; },
+       .handler =
+           [](const HttpServerRequest& routed_request) {
+             HttpServerResponse response;
+             response.status_code = routed_request.target == kRpcPath ? kHttpOk : kHttpInternalServerError;
+             return response;
+           },
+       .priority = kLowPriority});
+
+  const HttpServerRequest request{.method = "POST", .target = "rpc/", .headers = {}, .body = "", .remote_address = ""};
+  const auto result = mux.RouteRequest(request);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().status_code, kHttpOk);
+}
+
+TEST(TransportMuxTest, ReturnsStructuredRouteMissForMissingPath) {
+  TransportMux mux;
+
+  const HttpServerRequest request{.method = "GET", .target = "", .headers = {}, .body = "", .remote_address = ""};
+  const auto result = mux.RouteRequest(request);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().status_code, TransportMux::kHttpNotFound);
+  EXPECT_NE(result.value().body.find(std::string(kNoRouteCode)), std::string::npos);
+  EXPECT_EQ(mux.last_route_miss().normalized_path, "/");
+}
+
+TEST(TransportMuxTest, UsesCustomNotFoundHandler) {
+  TransportMux mux;
+  mux.SetNotFoundHandler([](const HttpServerRequest&) {
+    HttpServerResponse response;
+    response.status_code = kHttpInternalServerError;
+    response.body = std::string(kCustomNotFoundBody);
+    return response;
+  });
+
+  const HttpServerRequest request{
+      .method = "GET", .target = "/missing", .headers = {}, .body = "", .remote_address = ""};
+  const auto result = mux.RouteRequest(request);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().status_code, kHttpInternalServerError);
+  EXPECT_EQ(result.value().body, kCustomNotFoundBody);
 }
 
 TEST(TransportMuxTest, ReturnsStructuredRouteMissForMethodMismatch) {
