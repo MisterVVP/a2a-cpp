@@ -165,9 +165,9 @@
     "max_time_ns": 300
   },
   "BM_UuidV7TaskIdGenerator_Generate": {
-    "max_time_ns": 18000000
+    "max_time_ns": 8000000
   },
   "BM_UuidV7TaskIdGenerator_GenerateMultiThreaded/threads:${A2A_BENCHMARK_THREADS}": {
-    "max_time_ns": 75000000
+    "max_time_ns": 15000000
   }
 }
