@@ -27,6 +27,8 @@ constexpr int kRejectedHttpStatus = a2a::core::http::kStatusInternalServerError;
 constexpr int kCreatedConfigCount = 2;
 constexpr int kRemainingConfigCount = 1;
 constexpr int kEmptyConfigCount = 0;
+constexpr int kSinglePageConfigCount = 1;
+constexpr int kPushConfigPageSize = 1;
 constexpr int kMissingHttpStatus = 0;
 constexpr std::string_view kDeliveryFailureMessage = "delivery failed";
 constexpr std::string_view kWebhookRejectedMessage = "webhook rejected task update";
@@ -156,6 +158,33 @@ TEST(PushNotificationServiceTest, GetListAndDeleteConfigUseStore) {
   delete_request.set_id(std::string(kConfigId));
   ASSERT_TRUE(service.DeleteConfig(delete_request).ok());
   EXPECT_EQ(service.ListConfigs(list_request).value().configs_size(), kRemainingConfigCount);
+}
+
+TEST(PushNotificationServiceTest, ListConfigPassesPaginationToStore) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  ASSERT_TRUE(task_store.CreateOrUpdate(BuildTask()).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
+  ASSERT_TRUE(service.CreateConfig(BuildConfig(kOtherConfigId)).ok());
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest first_request;
+  first_request.set_task_id(std::string(kTaskId));
+  first_request.set_page_size(kPushConfigPageSize);
+  const auto first_page = service.ListConfigs(first_request);
+  ASSERT_TRUE(first_page.ok());
+  ASSERT_EQ(first_page.value().configs_size(), kSinglePageConfigCount);
+  ASSERT_FALSE(first_page.value().next_page_token().empty());
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest second_request;
+  second_request.set_task_id(std::string(kTaskId));
+  second_request.set_page_size(kPushConfigPageSize);
+  second_request.set_page_token(first_page.value().next_page_token());
+  const auto second_page = service.ListConfigs(second_request);
+  ASSERT_TRUE(second_page.ok());
+  EXPECT_EQ(second_page.value().configs_size(), kSinglePageConfigCount);
+  EXPECT_TRUE(second_page.value().next_page_token().empty());
 }
 
 TEST(PushNotificationServiceTest, NotifyTaskUpdatedDeliversStatusUpdateToEachConfig) {

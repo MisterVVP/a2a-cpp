@@ -40,7 +40,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificat
   if (push_store_ == nullptr) {
     return core::Error::Internal("push notification store is not configured");
   }
-  return push_store_->List(request.task_id());
+  return push_store_->List(request.task_id(), request.page_size(), request.page_token());
 }
 
 core::Result<void> PushNotificationService::DeleteConfig(

@@ -22,6 +22,13 @@ constexpr int kBulkConfigCount = 1000;
 constexpr int kSingleConfigCount = 1;
 constexpr int kTwoConfigCount = 2;
 constexpr int kEmptyConfigCount = 0;
+constexpr int kFirstPageSize = 2;
+constexpr int kSecondPageSize = 2;
+constexpr int kFinalPageConfigCount = 1;
+constexpr int kPaginationConfigCount = 5;
+constexpr std::string_view kSecondPageToken = "2";
+constexpr std::string_view kFinalPageToken = "4";
+constexpr std::string_view kInvalidPageToken = "not-a-number";
 
 struct PushConfigIds final {
   std::string_view task_id;
@@ -201,4 +208,39 @@ TEST(PushNotificationStoreTest, ListsLargeConfigSetAndDeleteOnlyRemovesTargetCon
   EXPECT_EQ(listed.value().configs_size(), kBulkConfigCount - 1);
   const std::vector<std::string> ids = ConfigIds(listed.value());
   EXPECT_FALSE(ContainsId(ids, deleted_config_id));
+}
+
+TEST(PushNotificationStoreTest, ListAppliesPageSizeAndNextPageToken) {
+  a2a::server::InMemoryPushNotificationStore store;
+  PopulateConfigs(&store, kPaginationConfigCount);
+
+  const auto first_page = store.List(kTaskId, kFirstPageSize);
+
+  ASSERT_TRUE(first_page.ok());
+  EXPECT_EQ(first_page.value().configs_size(), kFirstPageSize);
+  EXPECT_EQ(first_page.value().next_page_token(), kSecondPageToken);
+}
+
+TEST(PushNotificationStoreTest, ListAppliesPageTokenAndClearsTokenOnFinalPage) {
+  a2a::server::InMemoryPushNotificationStore store;
+  PopulateConfigs(&store, kPaginationConfigCount);
+
+  const auto second_page = store.List(kTaskId, kSecondPageSize, kSecondPageToken);
+  ASSERT_TRUE(second_page.ok());
+  EXPECT_EQ(second_page.value().configs_size(), kSecondPageSize);
+  EXPECT_EQ(second_page.value().next_page_token(), kFinalPageToken);
+
+  const auto final_page = store.List(kTaskId, kSecondPageSize, kFinalPageToken);
+  ASSERT_TRUE(final_page.ok());
+  EXPECT_EQ(final_page.value().configs_size(), kFinalPageConfigCount);
+  EXPECT_TRUE(final_page.value().next_page_token().empty());
+}
+
+TEST(PushNotificationStoreTest, ListRejectsInvalidPaginationArguments) {
+  a2a::server::InMemoryPushNotificationStore store;
+  PopulateConfigs(&store, kPaginationConfigCount);
+
+  EXPECT_FALSE(store.List(kTaskId, -kFirstPageSize).ok());
+  EXPECT_FALSE(store.List(kTaskId, kFirstPageSize, kInvalidPageToken).ok());
+  EXPECT_FALSE(store.List(kTaskId, kFirstPageSize, std::to_string(kPaginationConfigCount + 1)).ok());
 }

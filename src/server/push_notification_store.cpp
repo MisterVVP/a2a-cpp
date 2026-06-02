@@ -3,7 +3,10 @@
 
 #include "a2a/server/push_notification_store.h"
 
+#include <algorithm>
+#include <charconv>
 #include <string>
+#include <utility>
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
@@ -11,25 +14,61 @@
 namespace a2a::server {
 namespace {
 
+constexpr std::string_view kTaskIdRequiredMessage = "push notification task_id is required";
+constexpr std::string_view kConfigIdRequiredMessage = "push notification id is required";
+constexpr std::string_view kConfigUrlRequiredMessage = "push notification url is required";
+constexpr std::string_view kTaskConfigNotFoundMessage = "push notification task config not found";
+constexpr std::string_view kConfigNotFoundMessage = "push notification config not found";
+constexpr std::string_view kPageSizeInvalidMessage =
+    "ListTaskPushNotificationConfigsRequest.page_size must be non-negative";
+constexpr std::string_view kPageTokenInvalidMessage =
+    "ListTaskPushNotificationConfigsRequest.page_token must be a non-negative integer";
+constexpr std::string_view kPageTokenOutOfRangeMessage =
+    "ListTaskPushNotificationConfigsRequest.page_token exceeds available config count";
+
 core::Result<void> ValidateConfig(const lf::a2a::v1::TaskPushNotificationConfig& config) {
   if (config.task_id().empty()) {
-    return core::Error::Validation("push notification task_id is required");
+    return core::Error::Validation(std::string(kTaskIdRequiredMessage));
   }
   if (config.id().empty()) {
-    return core::Error::Validation("push notification id is required");
+    return core::Error::Validation(std::string(kConfigIdRequiredMessage));
   }
   if (config.url().empty()) {
-    return core::Error::Validation("push notification url is required");
+    return core::Error::Validation(std::string(kConfigUrlRequiredMessage));
   }
   return {};
 }
 
 core::Result<void> ValidateLookup(std::string_view task_id, std::string_view config_id) {
   if (task_id.empty()) {
-    return core::Error::Validation("push notification task_id is required");
+    return core::Error::Validation(std::string(kTaskIdRequiredMessage));
   }
   if (config_id.empty()) {
-    return core::Error::Validation("push notification id is required");
+    return core::Error::Validation(std::string(kConfigIdRequiredMessage));
+  }
+  return {};
+}
+
+core::Result<std::size_t> ParsePageToken(std::string_view page_token) {
+  if (page_token.empty()) {
+    return std::size_t{0};
+  }
+  std::size_t parsed = 0;
+  const auto* begin = page_token.data();
+  const auto* end = begin + page_token.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end) {
+    return core::Error::Validation(std::string(kPageTokenInvalidMessage));
+  }
+  return parsed;
+}
+
+core::Result<void> ValidateListRequest(std::string_view task_id, int page_size) {
+  if (task_id.empty()) {
+    return core::Error::Validation(std::string(kTaskIdRequiredMessage));
+  }
+  if (page_size < 0) {
+    return core::Error::Validation(std::string(kPageSizeInvalidMessage));
   }
   return {};
 }
@@ -69,19 +108,24 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
   std::lock_guard<std::mutex> lock(mutex_);
   const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
-    return core::protocol_errors::TaskNotFound("push notification task config not found");
+    return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
   }
   const auto config_it = task_it->second.config_indices.find(config_id);
   if (config_it == task_it->second.config_indices.end()) {
-    return core::Error::Validation("push notification config not found");
+    return core::Error::Validation(std::string(kConfigNotFoundMessage));
   }
   return task_it->second.list_response.configs(config_it->second);
 }
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushNotificationStore::List(
-    std::string_view task_id) const {
-  if (task_id.empty()) {
-    return core::Error::Validation("push notification task_id is required");
+    std::string_view task_id, int page_size, std::string_view page_token) const {
+  const auto validation = ValidateListRequest(task_id, page_size);
+  if (!validation.ok()) {
+    return validation.error();
+  }
+  const auto offset = ParsePageToken(page_token);
+  if (!offset.ok()) {
+    return offset.error();
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
@@ -90,11 +134,25 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
     return lf::a2a::v1::ListTaskPushNotificationConfigsResponse{};
   }
 
+  const auto& source_configs = task_it->second.list_response.configs();
+  const int source_config_count = source_configs.size();
+  const std::size_t start = offset.value();
+  if (std::cmp_greater(start, source_config_count)) {
+    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
+  }
+  const std::size_t remaining = static_cast<std::size_t>(source_config_count) - start;
+  const std::size_t effective_page_size = page_size == 0 ? remaining : static_cast<std::size_t>(page_size);
+  const std::size_t result_size = std::min(effective_page_size, remaining);
+
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
   auto* configs = response.mutable_configs();
-  const auto& source_configs = task_it->second.list_response.configs();
-  configs->Reserve(source_configs.size());
-  configs->MergeFrom(source_configs);
+  configs->Reserve(static_cast<int>(result_size));
+  for (std::size_t index = start; index < start + result_size; ++index) {
+    *configs->Add() = source_configs.Get(static_cast<int>(index));
+  }
+  if (result_size < remaining) {
+    response.set_next_page_token(std::to_string(start + result_size));
+  }
   return response;
 }
 
