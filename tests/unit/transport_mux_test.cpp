@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/transport_mux.h"
 
 #include <gtest/gtest.h>
@@ -10,6 +9,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+
+#include "a2a/server/json_rpc_server_transport.h"
 
 namespace {
 
@@ -32,8 +33,8 @@ constexpr std::string_view kWebhookUrl = "https://example.test/push";
 
 class JsonRpcPushConfigRecordingExecutor final : public a2a::server::AgentExecutor {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
     return lf::a2a::v1::SendMessageResponse{};
