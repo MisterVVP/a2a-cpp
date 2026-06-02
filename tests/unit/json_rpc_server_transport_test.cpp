@@ -87,6 +87,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
       const lf::a2a::v1::TaskPushNotificationConfig& request, a2a::server::RequestContext& context) override {
     (void)context;
     last_push_task_id = request.task_id();
+    last_push_url = request.url();
+    last_push_auth_scheme = request.authentication().scheme();
     lf::a2a::v1::TaskPushNotificationConfig response = request;
     response.set_id(std::string(kPushConfigId));
     return response;
@@ -132,6 +134,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
   std::string last_version_header;
   std::string last_bearer_token;
   std::string last_push_task_id;
+  std::string last_push_url;
+  std::string last_push_auth_scheme;
   std::string last_deleted_push_config_id;
   bool fail_streaming = false;
   lf::a2a::v1::TaskState task_state = lf::a2a::v1::TASK_STATE_WORKING;
@@ -253,6 +257,35 @@ TEST(JsonRpcServerTransportTest, MapsExecutorFailureToJsonRpcError) {
   const auto& error_fields = envelope.fields().at("error").struct_value().fields();
   EXPECT_EQ(static_cast<int>(error_fields.at("code").number_value()), kJsonRpcInternalError);
   EXPECT_EQ(error_fields.at("message").string_value(), "cancel unavailable");
+}
+
+TEST(JsonRpcServerTransportTest, CreatePushConfigParsesNestedProtocolParams) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(
+      R"({"jsonrpc":"2.0","id":"req-push","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":{"url":"https://example.test/push","authentication":{"scheme":"Bearer"}}}})"));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(executor.last_push_task_id, kTaskPushId);
+  EXPECT_EQ(executor.last_push_url, kWebhookUrl);
+  EXPECT_EQ(executor.last_push_auth_scheme, "Bearer");
+  EXPECT_NE(response.value().body.find(std::string(kWebhookUrl)), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, CreatePushConfigRejectsInvalidNestedConfigShape) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(
+      R"({"jsonrpc":"2.0","id":"req-push-invalid","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":"https://example.test/push"}})"));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find("pushNotificationConfig must be an object"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {

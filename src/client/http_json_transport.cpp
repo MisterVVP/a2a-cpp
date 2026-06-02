@@ -119,11 +119,32 @@ core::Result<T> ParseBodyOrMapError(std::string_view method, std::string_view en
 }
 
 std::string BuildTaskPath(std::string_view task_id) {
-  return std::string(EndpointMap::kTaskCollection) + "/" + std::string(task_id);
+  std::string path;
+  path.reserve(EndpointMap::kTaskCollection.size() + 1 + task_id.size());
+  path += EndpointMap::kTaskCollection;
+  path += '/';
+  path += task_id;
+  return path;
 }
 
-std::string BuildPushConfigPath(std::string_view id) {
-  return std::string(EndpointMap::kPushConfigCollection) + "/" + std::string(id);
+std::string BuildTaskPushConfigCollectionPath(std::string_view task_id) {
+  std::string path = BuildTaskPath(task_id);
+  path.reserve(path.size() + EndpointMap::kPushConfigCollection.size());
+  path += EndpointMap::kPushConfigCollection;
+  return path;
+}
+
+struct PushConfigPathParts final {
+  std::string_view task_id;
+  std::string_view id;
+};
+
+std::string BuildTaskPushConfigPath(PushConfigPathParts parts) {
+  std::string path = BuildTaskPushConfigCollectionPath(parts.task_id);
+  path.reserve(path.size() + 1 + parts.id.size());
+  path += '/';
+  path += parts.id;
+  return path;
 }
 
 core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
@@ -398,12 +419,16 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(const lf::a2a::v1:
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
+  if (request.task_id().empty()) {
+    return core::Error::Validation("TaskPushNotificationConfig.task_id is required");
+  }
+
   const auto body = core::MessageToJson(request);
   if (!body.ok()) {
     return body.error();
   }
 
-  const std::string endpoint(EndpointMap::kPushConfigCollection);
+  const std::string endpoint = BuildTaskPushConfigCollectionPath(request.task_id());
   const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
@@ -413,11 +438,14 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::CreateT
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
+  if (request.task_id().empty()) {
+    return core::Error::Validation("GetTaskPushNotificationConfigRequest.task_id is required");
+  }
   if (request.id().empty()) {
     return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
   }
 
-  const std::string endpoint = BuildPushConfigPath(request.id());
+  const std::string endpoint = BuildTaskPushConfigPath({.task_id = request.task_id(), .id = request.id()});
   const auto response = SendRequest({.method = "GET", .endpoint = endpoint}, {}, options);
   if (!response.ok()) {
     return response.error();
@@ -427,19 +455,16 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTask
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> HttpJsonTransport::ListTaskPushNotificationConfigs(
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
+  if (request.task_id().empty()) {
+    return core::Error::Validation("ListTaskPushNotificationConfigsRequest.task_id is required");
+  }
+
   std::ostringstream endpoint;
-  endpoint << EndpointMap::kPushConfigCollection;
-  if (!request.task_id().empty() || request.page_size() > 0 || !request.page_token().empty()) {
+  endpoint << BuildTaskPushConfigCollectionPath(request.task_id());
+  if (request.page_size() > 0 || !request.page_token().empty()) {
     endpoint << "?";
     bool has_previous = false;
-    if (!request.task_id().empty()) {
-      endpoint << "taskId=" << request.task_id();
-      has_previous = true;
-    }
     if (request.page_size() > 0) {
-      if (has_previous) {
-        endpoint << "&";
-      }
       endpoint << "pageSize=" << request.page_size();
       has_previous = true;
     }
@@ -461,11 +486,14 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> HttpJsonTrans
 
 core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
     const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
+  if (request.task_id().empty()) {
+    return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.task_id is required");
+  }
   if (request.id().empty()) {
     return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
   }
 
-  const std::string endpoint = BuildPushConfigPath(request.id());
+  const std::string endpoint = BuildTaskPushConfigPath({.task_id = request.task_id(), .id = request.id()});
   const auto response = SendRequest({.method = "DELETE", .endpoint = endpoint}, {}, options);
   if (!response.ok()) {
     return response.error();

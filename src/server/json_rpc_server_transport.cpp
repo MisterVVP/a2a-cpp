@@ -45,6 +45,8 @@ constexpr int kJsonRpcVersionNotSupported = -32009;
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::size_t kMinListTasksPageSize = 1;
+constexpr std::string_view kTaskIdJsonField = "taskId";
+constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 
 std::string ToLower(std::string_view value) {
   std::string lowered;
@@ -218,6 +220,33 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
     return parse_payload.error();
   }
   return payload;
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> ParseCreatePushConfigPayload(
+    const google::protobuf::Struct& params) {
+  const auto& fields = params.fields();
+  const auto nested_config_it = fields.find(std::string(kPushNotificationConfigJsonField));
+  if (nested_config_it == fields.end()) {
+    return ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(params);
+  }
+  if (!nested_config_it->second.has_struct_value()) {
+    return core::Error::Validation("TaskPushNotificationConfig.pushNotificationConfig must be an object");
+  }
+
+  auto payload = ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(nested_config_it->second.struct_value());
+  if (!payload.ok()) {
+    return payload.error();
+  }
+
+  const auto task_id_it = fields.find(std::string(kTaskIdJsonField));
+  if (task_id_it != fields.end()) {
+    if (task_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+      return core::Error::Validation("TaskPushNotificationConfig.taskId must be a string");
+    }
+    payload.value().set_task_id(task_id_it->second.string_value());
+  }
+
+  return payload.value();
 }
 
 core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params,
@@ -398,7 +427,7 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
                                                              const google::protobuf::Struct& params,
                                                              const JsonRpcServerTransportOptions& options) {
   if (IsCreatePushConfigMethod(method_name)) {
-    auto payload = ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(params);
+    auto payload = ParseCreatePushConfigPayload(params);
     if (!payload.ok()) {
       return payload.error();
     }
