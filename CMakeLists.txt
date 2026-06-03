@@ -19,6 +19,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 find_package(gRPC CONFIG REQUIRED)
+find_package(CURL REQUIRED)
 if(NOT TARGET protobuf::libprotobuf)
   set(protobuf_MODULE_COMPATIBLE ON)
   find_package(Protobuf REQUIRED)

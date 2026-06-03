@@ -26,3 +26,16 @@ Recommended executor flow:
 5. Advertise push support in the Agent Card only after the store and delivery client are configured.
 
 The built-in `HttpPushNotificationDeliveryClient` is synchronous and intended for local examples, tests, and simple deployments. Production servers should usually inject a durable queued sender with retries, backoff, webhook URL validation, credential protection, SSRF controls, and delivery telemetry. See `examples/push_notifications.cpp` for a focused service-level example and `examples/example_support.h` for executor wiring.
+
+### Built-in HTTP delivery requirements
+
+`HttpPushNotificationDeliveryClient` uses libcurl for outbound webhook delivery. SDK users that enable the built-in client must provide a libcurl build with HTTPS support and a platform trust store (or equivalent libcurl TLS backend configuration) so production `https://` webhook URLs can be verified.
+
+For security and interoperability, the built-in client:
+
+- accepts `http://` and `https://` webhook URLs, with TLS used for `https://` URLs;
+- sets libcurl's minimum TLS version to TLS 1.2, allowing TLS 1.2 or newer only;
+- supports HTTP/1.1, HTTP/2.0, and HTTP/3.0 request configuration; and
+- rejects HTTP/1.0 configuration instead of downgrading to it.
+
+The default push-delivery preference is HTTP/2.0 with HTTP/1.1 fallback. Keep custom delivery clients at the same or stronger TLS baseline.
