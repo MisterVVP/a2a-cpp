@@ -12,41 +12,42 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/result.h"
 
-namespace a2a::server {
+namespace a2a::http {
 
 namespace detail {
-struct HttpClientGlobalState;
+struct ClientGlobalState;
 }
 
-struct HttpClientHeader final {
+struct Header final {
   std::string name;
   std::string value;
 };
 
-struct HttpClientRequest final {
+struct Request final {
   std::string method;
   std::string url;
-  std::vector<HttpClientHeader> headers;
+  std::vector<Header> headers;
   std::string body;
   std::chrono::milliseconds timeout{0};
   std::string http_version = std::string(core::http::kHttpVersion11);
 };
 
-struct HttpClientResponse final {
+struct Response final {
   int status_code = 0;
+  std::vector<Header> headers;
   std::string body;
 };
 
-class HttpClient final {
+class Client final {
  public:
-  HttpClient();
+  Client();
 
-  [[nodiscard]] core::Result<HttpClientResponse> SendRequest(const HttpClientRequest& request) const;
+  [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
 
  private:
-  std::shared_ptr<const detail::HttpClientGlobalState> global_state_;
+  std::shared_ptr<const detail::ClientGlobalState> global_state_;
 };
 
 [[nodiscard]] bool IsSupportedHttpVersion(std::string_view http_version) noexcept;
 
-}  // namespace a2a::server
+}  // namespace a2a::http

@@ -29,7 +29,7 @@ The built-in `HttpPushNotificationDeliveryClient` is synchronous and intended fo
 
 ### Built-in HTTP delivery requirements
 
-`HttpPushNotificationDeliveryClient` uses libcurl for outbound webhook delivery. SDK users that enable the built-in client must provide a libcurl build with HTTPS support and a platform trust store (or equivalent libcurl TLS backend configuration) so production `https://` webhook URLs can be verified.
+When libcurl support is enabled, `HttpPushNotificationDeliveryClient` uses the SDK shared libcurl-backed outbound HTTP client for webhook delivery. SDK users that enable the built-in client must provide a libcurl build with HTTPS support and a platform trust store (or equivalent libcurl TLS backend configuration) so production `https://` webhook URLs can be verified.
 
 For security and interoperability, the built-in client:
 
@@ -39,3 +39,7 @@ For security and interoperability, the built-in client:
 - rejects HTTP/1.0 configuration instead of downgrading to it.
 
 The default push-delivery preference is HTTP/2.0 with HTTP/1.1 fallback. Keep custom delivery clients at the same or stronger TLS baseline.
+
+The shared outbound HTTP implementation lives outside the server namespace and is reused by client REST, JSON-RPC, discovery, and push-notification delivery paths. Custom `PushNotificationDeliveryClient` implementations can still be injected for queues, retries, policy enforcement, or alternate HTTP stacks.
+
+Builds configured with `-DA2A_ENABLE_LIBCURL=OFF` keep server transports and custom delivery clients available, but the built-in `HttpPushNotificationDeliveryClient` cannot perform outbound webhook calls and reports that libcurl support is disabled.

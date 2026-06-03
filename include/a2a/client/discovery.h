@@ -31,6 +31,8 @@ struct HttpResponse final {
 
 using HttpFetcher = std::function<core::Result<HttpResponse>(std::string_view url)>;
 
+[[nodiscard]] HttpFetcher MakeDefaultHttpFetcher();
+
 struct ResolvedInterface final {
   PreferredTransport transport = PreferredTransport::kRest;
   std::string url;
@@ -41,6 +43,8 @@ struct ResolvedInterface final {
 class DiscoveryClient final {
  public:
   explicit DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
+
+  [[nodiscard]] static DiscoveryClient CreateDefault(std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(std::string_view base_url);

@@ -180,6 +180,13 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
   }
 }
 
+std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterface resolved_interface,
+                                                                  std::chrono::milliseconds default_timeout,
+                                                                  RequestIdGenerator id_generator) {
+  return std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(), default_timeout,
+                                            std::move(id_generator));
+}
+
 core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
                                                                       const CallOptions& options) const {
   if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {

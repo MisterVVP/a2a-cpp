@@ -75,6 +75,21 @@ target_link_libraries(url_utils_test
 
 gtest_discover_tests(url_utils_test)
 
+add_executable(http_client_test
+  unit/http_client_test.cpp
+)
+
+target_link_libraries(http_client_test
+  PRIVATE
+    a2a::client
+    a2a::http
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(http_client_test)
+
 add_executable(core_protojson_golden_test
   unit/core_protojson_golden_test.cpp
 )

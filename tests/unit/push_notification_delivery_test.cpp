@@ -61,7 +61,7 @@ lf::a2a::v1::TaskPushNotificationConfig BuildConfig(std::string url) {
   return config;
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && defined(A2A_HAS_LIBCURL)
 std::string BuildLoopbackUrl(int port, std::string_view scheme = a2a::core::http::kHttpScheme) {
   std::string url;
   const std::string port_text = std::to_string(port);
@@ -177,7 +177,20 @@ TEST(PushNotificationDeliveryTest, RejectsUnresolvedHost) {
   EXPECT_FALSE(result.ok());
 }
 
-#ifndef _WIN32
+#if !defined(A2A_HAS_LIBCURL)
+TEST(PushNotificationDeliveryTest, BuiltInHttpDeliveryReportsDisabledLibcurlSupport) {
+  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig("http://127.0.0.1:1/webhook"),
+                                                 .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
+}
+#endif
+
+#if !defined(_WIN32) && defined(A2A_HAS_LIBCURL)
 TEST(PushNotificationDeliveryTest, AttemptsHttpsDeliveryWithBuiltInTlsClient) {
   LoopbackHttpServer server{std::string(kHttpOkResponse)};
   a2a::server::HttpPushNotificationDeliveryOptions options;

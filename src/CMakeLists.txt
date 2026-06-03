@@ -23,6 +23,34 @@ target_link_libraries(a2a_core
     protobuf::libprotobuf
 )
 
+add_library(a2a_http STATIC
+  http/http_client.cpp
+)
+add_library(a2a::http ALIAS a2a_http)
+
+target_include_directories(a2a_http
+  PUBLIC
+    $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+
+target_link_libraries(a2a_http
+  PUBLIC
+    a2a::core
+)
+
+if(A2A_HAS_LIBCURL)
+  target_link_libraries(a2a_http
+    PRIVATE
+      CURL::libcurl
+  )
+  target_compile_definitions(a2a_http
+    PUBLIC
+      A2A_HAS_LIBCURL=1
+  )
+endif()
+
+
 add_library(a2a_client STATIC
   client/auth.cpp
   client/client.cpp
@@ -43,12 +71,12 @@ target_include_directories(a2a_client
 target_link_libraries(a2a_client
   PUBLIC
     a2a::core
+    a2a::http
 )
 
 add_library(a2a_server STATIC
   server/grpc_server_transport.cpp
   server/http_adapter.cpp
-  server/http_client.cpp
   server/rest_server_transport.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp
@@ -71,11 +99,10 @@ target_include_directories(a2a_server
 target_link_libraries(a2a_server
   PUBLIC
     a2a::core
-  PRIVATE
-    CURL::libcurl
+    a2a::http
 )
 
-install(TARGETS a2a_core a2a_client a2a_server
+install(TARGETS a2a_core a2a_http a2a_client a2a_server
   EXPORT a2a_cppTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
