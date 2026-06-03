@@ -8,6 +8,7 @@
 
 #include "a2a/core/http_constants.h"
 #include "a2a/core/result.h"
+#include "a2a/server/http_client.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
@@ -44,6 +45,7 @@ class HttpPushNotificationDeliveryClient final : public PushNotificationDelivery
 
  private:
   HttpPushNotificationDeliveryOptions options_;
+  HttpClient http_client_;
 };
 
 }  // namespace a2a::server

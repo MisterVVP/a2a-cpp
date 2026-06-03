@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "a2a/core/http_constants.h"
+#include "a2a/core/protocol_codes.h"
 
 namespace {
 
@@ -158,6 +159,23 @@ TEST(PushNotificationServiceTest, GetListAndDeleteConfigUseStore) {
   delete_request.set_id(std::string(kConfigId));
   ASSERT_TRUE(service.DeleteConfig(delete_request).ok());
   EXPECT_EQ(service.ListConfigs(list_request).value().configs_size(), kRemainingConfigCount);
+}
+
+TEST(PushNotificationServiceTest, ListConfigRequiresExistingTask) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
+  request.set_task_id(std::string(kTaskId));
+
+  const auto listed = service.ListConfigs(request);
+
+  ASSERT_FALSE(listed.ok());
+  EXPECT_EQ(listed.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  ASSERT_TRUE(listed.error().protocol_code().has_value());
+  EXPECT_EQ(listed.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
 }
 
 TEST(PushNotificationServiceTest, ListConfigPassesPaginationToStore) {

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <string>
@@ -29,7 +30,6 @@ constexpr std::string_view kConfigId = "push-1";
 constexpr std::string_view kAuthScheme = "Bearer";
 constexpr std::string_view kCredentials = "credential-value";
 constexpr std::string_view kMalformedUrl = "ftp://127.0.0.1/webhook";
-constexpr std::string_view kHttpsUrl = "https://127.0.0.1/webhook";
 constexpr std::string_view kMissingHostUrl = "http:///webhook";
 constexpr std::string_view kMissingPortUrl = "http://127.0.0.1:/webhook";
 constexpr std::string_view kUnresolvedUrl = "http://invalid.invalid/webhook";
@@ -62,7 +62,17 @@ lf::a2a::v1::TaskPushNotificationConfig BuildConfig(std::string url) {
 }
 
 #ifndef _WIN32
-std::string BuildLoopbackUrl(int port) { return "http://127.0.0.1:" + std::to_string(port) + "/webhook"; }
+std::string BuildLoopbackUrl(int port, std::string_view scheme = a2a::core::http::kHttpScheme) {
+  std::string url;
+  const std::string port_text = std::to_string(port);
+  url.reserve(scheme.size() + std::string_view("127.0.0.1:").size() + port_text.size() +
+              std::string_view("/webhook").size());
+  url.append(scheme);
+  url.append("127.0.0.1:");
+  url.append(port_text);
+  url.append("/webhook");
+  return url;
+}
 
 class LoopbackHttpServer final {
  public:
@@ -108,10 +118,10 @@ class LoopbackHttpServer final {
     if (client == kSocketError) {
       return;
     }
-    char buffer[a2a::core::http::kReceiveBufferSize]{};
-    const auto received = ::recv(client, buffer, sizeof(buffer), 0);
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
     if (received > 0) {
-      request_.assign(buffer, static_cast<std::size_t>(received));
+      request_.assign(buffer.data(), static_cast<std::size_t>(received));
     }
     (void)::send(client, response_.data(), response_.size(), 0);
     ::close(client);
@@ -130,16 +140,6 @@ class LoopbackHttpServer final {
 TEST(PushNotificationDeliveryTest, RejectsUnsupportedUrlScheme) {
   a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
   const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kMalformedUrl)),
-                                                 .payload = BuildPayload()};
-
-  const auto result = client.Deliver(request);
-
-  EXPECT_FALSE(result.ok());
-}
-
-TEST(PushNotificationDeliveryTest, RejectsHttpsWithoutTlsClient) {
-  a2a::server::HttpPushNotificationDeliveryClient client{std::chrono::milliseconds(kDeliveryTimeoutMs)};
-  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kHttpsUrl)),
                                                  .payload = BuildPayload()};
 
   const auto result = client.Deliver(request);
@@ -178,6 +178,22 @@ TEST(PushNotificationDeliveryTest, RejectsUnresolvedHost) {
 }
 
 #ifndef _WIN32
+TEST(PushNotificationDeliveryTest, AttemptsHttpsDeliveryWithBuiltInTlsClient) {
+  LoopbackHttpServer server{std::string(kHttpOkResponse)};
+  a2a::server::HttpPushNotificationDeliveryOptions options;
+  options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
+  options.http_version = std::string(kHttpVersion11);
+  options.fallback_http_version.clear();
+  a2a::server::HttpPushNotificationDeliveryClient client(options);
+  const a2a::server::PushDeliveryRequest request{
+      .config = BuildConfig(BuildLoopbackUrl(server.port(), a2a::core::http::kHttpsScheme)), .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_FALSE(server.request().empty());
+}
+
 TEST(PushNotificationDeliveryTest, DeliversJsonPayloadWithAuthorizationHeader) {
   LoopbackHttpServer server{std::string(kHttpOkResponse)};
   a2a::server::HttpPushNotificationDeliveryOptions options;
@@ -214,20 +230,34 @@ TEST(PushNotificationDeliveryTest, OmitsAuthorizationHeaderWhenSchemeIsEmpty) {
   EXPECT_EQ(server.request().find("Authorization:"), std::string::npos);
 }
 
-TEST(PushNotificationDeliveryTest, RetriesWithFallbackHttpVersion) {
-  LoopbackHttpServer server{std::string(kHttpOkResponse)};
+TEST(PushNotificationDeliveryTest, RejectsHttp10PrimaryVersion) {
   a2a::server::HttpPushNotificationDeliveryOptions options;
   options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
   options.http_version = std::string(kHttpVersion10);
   options.fallback_http_version = std::string(kHttpVersion11);
   a2a::server::HttpPushNotificationDeliveryClient client(options);
-  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(BuildLoopbackUrl(server.port())),
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kUnresolvedUrl)),
                                                  .payload = BuildPayload()};
 
   const auto result = client.Deliver(request);
 
-  ASSERT_TRUE(result.ok());
-  EXPECT_NE(server.request().find("POST /webhook HTTP/1.0"), std::string::npos);
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
+TEST(PushNotificationDeliveryTest, RejectsHttp10FallbackVersion) {
+  a2a::server::HttpPushNotificationDeliveryOptions options;
+  options.timeout = std::chrono::milliseconds(kDeliveryTimeoutMs);
+  options.http_version = std::string(kHttpVersion11);
+  options.fallback_http_version = std::string(kHttpVersion10);
+  a2a::server::HttpPushNotificationDeliveryClient client(options);
+  const a2a::server::PushDeliveryRequest request{.config = BuildConfig(std::string(kUnresolvedUrl)),
+                                                 .payload = BuildPayload()};
+
+  const auto result = client.Deliver(request);
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
 }
 
 TEST(PushNotificationDeliveryTest, RejectsNonSuccessWebhookStatus) {

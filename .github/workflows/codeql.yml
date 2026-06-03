@@ -34,15 +34,7 @@ jobs:
           build-mode: manual
 
       - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake \
-            ninja-build \
-            protobuf-compiler \
-            libprotobuf-dev \
-            protobuf-compiler-grpc \
-            libgrpc++-dev
+        run: ./scripts/install_build_deps.sh
 
       - name: Build
         run: |
