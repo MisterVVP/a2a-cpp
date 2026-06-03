@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
 #pragma once
 
@@ -29,6 +30,8 @@ inline constexpr std::string_view kMessageId = "message-bench-1";
 inline constexpr std::string_view kBenchText = "hello benchmark";
 inline constexpr std::size_t kTaskCount = 1000;
 inline constexpr std::size_t kLargeHistoryCount = 100;
+inline constexpr std::string_view kPushConfigId = "push-bench-1";
+inline constexpr std::string_view kPushUrl = "http://127.0.0.1/webhook";
 
 inline lf::a2a::v1::Message BuildMessage(std::string_view message_id = kMessageId, std::string_view task_id = kTaskId,
                                          std::string_view context_id = kContextId) {

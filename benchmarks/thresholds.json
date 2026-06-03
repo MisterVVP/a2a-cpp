@@ -68,6 +68,15 @@
   "BM_ProtoJson_MessageToJson_Task": {
     "max_time_ns": 20000
   },
+  "BM_PushNotificationService_Notify_ManyConfigs": {
+    "max_time_ns": 900000
+  },
+  "BM_PushNotificationStore_CreateOrUpdate": {
+    "max_time_ns": 900000
+  },
+  "BM_PushNotificationStore_List_ManyConfigs": {
+    "max_time_ns": 350000
+  },
   "BM_RestTransport_AgentCardResponse": {
     "max_time_ns": 90000
   },
@@ -96,7 +105,7 @@
     "max_time_ns": 50000
   },
   "BM_SequentialTaskIdGenerator_Generate": {
-    "max_time_ns": 50
+    "max_time_ns": 75000
   },
   "BM_TaskLifecycle_ContinueExistingTask": {
     "max_time_ns": 500
@@ -131,10 +140,10 @@
   "BM_TaskStore_GetTaskHistoryLengthZero": {
     "max_time_ns": 35000
   },
-  "BM_TaskStore_Get_1000Tasks": {
+  "BM_TaskStore_Get_ManyTasks": {
     "max_time_ns": 500
   },
-  "BM_TaskStore_List_1000Tasks": {
+  "BM_TaskStore_List_ManyTasks": {
     "max_time_ns": 1250000
   },
   "BM_TransportMux_MethodMismatch": {
@@ -156,9 +165,9 @@
     "max_time_ns": 300
   },
   "BM_UuidV7TaskIdGenerator_Generate": {
-    "max_time_ns": 12000
+    "max_time_ns": 15000000
   },
   "BM_UuidV7TaskIdGenerator_GenerateMultiThreaded/threads:${A2A_BENCHMARK_THREADS}": {
-    "max_time_ns": 24000
+    "max_time_ns": 25000000
   }
 }

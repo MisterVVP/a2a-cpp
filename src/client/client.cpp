@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_methods.h"
 
 namespace a2a::client {
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
@@ -44,7 +45,7 @@ core::Result<lf::a2a::v1::SendMessageResponse> A2AClient::SendMessage(const lf::
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "SendMessage", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kSendMessage, .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->SendMessage(request, options);
   RunAfterInterceptors(context,
@@ -57,7 +58,7 @@ core::Result<lf::a2a::v1::Task> A2AClient::GetTask(const lf::a2a::v1::GetTaskReq
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "GetTask", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kGetTask, .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->GetTask(request, options);
   RunAfterInterceptors(context,
@@ -69,7 +70,7 @@ core::Result<ListTasksResponse> A2AClient::ListTasks(const ListTasksRequest& req
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "ListTasks", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kListTasks, .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->ListTasks(request, options);
   RunAfterInterceptors(context,
@@ -82,7 +83,7 @@ core::Result<lf::a2a::v1::Task> A2AClient::CancelTask(const lf::a2a::v1::CancelT
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "CancelTask", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kCancelTask, .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->CancelTask(request, options);
   RunAfterInterceptors(context,
@@ -95,7 +96,8 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::CreateTaskPushN
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "CreateTaskPushNotificationConfig", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kCreateTaskPushNotificationConfig,
+                                  .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->CreateTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context,
@@ -108,7 +110,8 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::GetTaskPushNoti
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "GetTaskPushNotificationConfig", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kGetTaskPushNotificationConfig,
+                                  .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->GetTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context,
@@ -121,7 +124,8 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> A2AClient::Li
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "ListTaskPushNotificationConfigs", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kListTaskPushNotificationConfigs,
+                                  .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->ListTaskPushNotificationConfigs(request, options);
   RunAfterInterceptors(context,
@@ -134,7 +138,8 @@ core::Result<void> A2AClient::DeleteTaskPushNotificationConfig(
   if (transport_ == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
-  const ClientCallContext context{.operation = "DeleteTaskPushNotificationConfig", .options = &options};
+  const ClientCallContext context{.operation = core::protocol_methods::kDeleteTaskPushNotificationConfig,
+                                  .options = &options};
   RunBeforeInterceptors(context);
   const auto result = transport_->DeleteTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context,

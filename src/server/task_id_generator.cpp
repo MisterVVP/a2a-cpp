@@ -2,10 +2,12 @@
 
 #include "a2a/server/task_id_generator.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
 #include <random>
+#include <utility>
 
 #include "a2a/core/error.h"
 #include "a2a/server/server.h"
@@ -23,9 +25,7 @@ core::Result<std::string> UuidV7TaskIdGenerator::GenerateTaskId(const lf::a2a::v
   std::uint64_t sequence_value = 0;
   {
     std::scoped_lock<std::mutex> lock(mutex_);
-    if (effective_ms < last_timestamp_ms_) {
-      effective_ms = last_timestamp_ms_;
-    }
+    effective_ms = std::max(effective_ms, last_timestamp_ms_);
     if (effective_ms > last_timestamp_ms_) {
       last_timestamp_ms_ = effective_ms;
       std::random_device rd;
@@ -58,7 +58,7 @@ core::Result<std::string> UuidV7TaskIdGenerator::GenerateTaskId(const lf::a2a::v
       std::snprintf(uuid.data(), uuid.size(), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
                     bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9],
                     bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]);
-  if (written != static_cast<int>(kUuidStringSize)) {
+  if (std::cmp_not_equal(written, kUuidStringSize)) {
     return core::Error::Internal("Failed to format UUIDv7");
   }
   return std::string(kPrefix) + std::string(uuid.data(), kUuidStringSize);

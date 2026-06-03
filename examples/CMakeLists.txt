@@ -35,6 +35,10 @@ add_executable(example_push_notification_config_client push_notification_config_
 target_include_directories(example_push_notification_config_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(example_push_notification_config_client PRIVATE a2a::client a2a::server a2a::core)
 
+add_executable(example_push_notifications push_notifications.cpp)
+target_include_directories(example_push_notifications PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(example_push_notifications PRIVATE a2a::server a2a::core)
+
 add_executable(example_interceptor_client interceptor_client.cpp)
 target_include_directories(example_interceptor_client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(example_interceptor_client PRIVATE a2a::client a2a::server a2a::core)

@@ -10,6 +10,7 @@
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_methods.h"
 
 namespace {
 
@@ -133,23 +134,30 @@ TEST(HttpJsonClientIntegrationTest, ListTasksBuildsQueryAndParsesTasks) {
 TEST(HttpJsonClientIntegrationTest, SupportsPushNotificationConfigCrudAndList) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
-        if (request.method == "POST" && request.url.ends_with("/pushNotificationConfigs")) {
-          return HttpClientResponse{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}},
-                                    .body = R"({"id":"pn-1","taskId":"t-1","url":"https://cb"})"};
-        }
-        if (request.method == "GET" && request.url.ends_with("/pushNotificationConfigs/pn-1")) {
+        if (request.method == "POST" &&
+            request.url.ends_with("/tasks/t-1" +
+                                  std::string(a2a::core::protocol_methods::kPushNotificationConfigsSegment))) {
           return HttpClientResponse{.status_code = kHttpOk,
                                     .headers = {{"A2A-Version", "1.0"}},
                                     .body = R"({"id":"pn-1","taskId":"t-1","url":"https://cb"})"};
         }
         if (request.method == "GET" &&
-            request.url.find("/pushNotificationConfigs?taskId=t-1&pageSize=25") != std::string::npos) {
+            request.url.ends_with(
+                "/tasks/t-1" + std::string(a2a::core::protocol_methods::kPushNotificationConfigsSegment) + "/pn-1")) {
+          return HttpClientResponse{.status_code = kHttpOk,
+                                    .headers = {{"A2A-Version", "1.0"}},
+                                    .body = R"({"id":"pn-1","taskId":"t-1","url":"https://cb"})"};
+        }
+        if (request.method == "GET" &&
+            request.url.find("/tasks/t-1" + std::string(a2a::core::protocol_methods::kPushNotificationConfigsSegment) +
+                             "?pageSize=25") != std::string::npos) {
           return HttpClientResponse{.status_code = kHttpOk,
                                     .headers = {{"A2A-Version", "1.0"}},
                                     .body = R"({"configs":[{"id":"pn-1","taskId":"t-1"}]})"};
         }
-        if (request.method == "DELETE" && request.url.ends_with("/pushNotificationConfigs/pn-1")) {
+        if (request.method == "DELETE" &&
+            request.url.ends_with(
+                "/tasks/t-1" + std::string(a2a::core::protocol_methods::kPushNotificationConfigsSegment) + "/pn-1")) {
           return HttpClientResponse{.status_code = kHttpNoContent, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
         }
         return a2a::core::Error::Internal("unexpected request");

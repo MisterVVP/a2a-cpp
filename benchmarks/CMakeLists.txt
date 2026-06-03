@@ -26,6 +26,7 @@ add_executable(a2a_benchmarks
   bench_http_adapter.cpp
   bench_json_rpc_transport.cpp
   bench_protojson.cpp
+  bench_push_notifications.cpp
   bench_rest_transport.cpp
   bench_task_lifecycle.cpp
   bench_task_store.cpp

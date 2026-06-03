@@ -34,6 +34,7 @@
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
+#include "a2a/server/socket_utils.h"
 #include "a2a/server/transport_mux.h"
 #include "example_support.h"
 
@@ -94,6 +95,7 @@ int main(int argc, char** argv) {
                          .json_rpc_url = "http://localhost:" + std::to_string(port) + "/rpc",
                          .grpc_url = "localhost:" + std::to_string(grpc_port)},
                         "TCK HTTP SUT", "0.1.0", "Conformance-focused local SUT for A2A")
+                        .WithPushNotifications(true)
                         .Build();
 
   a2a::examples::ExampleExecutor executor;

@@ -5,6 +5,7 @@
 
 #include <google/protobuf/struct.pb.h>
 
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
@@ -17,13 +18,20 @@
 #include "a2a/core/error.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 
 namespace a2a::server {
 namespace {
+
+template <std::size_t MessageSize>
+[[nodiscard]] core::Error InvalidJsonRpcResponsePayload(const std::array<char, MessageSize>& message) {
+  return core::protocol_errors::InvalidAgentResponse(core::protocol_error_messages::ToString(message));
+}
 
 constexpr int kHttpOk = 200;
 constexpr int kHttpInternalServerError = 500;
@@ -37,6 +45,8 @@ constexpr int kJsonRpcVersionNotSupported = -32009;
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::size_t kMinListTasksPageSize = 1;
+constexpr std::string_view kTaskIdJsonField = "taskId";
+constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 
 std::string ToLower(std::string_view value) {
   std::string lowered;
@@ -73,41 +83,52 @@ bool IsMethod(std::string_view actual, std::string_view canonical, std::string_v
 }
 
 bool IsSendMessageMethod(std::string_view method) {
-  return IsMethod(method, "SendMessage", core::json_rpc::MethodNames::kSendMessage) ||
+  return IsMethod(method, core::protocol_methods::kSendMessage, core::json_rpc::MethodNames::kSendMessage) ||
          method == core::json_rpc::MethodNames::kLegacySendMessage;
 }
 
 bool IsSendStreamingMessageMethod(std::string_view method) {
-  return IsMethod(method, "SendStreamingMessage", "a2a.sendStreamingMessage");
+  return IsMethod(method, core::protocol_methods::kSendStreamingMessage, "a2a.sendStreamingMessage");
 }
 
 bool IsGetTaskMethod(std::string_view method) {
-  return IsMethod(method, "GetTask", core::json_rpc::MethodNames::kGetTask) ||
+  return IsMethod(method, core::protocol_methods::kGetTask, core::json_rpc::MethodNames::kGetTask) ||
          method == core::json_rpc::MethodNames::kLegacyGetTask;
 }
 
 bool IsCancelTaskMethod(std::string_view method) {
-  return IsMethod(method, "CancelTask", core::json_rpc::MethodNames::kCancelTask) ||
+  return IsMethod(method, core::protocol_methods::kCancelTask, core::json_rpc::MethodNames::kCancelTask) ||
          method == core::json_rpc::MethodNames::kLegacyCancelTask;
 }
 
 bool IsListTasksMethod(std::string_view method) {
-  return IsMethod(method, "ListTasks", core::json_rpc::MethodNames::kListTasks) ||
+  return IsMethod(method, core::protocol_methods::kListTasks, core::json_rpc::MethodNames::kListTasks) ||
          method == core::json_rpc::MethodNames::kLegacyListTasks ||
          method == core::json_rpc::MethodNames::kLegacyListTasksDot;
 }
 
 bool IsSubscribeToTaskMethod(std::string_view method) {
-  return IsMethod(method, "SubscribeToTask", "a2a.subscribeToTask");
+  return IsMethod(method, core::protocol_methods::kSubscribeToTask, "a2a.subscribeToTask");
 }
 
-bool IsPushConfigMethod(std::string_view method) {
-  return method == "CreateTaskPushNotificationConfig" || method == "GetTaskPushNotificationConfig" ||
-         method == "ListTaskPushNotificationConfigs" || method == "DeleteTaskPushNotificationConfig" ||
-         method == core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig ||
-         method == core::json_rpc::MethodNames::kGetTaskPushNotificationConfig ||
-         method == core::json_rpc::MethodNames::kListTaskPushNotificationConfigs ||
-         method == core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig;
+bool IsCreatePushConfigMethod(std::string_view method) {
+  return IsMethod(method, core::protocol_methods::kCreateTaskPushNotificationConfig,
+                  core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig);
+}
+
+bool IsGetPushConfigMethod(std::string_view method) {
+  return IsMethod(method, core::protocol_methods::kGetTaskPushNotificationConfig,
+                  core::json_rpc::MethodNames::kGetTaskPushNotificationConfig);
+}
+
+bool IsListPushConfigMethod(std::string_view method) {
+  return IsMethod(method, core::protocol_methods::kListTaskPushNotificationConfigs,
+                  core::json_rpc::MethodNames::kListTaskPushNotificationConfigs);
+}
+
+bool IsDeletePushConfigMethod(std::string_view method) {
+  return IsMethod(method, core::protocol_methods::kDeleteTaskPushNotificationConfig,
+                  core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig);
 }
 
 std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
@@ -199,6 +220,33 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
     return parse_payload.error();
   }
   return payload;
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> ParseCreatePushConfigPayload(
+    const google::protobuf::Struct& params) {
+  const auto& fields = params.fields();
+  const auto nested_config_it = fields.find(std::string(kPushNotificationConfigJsonField));
+  if (nested_config_it == fields.end()) {
+    return ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(params);
+  }
+  if (!nested_config_it->second.has_struct_value()) {
+    return core::Error::Validation("TaskPushNotificationConfig.pushNotificationConfig must be an object");
+  }
+
+  auto payload = ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(nested_config_it->second.struct_value());
+  if (!payload.ok()) {
+    return payload.error();
+  }
+
+  const auto task_id_it = fields.find(std::string(kTaskIdJsonField));
+  if (task_id_it != fields.end()) {
+    if (task_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+      return core::Error::Validation("TaskPushNotificationConfig.taskId must be a string");
+    }
+    payload.value().set_task_id(task_id_it->second.string_value());
+  }
+
+  return payload.value();
 }
 
 core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params,
@@ -378,9 +426,37 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view method_name,
                                                              const google::protobuf::Struct& params,
                                                              const JsonRpcServerTransportOptions& options) {
-  if (IsPushConfigMethod(method_name)) {
-    (void)params;
-    return core::protocol_errors::PushNotificationNotSupported();
+  if (IsCreatePushConfigMethod(method_name)) {
+    auto payload = ParseCreatePushConfigPayload(params);
+    if (!payload.ok()) {
+      return payload.error();
+    }
+    return DispatchRequest{.operation = DispatcherOperation::kCreateTaskPushNotificationConfig,
+                           .payload = std::move(payload.value())};
+  }
+  if (IsGetPushConfigMethod(method_name)) {
+    auto payload = ParseProtoPayload<lf::a2a::v1::GetTaskPushNotificationConfigRequest>(params);
+    if (!payload.ok()) {
+      return payload.error();
+    }
+    return DispatchRequest{.operation = DispatcherOperation::kGetTaskPushNotificationConfig,
+                           .payload = std::move(payload.value())};
+  }
+  if (IsListPushConfigMethod(method_name)) {
+    auto payload = ParseProtoPayload<lf::a2a::v1::ListTaskPushNotificationConfigsRequest>(params);
+    if (!payload.ok()) {
+      return payload.error();
+    }
+    return DispatchRequest{.operation = DispatcherOperation::kListTaskPushNotificationConfigs,
+                           .payload = std::move(payload.value())};
+  }
+  if (IsDeletePushConfigMethod(method_name)) {
+    auto payload = ParseProtoPayload<lf::a2a::v1::DeleteTaskPushNotificationConfigRequest>(params);
+    if (!payload.ok()) {
+      return payload.error();
+    }
+    return DispatchRequest{.operation = DispatcherOperation::kDeleteTaskPushNotificationConfig,
+                           .payload = std::move(payload.value())};
   }
 
   const auto operation = MethodToOperation(method_name);
@@ -427,6 +503,11 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
       dispatch_request.payload = parsed_payload;
       return dispatch_request;
     }
+    case DispatcherOperation::kCreateTaskPushNotificationConfig:
+    case DispatcherOperation::kGetTaskPushNotificationConfig:
+    case DispatcherOperation::kListTaskPushNotificationConfigs:
+    case DispatcherOperation::kDeleteTaskPushNotificationConfig:
+      return core::Error::Internal("Push notification operations are handled before the generic JSON-RPC switch");
   }
 
   return core::Error::Internal("Unsupported JSON-RPC dispatcher operation");
@@ -703,8 +784,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   if (is_streaming) {
     auto* session = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
     if (session == nullptr) {
-      const auto error = core::protocol_errors::InvalidAgentResponse("JSON-RPC streaming response payload mismatch")
-                             .WithTransport("jsonrpc");
+      const auto error =
+          InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForStreaming)
+              .WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
@@ -720,8 +802,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   if (is_subscribe) {
     const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
     if (task == nullptr) {
-      const auto error = core::protocol_errors::InvalidAgentResponse("JSON-RPC subscribe response payload mismatch")
-                             .WithTransport("jsonrpc");
+      const auto error =
+          InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSubscribe)
+              .WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
@@ -801,7 +884,8 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC SendMessage response payload mismatch");
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSendMessage);
       }
       return BuildJsonValueFromMessage(*payload);
     }
@@ -809,16 +893,39 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::Task>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC Task response payload mismatch");
+        return InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForTask);
       }
       return BuildJsonValueFromMessage(*payload);
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
-        return core::protocol_errors::InvalidAgentResponse("JSON-RPC ListTasks response payload mismatch");
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForListTasks);
       }
       return BuildListTasksResult(*payload);
+    }
+    case DispatcherOperation::kCreateTaskPushNotificationConfig:
+    case DispatcherOperation::kGetTaskPushNotificationConfig: {
+      const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&response.payload());
+      if (payload == nullptr) {
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForPushConfig);
+      }
+      return BuildJsonValueFromMessage(*payload);
+    }
+    case DispatcherOperation::kListTaskPushNotificationConfigs: {
+      const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&response.payload());
+      if (payload == nullptr) {
+        return InvalidJsonRpcResponsePayload(
+            core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForPushConfigList);
+      }
+      return BuildJsonValueFromMessage(*payload);
+    }
+    case DispatcherOperation::kDeleteTaskPushNotificationConfig: {
+      google::protobuf::Value value;
+      value.mutable_struct_value();
+      return value;
     }
     case DispatcherOperation::kSendStreamingMessage:
       return core::protocol_errors::InvalidAgentResponse("Streaming JSON-RPC responses must be serialized as SSE");

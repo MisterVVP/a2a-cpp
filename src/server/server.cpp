@@ -4,6 +4,7 @@
 #include "a2a/server/server.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <limits>
@@ -12,12 +13,18 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
 
 namespace a2a::server {
 
 namespace {
+
+template <std::size_t MessageSize>
+[[nodiscard]] core::Error DispatchPayloadTypeMismatchError(const std::array<char, MessageSize>& message) {
+  return core::Error::Validation(core::protocol_error_messages::ToString(message));
+}
 
 std::string ToLower(std::string_view value) {
   std::string lowered(value);
@@ -79,13 +86,86 @@ void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
   task->mutable_history()->DeleteSubrange(0, remove_count);
 }
 
+bool IsPushNotificationOperation(DispatcherOperation operation) {
+  return operation == DispatcherOperation::kCreateTaskPushNotificationConfig ||
+         operation == DispatcherOperation::kGetTaskPushNotificationConfig ||
+         operation == DispatcherOperation::kListTaskPushNotificationConfigs ||
+         operation == DispatcherOperation::kDeleteTaskPushNotificationConfig;
+}
+
+core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, const DispatchRequest& request,
+                                                      RequestContext& context) {
+  switch (request.operation) {
+    case DispatcherOperation::kCreateTaskPushNotificationConfig: {
+      const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&request.payload);
+      if (payload == nullptr) {
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForCreateTaskPushNotificationConfig);
+      }
+      const auto response = executor.CreateTaskPushNotificationConfig(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+    case DispatcherOperation::kGetTaskPushNotificationConfig: {
+      const auto* payload = std::get_if<lf::a2a::v1::GetTaskPushNotificationConfigRequest>(&request.payload);
+      if (payload == nullptr) {
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTaskPushNotificationConfig);
+      }
+      const auto response = executor.GetTaskPushNotificationConfig(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+    case DispatcherOperation::kListTaskPushNotificationConfigs: {
+      const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsRequest>(&request.payload);
+      if (payload == nullptr) {
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForListTaskPushNotificationConfigs);
+      }
+      const auto response = executor.ListTaskPushNotificationConfigs(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(response.value());
+    }
+    case DispatcherOperation::kDeleteTaskPushNotificationConfig: {
+      const auto* payload = std::get_if<lf::a2a::v1::DeleteTaskPushNotificationConfigRequest>(&request.payload);
+      if (payload == nullptr) {
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForDeleteTaskPushNotificationConfig);
+      }
+      const auto response = executor.DeleteTaskPushNotificationConfig(*payload, context);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse();
+    }
+    case DispatcherOperation::kSendMessage:
+    case DispatcherOperation::kSendStreamingMessage:
+    case DispatcherOperation::kGetTask:
+    case DispatcherOperation::kListTasks:
+    case DispatcherOperation::kCancelTask:
+      return core::Error::Validation("Dispatch operation is not a push notification operation");
+  }
+  return core::Error::Validation("Unsupported push notification dispatcher operation");
+}
+
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context) {
+  if (IsPushNotificationOperation(request.operation)) {
+    return DispatchPushToExecutor(executor, request, context);
+  }
+
   switch (request.operation) {
     case DispatcherOperation::kSendMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for SendMessage");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendMessage);
       }
       const auto response = executor.SendMessage(*payload, context);
       if (!response.ok()) {
@@ -96,7 +176,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kSendStreamingMessage: {
       const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for SendStreamingMessage");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendStreamingMessage);
       }
       auto response = executor.SendStreamingMessage(*payload, context);
       if (!response.ok()) {
@@ -107,7 +188,7 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kGetTask: {
       const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for GetTask");
+        return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask);
       }
       auto response = executor.GetTask(*payload, context);
       if (!response.ok()) {
@@ -122,7 +203,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for ListTasks");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForListTasks);
       }
       const auto response = executor.ListTasks(*payload, context);
       if (!response.ok()) {
@@ -133,7 +215,8 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::CancelTaskRequest>(&request.payload);
       if (payload == nullptr) {
-        return core::Error::Validation("Dispatch payload type mismatch for CancelTask");
+        return DispatchPayloadTypeMismatchError(
+            core::protocol_error_messages::kDispatchPayloadTypeMismatchForCancelTask);
       }
       const auto response = executor.CancelTask(*payload, context);
       if (!response.ok()) {
@@ -141,6 +224,11 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
       }
       return DispatchResponse(response.value());
     }
+    case DispatcherOperation::kCreateTaskPushNotificationConfig:
+    case DispatcherOperation::kGetTaskPushNotificationConfig:
+    case DispatcherOperation::kListTaskPushNotificationConfigs:
+    case DispatcherOperation::kDeleteTaskPushNotificationConfig:
+      return core::Error::Validation("Push notification dispatch was not handled by push dispatcher");
   }
 
   return core::Error::Validation("Unsupported dispatcher operation");
@@ -489,7 +577,7 @@ void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts) {
 }
 
 void TimestampDescTaskOrdering::Sort(std::vector<const lf::a2a::v1::Task*>* tasks) {
-  std::stable_sort(tasks->begin(), tasks->end(), [](const lf::a2a::v1::Task* lhs, const lf::a2a::v1::Task* rhs) {
+  std::ranges::stable_sort(*tasks, [](const lf::a2a::v1::Task* lhs, const lf::a2a::v1::Task* rhs) {
     const int64_t lhs_seconds = lhs->status().has_timestamp() ? lhs->status().timestamp().seconds() : 0;
     const int64_t rhs_seconds = rhs->status().has_timestamp() ? rhs->status().timestamp().seconds() : 0;
     if (lhs_seconds != rhs_seconds) {

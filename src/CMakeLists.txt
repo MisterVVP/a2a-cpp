@@ -48,9 +48,14 @@ target_link_libraries(a2a_client
 add_library(a2a_server STATIC
   server/grpc_server_transport.cpp
   server/http_adapter.cpp
+  server/http_client.cpp
   server/rest_server_transport.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp
+  server/push_notification_delivery.cpp
+  server/push_notification_service.cpp
+  server/push_notification_store.cpp
+  server/socket_utils.cpp
   server/task_id_generator.cpp
   server/transport_mux.cpp
   server/server.cpp
@@ -66,6 +71,8 @@ target_include_directories(a2a_server
 target_link_libraries(a2a_server
   PUBLIC
     a2a::core
+  PRIVATE
+    CURL::libcurl
 )
 
 install(TARGETS a2a_core a2a_client a2a_server

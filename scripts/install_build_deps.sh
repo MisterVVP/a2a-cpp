@@ -35,6 +35,7 @@ PACKAGES=(
   libprotobuf-dev
   protobuf-compiler-grpc
   libgrpc++-dev
+  libcurl4-openssl-dev
   libgtest-dev
   clang-format
   clang-tidy

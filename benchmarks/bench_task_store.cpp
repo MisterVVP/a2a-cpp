@@ -33,7 +33,7 @@ void BM_TaskStore_CreateOrUpdate(benchmark::State& state) {
 }
 BENCHMARK(BM_TaskStore_CreateOrUpdate);
 
-void BM_TaskStore_Get_1000Tasks(benchmark::State& state) {
+void BM_TaskStore_Get_ManyTasks(benchmark::State& state) {
   const auto store = BuildStore(a2a::bench::kTaskCount);
   const std::string id = "task-500";
   for (auto _ : state) {
@@ -41,9 +41,9 @@ void BM_TaskStore_Get_1000Tasks(benchmark::State& state) {
     benchmark::DoNotOptimize(result);
   }
 }
-BENCHMARK(BM_TaskStore_Get_1000Tasks);
+BENCHMARK(BM_TaskStore_Get_ManyTasks);
 
-void BM_TaskStore_List_1000Tasks(benchmark::State& state) {
+void BM_TaskStore_List_ManyTasks(benchmark::State& state) {
   const auto store = BuildStore(a2a::bench::kTaskCount);
   const a2a::server::ListTasksRequest request;
   for (auto _ : state) {
@@ -51,7 +51,7 @@ void BM_TaskStore_List_1000Tasks(benchmark::State& state) {
     benchmark::DoNotOptimize(result);
   }
 }
-BENCHMARK(BM_TaskStore_List_1000Tasks);
+BENCHMARK(BM_TaskStore_List_ManyTasks);
 
 void BM_TaskStore_AppendTaskHistory_NoDuplicate(benchmark::State& state) {
   std::size_t index = 0;

@@ -21,6 +21,7 @@ class AgentCardBuilder final {
   AgentCardBuilder& SetDescription(std::string_view description);
   AgentCardBuilder& AddDefaultInputMode(std::string_view mode);
   AgentCardBuilder& AddDefaultOutputMode(std::string_view mode);
+  AgentCardBuilder& WithPushNotifications(bool enabled);
 
   struct InterfaceSpec final {
     std::string_view binding;

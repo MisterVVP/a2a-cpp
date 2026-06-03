@@ -40,6 +40,4 @@ class HttpAdapter final {
   Options options_;
 };
 
-void CloseSocketCrossPlatform(int fd) noexcept;
-
 }  // namespace a2a::server

@@ -50,6 +50,7 @@ These instructions apply to the entire repository. Follow them for all changes u
 - Do not suppress linter findings with `NOLINT` unless there is a documented, reviewer-approved justification in code comments and the PR description. Prefer structural refactors that eliminate the warning.
 - Document non-obvious decisions with short comments near the code.
 - **Magic strings are forbidden** in production and test code. Use named `constexpr` constants (or equivalent strongly typed constants) and centralize protocol literals in shared headers where possible.
+- Code must be both readable and efficient: prefer straightforward, maintainable constructs first, then use measured/pre-allocated optimizations for hot paths without obscuring intent.
 - Prioritize performance and algorithmic efficiency:
   - Analyze asymptotic complexity for hot paths and prefer lower-complexity algorithms/data structures (`O(1)`/`O(log n)` over repeated linear scans where feasible).
   - Avoid avoidable allocations, copies, and parsing overhead in request/response critical paths.

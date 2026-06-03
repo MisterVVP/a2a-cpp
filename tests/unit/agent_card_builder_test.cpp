@@ -97,4 +97,15 @@ TEST(AgentCardBuilderTest, ValidateAcceptsGrpcHostPortUrl) {
   EXPECT_TRUE(builder.Validate().ok());
 }
 
+TEST(AgentCardBuilderTest, WithPushNotificationsPreservesExistingCapabilities) {
+  const auto card = a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = "http://agent.local/a2a",
+                                                                    .json_rpc_url = "http://agent.local/rpc",
+                                                                    .grpc_url = "agent.local:50051"})
+                        .WithPushNotifications(true)
+                        .Build();
+
+  EXPECT_TRUE(card.capabilities().streaming());
+  EXPECT_TRUE(card.capabilities().push_notifications());
+}
+
 }  // namespace

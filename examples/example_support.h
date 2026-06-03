@@ -20,6 +20,9 @@
 #include "a2a/core/response_builders.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/url_utils.h"
+#include "a2a/server/push_notification_delivery.h"
+#include "a2a/server/push_notification_service.h"
+#include "a2a/server/push_notification_store.h"
 #include "a2a/server/server.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_constants.h"
@@ -136,12 +139,20 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!stored.ok()) {
       return stored.error();
     }
+    const auto register_push = push_notifications_.RegisterInlineConfigIfPresent(request, task_id);
+    if (!register_push.ok()) {
+      return register_push.error();
+    }
     const auto append =
         lifecycle_.AppendHistory(task_id, request.message(), server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
     if (!append.ok()) {
       return append.error();
     }
     task = append.value();
+    const auto notify = push_notifications_.NotifyTaskUpdated(task);
+    if (!notify.ok()) {
+      return notify.error();
+    }
 
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
@@ -228,23 +239,58 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                              server::RequestContext& context) override {
     (void)context;
-    return lifecycle_.TransitionTaskStatus(request.id(), lf::a2a::v1::TASK_STATE_CANCELED);
+    auto task = lifecycle_.TransitionTaskStatus(request.id(), lf::a2a::v1::TASK_STATE_CANCELED);
+    if (!task.ok()) {
+      return task.error();
+    }
+    const auto notify = push_notifications_.NotifyTaskUpdated(task.value());
+    if (!notify.ok()) {
+      return notify.error();
+    }
+    return task.value();
+  }
+
+  core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, server::RequestContext& context) override {
+    (void)context;
+    return push_notifications_.CreateConfig(request);
+  }
+
+  core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, server::RequestContext& context) override {
+    (void)context;
+    return push_notifications_.GetConfig(request);
+  }
+
+  core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, server::RequestContext& context) override {
+    (void)context;
+    return push_notifications_.ListConfigs(request);
+  }
+
+  core::Result<void> DeleteTaskPushNotificationConfig(
+      const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, server::RequestContext& context) override {
+    (void)context;
+    return push_notifications_.DeleteConfig(request);
   }
 
  private:
   std::vector<std::string> ordered_ids_;
   server::InMemoryTaskStore store_;
+  server::InMemoryPushNotificationStore push_store_;
+  server::HttpPushNotificationDeliveryClient push_delivery_;
   std::shared_ptr<server::TaskIdGenerator> task_id_generator_{std::make_shared<server::SequentialTaskIdGenerator>()};
   server::TaskLifecycleService lifecycle_{&store_, task_id_generator_};
+  server::PushNotificationService push_notifications_{&store_, &push_store_, &push_delivery_};
   std::uint64_t status_timestamp_counter_ = 0;
 };
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {
-  return a2a::core::AgentCardBuilder::RestPreset(name, url).Build();
+  return a2a::core::AgentCardBuilder::RestPreset(name, url).WithPushNotifications(true).Build();
 }
 
 inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::string_view url) {
-  return a2a::core::AgentCardBuilder::JsonRpcPreset(name, url).Build();
+  return a2a::core::AgentCardBuilder::JsonRpcPreset(name, url).WithPushNotifications(true).Build();
 }
 
 }  // namespace a2a::examples
