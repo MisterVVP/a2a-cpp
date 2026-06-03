@@ -285,6 +285,26 @@ class TaskStore {
   [[nodiscard]] virtual HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const = 0;
 };
 
+struct TaskStoreStringHash final {
+  using is_transparent = void;
+
+  [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
+    return std::hash<std::string_view>{}(value);
+  }
+
+  [[nodiscard]] std::size_t operator()(const std::string& value) const noexcept {
+    return (*this)(std::string_view(value));
+  }
+
+  [[nodiscard]] std::size_t operator()(const char* value) const noexcept { return (*this)(std::string_view(value)); }
+};
+
+struct TaskStoreStringEqual final {
+  using is_transparent = void;
+
+  [[nodiscard]] bool operator()(std::string_view lhs, std::string_view rhs) const noexcept { return lhs == rhs; }
+};
+
 class InMemoryTaskStore final : public TaskStore {
  public:
   class HistoryTelemetrySink {
@@ -308,11 +328,11 @@ class InMemoryTaskStore final : public TaskStore {
  private:
   static std::optional<std::size_t> ParsePageToken(std::string_view token);
 
-  mutable std::mutex mutex_;
+  mutable std::shared_mutex mutex_;
   std::shared_ptr<HistoryTelemetrySink> telemetry_sink_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
   std::vector<std::string> ordered_ids_;
-  std::unordered_map<std::string, lf::a2a::v1::Task> tasks_;
+  std::unordered_map<std::string, lf::a2a::v1::Task, TaskStoreStringHash, TaskStoreStringEqual> tasks_;
 };
 
 class TaskLifecycleService final {

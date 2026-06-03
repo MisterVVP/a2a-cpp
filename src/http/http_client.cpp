@@ -1,25 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/http_client.h"
+#include "a2a/http/http_client.h"
 
+#include <string>
+#include <string_view>
+
+#include "a2a/core/error.h"
+
+#if defined(A2A_HAS_LIBCURL)
 #include <curl/curl.h>
 
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <sstream>
-#include <string>
-#include <string_view>
 #include <utility>
+#endif
 
-#include "a2a/core/error.h"
+namespace a2a::http {
 
-namespace a2a::server {
+#if defined(A2A_HAS_LIBCURL)
 
 namespace detail {
-struct HttpClientGlobalState final {
-  HttpClientGlobalState() : code(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
+struct ClientGlobalState final {
+  ClientGlobalState() : code(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
 
   CURLcode code = CURLE_OK;
 };
@@ -35,10 +41,12 @@ constexpr std::string_view kRequestFailureMessage = "failed to execute HTTP requ
 constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP response status";
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
+constexpr std::string_view kHttpStatusLinePrefix = "HTTP/";
+constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 
-std::shared_ptr<const detail::HttpClientGlobalState> EnsureCurlGlobalInit() {
-  static const auto init = std::make_shared<detail::HttpClientGlobalState>();
+std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
+  static const auto init = std::make_shared<detail::ClientGlobalState>();
   return init;
 }
 
@@ -70,7 +78,7 @@ std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::s
   return message.str();
 }
 
-std::string BuildHeaderValue(const HttpClientHeader& header) {
+std::string BuildHeaderValue(const Header& header) {
   std::string value;
   value.reserve(header.name.size() + core::http::kHeaderNameValueSeparator.size() + header.value.size());
   value.append(header.name);
@@ -95,7 +103,7 @@ core::Result<void> AppendHeader(CurlHeaderList* headers, const std::string& head
   return {};
 }
 
-core::Result<CurlHeaderList> BuildHeaders(const std::vector<HttpClientHeader>& headers) {
+core::Result<CurlHeaderList> BuildHeaders(const std::vector<Header>& headers) {
   CurlHeaderList list;
   for (const auto& header : headers) {
     const auto appended = AppendHeader(&list, BuildHeaderValue(header));
@@ -104,6 +112,48 @@ core::Result<CurlHeaderList> BuildHeaders(const std::vector<HttpClientHeader>& h
     }
   }
   return list;
+}
+
+std::string_view TrimHeaderValue(std::string_view value) {
+  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
+    value.remove_suffix(1);
+  }
+  return value;
+}
+
+std::optional<Header> ParseHeaderLine(std::string_view line) {
+  if (line.starts_with(kHttpStatusLinePrefix)) {
+    return Header{};
+  }
+
+  const auto separator = line.find(kHeaderSeparator);
+  if (separator == std::string_view::npos) {
+    return std::nullopt;
+  }
+
+  std::string name(line.substr(0, separator));
+  const std::string_view value = TrimHeaderValue(line.substr(separator + 1));
+  return Header{.name = std::move(name), .value = std::string(value)};
+}
+
+size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
+  auto* headers = static_cast<std::vector<Header>*>(user_data);
+  const std::size_t byte_count = size * nmemb;
+  const std::string_view line(contents, byte_count);
+  const auto header = ParseHeaderLine(line);
+  if (!header.has_value()) {
+    return byte_count;
+  }
+  if (header->name.empty() && header->value.empty()) {
+    headers->clear();
+    return byte_count;
+  }
+  headers->push_back(header.value());
+  return byte_count;
 }
 
 size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_data) {
@@ -126,8 +176,8 @@ core::Result<long> MapHttpVersion(std::string_view http_version) {
   return core::Error::Validation(std::string(kUnsupportedHttpVersionMessage));
 }
 
-core::Result<void> ConfigureCurl(CURL* handle, const HttpClientRequest& request, const CurlHeaderList& headers,
-                                 std::string* response_body) {
+core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
+                                 std::string* response_body, std::vector<Header>* response_headers) {
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();
@@ -145,12 +195,14 @@ core::Result<void> ConfigureCurl(CURL* handle, const HttpClientRequest& request,
   const auto set_no_signal = curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
   const auto set_write = curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, WriteResponseBody);
   const auto set_write_data = curl_easy_setopt(handle, CURLOPT_WRITEDATA, response_body);
+  const auto set_header = curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, WriteResponseHeader);
+  const auto set_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, response_headers);
   const auto set_http_version = curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, http_version.value());
   const auto set_tls_minimum = curl_easy_setopt(handle, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
   if (set_url != CURLE_OK || set_method != CURLE_OK || set_headers != CURLE_OK || set_body != CURLE_OK ||
       set_body_size != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
-      set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK ||
-      set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK) {
+      set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK || set_header != CURLE_OK ||
+      set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   return {};
@@ -163,9 +215,9 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
          http_version == core::http::kHttpVersion30;
 }
 
-HttpClient::HttpClient() : global_state_(EnsureCurlGlobalInit()) {}
+Client::Client() : global_state_(EnsureCurlGlobalInit()) {}
 
-core::Result<HttpClientResponse> HttpClient::SendRequest(const HttpClientRequest& request) const {
+core::Result<Response> Client::SendRequest(const Request& request) const {
   if (global_state_->code != CURLE_OK) {
     return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, global_state_->code, {}));
   }
@@ -187,7 +239,8 @@ core::Result<HttpClientResponse> HttpClient::SendRequest(const HttpClientRequest
   }
 
   std::string response_body;
-  const auto configured = ConfigureCurl(handle.get(), request, headers.value(), &response_body);
+  std::vector<Header> response_headers;
+  const auto configured = ConfigureCurl(handle.get(), request, headers.value(), &response_body, &response_headers);
   if (!configured.ok()) {
     return configured.error();
   }
@@ -205,7 +258,33 @@ core::Result<HttpClientResponse> HttpClient::SendRequest(const HttpClientRequest
   if (response_code == kHttpResponseCodeUnset) {
     return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
   }
-  return HttpClientResponse{.status_code = static_cast<int>(response_code), .body = std::move(response_body)};
+  return Response{.status_code = static_cast<int>(response_code),
+                  .headers = std::move(response_headers),
+                  .body = std::move(response_body)};
 }
 
-}  // namespace a2a::server
+#else
+
+namespace {
+
+constexpr std::string_view kLibcurlDisabledMessage =
+    "default libcurl-backed HTTP support is disabled; rebuild with A2A_ENABLE_LIBCURL=ON and libcurl available or "
+    "inject a custom requester/fetcher";
+
+}  // namespace
+
+Client::Client() = default;
+
+core::Result<Response> Client::SendRequest(const Request& request) const {
+  (void)request;
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+}
+
+bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
+  return http_version == core::http::kHttpVersion11 || http_version == core::http::kHttpVersion20 ||
+         http_version == core::http::kHttpVersion30;
+}
+
+#endif
+
+}  // namespace a2a::http

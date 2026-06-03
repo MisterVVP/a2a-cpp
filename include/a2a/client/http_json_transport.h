@@ -37,6 +37,8 @@ using StreamCancelled = std::function<bool()>;
 using HttpStreamRequester = std::function<core::Result<HttpClientResponse>(
     const HttpRequest& request, const HttpStreamChunkHandler& on_chunk, const StreamCancelled& is_cancelled)>;
 
+[[nodiscard]] HttpRequester MakeDefaultHttpRequester();
+
 struct HttpOperation final {
   std::string_view method;
   std::string_view endpoint;
@@ -52,6 +54,9 @@ class HttpJsonTransport final : public ClientTransport {
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              std::chrono::milliseconds default_timeout = kDefaultTimeout);
+
+  [[nodiscard]] static std::unique_ptr<HttpJsonTransport> CreateDefault(
+      ResolvedInterface resolved_interface, std::chrono::milliseconds default_timeout = kDefaultTimeout);
 
   [[nodiscard]] core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) override;

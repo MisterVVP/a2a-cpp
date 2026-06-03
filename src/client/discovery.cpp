@@ -15,6 +15,7 @@
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "a2a/http/http_client.h"
 
 namespace a2a::client {
 
@@ -23,6 +24,7 @@ namespace {
 constexpr int kHttpStatusOkMin = 200;
 constexpr int kHttpStatusOkMax = 299;
 constexpr int kHttpStatusNotFound = 404;
+constexpr std::string_view kDiscoveryGetMethod = "GET";
 
 std::string Trim(std::string_view input) {
   std::string value(input);
@@ -34,6 +36,10 @@ std::string Trim(std::string_view input) {
     return {};
   }
   return {begin, end};
+}
+
+HttpResponse ToDiscoveryHttpResponse(a2a::http::Response response) {
+  return HttpResponse{.status_code = response.status_code, .body = std::move(response.body)};
 }
 
 bool HasHttpScheme(std::string_view url) { return url.starts_with("http://") || url.starts_with("https://"); }
@@ -88,8 +94,25 @@ std::optional<std::string_view> ToWireTransport(PreferredTransport transport) {
 
 }  // namespace
 
+HttpFetcher MakeDefaultHttpFetcher() {
+  return [client = a2a::http::Client{}](std::string_view url) -> core::Result<HttpResponse> {
+    a2a::http::Request request;
+    request.method = std::string(kDiscoveryGetMethod);
+    request.url = std::string(url);
+    auto response = client.SendRequest(request);
+    if (!response.ok()) {
+      return response.error();
+    }
+    return ToDiscoveryHttpResponse(std::move(response.value()));
+  };
+}
+
 DiscoveryClient::DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl)
     : fetcher_(std::move(fetcher)), cache_ttl_(cache_ttl) {}
+
+DiscoveryClient DiscoveryClient::CreateDefault(std::chrono::seconds cache_ttl) {
+  return DiscoveryClient(MakeDefaultHttpFetcher(), cache_ttl);
+}
 
 core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view base_url) {
   const auto discovery_url = BuildDiscoveryUrl(base_url);

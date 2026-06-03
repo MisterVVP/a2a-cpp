@@ -20,6 +20,7 @@
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "a2a/http/http_client.h"
 
 namespace a2a::client {
 namespace {
@@ -27,6 +28,32 @@ namespace {
 constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
 constexpr int kHttpNoContent = 204;
+constexpr std::string_view kDefaultMtlsUnsupportedMessage =
+    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
+
+a2a::http::Request ToSharedHttpRequest(const HttpRequest& request) {
+  a2a::http::Request shared_request;
+  shared_request.method = request.method;
+  shared_request.url = request.url;
+  shared_request.body = request.body;
+  shared_request.timeout = request.timeout;
+  shared_request.headers.reserve(request.headers.size());
+  for (const auto& [name, value] : request.headers) {
+    shared_request.headers.push_back(a2a::http::Header{.name = name, .value = value});
+  }
+  return shared_request;
+}
+
+HttpClientResponse ToClientHttpResponse(a2a::http::Response response) {
+  HttpClientResponse client_response;
+  client_response.status_code = response.status_code;
+  client_response.body = std::move(response.body);
+  client_response.headers.reserve(response.headers.size());
+  for (auto& header : response.headers) {
+    client_response.headers.insert_or_assign(std::move(header.name), std::move(header.value));
+  }
+  return client_response;
+}
 
 struct EndpointMap final {
   static constexpr std::string_view kSendMessage = "/message:send";
@@ -281,6 +308,19 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
 
 }  // namespace
 
+HttpRequester MakeDefaultHttpRequester() {
+  return [client = a2a::http::Client{}](const HttpRequest& request) -> core::Result<HttpClientResponse> {
+    if (request.mtls.has_value()) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
+    auto response = client.SendRequest(ToSharedHttpRequest(request));
+    if (!response.ok()) {
+      return response.error();
+    }
+    return ToClientHttpResponse(std::move(response.value()));
+  };
+}
+
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
@@ -291,6 +331,12 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      std::chrono::milliseconds default_timeout)
     : HttpJsonTransport(std::move(resolved_interface), std::move(requester), {}, default_timeout) {}
+
+std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
+                                                                    std::chrono::milliseconds default_timeout) {
+  return std::make_unique<HttpJsonTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
+                                             default_timeout);
+}
 
 core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation, std::string body,
                                                                 const CallOptions& options) const {

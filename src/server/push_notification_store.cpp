@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <utility>
 
@@ -82,7 +84,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
     return validation.error();
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::shared_mutex> lock(mutex_);
   auto [task_it, unused_inserted] = configs_.try_emplace(config.task_id());
   (void)unused_inserted;
   auto& task_configs = task_it->second;
@@ -105,7 +107,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationSt
     return validation.error();
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::shared_lock<std::shared_mutex> lock(mutex_);
   const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
     return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
@@ -128,7 +130,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
     return offset.error();
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::shared_lock<std::shared_mutex> lock(mutex_);
   const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
     return lf::a2a::v1::ListTaskPushNotificationConfigsResponse{};
@@ -146,10 +148,16 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
 
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
   auto* configs = response.mutable_configs();
-  configs->Reserve(static_cast<int>(result_size));
-  for (std::size_t index = start; index < start + result_size; ++index) {
-    *configs->Add() = source_configs.Get(static_cast<int>(index));
+  if (start == 0 && result_size == static_cast<std::size_t>(source_config_count)) {
+    configs->MergeFrom(source_configs);
+  } else {
+    configs->Reserve(static_cast<int>(result_size));
+    const std::size_t end = start + result_size;
+    for (std::size_t index = start; index < end; ++index) {
+      *configs->Add() = source_configs.Get(static_cast<int>(index));
+    }
   }
+
   if (result_size < remaining) {
     response.set_next_page_token(std::to_string(start + result_size));
   }
@@ -162,7 +170,7 @@ core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_i
     return validation.error();
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::shared_mutex> lock(mutex_);
   const auto task_it = configs_.find(task_id);
   if (task_it == configs_.end()) {
     return {};
@@ -174,13 +182,14 @@ core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_i
   }
 
   const int config_index = config_it->second;
-  const int last_index = task_configs.list_response.configs_size() - 1;
+  auto* configs = task_configs.list_response.mutable_configs();
+  const int last_index = configs->size() - 1;
   if (config_index != last_index) {
-    const lf::a2a::v1::TaskPushNotificationConfig last_config = task_configs.list_response.configs(last_index);
-    *task_configs.list_response.mutable_configs(config_index) = last_config;
-    task_configs.config_indices[last_config.id()] = config_index;
+    const std::string moved_id = configs->Get(last_index).id();
+    configs->SwapElements(config_index, last_index);
+    task_configs.config_indices[moved_id] = config_index;
   }
-  task_configs.list_response.mutable_configs()->RemoveLast();
+  configs->RemoveLast();
   task_configs.config_indices.erase(config_it);
 
   if (task_configs.config_indices.empty()) {

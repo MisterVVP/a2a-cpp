@@ -21,6 +21,19 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COM
 cmake --build build
 ```
 
+## Optional libcurl support
+
+The SDK can be configured without libcurl when default outbound HTTP is not needed:
+
+```bash
+cmake -S . -B build -DA2A_ENABLE_LIBCURL=OFF
+```
+
+With libcurl disabled or unavailable, the core SDK, injectable client transports, server request handling, and custom push-delivery implementations still build. The built-in buffered outbound HTTP implementation remains present as an API surface, but `a2a::http::Client::SendRequest` returns an internal error explaining that libcurl support is disabled. Use injected `HttpRequester`, `HttpFetcher`, `HttpStreamRequester`, or a custom `PushNotificationDeliveryClient` in libcurl-free builds.
+
+When `A2A_ENABLE_LIBCURL=ON` (the default), CMake enables the shared libcurl-backed implementation only if `CURL::libcurl` is found; otherwise it continues with the limited libcurl-free feature set.
+
+
 ## Build examples
 
 ```bash

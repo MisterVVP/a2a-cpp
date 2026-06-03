@@ -5,7 +5,7 @@
 
 #include <cstddef>
 #include <functional>
-#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -66,7 +66,7 @@ class InMemoryPushNotificationStore final : public PushNotificationStore {
     std::unordered_map<std::string, int, TransparentStringHash, TransparentStringEqual> config_indices;
   };
 
-  mutable std::mutex mutex_;
+  mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, TaskConfigs, TransparentStringHash, TransparentStringEqual> configs_;
 };
 

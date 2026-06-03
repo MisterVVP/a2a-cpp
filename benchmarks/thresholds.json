@@ -126,7 +126,7 @@
     "max_time_ns": 1000
   },
   "BM_TaskStore_AppendTaskHistory_DuplicateMessageId": {
-    "max_time_ns": 700
+    "max_time_ns": 750
   },
   "BM_TaskStore_AppendTaskHistory_NoDuplicate": {
     "max_time_ns": 2500

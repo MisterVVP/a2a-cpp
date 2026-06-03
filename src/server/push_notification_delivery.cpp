@@ -31,7 +31,7 @@ core::Result<void> ValidateUrlScheme(std::string_view url) {
 }
 
 core::Result<void> ValidateHttpVersion(std::string_view http_version) {
-  if (IsSupportedHttpVersion(http_version)) {
+  if (http::IsSupportedHttpVersion(http_version)) {
     return {};
   }
   return core::Error::Validation(std::string(kUnsupportedHttpVersionMessage));
@@ -59,22 +59,22 @@ std::string BuildAuthorizationValue(const lf::a2a::v1::TaskPushNotificationConfi
   return header;
 }
 
-std::vector<HttpClientHeader> BuildHeaders(const lf::a2a::v1::TaskPushNotificationConfig& config) {
-  std::vector<HttpClientHeader> headers;
+std::vector<http::Header> BuildHeaders(const lf::a2a::v1::TaskPushNotificationConfig& config) {
+  std::vector<http::Header> headers;
   constexpr std::size_t kBaseHeaderCount = 1;
   headers.reserve(kBaseHeaderCount + (config.authentication().scheme().empty() ? 0U : 1U));
-  headers.push_back(HttpClientHeader{.name = std::string(core::http::kContentTypeHeaderName),
-                                     .value = std::string(core::http::kContentTypeApplicationJson)});
+  headers.push_back(http::Header{.name = std::string(core::http::kContentTypeHeaderName),
+                                 .value = std::string(core::http::kContentTypeApplicationJson)});
   if (!config.authentication().scheme().empty()) {
-    headers.push_back(HttpClientHeader{.name = std::string(core::http::kAuthorizationHeaderName),
-                                       .value = BuildAuthorizationValue(config)});
+    headers.push_back(http::Header{.name = std::string(core::http::kAuthorizationHeaderName),
+                                   .value = BuildAuthorizationValue(config)});
   }
   return headers;
 }
 
-HttpClientRequest BuildHttpRequest(const PushDeliveryRequest& request, std::string body, std::string_view http_version,
-                                   std::chrono::milliseconds timeout) {
-  HttpClientRequest http_request;
+http::Request BuildHttpRequest(const PushDeliveryRequest& request, std::string body, std::string_view http_version,
+                               std::chrono::milliseconds timeout) {
+  http::Request http_request;
   http_request.method = std::string(kPostMethod);
   http_request.url = request.config.url();
   http_request.headers = BuildHeaders(request.config);
@@ -84,7 +84,7 @@ HttpClientRequest BuildHttpRequest(const PushDeliveryRequest& request, std::stri
   return http_request;
 }
 
-core::Result<PushDeliveryResult> DeliverHttpRequest(const HttpClient& http_client, const PushDeliveryRequest& request,
+core::Result<PushDeliveryResult> DeliverHttpRequest(const http::Client& http_client, const PushDeliveryRequest& request,
                                                     const std::string& body, std::string_view http_version,
                                                     std::chrono::milliseconds timeout) {
   const auto response = http_client.SendRequest(BuildHttpRequest(request, body, http_version, timeout));

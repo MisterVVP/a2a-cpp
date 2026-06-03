@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 
 #include "a2a/client/call_options.h"
@@ -24,6 +25,10 @@ class JsonRpcTransport final : public ClientTransport {
   explicit JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
                             RequestIdGenerator id_generator = {});
+
+  [[nodiscard]] static std::unique_ptr<JsonRpcTransport> CreateDefault(
+      ResolvedInterface resolved_interface, std::chrono::milliseconds default_timeout = kDefaultTimeout,
+      RequestIdGenerator id_generator = {});
 
   [[nodiscard]] core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) override;
