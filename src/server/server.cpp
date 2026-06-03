@@ -390,12 +390,13 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
     return core::Error::Validation("Task.id is required");
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto existing = tasks_.find(task.id());
-  if (existing == tasks_.end()) {
-    ordered_ids_.push_back(task.id());
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  auto [it, inserted] = tasks_.try_emplace(task.id(), task);
+  if (inserted) {
+    ordered_ids_.push_back(it->first);
+  } else {
+    it->second = task;
   }
-  tasks_[task.id()] = task;
   return {};
 }
 
@@ -404,8 +405,8 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
     return core::Error::Validation("Task id is required");
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = tasks_.find(std::string(id));
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  const auto it = tasks_.find(id);
   if (it == tasks_.end()) {
     return core::protocol_errors::TaskNotFound("Task not found");
   }
@@ -433,37 +434,43 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
     return offset.error();
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::shared_lock<std::shared_mutex> lock(mutex_);
 
-  std::vector<const lf::a2a::v1::Task*> filtered;
-  filtered.reserve(ordered_ids_.size());
+  const std::size_t start = offset.value();
+  const std::size_t effective_page_size = request.page_size;
+  ListTasksResponse response;
+  if (effective_page_size == 0) {
+    response.tasks.reserve(start < ordered_ids_.size() ? ordered_ids_.size() - start : 0);
+  } else {
+    response.tasks.reserve(effective_page_size);
+  }
+
+  std::size_t matched_count = 0;
   for (const auto& id : ordered_ids_) {
     const auto it = tasks_.find(id);
     if (it != tasks_.end() && MatchesListFilters(it->second, request)) {
-      filtered.push_back(&it->second);
+      if (matched_count >= start && (effective_page_size == 0 || response.tasks.size() < effective_page_size)) {
+        lf::a2a::v1::Task projected = it->second;
+        ApplyArtifactProjection(&projected, request.include_artifacts);
+        ApplyHistoryRetention(&projected, request.history_length);
+        response.tasks.push_back(std::move(projected));
+      }
+      ++matched_count;
     }
   }
 
-  const std::size_t start = offset.value();
-  const auto valid_offset = ValidateListPageOffset(start, filtered.size());
+  const auto valid_offset = ValidateListPageOffset(start, matched_count);
   if (!valid_offset.ok()) {
     return valid_offset.error();
   }
 
-  const std::size_t effective_page_size = request.page_size == 0 ? filtered.size() : request.page_size;
-  ListTasksResponse response;
-  response.page_size = std::min(effective_page_size, filtered.size() - start);
-  response.total_size = filtered.size();
-
-  for (std::size_t idx = start; idx < filtered.size(); ++idx) {
-    if (response.tasks.size() >= effective_page_size) {
-      response.next_page_token = std::to_string(idx);
-      break;
+  response.page_size = response.tasks.size();
+  response.total_size = matched_count;
+  if (effective_page_size != 0 && response.tasks.size() == effective_page_size) {
+    const std::size_t next_offset = start + response.tasks.size();
+    if (next_offset < matched_count) {
+      response.next_page_token = std::to_string(next_offset);
     }
-    lf::a2a::v1::Task projected = *filtered[idx];
-    ApplyArtifactProjection(&projected, request.include_artifacts);
-    ApplyHistoryRetention(&projected, request.history_length);
-    response.tasks.push_back(std::move(projected));
   }
 
   return response;
@@ -594,8 +601,8 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
     return core::Error::Validation("Task id is required");
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = tasks_.find(std::string(id));
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  const auto it = tasks_.find(id);
   if (it == tasks_.end()) {
     return core::protocol_errors::TaskNotFound("Task not found");
   }
@@ -615,32 +622,41 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
     return core::Error::Validation("Task id is required");
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = tasks_.find(std::string(task_id));
-  if (it == tasks_.end()) {
-    return core::protocol_errors::TaskNotFound("Task not found");
-  }
+  std::shared_ptr<HistoryTelemetrySink> telemetry_sink;
+  std::optional<HistoryDedupeEvent> dedupe_event;
+  lf::a2a::v1::Task result;
+  {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    const auto it = tasks_.find(task_id);
+    if (it == tasks_.end()) {
+      return core::protocol_errors::TaskNotFound("Task not found");
+    }
 
-  const auto dedupe_reason = FindHistoryDedupeReason(it->second.history(), message, policy);
-  if (dedupe_reason.has_value()) {
-    UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
-    if (telemetry_sink_ != nullptr) {
-      telemetry_sink_->OnDedupedHistoryMessage(TaskStore::HistoryDedupeEvent{
+    const auto dedupe_reason = FindHistoryDedupeReason(it->second.history(), message, policy);
+    if (dedupe_reason.has_value()) {
+      UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
+      telemetry_sink = telemetry_sink_;
+      dedupe_event = TaskStore::HistoryDedupeEvent{
           .task_id = std::string(task_id),
           .message_id = message.message_id(),
           .policy = policy,
           .reason = *dedupe_reason,
-      });
+      };
+      result = it->second;
+    } else {
+      *it->second.add_history() = message;
+      result = it->second;
     }
-    return it->second;
   }
 
-  *it->second.add_history() = message;
-  return it->second;
+  if (telemetry_sink != nullptr && dedupe_event.has_value()) {
+    telemetry_sink->OnDedupedHistoryMessage(*dedupe_event);
+  }
+  return result;
 }
 
 TaskStore::HistoryTelemetrySnapshot InMemoryTaskStore::GetHistoryTelemetrySnapshot() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::shared_lock<std::shared_mutex> lock(mutex_);
   return telemetry_snapshot_;
 }
 
