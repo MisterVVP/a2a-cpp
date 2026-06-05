@@ -87,6 +87,7 @@ add_library(a2a_server STATIC
   server/task_id_generator.cpp
   server/transport_mux.cpp
   server/server.cpp
+  server/stores/store_factory.cpp
 )
 add_library(a2a::server ALIAS a2a_server)
 
@@ -102,7 +103,43 @@ target_link_libraries(a2a_server
     a2a::http
 )
 
-install(TARGETS a2a_core a2a_http a2a_client a2a_server
+if(A2A_ENABLE_POSTGRES_STORE)
+  find_package(PostgreSQL REQUIRED)
+  add_library(a2a_store_postgres STATIC
+    server/stores/postgres_store.cpp
+  )
+  add_library(a2a::store_postgres ALIAS a2a_store_postgres)
+
+  target_include_directories(a2a_store_postgres
+    PUBLIC
+      $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  )
+
+  target_link_libraries(a2a_store_postgres
+    PUBLIC
+      a2a::server
+    PRIVATE
+      PostgreSQL::PostgreSQL
+  )
+
+  target_compile_definitions(a2a_store_postgres
+    PUBLIC
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+
+  target_compile_definitions(a2a_server
+    PRIVATE
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+endif()
+
+set(A2A_INSTALL_TARGETS a2a_core a2a_http a2a_client a2a_server)
+if(A2A_ENABLE_POSTGRES_STORE)
+  list(APPEND A2A_INSTALL_TARGETS a2a_store_postgres)
+endif()
+
+install(TARGETS ${A2A_INSTALL_TARGETS}
   EXPORT a2a_cppTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

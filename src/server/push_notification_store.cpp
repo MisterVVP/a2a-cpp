@@ -148,7 +148,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> InMemoryPushN
 
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
   auto* configs = response.mutable_configs();
-  if (start == 0 && result_size == static_cast<std::size_t>(source_config_count)) {
+  if (start == 0 && std::cmp_equal(result_size, source_config_count)) {
     configs->MergeFrom(source_configs);
   } else {
     configs->Reserve(static_cast<int>(result_size));
