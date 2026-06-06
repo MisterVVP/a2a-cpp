@@ -13,7 +13,6 @@
 #include <mutex>
 #include <optional>
 #include <ranges>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -350,24 +349,37 @@ namespace {
 
   const std::string tasks = TaskTable(options.schema);
   const std::string push_configs = PushTable(options.schema);
-  std::ostringstream sql;
-  sql << "CREATE TABLE IF NOT EXISTS " << tasks << " ("
-      << "id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
-      << "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
-      << "task_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());"
-      << "CREATE INDEX IF NOT EXISTS " << IndexName(options.schema, "idx_a2a_tasks_updated") << " ON " << tasks
-      << " (status_seconds DESC, status_nanos DESC, id DESC);"
-      << "CREATE INDEX IF NOT EXISTS " << IndexName(options.schema, "idx_a2a_tasks_context") << " ON " << tasks
-      << " (context_id, status_seconds DESC, status_nanos DESC, id DESC);"
-      << "CREATE INDEX IF NOT EXISTS " << IndexName(options.schema, "idx_a2a_tasks_state") << " ON " << tasks
-      << " (state, status_seconds DESC, status_nanos DESC, id DESC);"
-      << "CREATE TABLE IF NOT EXISTS " << push_configs << " ("
-      << "task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
-      << "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
-      << "PRIMARY KEY (task_id, config_id));"
-      << "CREATE INDEX IF NOT EXISTS " << IndexName(options.schema, "idx_a2a_push_configs_task") << " ON "
-      << push_configs << " (task_id);";
-  return Exec(connection, sql.str(), "initialize postgres store schema");
+  const std::string create_tasks = "CREATE TABLE IF NOT EXISTS " + tasks +
+                                   " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
+                                   "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
+                                   "task_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());";
+  const std::string create_tasks_updated_index = "CREATE INDEX IF NOT EXISTS " +
+                                                 IndexName(options.schema, "idx_a2a_tasks_updated") + " ON " + tasks +
+                                                 " (status_seconds DESC, status_nanos DESC, id DESC);";
+  const std::string create_tasks_context_index = "CREATE INDEX IF NOT EXISTS " +
+                                                 IndexName(options.schema, "idx_a2a_tasks_context") + " ON " + tasks +
+                                                 " (context_id, status_seconds DESC, status_nanos DESC, id DESC);";
+  const std::string create_tasks_state_index = "CREATE INDEX IF NOT EXISTS " +
+                                               IndexName(options.schema, "idx_a2a_tasks_state") + " ON " + tasks +
+                                               " (state, status_seconds DESC, status_nanos DESC, id DESC);";
+  const std::string create_push_configs = "CREATE TABLE IF NOT EXISTS " + push_configs +
+                                          " (task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
+                                          "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+                                          "PRIMARY KEY (task_id, config_id));";
+  const std::string create_push_configs_task_index = "CREATE INDEX IF NOT EXISTS " +
+                                                     IndexName(options.schema, "idx_a2a_push_configs_task") + " ON " +
+                                                     push_configs + " (task_id);";
+
+  const std::vector<std::string> schema_statements = {
+      create_tasks,        create_tasks_updated_index,    create_tasks_context_index, create_tasks_state_index,
+      create_push_configs, create_push_configs_task_index};
+  for (const auto& statement : schema_statements) {
+    const auto executed = Exec(connection, statement, "initialize postgres store schema");
+    if (!executed.ok()) {
+      return executed.error();
+    }
+  }
+  return {};
 }
 
 [[nodiscard]] std::shared_ptr<PostgresConnectionPool> MakePool(const PostgresStoreOptions& options) {
