@@ -28,6 +28,42 @@ struct StoreBundle final {
   std::unique_ptr<PushNotificationStore> push_store;
 };
 
+class StoreFactory {
+ public:
+  StoreFactory() = default;
+  StoreFactory(const StoreFactory&) = delete;
+  StoreFactory& operator=(const StoreFactory&) = delete;
+  StoreFactory(StoreFactory&&) = delete;
+  StoreFactory& operator=(StoreFactory&&) = delete;
+  virtual ~StoreFactory() = default;
+
+  [[nodiscard]] virtual StoreBackendKind backend_kind() const noexcept = 0;
+  [[nodiscard]] virtual core::Result<std::unique_ptr<TaskStore>> CreateTaskStore() const = 0;
+  [[nodiscard]] virtual core::Result<std::unique_ptr<PushNotificationStore>> CreatePushNotificationStore() const = 0;
+  [[nodiscard]] virtual core::Result<StoreBundle> CreateStoreBundle() const;
+};
+
+class InMemoryStoreFactory final : public StoreFactory {
+ public:
+  [[nodiscard]] StoreBackendKind backend_kind() const noexcept override;
+  [[nodiscard]] core::Result<std::unique_ptr<TaskStore>> CreateTaskStore() const override;
+  [[nodiscard]] core::Result<std::unique_ptr<PushNotificationStore>> CreatePushNotificationStore() const override;
+};
+
+class PostgresStoreFactory final : public StoreFactory {
+ public:
+  explicit PostgresStoreFactory(PostgresStoreOptions options);
+
+  [[nodiscard]] StoreBackendKind backend_kind() const noexcept override;
+  [[nodiscard]] core::Result<std::unique_ptr<TaskStore>> CreateTaskStore() const override;
+  [[nodiscard]] core::Result<std::unique_ptr<PushNotificationStore>> CreatePushNotificationStore() const override;
+  [[nodiscard]] core::Result<StoreBundle> CreateStoreBundle() const override;
+  [[nodiscard]] const PostgresStoreOptions& options() const noexcept;
+
+ private:
+  PostgresStoreOptions options_;
+};
+
 [[nodiscard]] core::Result<StoreBundle> CreateInMemoryStoreBundle();
 [[nodiscard]] core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options);
 

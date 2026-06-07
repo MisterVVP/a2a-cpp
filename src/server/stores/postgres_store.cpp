@@ -745,20 +745,54 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   return CheckCommand(lease.get(), result.get(), "delete postgres push notification config");
 }
 
-core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options) {
-  const auto validation = ValidatePostgresStoreOptions(options);
+PostgresStoreFactory::PostgresStoreFactory(PostgresStoreOptions options) : options_(std::move(options)) {}
+
+StoreBackendKind PostgresStoreFactory::backend_kind() const noexcept { return StoreBackendKind::kPostgres; }
+
+core::Result<std::unique_ptr<TaskStore>> PostgresStoreFactory::CreateTaskStore() const {
+  const auto validation = ValidatePostgresStoreOptions(options_);
   if (!validation.ok()) {
     return validation.error();
   }
   try {
-    auto pool = MakePool(options);
+    return std::unique_ptr<TaskStore>(std::make_unique<PostgresTaskStore>(options_));
+  } catch (const std::exception& ex) {
+    return core::Error::Internal(std::string("failed to create PostgreSQL task store: ") + ex.what());
+  }
+}
+
+core::Result<std::unique_ptr<PushNotificationStore>> PostgresStoreFactory::CreatePushNotificationStore() const {
+  const auto validation = ValidatePostgresStoreOptions(options_);
+  if (!validation.ok()) {
+    return validation.error();
+  }
+  try {
+    return std::unique_ptr<PushNotificationStore>(std::make_unique<PostgresPushNotificationStore>(options_));
+  } catch (const std::exception& ex) {
+    return core::Error::Internal(std::string("failed to create PostgreSQL push notification store: ") + ex.what());
+  }
+}
+
+core::Result<StoreBundle> PostgresStoreFactory::CreateStoreBundle() const {
+  const auto validation = ValidatePostgresStoreOptions(options_);
+  if (!validation.ok()) {
+    return validation.error();
+  }
+  try {
+    auto pool = MakePool(options_);
     StoreBundle bundle;
-    bundle.task_store = std::make_unique<PostgresTaskStore>(pool, options);
-    bundle.push_store = std::make_unique<PostgresPushNotificationStore>(std::move(pool), options);
+    bundle.task_store = std::make_unique<PostgresTaskStore>(pool, options_);
+    bundle.push_store = std::make_unique<PostgresPushNotificationStore>(std::move(pool), options_);
     return bundle;
   } catch (const std::exception& ex) {
     return core::Error::Internal(std::string("failed to create PostgreSQL store bundle: ") + ex.what());
   }
+}
+
+const PostgresStoreOptions& PostgresStoreFactory::options() const noexcept { return options_; }
+
+core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options) {
+  return PostgresStoreFactory(options).CreateStoreBundle();
 }
 
 }  // namespace a2a::server::stores

@@ -4,22 +4,61 @@
 #include "a2a/server/stores/store_factory.h"
 
 #include <memory>
+#include <utility>
 
 #include "a2a/core/error.h"
 
 namespace a2a::server::stores {
 
-core::Result<StoreBundle> CreateInMemoryStoreBundle() {
+core::Result<StoreBundle> StoreFactory::CreateStoreBundle() const {
+  auto task_store = CreateTaskStore();
+  if (!task_store.ok()) {
+    return task_store.error();
+  }
+  auto push_store = CreatePushNotificationStore();
+  if (!push_store.ok()) {
+    return push_store.error();
+  }
+
   StoreBundle bundle;
-  bundle.task_store = std::make_unique<InMemoryTaskStore>();
-  bundle.push_store = std::make_unique<InMemoryPushNotificationStore>();
+  bundle.task_store = std::move(task_store.value());
+  bundle.push_store = std::move(push_store.value());
   return bundle;
 }
 
+StoreBackendKind InMemoryStoreFactory::backend_kind() const noexcept { return StoreBackendKind::kInMemory; }
+
+core::Result<std::unique_ptr<TaskStore>> InMemoryStoreFactory::CreateTaskStore() const {
+  return std::unique_ptr<TaskStore>(std::make_unique<InMemoryTaskStore>());
+}
+
+core::Result<std::unique_ptr<PushNotificationStore>> InMemoryStoreFactory::CreatePushNotificationStore() const {
+  return std::unique_ptr<PushNotificationStore>(std::make_unique<InMemoryPushNotificationStore>());
+}
+
+core::Result<StoreBundle> CreateInMemoryStoreBundle() { return InMemoryStoreFactory().CreateStoreBundle(); }
+
 #ifndef A2A_ENABLE_POSTGRES_STORE
-core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options) {
-  (void)options;
+PostgresStoreFactory::PostgresStoreFactory(PostgresStoreOptions options) : options_(std::move(options)) {}
+
+StoreBackendKind PostgresStoreFactory::backend_kind() const noexcept { return StoreBackendKind::kPostgres; }
+
+core::Result<std::unique_ptr<TaskStore>> PostgresStoreFactory::CreateTaskStore() const {
   return core::Error::Internal("PostgreSQL store backend was not built; rebuild with A2A_ENABLE_POSTGRES_STORE=ON");
+}
+
+core::Result<std::unique_ptr<PushNotificationStore>> PostgresStoreFactory::CreatePushNotificationStore() const {
+  return core::Error::Internal("PostgreSQL store backend was not built; rebuild with A2A_ENABLE_POSTGRES_STORE=ON");
+}
+
+core::Result<StoreBundle> PostgresStoreFactory::CreateStoreBundle() const {
+  return core::Error::Internal("PostgreSQL store backend was not built; rebuild with A2A_ENABLE_POSTGRES_STORE=ON");
+}
+
+const PostgresStoreOptions& PostgresStoreFactory::options() const noexcept { return options_; }
+
+core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options) {
+  return PostgresStoreFactory(options).CreateStoreBundle();
 }
 #endif
 

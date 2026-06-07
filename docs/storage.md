@@ -4,15 +4,18 @@ The SDK storage layer is pluggable. `TaskLifecycleService` uses the `TaskStore` 
 
 ## In-memory stores
 
-Use `CreateInMemoryStoreBundle()` for examples, tests, and single-process development:
+Use `InMemoryStoreFactory` for examples, tests, and single-process development:
 
 ```cpp
-auto stores = a2a::server::stores::CreateInMemoryStoreBundle();
+a2a::server::stores::InMemoryStoreFactory factory;
+auto stores = factory.CreateStoreBundle();
 a2a::examples::ExampleExecutor executor({
     .task_store = stores.value().task_store.get(),
     .push_store = stores.value().push_store.get(),
 });
 ```
+
+`CreateInMemoryStoreBundle()` remains available as a convenience wrapper over the same factory.
 
 In-memory stores do not persist data, do not coordinate across processes, and should not be used as durable production storage.
 
@@ -73,17 +76,20 @@ Equivalent helper script:
 `ExampleExecutor` owns default in-memory stores when no options are supplied, preserving the existing examples. External callers can inject any implementation of the store interfaces:
 
 ```cpp
-auto stores = a2a::server::stores::CreatePostgresStoreBundle({
+a2a::server::stores::PostgresStoreFactory factory({
     .connection_string = "postgresql://a2a:a2a@127.0.0.1:5432/a2a",
     .schema = "public",
     .auto_create_schema = true,
 });
+auto stores = factory.CreateStoreBundle();
 
 a2a::examples::ExampleExecutor executor({
     .task_store = stores.value().task_store.get(),
     .push_store = stores.value().push_store.get(),
 });
 ```
+
+`CreatePostgresStoreBundle(...)` remains available as a convenience wrapper over `PostgresStoreFactory`.
 
 ## Sensitive push notification data
 

@@ -141,6 +141,31 @@ target_link_libraries(task_id_generator_test
 
 gtest_discover_tests(task_id_generator_test)
 
+add_executable(store_factory_test
+  unit/store_factory_test.cpp
+)
+
+target_link_libraries(store_factory_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+if(A2A_ENABLE_POSTGRES_STORE)
+  target_link_libraries(store_factory_test
+    PRIVATE
+      a2a::store_postgres
+  )
+  target_compile_definitions(store_factory_test
+    PRIVATE
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+endif()
+
+gtest_discover_tests(store_factory_test)
+
 add_executable(discovery_test
   unit/discovery_test.cpp
 )
