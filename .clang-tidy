@@ -5,6 +5,7 @@ Checks: >
   modernize-*,
   -modernize-use-trailing-return-type,
   -readability-identifier-length
+  -bugprone-easily-swappable-parameters
 WarningsAsErrors: '*'
 HeaderFilterRegex: '^(include|src|tests|examples)/'
 FormatStyle: file
