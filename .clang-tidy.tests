@@ -21,7 +21,8 @@ Checks: >
   -readability-container-size-empty,
   -modernize-use-nullptr,
   -performance-unnecessary-value-param,
-  -performance-move-const-arg
+  -performance-move-const-arg,
+  -bugprone-easily-swappable-parameters
 WarningsAsErrors: '*'
 HeaderFilterRegex: '^(tests|examples)/'
 FormatStyle: file
