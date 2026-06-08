@@ -36,8 +36,6 @@ core::Result<std::unique_ptr<PushNotificationStore>> InMemoryStoreFactory::Creat
   return std::unique_ptr<PushNotificationStore>(std::make_unique<InMemoryPushNotificationStore>());
 }
 
-core::Result<StoreBundle> CreateInMemoryStoreBundle() { return InMemoryStoreFactory().CreateStoreBundle(); }
-
 #ifndef A2A_ENABLE_POSTGRES_STORE
 PostgresStoreFactory::PostgresStoreFactory(PostgresStoreOptions options) : options_(std::move(options)) {}
 
@@ -57,9 +55,6 @@ core::Result<StoreBundle> PostgresStoreFactory::CreateStoreBundle() const {
 
 const PostgresStoreOptions& PostgresStoreFactory::options() const noexcept { return options_; }
 
-core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options) {
-  return PostgresStoreFactory(options).CreateStoreBundle();
-}
 #endif
 
 }  // namespace a2a::server::stores

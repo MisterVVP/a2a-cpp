@@ -43,8 +43,10 @@ TEST(StoreConformanceTest, PostgresStoreBundleRejectsInvalidSchemaBeforeConnecti
   constexpr std::array<std::string_view, 5> kInvalidSchemas = {"", "1invalid", "bad-name", "bad.schema", "bad;schema"};
 
   for (const std::string_view schema : kInvalidSchemas) {
-    const auto result = a2a::server::stores::CreatePostgresStoreBundle(
+    const a2a::server::stores::PostgresStoreFactory factory(
         {.connection_string = std::string(kInvalidConnectionString), .schema = std::string(schema)});
+
+    const auto result = factory.CreateStoreBundle();
 
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);

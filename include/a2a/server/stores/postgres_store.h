@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -13,6 +14,8 @@
 #include "a2a/server/stores/store_factory.h"
 
 namespace a2a::server::stores {
+
+inline constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
 
 class PostgresConnectionPool;
 

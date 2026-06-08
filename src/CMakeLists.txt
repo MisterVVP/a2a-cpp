@@ -87,6 +87,7 @@ add_library(a2a_server STATIC
   server/task_id_generator.cpp
   server/transport_mux.cpp
   server/server.cpp
+  server/sql_identifier.cpp
   server/stores/store_factory.cpp
 )
 add_library(a2a::server ALIAS a2a_server)

@@ -355,10 +355,15 @@ class TaskLifecycleService final {
   std::shared_ptr<TaskIdGenerator> task_id_generator_;
 };
 
+[[nodiscard]] bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request);
 [[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);
 [[nodiscard]] core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size);
 void ApplyHistoryRetention(lf::a2a::v1::Task* task, std::optional<std::size_t> history_length);
 void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts);
+[[nodiscard]] std::optional<TaskStore::HistoryDedupeEvent::Reason> FindHistoryDedupeReason(
+    const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message,
+    TaskStore::HistoryAppendPolicy policy);
+void UpdateDedupeSnapshot(TaskStore::HistoryTelemetrySnapshot* snapshot, TaskStore::HistoryDedupeEvent::Reason reason);
 
 class TimestampDescTaskOrdering final {
  public:

@@ -17,9 +17,12 @@ constexpr std::string_view kContextId = "factory-context";
 constexpr std::string_view kPushConfigId = "factory-config";
 constexpr std::string_view kPushUrl = "https://example.test/factory-webhook";
 constexpr std::string_view kInvalidPostgresDsn = "postgresql://invalid-host.invalid/a2a";
+#ifdef A2A_ENABLE_POSTGRES_STORE
 constexpr std::string_view kInvalidSchema = "bad-schema";
+#else
 constexpr std::string_view kPostgresNotBuiltMessage =
     "PostgreSQL store backend was not built; rebuild with A2A_ENABLE_POSTGRES_STORE=ON";
+#endif
 
 [[nodiscard]] lf::a2a::v1::Task MakeTask() {
   lf::a2a::v1::Task task;
@@ -62,14 +65,6 @@ TEST(StoreFactoryTest, InMemoryFactoryCreatesCompleteBundle) {
   const a2a::server::stores::InMemoryStoreFactory factory;
 
   auto bundle = factory.CreateStoreBundle();
-
-  ASSERT_TRUE(bundle.ok());
-  EXPECT_NE(bundle.value().task_store, nullptr);
-  EXPECT_NE(bundle.value().push_store, nullptr);
-}
-
-TEST(StoreFactoryTest, InMemoryConvenienceFunctionDelegatesToFactory) {
-  auto bundle = a2a::server::stores::CreateInMemoryStoreBundle();
 
   ASSERT_TRUE(bundle.ok());
   EXPECT_NE(bundle.value().task_store, nullptr);

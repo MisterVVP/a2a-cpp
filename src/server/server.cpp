@@ -60,19 +60,6 @@ bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf:
   return ts.seconds() > cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() >= cutoff.nanos());
 }
 
-bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
-  if (!request.context_id.empty() && task.context_id() != request.context_id) {
-    return false;
-  }
-  if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
-    return false;
-  }
-  if (request.status_timestamp_after.has_value() && !HasStatusAfterCutoff(task, *request.status_timestamp_after)) {
-    return false;
-  }
-  return true;
-}
-
 void ApplyHistoryLimit(lf::a2a::v1::Task* task, std::size_t keep) {
   if (keep == 0) {
     task->clear_history();
@@ -277,6 +264,21 @@ std::optional<TaskStore::HistoryDedupeEvent::Reason> FindIdOrFingerprintDedupeRe
   return std::nullopt;
 }
 
+}  // namespace
+
+bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
+  if (!request.context_id.empty() && task.context_id() != request.context_id) {
+    return false;
+  }
+  if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
+    return false;
+  }
+  if (request.status_timestamp_after.has_value() && !HasStatusAfterCutoff(task, *request.status_timestamp_after)) {
+    return false;
+  }
+  return true;
+}
+
 std::optional<TaskStore::HistoryDedupeEvent::Reason> FindHistoryDedupeReason(
     const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message,
     TaskStore::HistoryAppendPolicy policy) {
@@ -297,8 +299,6 @@ void UpdateDedupeSnapshot(TaskStore::HistoryTelemetrySnapshot* snapshot, TaskSto
   }
   snapshot->dedupe_dropped_by_fingerprint_without_message_id += 1;
 }
-
-}  // namespace
 
 std::unordered_map<std::string, std::string> ExtractAuthMetadata(
     const std::unordered_map<std::string, std::string>& headers) {

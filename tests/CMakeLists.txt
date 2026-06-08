@@ -75,6 +75,18 @@ target_link_libraries(url_utils_test
 
 gtest_discover_tests(url_utils_test)
 
+add_executable(sql_identifier_test
+  unit/sql_identifier_test.cpp
+)
+
+target_link_libraries(sql_identifier_test
+  PRIVATE
+    a2a::server
+    GTest::gtest_main
+)
+
+gtest_discover_tests(sql_identifier_test)
+
 add_executable(http_client_test
   unit/http_client_test.cpp
 )

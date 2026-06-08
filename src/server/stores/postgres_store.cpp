@@ -11,8 +11,6 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
-#include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,11 +18,11 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
+#include "a2a/server/sql_identifier.h"
 
 namespace a2a::server::stores {
 namespace {
 
-constexpr std::size_t kDefaultPoolSize = 4;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskIdRequiredMessage = "Task id is required";
 constexpr std::string_view kTaskNotFoundMessage = "Task not found";
@@ -61,47 +59,16 @@ using PgConnection = std::unique_ptr<PGconn, PgConnectionDeleter>;
   return core::Error::Internal(std::string(operation) + ": " + PQresultErrorMessage(result));
 }
 
-[[nodiscard]] bool IsValidSchemaName(std::string_view schema) {
-  if (schema.empty()) {
-    return false;
-  }
-  const auto is_alpha_or_underscore = [](unsigned char ch) { return std::isalpha(ch) != 0 || ch == '_'; };
-  const auto is_alnum_or_underscore = [](unsigned char ch) { return std::isalnum(ch) != 0 || ch == '_'; };
-  if (!is_alpha_or_underscore(static_cast<unsigned char>(schema.front()))) {
-    return false;
-  }
-  return std::ranges::all_of(schema.substr(1),
-                             [&](char ch) { return is_alnum_or_underscore(static_cast<unsigned char>(ch)); });
-}
-
-[[nodiscard]] std::string QuoteSqlIdentifier(std::string_view identifier) {
-  std::string quoted;
-  quoted.reserve(identifier.size() + 2);
-  quoted.push_back('"');
-  for (const char ch : identifier) {
-    if (ch == '"') {
-      quoted.push_back('"');
-    }
-    quoted.push_back(ch);
-  }
-  quoted.push_back('"');
-  return quoted;
-}
-
-[[nodiscard]] std::string Qualified(std::string_view schema, std::string_view identifier) {
-  return QuoteSqlIdentifier(schema) + "." + QuoteSqlIdentifier(identifier);
-}
-
-[[nodiscard]] std::string TaskTable(std::string_view schema) { return Qualified(schema, "a2a_tasks"); }
+[[nodiscard]] std::string TaskTable(std::string_view schema) { return QualifiedSqlIdentifier(schema, "a2a_tasks"); }
 [[nodiscard]] std::string PushTable(std::string_view schema) {
-  return Qualified(schema, "a2a_push_notification_configs");
+  return QualifiedSqlIdentifier(schema, "a2a_push_notification_configs");
 }
 [[nodiscard]] std::string IndexName(std::string_view schema, std::string_view index_name) {
-  return Qualified(schema, index_name);
+  return QualifiedSqlIdentifier(schema, index_name);
 }
 
 [[nodiscard]] core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
-  if (!IsValidSchemaName(options.schema)) {
+  if (!IsValidSqlIdentifier(options.schema)) {
     return core::Error::Validation("PostgreSQL schema must be a simple SQL identifier");
   }
   if (options.connection_string.empty()) {
@@ -156,70 +123,6 @@ void ValidatePostgresStoreOptionsOrThrow(const PostgresStoreOptions& options) {
   return parsed;
 }
 
-[[nodiscard]] bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf::Timestamp& cutoff) {
-  if (!task.status().has_timestamp()) {
-    return false;
-  }
-  const auto& timestamp = task.status().timestamp();
-  return timestamp.seconds() > cutoff.seconds() ||
-         (timestamp.seconds() == cutoff.seconds() && timestamp.nanos() >= cutoff.nanos());
-}
-
-[[nodiscard]] bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
-  if (!request.context_id.empty() && task.context_id() != request.context_id) {
-    return false;
-  }
-  if (request.status_filter.has_value() && task.status().state() != *request.status_filter) {
-    return false;
-  }
-  if (request.status_timestamp_after.has_value() && !HasStatusAfterCutoff(task, *request.status_timestamp_after)) {
-    return false;
-  }
-  return true;
-}
-
-[[nodiscard]] bool HasSameMessageFingerprint(const lf::a2a::v1::Message& lhs, const lf::a2a::v1::Message& rhs) {
-  lf::a2a::v1::Message lhs_copy = lhs;
-  lf::a2a::v1::Message rhs_copy = rhs;
-  lhs_copy.clear_message_id();
-  rhs_copy.clear_message_id();
-  return lhs_copy.SerializeAsString() == rhs_copy.SerializeAsString();
-}
-
-[[nodiscard]] bool HasSameMessageIdAndFingerprint(const lf::a2a::v1::Message& lhs, const lf::a2a::v1::Message& rhs) {
-  return !rhs.message_id().empty() && lhs.message_id() == rhs.message_id() && HasSameMessageFingerprint(lhs, rhs);
-}
-
-[[nodiscard]] std::optional<TaskStore::HistoryDedupeEvent::Reason> FindHistoryDedupeReason(
-    const google::protobuf::RepeatedPtrField<lf::a2a::v1::Message>& history, const lf::a2a::v1::Message& message,
-    TaskStore::HistoryAppendPolicy policy) {
-  const bool has_message_id = !message.message_id().empty();
-  for (const auto& existing : history) {
-    if (policy == TaskStore::HistoryAppendPolicy::kDedupByMessageId && has_message_id &&
-        HasSameMessageIdAndFingerprint(existing, message)) {
-      return TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
-    }
-    if (policy == TaskStore::HistoryAppendPolicy::kDedupByIdOrFingerprint) {
-      if (has_message_id && HasSameMessageIdAndFingerprint(existing, message)) {
-        return TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint;
-      }
-      if (!has_message_id && HasSameMessageFingerprint(existing, message)) {
-        return TaskStore::HistoryDedupeEvent::Reason::kDuplicateFingerprintWithoutMessageId;
-      }
-    }
-  }
-  return std::nullopt;
-}
-
-void UpdateDedupeSnapshot(TaskStore::HistoryTelemetrySnapshot* snapshot, TaskStore::HistoryDedupeEvent::Reason reason) {
-  snapshot->dedupe_dropped_total += 1;
-  if (reason == TaskStore::HistoryDedupeEvent::Reason::kDuplicateMessageIdAndFingerprint) {
-    snapshot->dedupe_dropped_by_message_id_and_fingerprint += 1;
-  } else {
-    snapshot->dedupe_dropped_by_fingerprint_without_message_id += 1;
-  }
-}
-
 [[nodiscard]] core::Result<void> ValidatePushConfig(const lf::a2a::v1::TaskPushNotificationConfig& config) {
   if (config.task_id().empty()) {
     return core::Error::Validation(std::string(kPushTaskIdRequiredMessage));
@@ -266,7 +169,7 @@ class Transaction final {
 
 class PostgresConnectionPool final {
  public:
-  explicit PostgresConnectionPool(std::string connection_string, std::size_t size = kDefaultPoolSize)
+  explicit PostgresConnectionPool(std::string connection_string, std::size_t size = kDefaultPostgresConnectionPoolSize)
       : connection_string_(std::move(connection_string)) {
     connections_.reserve(size);
     for (std::size_t index = 0; index < size; ++index) {
@@ -790,9 +693,5 @@ core::Result<StoreBundle> PostgresStoreFactory::CreateStoreBundle() const {
 }
 
 const PostgresStoreOptions& PostgresStoreFactory::options() const noexcept { return options_; }
-
-core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options) {
-  return PostgresStoreFactory(options).CreateStoreBundle();
-}
 
 }  // namespace a2a::server::stores

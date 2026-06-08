@@ -15,8 +15,6 @@ a2a::examples::ExampleExecutor executor({
 });
 ```
 
-`CreateInMemoryStoreBundle()` remains available as a convenience wrapper over the same factory.
-
 In-memory stores do not persist data, do not coordinate across processes, and should not be used as durable production storage.
 
 ## PostgreSQL build flag
@@ -88,8 +86,6 @@ a2a::examples::ExampleExecutor executor({
     .push_store = stores.value().push_store.get(),
 });
 ```
-
-`CreatePostgresStoreBundle(...)` remains available as a convenience wrapper over `PostgresStoreFactory`.
 
 ## Sensitive push notification data
 

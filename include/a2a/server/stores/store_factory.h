@@ -64,7 +64,4 @@ class PostgresStoreFactory final : public StoreFactory {
   PostgresStoreOptions options_;
 };
 
-[[nodiscard]] core::Result<StoreBundle> CreateInMemoryStoreBundle();
-[[nodiscard]] core::Result<StoreBundle> CreatePostgresStoreBundle(const PostgresStoreOptions& options);
-
 }  // namespace a2a::server::stores
