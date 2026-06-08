@@ -21,9 +21,8 @@ bool IsValidSqlIdentifier(std::string_view identifier) {
   if (!IsAlphaOrUnderscore(static_cast<unsigned char>(identifier.front()))) {
     return false;
   }
-  return std::ranges::all_of(identifier.substr(1), [](char ch) {
-    return IsAlnumOrUnderscore(static_cast<unsigned char>(ch));
-  });
+  return std::ranges::all_of(identifier.substr(1),
+                             [](char ch) { return IsAlnumOrUnderscore(static_cast<unsigned char>(ch)); });
 }
 
 std::string QuoteSqlIdentifier(std::string_view identifier) {

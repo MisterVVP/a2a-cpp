@@ -42,8 +42,8 @@ TEST(SqlIdentifierTest, ClassifiesIdentifierCharacters) {
 }
 
 TEST(SqlIdentifierTest, ValidatesSimpleSqlIdentifiers) {
-  constexpr std::array<std::string_view, 5> kInvalidIdentifiers = {
-      std::string_view{}, kStartsWithDigit, kContainsDash, kContainsDot, kContainsSemicolon};
+  constexpr std::array<std::string_view, 5> kInvalidIdentifiers = {std::string_view{}, kStartsWithDigit, kContainsDash,
+                                                                   kContainsDot, kContainsSemicolon};
 
   EXPECT_TRUE(a2a::server::IsValidSqlIdentifier(kSimpleIdentifier));
   for (const std::string_view invalid_identifier : kInvalidIdentifiers) {
