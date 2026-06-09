@@ -47,6 +47,46 @@ void ExpectPostgresAcquireFailure(const a2a::core::Error& error) {
   return "a2a_test_" + std::to_string(ticks) + "_" + std::string(suffix);
 }
 
+constexpr std::string_view kTargetContext = "target-context";
+constexpr std::string_view kOtherContext = "other-context";
+constexpr std::string_view kOldTargetTaskId = "old-target-context-task";
+constexpr std::string_view kNewTargetTaskId = "new-target-context-task";
+constexpr std::string_view kOtherContextTaskId = "other-context-task";
+constexpr std::string_view kCompletedTargetTaskId = "completed-target-context-task";
+constexpr std::size_t kFilteredTaskCount = 2;
+constexpr std::size_t kSingleTaskPageSize = 1;
+constexpr int kOldTargetTaskTimestampSeconds = 1000;
+constexpr int kNewTargetTaskTimestampSeconds = 3000;
+constexpr int kOtherContextTaskTimestampSeconds = 4000;
+constexpr int kCompletedTargetTaskTimestampSeconds = 5000;
+
+void AddPostgresTask(a2a::server::stores::PostgresTaskStore& store, std::string_view task_id,
+                     std::string_view context_id, lf::a2a::v1::TaskState state, int timestamp_seconds) {
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask(std::string(task_id), std::string(context_id),
+                                                                          state, timestamp_seconds))
+                  .ok());
+}
+
+void SeedPostgresFilteredPaginationTasks(a2a::server::stores::PostgresTaskStore& store) {
+  AddPostgresTask(store, kOldTargetTaskId, kTargetContext, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(store, kNewTargetTaskId, kTargetContext, lf::a2a::v1::TASK_STATE_WORKING,
+                  kNewTargetTaskTimestampSeconds);
+  AddPostgresTask(store, kOtherContextTaskId, kOtherContext, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOtherContextTaskTimestampSeconds);
+  AddPostgresTask(store, kCompletedTargetTaskId, kTargetContext, lf::a2a::v1::TASK_STATE_COMPLETED,
+                  kCompletedTargetTaskTimestampSeconds);
+}
+
+void ExpectFilteredPostgresListPage(const a2a::server::ListTasksResponse& page, std::string_view expected_task_id,
+                                    bool expect_next_page) {
+  EXPECT_EQ(page.total_size, kFilteredTaskCount);
+  ASSERT_EQ(page.tasks.size(), kSingleTaskPageSize);
+  EXPECT_EQ(page.tasks.front().id(), expected_task_id);
+  EXPECT_EQ(!page.next_page_token.empty(), expect_next_page);
+}
+
 TEST(StoreConformanceTest, PostgresStoreBundleRejectsInvalidSchemaBeforeConnecting) {
   constexpr std::string_view kInvalidConnectionString = "postgresql://invalid-host.invalid/a2a";
   constexpr std::array<std::string_view, 5> kInvalidSchemas = {"", "1invalid", "bad-name", "bad.schema", "bad;schema"};
@@ -107,43 +147,21 @@ TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) 
   const std::string schema = MakePostgresTestSchema("task_filtered_page");
   a2a::server::stores::PostgresTaskStore store(
       a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
-
-  ASSERT_TRUE(store
-                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("old-target-context-task", "target-context",
-                                                                          lf::a2a::v1::TASK_STATE_WORKING, 1000))
-                  .ok());
-  ASSERT_TRUE(store
-                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("new-target-context-task", "target-context",
-                                                                          lf::a2a::v1::TASK_STATE_WORKING, 3000))
-                  .ok());
-  ASSERT_TRUE(store
-                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("other-context-task", "other-context",
-                                                                          lf::a2a::v1::TASK_STATE_WORKING, 4000))
-                  .ok());
-  ASSERT_TRUE(store
-                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask(
-                      "completed-target-context-task", "target-context", lf::a2a::v1::TASK_STATE_COMPLETED, 5000))
-                  .ok());
+  SeedPostgresFilteredPaginationTasks(store);
 
   a2a::server::ListTasksRequest request;
-  request.context_id = "target-context";
+  request.context_id = kTargetContext;
   request.status_filter = lf::a2a::v1::TASK_STATE_WORKING;
-  request.page_size = 1;
+  request.page_size = kSingleTaskPageSize;
 
   const auto first_page = store.List(request);
   ASSERT_TRUE(first_page.ok());
-  EXPECT_EQ(first_page.value().total_size, 2U);
-  ASSERT_EQ(first_page.value().tasks.size(), 1U);
-  EXPECT_EQ(first_page.value().tasks.front().id(), "new-target-context-task");
-  ASSERT_FALSE(first_page.value().next_page_token.empty());
+  ExpectFilteredPostgresListPage(first_page.value(), kNewTargetTaskId, true);
 
   request.page_token = first_page.value().next_page_token;
   const auto second_page = store.List(request);
   ASSERT_TRUE(second_page.ok());
-  EXPECT_EQ(second_page.value().total_size, 2U);
-  ASSERT_EQ(second_page.value().tasks.size(), 1U);
-  EXPECT_EQ(second_page.value().tasks.front().id(), "old-target-context-task");
-  EXPECT_TRUE(second_page.value().next_page_token.empty());
+  ExpectFilteredPostgresListPage(second_page.value(), kOldTargetTaskId, false);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
