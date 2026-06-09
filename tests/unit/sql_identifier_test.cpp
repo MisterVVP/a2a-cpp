@@ -23,9 +23,9 @@ constexpr std::string_view kContainsSemicolon = "bad;schema";
 constexpr std::string_view kNeedsQuoting = "tenant_schema";
 constexpr std::string_view kContainsQuote = "tenant\"schema";
 constexpr std::string_view kQuotedIdentifier = "\"tenant_schema\"";
-constexpr std::string_view kEscapedQuotedIdentifier = "\"tenant\"\"schema\"";
+constexpr std::string_view kEscapedQuotedIdentifier = R"("tenant""schema")";
 constexpr std::string_view kTableName = "a2a_tasks";
-constexpr std::string_view kQualifiedIdentifier = "\"tenant_schema\".\"a2a_tasks\"";
+constexpr std::string_view kQualifiedIdentifier = R"("tenant_schema"."a2a_tasks")";
 
 TEST(SqlIdentifierTest, ClassifiesIdentifierCharacters) {
   EXPECT_TRUE(a2a::server::IsAlphaOrUnderscore(kAlpha));

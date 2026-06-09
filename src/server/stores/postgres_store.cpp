@@ -74,8 +74,20 @@ using PgConnection = std::unique_ptr<PGconn, PgConnectionDeleter>;
 [[nodiscard]] std::string PushTable(std::string_view schema) {
   return QualifiedSqlIdentifier(schema, "a2a_push_notification_configs");
 }
-[[nodiscard]] std::string IndexName(std::string_view schema, std::string_view index_name) {
-  return QualifiedSqlIdentifier(schema, index_name);
+[[nodiscard]] std::string CreateIndexStatement(std::string_view index_name, const std::string& table_name,
+                                               std::string_view columns) {
+  const std::string quoted_index_name = QuoteSqlIdentifier(index_name);
+  std::string statement;
+  statement.reserve(std::string_view("CREATE INDEX IF NOT EXISTS ").size() + quoted_index_name.size() +
+                    std::string_view(" ON ").size() + table_name.size() + 1 + columns.size() + 1);
+  statement.append("CREATE INDEX IF NOT EXISTS ");
+  statement.append(quoted_index_name);
+  statement.append(" ON ");
+  statement.append(table_name);
+  statement.push_back(' ');
+  statement.append(columns);
+  statement.push_back(';');
+  return statement;
 }
 
 [[nodiscard]] core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
@@ -300,22 +312,26 @@ namespace {
                                    " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
                                    "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
                                    "task_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());";
-  const std::string create_tasks_updated_index = "CREATE INDEX IF NOT EXISTS " +
-                                                 IndexName(options.schema, "idx_a2a_tasks_updated") + " ON " + tasks +
-                                                 " (status_seconds DESC, status_nanos DESC, id DESC);";
-  const std::string create_tasks_context_index = "CREATE INDEX IF NOT EXISTS " +
-                                                 IndexName(options.schema, "idx_a2a_tasks_context") + " ON " + tasks +
-                                                 " (context_id, status_seconds DESC, status_nanos DESC, id DESC);";
-  const std::string create_tasks_state_index = "CREATE INDEX IF NOT EXISTS " +
-                                               IndexName(options.schema, "idx_a2a_tasks_state") + " ON " + tasks +
-                                               " (state, status_seconds DESC, status_nanos DESC, id DESC);";
+  constexpr std::string_view kTasksUpdatedIndex = "idx_a2a_tasks_updated";
+  constexpr std::string_view kTasksContextIndex = "idx_a2a_tasks_context";
+  constexpr std::string_view kTasksStateIndex = "idx_a2a_tasks_state";
+  constexpr std::string_view kTasksUpdatedIndexColumns = "(status_seconds DESC, status_nanos DESC, id DESC)";
+  constexpr std::string_view kTasksContextIndexColumns =
+      "(context_id, status_seconds DESC, status_nanos DESC, id DESC)";
+  constexpr std::string_view kTasksStateIndexColumns = "(state, status_seconds DESC, status_nanos DESC, id DESC)";
+  const std::string create_tasks_updated_index =
+      CreateIndexStatement(kTasksUpdatedIndex, tasks, kTasksUpdatedIndexColumns);
+  const std::string create_tasks_context_index =
+      CreateIndexStatement(kTasksContextIndex, tasks, kTasksContextIndexColumns);
+  const std::string create_tasks_state_index = CreateIndexStatement(kTasksStateIndex, tasks, kTasksStateIndexColumns);
   const std::string create_push_configs = "CREATE TABLE IF NOT EXISTS " + push_configs +
                                           " (task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
                                           "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
                                           "PRIMARY KEY (task_id, config_id));";
-  const std::string create_push_configs_task_index = "CREATE INDEX IF NOT EXISTS " +
-                                                     IndexName(options.schema, "idx_a2a_push_configs_task") + " ON " +
-                                                     push_configs + " (task_id);";
+  constexpr std::string_view kPushConfigsTaskIndex = "idx_a2a_push_configs_task";
+  constexpr std::string_view kPushConfigsTaskIndexColumns = "(task_id)";
+  const std::string create_push_configs_task_index =
+      CreateIndexStatement(kPushConfigsTaskIndex, push_configs, kPushConfigsTaskIndexColumns);
 
   const std::vector<std::string> schema_statements = {
       create_tasks,        create_tasks_updated_index,    create_tasks_context_index, create_tasks_state_index,
