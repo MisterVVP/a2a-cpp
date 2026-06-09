@@ -33,6 +33,15 @@ TEST(StoreConformanceTest, InMemoryPushNotificationStore) {
 #ifdef A2A_ENABLE_POSTGRES_STORE
 [[nodiscard]] const char* GetPostgresDsn() { return std::getenv("A2A_TEST_POSTGRES_DSN"); }
 
+[[nodiscard]] a2a::core::Error MakePostgresAcquireFailureForTesting() {
+  return a2a::core::Error::Internal("test postgres acquire failure");
+}
+
+void ExpectPostgresAcquireFailure(const a2a::core::Error& error) {
+  EXPECT_EQ(error.code(), a2a::core::ErrorCode::kInternal);
+  EXPECT_EQ(error.message(), "test postgres acquire failure");
+}
+
 [[nodiscard]] std::string MakePostgresTestSchema(std::string_view suffix) {
   const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
   return "a2a_test_" + std::to_string(ticks) + "_" + std::string(suffix);
@@ -87,6 +96,155 @@ TEST(StoreConformanceTest, PostgresTaskStore) {
   const auto shared = second.Get("shared-postgres-task");
   ASSERT_TRUE(shared.ok());
   EXPECT_EQ(shared.value().id(), "shared-postgres-task");
+}
+
+TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+  const std::string schema = MakePostgresTestSchema("task_filtered_page");
+  a2a::server::stores::PostgresTaskStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
+
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("old-target-context-task", "target-context",
+                                                                          lf::a2a::v1::TASK_STATE_WORKING, 1000))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("new-target-context-task", "target-context",
+                                                                          lf::a2a::v1::TASK_STATE_WORKING, 3000))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("other-context-task", "other-context",
+                                                                          lf::a2a::v1::TASK_STATE_WORKING, 4000))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask(
+                      "completed-target-context-task", "target-context", lf::a2a::v1::TASK_STATE_COMPLETED, 5000))
+                  .ok());
+
+  a2a::server::ListTasksRequest request;
+  request.context_id = "target-context";
+  request.status_filter = lf::a2a::v1::TASK_STATE_WORKING;
+  request.page_size = 1;
+
+  const auto first_page = store.List(request);
+  ASSERT_TRUE(first_page.ok());
+  EXPECT_EQ(first_page.value().total_size, 2U);
+  ASSERT_EQ(first_page.value().tasks.size(), 1U);
+  EXPECT_EQ(first_page.value().tasks.front().id(), "new-target-context-task");
+  ASSERT_FALSE(first_page.value().next_page_token.empty());
+
+  request.page_token = first_page.value().next_page_token;
+  const auto second_page = store.List(request);
+  ASSERT_TRUE(second_page.ok());
+  EXPECT_EQ(second_page.value().total_size, 2U);
+  ASSERT_EQ(second_page.value().tasks.size(), 1U);
+  EXPECT_EQ(second_page.value().tasks.front().id(), "old-target-context-task");
+  EXPECT_TRUE(second_page.value().next_page_token.empty());
+}
+
+TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+  const std::string schema = MakePostgresTestSchema("task_acquire_failure");
+  a2a::server::stores::PostgresTaskStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto create = store.CreateOrUpdate(a2a::tests::store_conformance::MakeTask(
+      "lease-error-task", "lease-error-context", lf::a2a::v1::TASK_STATE_WORKING, 1000));
+  ASSERT_FALSE(create.ok());
+  ExpectPostgresAcquireFailure(create.error());
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto get = store.Get("lease-error-task");
+  ASSERT_FALSE(get.ok());
+  ExpectPostgresAcquireFailure(get.error());
+
+  a2a::server::ListTasksRequest list_request;
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto list = store.List(list_request);
+  ASSERT_FALSE(list.ok());
+  ExpectPostgresAcquireFailure(list.error());
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto cancel = store.Cancel("lease-error-task");
+  ASSERT_FALSE(cancel.ok());
+  ExpectPostgresAcquireFailure(cancel.error());
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto append = store.AppendTaskHistory(
+      "lease-error-task", a2a::tests::store_conformance::MakeMessage("lease-error-message", "message"),
+      a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+  ASSERT_FALSE(append.ok());
+  ExpectPostgresAcquireFailure(append.error());
+}
+
+TEST(StoreConformanceTest, PostgresPushNotificationStorePropagatesAcquireFailures) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+  const std::string schema = MakePostgresTestSchema("push_acquire_failure");
+  a2a::server::stores::PostgresPushNotificationStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto create =
+      store.CreateOrUpdate(a2a::tests::store_conformance::MakeConfig("lease-error-task", "lease-error-config"));
+  ASSERT_FALSE(create.ok());
+  ExpectPostgresAcquireFailure(create.error());
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto get = store.Get("lease-error-task", "lease-error-config");
+  ASSERT_FALSE(get.ok());
+  ExpectPostgresAcquireFailure(get.error());
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto list = store.List("lease-error-task");
+  ASSERT_FALSE(list.ok());
+  ExpectPostgresAcquireFailure(list.error());
+
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto deleted = store.Delete("lease-error-task", "lease-error-config");
+  ASSERT_FALSE(deleted.ok());
+  ExpectPostgresAcquireFailure(deleted.error());
+}
+
+TEST(StoreConformanceTest, PostgresStoreFactoryPropagatesAcquireFailures) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+
+  a2a::server::stores::PostgresStoreFactory task_factory(
+      {.connection_string = dsn, .schema = MakePostgresTestSchema("factory_task_acquire_failure")});
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto task_store = task_factory.CreateTaskStore();
+  ASSERT_FALSE(task_store.ok());
+  ExpectPostgresAcquireFailure(task_store.error());
+
+  a2a::server::stores::PostgresStoreFactory push_factory(
+      {.connection_string = dsn, .schema = MakePostgresTestSchema("factory_push_acquire_failure")});
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto push_store = push_factory.CreatePushNotificationStore();
+  ASSERT_FALSE(push_store.ok());
+  ExpectPostgresAcquireFailure(push_store.error());
+
+  a2a::server::stores::PostgresStoreFactory bundle_factory(
+      {.connection_string = dsn, .schema = MakePostgresTestSchema("factory_bundle_acquire_failure")});
+  a2a::server::stores::FailNextPostgresAcquireForTesting(MakePostgresAcquireFailureForTesting());
+  const auto bundle = bundle_factory.CreateStoreBundle();
+  ASSERT_FALSE(bundle.ok());
+  ExpectPostgresAcquireFailure(bundle.error());
 }
 
 TEST(StoreConformanceTest, PostgresPushNotificationStore) {

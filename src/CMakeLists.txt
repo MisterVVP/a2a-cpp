@@ -129,6 +129,13 @@ if(A2A_ENABLE_POSTGRES_STORE)
       A2A_ENABLE_POSTGRES_STORE=1
   )
 
+  if(A2A_ENABLE_TESTING)
+    target_compile_definitions(a2a_store_postgres
+      PUBLIC
+        A2A_POSTGRES_STORE_TESTING=1
+    )
+  endif()
+
   target_compile_definitions(a2a_server
     PRIVATE
       A2A_ENABLE_POSTGRES_STORE=1

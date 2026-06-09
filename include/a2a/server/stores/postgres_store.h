@@ -19,6 +19,10 @@ inline constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
 
 class PostgresConnectionPool;
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+void FailNextPostgresAcquireForTesting(core::Error error);
+#endif
+
 class PostgresTaskStore final : public a2a::server::TaskStore {
  public:
   explicit PostgresTaskStore(PostgresStoreOptions options);

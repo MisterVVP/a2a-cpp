@@ -40,9 +40,24 @@ on:
 jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: a2a
+          POSTGRES_PASSWORD: a2a
+          POSTGRES_DB: a2a
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2a -d a2a"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       CLANG_TIDY_PROFILE: ${{ github.event_name == 'schedule' && 'strict' || (github.event_name == 'workflow_dispatch' && inputs.clang_tidy_profile || 'split') }}
       CLANG_TIDY_ENABLE_CHECK_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profiling && '1' || '0' }}
+      A2A_TEST_POSTGRES_DSN: postgresql://a2a:a2a@127.0.0.1:5432/a2a
     steps:
       - uses: actions/checkout@v6
         with:
@@ -58,7 +73,12 @@ jobs:
             clang-format --dry-run --Werror "${CPP_FILES[@]}"
           fi
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DA2A_ENABLE_TESTING=ON \
+            -DA2A_ENABLE_POSTGRES_STORE=ON
       - name: Build
         run: cmake --build build -j"$(nproc)"
       - name: Test

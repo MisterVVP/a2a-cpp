@@ -11,9 +11,11 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
@@ -39,6 +41,11 @@ constexpr std::string_view kConfigNotFoundMessage = "push notification config no
 constexpr std::string_view kPageSizeInvalidMessage =
     "ListTaskPushNotificationConfigsRequest.page_size must be non-negative";
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+std::mutex g_test_acquire_failure_mutex;
+std::optional<core::Error> g_test_acquire_failure;
+#endif
+
 struct PgResultDeleter final {
   void operator()(PGresult* result) const noexcept { PQclear(result); }
 };
@@ -57,6 +64,10 @@ using PgConnection = std::unique_ptr<PGconn, PgConnectionDeleter>;
 
 [[nodiscard]] core::Error DatabaseResultError(PGresult* result, std::string_view operation) {
   return core::Error::Internal(std::string(operation) + ": " + PQresultErrorMessage(result));
+}
+
+[[nodiscard]] core::Error DatabaseConnectionError(std::string_view message) {
+  return core::Error::Internal("open postgres connection: " + std::string(message));
 }
 
 [[nodiscard]] std::string TaskTable(std::string_view schema) { return QualifiedSqlIdentifier(schema, "a2a_tasks"); }
@@ -167,13 +178,31 @@ class Transaction final {
 
 }  // namespace
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+namespace {
+[[nodiscard]] std::optional<core::Error> ConsumePostgresAcquireFailureForTesting() {
+  std::lock_guard<std::mutex> lock(g_test_acquire_failure_mutex);
+  if (!g_test_acquire_failure.has_value()) {
+    return std::nullopt;
+  }
+  auto error = std::move(g_test_acquire_failure);
+  g_test_acquire_failure.reset();
+  return error;
+}
+}  // namespace
+#endif
+
 class PostgresConnectionPool final {
  public:
   explicit PostgresConnectionPool(std::string connection_string, std::size_t size = kDefaultPostgresConnectionPoolSize)
       : connection_string_(std::move(connection_string)) {
     connections_.reserve(size);
     for (std::size_t index = 0; index < size; ++index) {
-      connections_.push_back(OpenConnection());
+      auto connection = OpenConnection();
+      if (!connection.ok()) {
+        throw std::runtime_error(std::string(connection.error().message()));
+      }
+      connections_.push_back(std::move(connection.value()));
     }
   }
 
@@ -198,26 +227,41 @@ class PostgresConnectionPool final {
     PgConnection connection_;
   };
 
-  [[nodiscard]] Lease Acquire() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    condition_.wait(lock, [&] { return !connections_.empty(); });
-    PgConnection connection = std::move(connections_.back());
-    connections_.pop_back();
-    if (PQstatus(connection.get()) != CONNECTION_OK) {
-      connection = OpenConnection();
+  [[nodiscard]] core::Result<Lease> Acquire() {
+#ifdef A2A_POSTGRES_STORE_TESTING
+    if (auto failure = ConsumePostgresAcquireFailureForTesting(); failure.has_value()) {
+      return std::move(*failure);
     }
-    return {this, std::move(connection)};
+#endif
+
+    PgConnection connection;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      condition_.wait(lock, [&] { return !connections_.empty(); });
+      connection = std::move(connections_.back());
+      connections_.pop_back();
+    }
+
+    if (PQstatus(connection.get()) != CONNECTION_OK) {
+      auto reopened = OpenConnection();
+      if (!reopened.ok()) {
+        Return(std::move(connection));
+        return reopened.error();
+      }
+      connection = std::move(reopened.value());
+    }
+    return Lease(this, std::move(connection));
   }
 
  private:
-  [[nodiscard]] PgConnection OpenConnection() const {
+  [[nodiscard]] core::Result<PgConnection> OpenConnection() const {
     PgConnection connection(PQconnectdb(connection_string_.c_str()));
     if (connection == nullptr || PQstatus(connection.get()) != CONNECTION_OK) {
       const std::string message =
           connection == nullptr ? "unable to allocate PostgreSQL connection" : PQerrorMessage(connection.get());
-      throw std::runtime_error(message);
+      return DatabaseConnectionError(message);
     }
-    return connection;
+    return std::move(connection);
   }
 
   void Return(PgConnection connection) {
@@ -339,11 +383,82 @@ namespace {
   return ParseTaskRow(result.get(), 0);
 }
 
+[[nodiscard]] PostgresConnectionPool::Lease AcquireOrThrow(PostgresConnectionPool& pool) {
+  auto lease = pool.Acquire();
+  if (!lease.ok()) {
+    throw std::runtime_error(std::string(lease.error().message()));
+  }
+  return std::move(lease.value());
+}
+
+[[nodiscard]] std::string AddSqlParameter(std::vector<std::string>* values, std::string value) {
+  values->push_back(std::move(value));
+  return "$" + std::to_string(values->size());
+}
+
+[[nodiscard]] std::vector<const char*> BuildSqlParameterPointers(const std::vector<std::string>& values) {
+  std::vector<const char*> pointers;
+  pointers.reserve(values.size());
+  for (const auto& value : values) {
+    pointers.push_back(value.c_str());
+  }
+  return pointers;
+}
+
+struct TaskListSqlFilter final {
+  std::string where_clause;
+  std::vector<std::string> values;
+};
+
+[[nodiscard]] TaskListSqlFilter BuildTaskListSqlFilter(const ListTasksRequest& request) {
+  TaskListSqlFilter filter;
+  std::vector<std::string> predicates;
+
+  if (!request.context_id.empty()) {
+    predicates.push_back("context_id = " + AddSqlParameter(&filter.values, request.context_id));
+  }
+  if (request.status_filter.has_value()) {
+    predicates.push_back("state = " +
+                         AddSqlParameter(&filter.values, std::to_string(static_cast<int>(*request.status_filter))));
+  }
+  if (request.status_timestamp_after.has_value()) {
+    const auto& cutoff = *request.status_timestamp_after;
+    const std::string seconds_param = AddSqlParameter(&filter.values, std::to_string(cutoff.seconds()));
+    const std::string nanos_param = AddSqlParameter(&filter.values, std::to_string(cutoff.nanos()));
+    predicates.push_back("(status_seconds > " + seconds_param + " OR (status_seconds = " + seconds_param +
+                         " AND status_nanos >= " + nanos_param + "))");
+  }
+
+  if (!predicates.empty()) {
+    filter.where_clause = " WHERE ";
+    for (std::size_t index = 0; index < predicates.size(); ++index) {
+      if (index != 0) {
+        filter.where_clause += " AND ";
+      }
+      filter.where_clause += predicates[index];
+    }
+  }
+  return filter;
+}
+
+[[nodiscard]] core::Result<std::size_t> ParseCountResult(PGresult* result, std::string_view operation) {
+  if (PQntuples(result) != 1) {
+    return core::Error::Internal(std::string(operation) + ": expected exactly one count row");
+  }
+  std::size_t parsed = 0;
+  const std::string_view raw_count(PQgetvalue(result, 0, 0));
+  const auto parsed_result = std::from_chars(raw_count.data(), raw_count.data() + raw_count.size(), parsed);
+  if (parsed_result.ec != std::errc() || parsed_result.ptr != raw_count.data() + raw_count.size()) {
+    return core::Error::Internal(std::string(operation) + ": failed to parse count");
+  }
+  return parsed;
+}
+
 }  // namespace
 
 PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
     : pool_(MakePool(options)), options_(std::move(options)) {
-  auto lease = pool_->Acquire();
+  auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
     throw std::runtime_error(std::string(initialized.error().message()));
@@ -353,7 +468,7 @@ PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
 PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> pool, PostgresStoreOptions options)
     : pool_(std::move(pool)), options_(std::move(options)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
-  auto lease = pool_->Acquire();
+  auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
     throw std::runtime_error(std::string(initialized.error().message()));
@@ -367,7 +482,10 @@ core::Result<void> PostgresTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
     return core::Error::Validation(std::string(kTaskIdFieldRequiredMessage));
   }
   auto lease = pool_->Acquire();
-  return UpsertTask(lease.get(), options_, task);
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  return UpsertTask(lease.value().get(), options_, task);
 }
 
 core::Result<lf::a2a::v1::Task> PostgresTaskStore::Get(std::string_view id) const {
@@ -378,8 +496,11 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Get(std::string_view id) cons
   const std::string sql = "SELECT task_proto FROM " + TaskTable(options_.schema) + " WHERE id = $1";
   const char* values[] = {id_value.c_str()};
   auto lease = pool_->Acquire();
-  PgResult result(PQexecParams(lease.get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
-  const auto checked = CheckTuples(lease.get(), result.get(), "get postgres task");
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres task");
   if (!checked.ok()) {
     return checked.error();
   }
@@ -394,43 +515,62 @@ core::Result<ListTasksResponse> PostgresTaskStore::List(const ListTasksRequest& 
   if (!offset.ok()) {
     return offset.error();
   }
-  const std::string sql = "SELECT task_proto FROM " + TaskTable(options_.schema) +
-                          " ORDER BY status_seconds DESC, status_nanos DESC, id DESC";
+
+  const TaskListSqlFilter filter = BuildTaskListSqlFilter(request);
   auto lease = pool_->Acquire();
-  PgResult result(PQexecParams(lease.get(), sql.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 1));
-  const auto checked = CheckTuples(lease.get(), result.get(), "list postgres tasks");
-  if (!checked.ok()) {
-    return checked.error();
+  if (!lease.ok()) {
+    return lease.error();
   }
 
-  std::vector<lf::a2a::v1::Task> matched;
-  matched.reserve(static_cast<std::size_t>(PQntuples(result.get())));
-  for (int row = 0; row < PQntuples(result.get()); ++row) {
-    auto task = ParseTaskRow(result.get(), row);
-    if (!task.ok()) {
-      return task.error();
-    }
-    if (MatchesListFilters(task.value(), request)) {
-      matched.push_back(std::move(task.value()));
-    }
+  const std::string count_sql = "SELECT count(*) FROM " + TaskTable(options_.schema) + filter.where_clause;
+  const auto count_values = BuildSqlParameterPointers(filter.values);
+  PgResult count_result(PQexecParams(lease.value().get(), count_sql.c_str(), static_cast<int>(count_values.size()),
+                                     nullptr, count_values.data(), nullptr, nullptr, 0));
+  const auto count_checked = CheckTuples(lease.value().get(), count_result.get(), "count postgres tasks");
+  if (!count_checked.ok()) {
+    return count_checked.error();
+  }
+  const auto total_size = ParseCountResult(count_result.get(), "count postgres tasks");
+  if (!total_size.ok()) {
+    return total_size.error();
   }
 
-  const auto valid_offset = ValidateListPageOffset(offset.value(), matched.size());
+  const auto valid_offset = ValidateListPageOffset(offset.value(), total_size.value());
   if (!valid_offset.ok()) {
     return valid_offset.error();
   }
 
   ListTasksResponse response;
-  response.total_size = matched.size();
-  const std::size_t remaining = matched.size() - offset.value();
+  response.total_size = total_size.value();
+  const std::size_t remaining = total_size.value() - offset.value();
   const std::size_t effective_page_size = request.page_size == 0 ? remaining : request.page_size;
   const std::size_t result_size = std::min(effective_page_size, remaining);
+
+  std::vector<std::string> select_values = filter.values;
+  std::string select_sql = "SELECT task_proto FROM " + TaskTable(options_.schema) + filter.where_clause +
+                           " ORDER BY status_seconds DESC, status_nanos DESC, id DESC";
+  if (request.page_size != 0) {
+    select_sql += " LIMIT " + AddSqlParameter(&select_values, std::to_string(result_size));
+  }
+  select_sql += " OFFSET " + AddSqlParameter(&select_values, std::to_string(offset.value()));
+
+  const auto select_value_pointers = BuildSqlParameterPointers(select_values);
+  PgResult result(PQexecParams(lease.value().get(), select_sql.c_str(), static_cast<int>(select_value_pointers.size()),
+                               nullptr, select_value_pointers.data(), nullptr, nullptr, 1));
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "list postgres tasks");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+
   response.tasks.reserve(result_size);
-  const std::size_t end = offset.value() + result_size;
-  for (std::size_t index = offset.value(); index < end; ++index) {
-    ApplyArtifactProjection(&matched[index], request.include_artifacts);
-    ApplyHistoryRetention(&matched[index], request.history_length);
-    response.tasks.push_back(std::move(matched[index]));
+  for (int row = 0; row < PQntuples(result.get()); ++row) {
+    auto task = ParseTaskRow(result.get(), row);
+    if (!task.ok()) {
+      return task.error();
+    }
+    ApplyArtifactProjection(&task.value(), request.include_artifacts);
+    ApplyHistoryRetention(&task.value(), request.history_length);
+    response.tasks.push_back(std::move(task.value()));
   }
   response.page_size = response.tasks.size();
   if (request.page_size != 0 && result_size < remaining) {
@@ -444,12 +584,15 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Cancel(std::string_view id) {
     return core::Error::Validation(std::string(kTaskIdRequiredMessage));
   }
   auto lease = pool_->Acquire();
-  Transaction transaction(lease.get());
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  Transaction transaction(lease.value().get());
   auto begun = transaction.Begin();
   if (!begun.ok()) {
     return begun.error();
   }
-  auto task = SelectTaskForUpdate(lease.get(), options_, id);
+  auto task = SelectTaskForUpdate(lease.value().get(), options_, id);
   if (!task.ok()) {
     return task.error();
   }
@@ -457,7 +600,7 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Cancel(std::string_view id) {
     return core::protocol_errors::TaskNotCancelable();
   }
   task.value().mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
-  auto updated = UpsertTask(lease.get(), options_, task.value());
+  auto updated = UpsertTask(lease.value().get(), options_, task.value());
   if (!updated.ok()) {
     return updated.error();
   }
@@ -475,12 +618,15 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
     return core::Error::Validation(std::string(kTaskIdRequiredMessage));
   }
   auto lease = pool_->Acquire();
-  Transaction transaction(lease.get());
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  Transaction transaction(lease.value().get());
   auto begun = transaction.Begin();
   if (!begun.ok()) {
     return begun.error();
   }
-  auto task = SelectTaskForUpdate(lease.get(), options_, task_id);
+  auto task = SelectTaskForUpdate(lease.value().get(), options_, task_id);
   if (!task.ok()) {
     return task.error();
   }
@@ -490,7 +636,7 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
     UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
   } else {
     *task.value().add_history() = message;
-    auto updated = UpsertTask(lease.get(), options_, task.value());
+    auto updated = UpsertTask(lease.value().get(), options_, task.value());
     if (!updated.ok()) {
       return updated.error();
     }
@@ -509,7 +655,7 @@ TaskStore::HistoryTelemetrySnapshot PostgresTaskStore::GetHistoryTelemetrySnapsh
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOptions options)
     : pool_(MakePool(options)), options_(std::move(options)) {
-  auto lease = pool_->Acquire();
+  auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
     throw std::runtime_error(std::string(initialized.error().message()));
@@ -520,7 +666,7 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
                                                              PostgresStoreOptions options)
     : pool_(std::move(pool)), options_(std::move(options)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
-  auto lease = pool_->Acquire();
+  auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
     throw std::runtime_error(std::string(initialized.error().message()));
@@ -544,8 +690,11 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   const int lengths[] = {0, 0, 0, static_cast<int>(payload.size())};
   const int formats[] = {0, 0, 0, 1};
   auto lease = pool_->Acquire();
-  PgResult result(PQexecParams(lease.get(), sql.c_str(), 4, nullptr, values, lengths, formats, 0));
-  const auto checked = CheckCommand(lease.get(), result.get(), "upsert postgres push notification config");
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values, lengths, formats, 0));
+  const auto checked = CheckCommand(lease.value().get(), result.get(), "upsert postgres push notification config");
   if (!checked.ok()) {
     return checked.error();
   }
@@ -564,15 +713,19 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
       "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
   const char* values[] = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
-  PgResult result(PQexecParams(lease.get(), sql.c_str(), 2, nullptr, values, nullptr, nullptr, 1));
-  const auto checked = CheckTuples(lease.get(), result.get(), "get postgres push notification config");
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values, nullptr, nullptr, 1));
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres push notification config");
   if (!checked.ok()) {
     return checked.error();
   }
   if (PQntuples(result.get()) == 0) {
     const std::string exists_sql = "SELECT 1 FROM " + PushTable(options_.schema) + " WHERE task_id = $1 LIMIT 1";
-    PgResult exists(PQexecParams(lease.get(), exists_sql.c_str(), 1, nullptr, &values[0], nullptr, nullptr, 0));
-    const auto exists_checked = CheckTuples(lease.get(), exists.get(), "check postgres push notification task configs");
+    PgResult exists(PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, &values[0], nullptr, nullptr, 0));
+    const auto exists_checked =
+        CheckTuples(lease.value().get(), exists.get(), "check postgres push notification task configs");
     if (!exists_checked.ok()) {
       return exists_checked.error();
     }
@@ -605,8 +758,11 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
       "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY config_id ASC";
   const char* values[] = {task_id_value.c_str()};
   auto lease = pool_->Acquire();
-  PgResult result(PQexecParams(lease.get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
-  const auto checked = CheckTuples(lease.get(), result.get(), "list postgres push notification configs");
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "list postgres push notification configs");
   if (!checked.ok()) {
     return checked.error();
   }
@@ -644,9 +800,19 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   const std::string sql = "DELETE FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
   const char* values[] = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
-  PgResult result(PQexecParams(lease.get(), sql.c_str(), 2, nullptr, values, nullptr, nullptr, 0));
-  return CheckCommand(lease.get(), result.get(), "delete postgres push notification config");
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values, nullptr, nullptr, 0));
+  return CheckCommand(lease.value().get(), result.get(), "delete postgres push notification config");
 }
+
+#ifdef A2A_POSTGRES_STORE_TESTING
+void FailNextPostgresAcquireForTesting(core::Error error) {
+  std::lock_guard<std::mutex> lock(g_test_acquire_failure_mutex);
+  g_test_acquire_failure = std::move(error);
+}
+#endif
 
 PostgresStoreFactory::PostgresStoreFactory(PostgresStoreOptions options) : options_(std::move(options)) {}
 
