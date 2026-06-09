@@ -223,9 +223,8 @@ class PostgresConnectionPool final {
     Lease(PostgresConnectionPool* pool, PgConnection connection) : pool_(pool), connection_(std::move(connection)) {}
     Lease(const Lease&) = delete;
     Lease& operator=(const Lease&) = delete;
-    Lease(Lease&& other) noexcept : pool_(other.pool_), connection_(std::move(other.connection_)) {
-      other.pool_ = nullptr;
-    }
+    Lease(Lease&& other) noexcept
+        : pool_(std::exchange(other.pool_, nullptr)), connection_(std::move(other.connection_)) {}
     Lease& operator=(Lease&& other) noexcept = delete;
     ~Lease() {
       if (pool_ != nullptr && connection_ != nullptr) {
