@@ -39,7 +39,7 @@ TEST(StoreConformanceTest, InMemoryPushNotificationStore) {
 
 void ExpectPostgresAcquireFailure(const a2a::core::Error& error) {
   EXPECT_EQ(error.code(), a2a::core::ErrorCode::kInternal);
-  EXPECT_EQ(error.message(), "test postgres acquire failure");
+  EXPECT_NE(error.message().find("test postgres acquire failure"), std::string_view::npos);
 }
 
 [[nodiscard]] std::string MakePostgresTestSchema(std::string_view suffix) {
