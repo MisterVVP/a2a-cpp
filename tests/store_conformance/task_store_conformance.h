@@ -14,8 +14,12 @@ namespace a2a::tests::store_conformance {
 
 constexpr std::string_view kTaskOne = "conformance-task-1";
 constexpr std::string_view kTaskTwo = "conformance-task-2";
+constexpr std::string_view kTaskWithoutStatusTimestamp = "conformance-task-without-status-timestamp";
 constexpr std::string_view kContextOne = "conformance-context-1";
 constexpr std::string_view kContextTwo = "conformance-context-2";
+constexpr std::string_view kContextWithoutStatusTimestamp = "conformance-context-without-status-timestamp";
+constexpr int64_t kEpochSeconds = 0;
+constexpr int32_t kEpochNanos = 0;
 constexpr int64_t kBaseSeconds = 1000;
 constexpr int32_t kBaseNanos = 7;
 
@@ -38,6 +42,15 @@ constexpr int32_t kBaseNanos = 7;
   task.add_artifacts()->set_artifact_id("artifact");
   *task.add_history() = MakeMessage("history-1", "first");
   *task.add_history() = MakeMessage("history-2", "second");
+  return task;
+}
+
+[[nodiscard]] inline lf::a2a::v1::Task MakeTaskWithoutStatusTimestamp(std::string id, std::string context,
+                                                                      lf::a2a::v1::TaskState state) {
+  lf::a2a::v1::Task task;
+  task.set_id(std::move(id));
+  task.set_context_id(std::move(context));
+  task.mutable_status()->set_state(state);
   return task;
 }
 
@@ -89,6 +102,26 @@ void RunTaskStoreConformance(Factory&& factory) {
   ASSERT_FALSE(timestamp_list.value().tasks.empty());
   for (const auto& task : timestamp_list.value().tasks) {
     EXPECT_GE(task.status().timestamp().seconds(), kBaseSeconds + 1);
+  }
+
+  ASSERT_TRUE(store
+                  ->CreateOrUpdate(MakeTaskWithoutStatusTimestamp(std::string(kTaskWithoutStatusTimestamp),
+                                                                  std::string(kContextWithoutStatusTimestamp),
+                                                                  lf::a2a::v1::TASK_STATE_WORKING))
+                  .ok());
+  const auto without_timestamp = store->Get(kTaskWithoutStatusTimestamp);
+  ASSERT_TRUE(without_timestamp.ok());
+  ASSERT_FALSE(without_timestamp.value().status().has_timestamp());
+
+  a2a::server::ListTasksRequest epoch_timestamp_request;
+  epoch_timestamp_request.status_timestamp_after.emplace();
+  epoch_timestamp_request.status_timestamp_after->set_seconds(kEpochSeconds);
+  epoch_timestamp_request.status_timestamp_after->set_nanos(kEpochNanos);
+  const auto epoch_timestamp_list = store->List(epoch_timestamp_request);
+  ASSERT_TRUE(epoch_timestamp_list.ok());
+  for (const auto& task : epoch_timestamp_list.value().tasks) {
+    EXPECT_NE(task.id(), kTaskWithoutStatusTimestamp);
+    EXPECT_TRUE(task.status().has_timestamp());
   }
 
   a2a::server::ListTasksRequest projection_request;
