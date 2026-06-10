@@ -63,6 +63,8 @@ void RunTaskStoreConformance(Factory&& factory) {
   const auto first_page = store->List(page_request);
   ASSERT_TRUE(first_page.ok());
   EXPECT_EQ(first_page.value().page_size, 1U);
+  ASSERT_EQ(first_page.value().tasks.size(), 1U);
+  EXPECT_EQ(first_page.value().tasks.front().id(), kTaskOne);
   EXPECT_FALSE(first_page.value().next_page_token.empty());
 
   a2a::server::ListTasksRequest context_request;

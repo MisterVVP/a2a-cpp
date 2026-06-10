@@ -40,13 +40,13 @@ When enabled, CMake builds `a2a::store_postgres`. Applications that instantiate 
 Start a local PostgreSQL 16 database:
 
 ```bash
-docker compose -f dev/docker-compose.postgres.yml up -d
+docker compose -f dev/local/docker-compose.postgres.yml up -d
 ```
 
 Equivalent helper script:
 
 ```bash
-./scripts/dev/postgres_up.sh
+./dev/local/postgres_up.sh
 ```
 
 Run a PostgreSQL-enabled build and test suite:
@@ -60,14 +60,16 @@ A2A_TEST_POSTGRES_DSN="postgresql://a2a:a2a@127.0.0.1:5432/a2a" ctest --test-dir
 Stop the database when done:
 
 ```bash
-docker compose -f dev/docker-compose.postgres.yml down
+docker compose -f dev/local/docker-compose.postgres.yml down
 ```
 
 Equivalent helper script:
 
 ```bash
-./scripts/dev/postgres_down.sh
+./dev/local/postgres_down.sh
 ```
+
+See `dev/local/README.md` for all local SDK development helper commands.
 
 ## Example executor injection
 

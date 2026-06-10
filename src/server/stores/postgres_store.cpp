@@ -74,6 +74,18 @@ using PgConnection = std::unique_ptr<PGconn, PgConnectionDeleter>;
 [[nodiscard]] std::string PushTable(std::string_view schema) {
   return QualifiedSqlIdentifier(schema, "a2a_push_notification_configs");
 }
+[[nodiscard]] std::string TaskCreatedSequence(std::string_view schema) {
+  return QualifiedSqlIdentifier(schema, "a2a_tasks_created_sequence");
+}
+[[nodiscard]] std::string SqlStringLiteral(const std::string& value) {
+  std::string literal = "'";
+  for (const char symbol : value) {
+    literal += symbol == '\'' ? "''" : std::string(1, symbol);
+  }
+  literal += "'";
+  return literal;
+}
+
 [[nodiscard]] std::string CreateIndexStatement(std::string_view index_name, const std::string& table_name,
                                                std::string_view columns) {
   const std::string quoted_index_name = QuoteSqlIdentifier(index_name);
@@ -307,19 +319,27 @@ namespace {
 
   const std::string tasks = TaskTable(options.schema);
   const std::string push_configs = PushTable(options.schema);
+  const std::string task_created_sequence = TaskCreatedSequence(options.schema);
+  const std::string task_created_sequence_regclass = SqlStringLiteral(task_created_sequence);
+  const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
   const std::string create_tasks = "CREATE TABLE IF NOT EXISTS " + tasks +
                                    " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
                                    "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
+                                   "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
+                                   task_created_sequence_regclass +
+                                   "), "
                                    "task_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());";
-  constexpr std::string_view kTasksUpdatedIndex = "idx_a2a_tasks_updated";
+  const std::string add_tasks_created_sequence =
+      "ALTER TABLE " + tasks + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
+      task_created_sequence_regclass + ");";
+  constexpr std::string_view kTasksCreatedSequenceIndex = "idx_a2a_tasks_created_sequence";
   constexpr std::string_view kTasksContextIndex = "idx_a2a_tasks_context";
   constexpr std::string_view kTasksStateIndex = "idx_a2a_tasks_state";
-  constexpr std::string_view kTasksUpdatedIndexColumns = "(status_seconds DESC, status_nanos DESC, id DESC)";
-  constexpr std::string_view kTasksContextIndexColumns =
-      "(context_id, status_seconds DESC, status_nanos DESC, id DESC)";
-  constexpr std::string_view kTasksStateIndexColumns = "(state, status_seconds DESC, status_nanos DESC, id DESC)";
-  const std::string create_tasks_updated_index =
-      CreateIndexStatement(kTasksUpdatedIndex, tasks, kTasksUpdatedIndexColumns);
+  constexpr std::string_view kTasksCreatedSequenceIndexColumns = "(created_sequence ASC)";
+  constexpr std::string_view kTasksContextIndexColumns = "(context_id, created_sequence ASC)";
+  constexpr std::string_view kTasksStateIndexColumns = "(state, created_sequence ASC)";
+  const std::string create_tasks_created_sequence_index =
+      CreateIndexStatement(kTasksCreatedSequenceIndex, tasks, kTasksCreatedSequenceIndexColumns);
   const std::string create_tasks_context_index =
       CreateIndexStatement(kTasksContextIndex, tasks, kTasksContextIndexColumns);
   const std::string create_tasks_state_index = CreateIndexStatement(kTasksStateIndex, tasks, kTasksStateIndexColumns);
@@ -332,9 +352,10 @@ namespace {
   const std::string create_push_configs_task_index =
       CreateIndexStatement(kPushConfigsTaskIndex, push_configs, kPushConfigsTaskIndexColumns);
 
-  const std::vector<std::string> schema_statements = {
-      create_tasks,        create_tasks_updated_index,    create_tasks_context_index, create_tasks_state_index,
-      create_push_configs, create_push_configs_task_index};
+  const std::vector<std::string> schema_statements = {create_task_created_sequence, create_tasks,
+                                                      add_tasks_created_sequence,   create_tasks_created_sequence_index,
+                                                      create_tasks_context_index,   create_tasks_state_index,
+                                                      create_push_configs,          create_push_configs_task_index};
   for (const auto& statement : schema_statements) {
     const auto executed = Exec(connection, statement, "initialize postgres store schema");
     if (!executed.ok()) {
@@ -562,8 +583,8 @@ core::Result<ListTasksResponse> PostgresTaskStore::List(const ListTasksRequest& 
   const std::size_t result_size = std::min(effective_page_size, remaining);
 
   std::vector<std::string> select_values = filter.values;
-  std::string select_sql = "SELECT task_proto FROM " + TaskTable(options_.schema) + filter.where_clause +
-                           " ORDER BY status_seconds DESC, status_nanos DESC, id DESC";
+  std::string select_sql =
+      "SELECT task_proto FROM " + TaskTable(options_.schema) + filter.where_clause + " ORDER BY created_sequence ASC";
   if (request.page_size != 0) {
     select_sql += " LIMIT " + AddSqlParameter(&select_values, std::to_string(result_size));
   }

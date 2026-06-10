@@ -156,12 +156,12 @@ TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) 
 
   const auto first_page = store.List(request);
   ASSERT_TRUE(first_page.ok());
-  ExpectFilteredPostgresListPage(first_page.value(), kNewTargetTaskId, true);
+  ExpectFilteredPostgresListPage(first_page.value(), kOldTargetTaskId, true);
 
   request.page_token = first_page.value().next_page_token;
   const auto second_page = store.List(request);
   ASSERT_TRUE(second_page.ok());
-  ExpectFilteredPostgresListPage(second_page.value(), kOldTargetTaskId, false);
+  ExpectFilteredPostgresListPage(second_page.value(), kNewTargetTaskId, false);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
