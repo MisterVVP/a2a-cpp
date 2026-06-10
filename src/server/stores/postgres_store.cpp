@@ -284,7 +284,7 @@ class PostgresConnectionPool final {
           connection == nullptr ? "unable to allocate PostgreSQL connection" : PQerrorMessage(connection.get());
       return DatabaseConnectionError(message);
     }
-    return std::move(connection);
+    return connection;
   }
 
   void Return(PgConnection connection) {
@@ -324,6 +324,7 @@ namespace {
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
   const std::string create_tasks = "CREATE TABLE IF NOT EXISTS " + tasks +
                                    " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
+                                   "has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE, "
                                    "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
                                    "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
                                    task_created_sequence_regclass +
@@ -332,6 +333,8 @@ namespace {
   const std::string add_tasks_created_sequence =
       "ALTER TABLE " + tasks + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       task_created_sequence_regclass + ");";
+  const std::string add_tasks_has_status_timestamp =
+      "ALTER TABLE " + tasks + " ADD COLUMN IF NOT EXISTS has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE;";
   constexpr std::string_view kTasksCreatedSequenceIndex = "idx_a2a_tasks_created_sequence";
   constexpr std::string_view kTasksContextIndex = "idx_a2a_tasks_context";
   constexpr std::string_view kTasksStateIndex = "idx_a2a_tasks_state";
@@ -352,10 +355,15 @@ namespace {
   const std::string create_push_configs_task_index =
       CreateIndexStatement(kPushConfigsTaskIndex, push_configs, kPushConfigsTaskIndexColumns);
 
-  const std::vector<std::string> schema_statements = {create_task_created_sequence, create_tasks,
-                                                      add_tasks_created_sequence,   create_tasks_created_sequence_index,
-                                                      create_tasks_context_index,   create_tasks_state_index,
-                                                      create_push_configs,          create_push_configs_task_index};
+  const std::vector<std::string> schema_statements = {create_task_created_sequence,
+                                                      create_tasks,
+                                                      add_tasks_created_sequence,
+                                                      add_tasks_has_status_timestamp,
+                                                      create_tasks_created_sequence_index,
+                                                      create_tasks_context_index,
+                                                      create_tasks_state_index,
+                                                      create_push_configs,
+                                                      create_push_configs_task_index};
   for (const auto& statement : schema_statements) {
     const auto executed = Exec(connection, statement, "initialize postgres store schema");
     if (!executed.ok()) {
@@ -373,20 +381,24 @@ namespace {
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
   const std::string payload = task.SerializeAsString();
+  const bool has_status_timestamp = task.status().has_timestamp();
+  const std::string has_timestamp = has_status_timestamp ? "true" : "false";
   const std::string state = std::to_string(static_cast<int>(task.status().state()));
-  const std::string seconds = std::to_string(task.status().has_timestamp() ? task.status().timestamp().seconds() : 0);
-  const std::string nanos = std::to_string(task.status().has_timestamp() ? task.status().timestamp().nanos() : 0);
-  const std::string sql = "INSERT INTO " + TaskTable(options.schema) +
-                          " (id, context_id, state, status_seconds, status_nanos, task_proto, updated_at) "
-                          "VALUES ($1, $2, $3, $4, $5, $6, now()) "
-                          "ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDED.state, "
-                          "status_seconds = EXCLUDED.status_seconds, status_nanos = EXCLUDED.status_nanos, "
-                          "task_proto = EXCLUDED.task_proto, updated_at = now()";
-  const char* values[] = {task.id().c_str(), task.context_id().c_str(), state.c_str(), seconds.c_str(), nanos.c_str(),
+  const std::string seconds = std::to_string(has_status_timestamp ? task.status().timestamp().seconds() : 0);
+  const std::string nanos = std::to_string(has_status_timestamp ? task.status().timestamp().nanos() : 0);
+  const std::string sql =
+      "INSERT INTO " + TaskTable(options.schema) +
+      " (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto, updated_at) "
+      "VALUES ($1, $2, $3, $4, $5, $6, $7, now()) "
+      "ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDED.state, "
+      "has_status_timestamp = EXCLUDED.has_status_timestamp, status_seconds = EXCLUDED.status_seconds, "
+      "status_nanos = EXCLUDED.status_nanos, task_proto = EXCLUDED.task_proto, updated_at = now()";
+  const char* values[] = {task.id().c_str(),     task.context_id().c_str(), state.c_str(),
+                          has_timestamp.c_str(), seconds.c_str(),           nanos.c_str(),
                           payload.data()};
-  const int lengths[] = {0, 0, 0, 0, 0, static_cast<int>(payload.size())};
-  const int formats[] = {0, 0, 0, 0, 0, 1};
-  constexpr int kTaskUpsertParameterCount = 6;
+  const int lengths[] = {0, 0, 0, 0, 0, 0, static_cast<int>(payload.size())};
+  const int formats[] = {0, 0, 0, 0, 0, 0, 1};
+  constexpr int kTaskUpsertParameterCount = 7;
   PgResult result(
       PQexecParams(connection, sql.c_str(), kTaskUpsertParameterCount, nullptr, values, lengths, formats, 0));
   return CheckCommand(connection, result.get(), "upsert postgres task");
@@ -461,8 +473,8 @@ struct TaskListSqlFilter final {
     const auto& cutoff = *request.status_timestamp_after;
     const std::string seconds_param = AddSqlParameter(&filter.values, std::to_string(cutoff.seconds()));
     const std::string nanos_param = AddSqlParameter(&filter.values, std::to_string(cutoff.nanos()));
-    predicates.push_back("(status_seconds > " + seconds_param + " OR (status_seconds = " + seconds_param +
-                         " AND status_nanos >= " + nanos_param + "))");
+    predicates.push_back("(has_status_timestamp = TRUE AND (status_seconds > " + seconds_param +
+                         " OR (status_seconds = " + seconds_param + " AND status_nanos >= " + nanos_param + ")))");
   }
 
   if (!predicates.empty()) {
