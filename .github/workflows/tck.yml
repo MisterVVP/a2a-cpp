@@ -15,12 +15,28 @@ env:
   TCK_LOG_DIR: tck-artifacts/logs
   SUT_HOST: 127.0.0.1
   SUT_PORT: "50061"
+  A2A_TCK_POSTGRES_DSN: postgresql://a2a:a2a@127.0.0.1:5432/a2a
+  A2A_TCK_POSTGRES_SCHEMA: tck_postgres
 
 jobs:
   mandatory-conformance:
     name: mandatory-conformance
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: a2a
+          POSTGRES_PASSWORD: a2a
+          POSTGRES_DB: a2a
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2a -d a2a"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -28,10 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           ./scripts/install_build_deps.sh
-          sudo apt-get install -y --no-install-recommends netcat-openbsd jq python3-venv nodejs npm
-
-      - name: Start deterministic SUT
-        run: ./scripts/run_tck_sut.sh
+          sudo apt-get install -y --no-install-recommends libpq-dev netcat-openbsd jq python3-venv nodejs npm postgresql-client
 
       - name: Checkout TCK
         uses: actions/checkout@v6
@@ -40,104 +53,43 @@ jobs:
           ref: ${{ env.TCK_REF }}
           path: ${{ env.TCK_WORKDIR }}
 
-      - name: Run mandatory TCK category
+      - name: Start deterministic SUT with in-memory store
+        env:
+          A2A_TCK_STORE_BACKEND: inmemory
+          SUT_LOG_FILE: build-tck/tck-sut-inmemory.log
+        run: ./scripts/run_tck_sut.sh
+
+      - name: Run mandatory TCK category with in-memory store
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
           TCK_TRANSPORTS: grpc,jsonrpc,http_json
-        run: |
-          set -euo pipefail
-          mkdir -p "${TCK_REPORT_DIR}" "${TCK_LOG_DIR}"
-          if [[ -n "${TCK_RUN_CMD}" ]]; then
-            pushd "${TCK_WORKDIR}" >/dev/null
-            bash -lc "${TCK_RUN_CMD}" | tee "../${TCK_LOG_DIR}/tck-run.log"
-            popd >/dev/null
-            exit 0
-          fi
+          TCK_REPORT_DIR: tck-artifacts/reports/inmemory
+          TCK_LOG_DIR: tck-artifacts/logs/inmemory
+        run: ./scripts/run_tck_mandatory.sh
 
-          if [[ -x "${TCK_WORKDIR}/scripts/run_tck.sh" ]]; then
-            "${TCK_WORKDIR}/scripts/run_tck.sh" \
-              --category mandatory \
-              --sut-endpoint "${TCK_SUT_ENDPOINT}" \
-              --output-dir "${TCK_REPORT_DIR}" \
-              | tee "${TCK_LOG_DIR}/tck-run.log"
-            exit 0
-          fi
+      - name: Stop deterministic in-memory SUT
+        if: always()
+        run: ./scripts/stop_tck_sut.sh
 
-          if [[ -x "${TCK_WORKDIR}/scripts/run_mandatory.sh" ]]; then
-            "${TCK_WORKDIR}/scripts/run_mandatory.sh" \
-              --sut-endpoint "${TCK_SUT_ENDPOINT}" \
-              --output-dir "${TCK_REPORT_DIR}" \
-              | tee "${TCK_LOG_DIR}/tck-run.log"
-            exit 0
-          fi
+      - name: Start deterministic SUT with PostgreSQL store
+        env:
+          A2A_TCK_STORE_BACKEND: postgres
+          SUT_LOG_FILE: build-tck/tck-sut-postgres.log
+        run: ./scripts/run_tck_sut.sh
 
-          if [[ -f "${TCK_WORKDIR}/run_tck.py" ]]; then
-            pushd "${TCK_WORKDIR}" >/dev/null
-            python3 -m pip install --upgrade pip
-            if [[ -f "requirements.txt" ]]; then
-              python3 -m pip install -r requirements.txt
-            fi
-            if [[ -f "pyproject.toml" ]]; then
-              python3 -m pip install -e .
-            fi
-            python3 -m pip install python-dotenv pyopenssl
-            if ! python3 -c "import pytest" >/dev/null 2>&1; then
-              python3 -m pip install pytest pytest-html
-            fi
-            python3 run_tck.py \
-              --sut-host "${TCK_SUT_URL}" \
-              --transport "${TCK_TRANSPORTS}" \
-              | tee "../${TCK_LOG_DIR}/tck-run.log"
-            popd >/dev/null
-            exit 0
-          fi
+      - name: Run mandatory TCK category with PostgreSQL store
+        env:
+          TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
+          TCK_TRANSPORTS: grpc,jsonrpc,http_json
+          TCK_REPORT_DIR: tck-artifacts/reports/postgres
+          TCK_LOG_DIR: tck-artifacts/logs/postgres
+        run: ./scripts/run_tck_mandatory.sh
 
-          if [[ -f "${TCK_WORKDIR}/package.json" ]]; then
-            pushd "${TCK_WORKDIR}" >/dev/null
-            npm ci
-            if npm run | grep -q "test:mandatory"; then
-              npm run test:mandatory -- --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" | tee "../${TCK_LOG_DIR}/tck-run.log"
-            elif npm run | grep -q "mandatory"; then
-              npm run mandatory -- --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" | tee "../${TCK_LOG_DIR}/tck-run.log"
-            else
-              npm test -- --category mandatory --sut-endpoint "${TCK_SUT_ENDPOINT}" --report-dir "../${TCK_REPORT_DIR}" | tee "../${TCK_LOG_DIR}/tck-run.log"
-            fi
-            popd >/dev/null
-            exit 0
-          fi
-
-          if [[ -f "${TCK_WORKDIR}/pyproject.toml" || -f "${TCK_WORKDIR}/requirements.txt" ]]; then
-            python3 -m pip install --upgrade pip
-            if [[ -f "${TCK_WORKDIR}/requirements.txt" ]]; then
-              python3 -m pip install -r "${TCK_WORKDIR}/requirements.txt"
-            fi
-            if [[ -f "${TCK_WORKDIR}/pyproject.toml" ]]; then
-              python3 -m pip install -e "${TCK_WORKDIR}"
-            fi
-            export PYTHONPATH="${PWD}/${TCK_WORKDIR}:${PYTHONPATH:-}"
-            export SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
-            export TCK_ENDPOINT="${TCK_SUT_ENDPOINT}"
-            export A2A_TCK_SUT_ENDPOINT="${TCK_SUT_ENDPOINT}"
-            export TCK_REPORT_DIR_ABS="${PWD}/${TCK_REPORT_DIR}"
-            export A2A_TCK_REPORT_DIR="${PWD}/${TCK_REPORT_DIR}"
-            pushd "${TCK_WORKDIR}" >/dev/null
-            if [[ -d tests/mandatory ]]; then
-              python3 -m pytest tests/mandatory --sut-host "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend | tee "../${TCK_LOG_DIR}/tck-run.log"
-            else
-              python3 -m pytest tests -m mandatory --sut-host "http://${SUT_HOST}:${SUT_PORT}" --import-mode=prepend --ignore=tests/unit --ignore=tests/unit/adapters | tee "../${TCK_LOG_DIR}/tck-run.log"
-            fi
-            popd >/dev/null
-            exit 0
-          fi
-
-          echo "Unable to locate a supported TCK entrypoint in ${TCK_WORKDIR}."
-          echo "Set repository variable TCK_RUN_CMD to the mandatory-suite command."
-          find "${TCK_WORKDIR}" -maxdepth 3 -type f | sort | tee "${TCK_LOG_DIR}/tck-workdir-files.txt"
-          exit 1
-
-      - name: Stop deterministic SUT
+      - name: Stop deterministic PostgreSQL SUT
         if: always()
         run: ./scripts/stop_tck_sut.sh
 
@@ -148,6 +100,7 @@ jobs:
           cp /etc/os-release "${TCK_LOG_DIR}/os-release.txt"
           uname -a > "${TCK_LOG_DIR}/uname.txt"
           cmake --version > "${TCK_LOG_DIR}/cmake-version.txt"
+          pg_isready -h 127.0.0.1 -p 5432 -U a2a -d a2a > "${TCK_LOG_DIR}/postgres-ready.txt" 2>&1 || true
 
       - name: Upload TCK artifacts
         if: always()
@@ -157,5 +110,6 @@ jobs:
           path: |
             ${{ env.TCK_REPORT_DIR }}
             ${{ env.TCK_LOG_DIR }}
-            build-tck/tck-sut.log
+            build-tck/tck-sut-inmemory.log
+            build-tck/tck-sut-postgres.log
           if-no-files-found: warn

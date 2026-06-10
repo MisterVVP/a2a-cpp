@@ -703,6 +703,17 @@ add_executable(tck_http_sut interop/tck_http_sut.cpp)
 target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/examples)
 target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
 
+if(A2A_ENABLE_POSTGRES_STORE)
+  target_link_libraries(tck_http_sut
+    PRIVATE
+      a2a::store_postgres
+  )
+  target_compile_definitions(tck_http_sut
+    PRIVATE
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+endif()
+
 add_executable(store_conformance_test
   store_conformance/store_conformance_test.cpp
 )
