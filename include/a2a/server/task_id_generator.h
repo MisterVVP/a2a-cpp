@@ -52,6 +52,7 @@ class UuidV7TaskIdGenerator final : public TaskIdGenerator {
   static constexpr std::string_view kPrefix = "task-";
   static constexpr std::uint64_t kTimestampMask = 0x0000FFFFFFFFFFFFULL;
   static constexpr std::uint64_t kSequenceMask = 0x0000000000000FFFULL;
+  static constexpr std::uint64_t kInitialSequenceMask = 0x00000000000003FFULL;
 
   std::mutex mutex_;
   std::uint64_t last_timestamp_ms_ = 0;
