@@ -15,7 +15,16 @@
 #include <utility>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// clang-format off
+#include <windows.h>
 #include <bcrypt.h>
+// clang-format on
 #pragma comment(lib, "bcrypt.lib")
 #elif defined(__linux__)
 #include <sys/random.h>
