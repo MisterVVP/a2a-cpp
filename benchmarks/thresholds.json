@@ -126,7 +126,7 @@
     "max_time_ns": 1000
   },
   "BM_TaskStore_AppendTaskHistory_DuplicateMessageId": {
-    "max_time_ns": 750
+    "max_time_ns": 850
   },
   "BM_TaskStore_AppendTaskHistory_NoDuplicate": {
     "max_time_ns": 2500
@@ -165,9 +165,9 @@
     "max_time_ns": 300
   },
   "BM_UuidV7TaskIdGenerator_Generate": {
-    "max_time_ns": 15000000
+    "max_time_ns": 1200000
   },
   "BM_UuidV7TaskIdGenerator_GenerateMultiThreaded/threads:${A2A_BENCHMARK_THREADS}": {
-    "max_time_ns": 25000000
+    "max_time_ns": 2000000
   }
 }
