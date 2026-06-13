@@ -13,6 +13,10 @@
 
 namespace a2a::server::stores {
 
+constexpr std::string_view kTaskIdRequiredMessage = "Task id is required";
+constexpr std::string_view kTaskNotFoundMessage = "Task not found";
+constexpr std::string_view kTaskIdFieldRequiredMessage = "Task.id is required";
+
 class PostgresConnectionPool;
 
 class PostgresTaskStore final : public a2a::server::TaskStore {

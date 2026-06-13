@@ -22,10 +22,6 @@
 namespace a2a::server::stores {
 namespace {
 
-constexpr std::string_view kTaskIdRequiredMessage = "Task id is required";
-constexpr std::string_view kTaskNotFoundMessage = "Task not found";
-constexpr std::string_view kTaskIdFieldRequiredMessage = "Task.id is required";
-
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
   const std::string payload = task.SerializeAsString();

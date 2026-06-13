@@ -19,18 +19,6 @@
 namespace a2a::server::stores {
 namespace {
 
-constexpr std::string_view kPageTokenInvalidMessage =
-    "ListTaskPushNotificationConfigsRequest.page_token must be a non-negative integer";
-constexpr std::string_view kPageTokenOutOfRangeMessage =
-    "ListTaskPushNotificationConfigsRequest.page_token exceeds available config count";
-constexpr std::string_view kPushTaskIdRequiredMessage = "push notification task_id is required";
-constexpr std::string_view kConfigIdRequiredMessage = "push notification id is required";
-constexpr std::string_view kConfigUrlRequiredMessage = "push notification url is required";
-constexpr std::string_view kTaskConfigNotFoundMessage = "push notification task config not found";
-constexpr std::string_view kConfigNotFoundMessage = "push notification config not found";
-constexpr std::string_view kPageSizeInvalidMessage =
-    "ListTaskPushNotificationConfigsRequest.page_size must be non-negative";
-
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
     return std::size_t{0};
