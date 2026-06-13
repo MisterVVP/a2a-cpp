@@ -18,7 +18,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
-#include "postgres_common.h"
+#include "a2a/server/stores/postgres_common.h"
 
 namespace a2a::server::stores {
 namespace {
@@ -341,6 +341,5 @@ TaskStore::HistoryTelemetrySnapshot PostgresTaskStore::GetHistoryTelemetrySnapsh
   std::lock_guard<std::mutex> lock(telemetry_mutex_);
   return telemetry_snapshot_;
 }
-
 
 }  // namespace a2a::server::stores

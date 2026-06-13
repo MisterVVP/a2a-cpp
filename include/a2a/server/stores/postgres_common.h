@@ -18,6 +18,10 @@
 
 namespace a2a::server::stores {
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+void FailNextPostgresAcquireForTesting(core::Error error);
+#endif
+
 inline constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
 
 struct PgResultDeleter final {
