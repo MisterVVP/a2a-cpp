@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
+#include "a2a/server/stores/postgres_common.h"
+
 #include <libpq-fe.h>
 
 #include <condition_variable>
@@ -13,7 +15,6 @@
 
 #include "a2a/core/error.h"
 #include "a2a/server/sql_identifier.h"
-#include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
 

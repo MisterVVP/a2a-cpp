@@ -107,7 +107,7 @@ target_link_libraries(a2a_server
 if(A2A_ENABLE_POSTGRES_STORE)
   find_package(PostgreSQL REQUIRED)
   add_library(a2a_store_postgres STATIC
-    server/stores/postgres_store.cpp
+    server/stores/postgres_common.cpp
     server/stores/postgres_task_store.cpp
     server/stores/postgres_notification_store.cpp
   )
