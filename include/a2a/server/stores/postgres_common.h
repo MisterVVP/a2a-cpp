@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <libpq-fe.h>
-
 #include <condition_variable>
 #include <cstddef>
 #include <memory>
@@ -15,6 +13,11 @@
 
 #include "a2a/core/error.h"
 #include "a2a/server/stores/store_factory.h"
+
+struct pg_conn;
+struct pg_result;
+using PGconn = pg_conn;
+using PGresult = pg_result;
 
 namespace a2a::server::stores {
 
