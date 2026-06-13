@@ -15,7 +15,9 @@
 #include "store_conformance/task_store_conformance.h"
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
+#include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_store.h"
+#include "a2a/server/stores/postgres_task_store.h"
 #endif
 
 namespace {
