@@ -14,10 +14,8 @@
 #include "a2a/core/error.h"
 #include "a2a/server/stores/store_factory.h"
 
-struct pg_conn;
-struct pg_result;
-using PGconn = pg_conn;
-using PGresult = pg_result;
+typedef struct pg_conn PGconn;
+typedef struct pg_result PGresult;
 
 namespace a2a::server::stores {
 
