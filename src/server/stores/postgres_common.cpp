@@ -21,6 +21,8 @@
 namespace a2a::server::stores {
 namespace {
 
+constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
+
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
 std::optional<core::Error> g_test_acquire_failure;
@@ -92,6 +94,9 @@ std::string PushTable(std::string_view schema) { return QualifiedSqlIdentifier(s
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
   if (!IsValidSqlIdentifier(options.schema)) {
     return core::Error::Validation("PostgreSQL schema must be a simple SQL identifier");
+  }
+  if (options.schema.size() > kPostgresIdentifierMaxBytes) {
+    return core::Error::Validation("PostgreSQL schema must be at most 63 bytes");
   }
   if (options.connection_string.empty()) {
     return core::Error::Validation("Postgres connection_string is required");
