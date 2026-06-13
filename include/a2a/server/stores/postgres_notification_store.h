@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "a2a/server/push_notification_store.h"
+#include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/store_factory.h"
 
 namespace a2a::server::stores {

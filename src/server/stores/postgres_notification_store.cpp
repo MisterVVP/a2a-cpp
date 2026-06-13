@@ -15,7 +15,6 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
-#include "a2a/server/stores/postgres_common.h"
 
 namespace a2a::server::stores {
 namespace {
