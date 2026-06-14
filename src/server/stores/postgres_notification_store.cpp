@@ -200,8 +200,8 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   const std::size_t requested_rows = std::min(effective_page_size, remaining);
   const std::string limit_value = std::to_string(requested_rows);
   const std::string offset_value = std::to_string(offset.value());
-  std::string sql = "SELECT config_proto FROM " + PushTable(options_.schema) +
-                    " WHERE task_id = $1 ORDER BY config_id ASC";
+  std::string sql =
+      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY config_id ASC";
   std::vector<const char*> values;
   values.push_back(task_id_value.c_str());
   if (page_size != 0) {
@@ -213,8 +213,8 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     values.push_back(offset_value.c_str());
   }
 
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
-                               nullptr, nullptr, 1));
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(values.size()), nullptr,
+                               values.data(), nullptr, nullptr, 1));
   const auto checked = CheckTuples(lease.value().get(), result.get(), "list postgres push notification configs");
   if (!checked.ok()) {
     return checked.error();
