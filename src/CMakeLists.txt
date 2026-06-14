@@ -84,6 +84,7 @@ add_library(a2a_server STATIC
   server/push_notification_service.cpp
   server/push_notification_store.cpp
   server/socket_utils.cpp
+  server/stores/sql_identifier.cpp
   server/task_id_generator.cpp
   server/transport_mux.cpp
   server/server.cpp
@@ -107,7 +108,6 @@ if(A2A_ENABLE_POSTGRES_STORE)
   find_package(PostgreSQL REQUIRED)
   add_library(a2a_store_postgres STATIC
     server/stores/postgres_common.cpp
-    server/stores/sql_identifier.cpp
     server/stores/postgres_task_store.cpp
     server/stores/postgres_notification_store.cpp
   )
