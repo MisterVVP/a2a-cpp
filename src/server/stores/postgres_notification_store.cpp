@@ -180,8 +180,10 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   }
 
   const std::string count_sql = "SELECT count(*) FROM " + PushTable(options_.schema) + " WHERE task_id = $1";
-  PgResult count_result(PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values, nullptr, nullptr, 0));
-  const auto count_checked = CheckTuples(lease.value().get(), count_result.get(), "count postgres push notification configs");
+  PgResult count_result(
+      PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values, nullptr, nullptr, 0));
+  const auto count_checked =
+      CheckTuples(lease.value().get(), count_result.get(), "count postgres push notification configs");
   if (!count_checked.ok()) {
     return count_checked.error();
   }
@@ -198,7 +200,8 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   const std::size_t requested_rows = std::min(effective_page_size, remaining);
   const std::string limit_value = std::to_string(requested_rows);
   const std::string offset_value = std::to_string(offset.value());
-  std::string sql = "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY config_id ASC";
+  std::string sql = "SELECT config_proto FROM " + PushTable(options_.schema) +
+                    " WHERE task_id = $1 ORDER BY config_id ASC";
   std::vector<const char*> values;
   values.push_back(task_id_value.c_str());
   if (page_size != 0) {
