@@ -23,7 +23,8 @@ namespace a2a::server::stores {
 void FailNextPostgresAcquireForTesting(core::Error error);
 #endif
 
-inline constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
+constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
+constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";
 constexpr std::string_view kPushTableName = "a2a_push_notification_configs";

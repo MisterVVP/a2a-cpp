@@ -21,8 +21,6 @@
 namespace a2a::server::stores {
 namespace {
 
-constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
-
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
 std::optional<core::Error> g_test_acquire_failure;
