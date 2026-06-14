@@ -139,8 +139,11 @@ Transaction::Transaction(PGconn* connection) : connection_(connection) {}
 core::Result<void> Transaction::Begin() { return Exec(connection_, "BEGIN", "begin postgres transaction"); }
 
 core::Result<void> Transaction::Commit() {
-  committed_ = true;
-  return Exec(connection_, "COMMIT", "commit postgres transaction");
+  const auto committed = Exec(connection_, "COMMIT", "commit postgres transaction");
+  if (committed.ok()) {
+    committed_ = true;
+  }
+  return committed;
 }
 
 Transaction::~Transaction() {
