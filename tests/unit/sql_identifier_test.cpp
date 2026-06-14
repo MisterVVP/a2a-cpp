@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/stores/sql_identifier.h
+#include "a2a/server/stores/sql_identifier.h"
 
 #include <gtest/gtest.h>
 
