@@ -12,6 +12,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
@@ -29,6 +30,19 @@ namespace {
   const auto result = std::from_chars(begin, end, parsed);
   if (result.ec != std::errc() || result.ptr != end) {
     return core::Error::Validation(std::string(kPageTokenInvalidMessage));
+  }
+  return parsed;
+}
+
+[[nodiscard]] core::Result<std::size_t> ParsePushConfigCount(PGresult* result) {
+  if (PQntuples(result) != 1) {
+    return core::Error::Internal("count postgres push notification configs: expected exactly one count row");
+  }
+  std::size_t parsed = 0;
+  const std::string_view raw_count(PQgetvalue(result, 0, 0));
+  const auto parsed_result = std::from_chars(raw_count.data(), raw_count.data() + raw_count.size(), parsed);
+  if (parsed_result.ec != std::errc() || parsed_result.ptr != raw_count.data() + raw_count.size()) {
+    return core::Error::Internal("count postgres push notification configs: failed to parse count");
   }
   return parsed;
 }
@@ -159,29 +173,54 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     return offset.error();
   }
   const std::string task_id_value(task_id);
-  const std::string sql =
-      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY config_id ASC";
-  const char* values[] = {task_id_value.c_str()};
+  const char* count_values[] = {task_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
+
+  const std::string count_sql = "SELECT count(*) FROM " + PushTable(options_.schema) + " WHERE task_id = $1";
+  PgResult count_result(PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values, nullptr, nullptr, 0));
+  const auto count_checked = CheckTuples(lease.value().get(), count_result.get(), "count postgres push notification configs");
+  if (!count_checked.ok()) {
+    return count_checked.error();
+  }
+  const auto count = ParsePushConfigCount(count_result.get());
+  if (!count.ok()) {
+    return count.error();
+  }
+  if (offset.value() > count.value()) {
+    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
+  }
+
+  const std::size_t remaining = count.value() - offset.value();
+  const std::size_t effective_page_size = page_size == 0 ? remaining : static_cast<std::size_t>(page_size);
+  const std::size_t requested_rows = std::min(effective_page_size, remaining);
+  const std::string limit_value = std::to_string(requested_rows);
+  const std::string offset_value = std::to_string(offset.value());
+  std::string sql = "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY config_id ASC";
+  std::vector<const char*> values;
+  values.push_back(task_id_value.c_str());
+  if (page_size != 0) {
+    sql += " LIMIT $2 OFFSET $3";
+    values.push_back(limit_value.c_str());
+    values.push_back(offset_value.c_str());
+  } else if (offset.value() != 0U) {
+    sql += " OFFSET $2";
+    values.push_back(offset_value.c_str());
+  }
+
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
+                               nullptr, nullptr, 1));
   const auto checked = CheckTuples(lease.value().get(), result.get(), "list postgres push notification configs");
   if (!checked.ok()) {
     return checked.error();
   }
-  const auto count = static_cast<std::size_t>(PQntuples(result.get()));
-  if (offset.value() > count) {
-    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
-  }
-  const std::size_t remaining = count - offset.value();
-  const std::size_t effective_page_size = page_size == 0 ? remaining : static_cast<std::size_t>(page_size);
-  const std::size_t result_size = std::min(effective_page_size, remaining);
+
+  const auto row_count = static_cast<std::size_t>(PQntuples(result.get()));
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
-  response.mutable_configs()->Reserve(static_cast<int>(result_size));
-  const std::size_t end = offset.value() + result_size;
-  for (std::size_t index = offset.value(); index < end; ++index) {
+  response.mutable_configs()->Reserve(static_cast<int>(row_count));
+  for (std::size_t index = 0; index < row_count; ++index) {
     lf::a2a::v1::TaskPushNotificationConfig config;
     if (!config.ParseFromArray(PQgetvalue(result.get(), static_cast<int>(index), 0),
                                PQgetlength(result.get(), static_cast<int>(index), 0))) {
@@ -189,8 +228,8 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     }
     *response.add_configs() = std::move(config);
   }
-  if (result_size < remaining) {
-    response.set_next_page_token(std::to_string(offset.value() + result_size));
+  if (offset.value() + row_count < count.value()) {
+    response.set_next_page_token(std::to_string(offset.value() + row_count));
   }
   return response;
 }
