@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace a2a::server {
+namespace a2a::server::stores {
 
 [[nodiscard]] bool IsAlphaOrUnderscore(unsigned char ch) noexcept;
 [[nodiscard]] bool IsAlnumOrUnderscore(unsigned char ch) noexcept;
@@ -14,4 +14,4 @@ namespace a2a::server {
 [[nodiscard]] std::string QuoteSqlIdentifier(std::string_view identifier);
 [[nodiscard]] std::string QualifiedSqlIdentifier(std::string_view schema, std::string_view identifier);
 
-}  // namespace a2a::server
+}  // namespace a2a::server::stores

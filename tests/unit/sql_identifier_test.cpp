@@ -28,33 +28,33 @@ constexpr std::string_view kTableName = "a2a_tasks";
 constexpr std::string_view kQualifiedIdentifier = R"("tenant_schema"."a2a_tasks")";
 
 TEST(SqlIdentifierTest, ClassifiesIdentifierCharacters) {
-  EXPECT_TRUE(a2a::server::IsAlphaOrUnderscore(kAlpha));
-  EXPECT_TRUE(a2a::server::IsAlphaOrUnderscore(kUpperAlpha));
-  EXPECT_TRUE(a2a::server::IsAlphaOrUnderscore(kUnderscore));
-  EXPECT_FALSE(a2a::server::IsAlphaOrUnderscore(kDigit));
-  EXPECT_FALSE(a2a::server::IsAlphaOrUnderscore(kDash));
+  EXPECT_TRUE(a2a::server::stores::IsAlphaOrUnderscore(kAlpha));
+  EXPECT_TRUE(a2a::server::stores::IsAlphaOrUnderscore(kUpperAlpha));
+  EXPECT_TRUE(a2a::server::stores::IsAlphaOrUnderscore(kUnderscore));
+  EXPECT_FALSE(a2a::server::stores::IsAlphaOrUnderscore(kDigit));
+  EXPECT_FALSE(a2a::server::stores::IsAlphaOrUnderscore(kDash));
 
-  EXPECT_TRUE(a2a::server::IsAlnumOrUnderscore(kAlpha));
-  EXPECT_TRUE(a2a::server::IsAlnumOrUnderscore(kUpperAlpha));
-  EXPECT_TRUE(a2a::server::IsAlnumOrUnderscore(kDigit));
-  EXPECT_TRUE(a2a::server::IsAlnumOrUnderscore(kUnderscore));
-  EXPECT_FALSE(a2a::server::IsAlnumOrUnderscore(kDash));
+  EXPECT_TRUE(a2a::server::stores::IsAlnumOrUnderscore(kAlpha));
+  EXPECT_TRUE(a2a::server::stores::IsAlnumOrUnderscore(kUpperAlpha));
+  EXPECT_TRUE(a2a::server::stores::IsAlnumOrUnderscore(kDigit));
+  EXPECT_TRUE(a2a::server::stores::IsAlnumOrUnderscore(kUnderscore));
+  EXPECT_FALSE(a2a::server::stores::IsAlnumOrUnderscore(kDash));
 }
 
 TEST(SqlIdentifierTest, ValidatesSimpleSqlIdentifiers) {
   constexpr std::array<std::string_view, 5> kInvalidIdentifiers = {std::string_view{}, kStartsWithDigit, kContainsDash,
                                                                    kContainsDot, kContainsSemicolon};
 
-  EXPECT_TRUE(a2a::server::IsValidSqlIdentifier(kSimpleIdentifier));
+  EXPECT_TRUE(a2a::server::stores::IsValidSqlIdentifier(kSimpleIdentifier));
   for (const std::string_view invalid_identifier : kInvalidIdentifiers) {
-    EXPECT_FALSE(a2a::server::IsValidSqlIdentifier(invalid_identifier));
+    EXPECT_FALSE(a2a::server::stores::IsValidSqlIdentifier(invalid_identifier));
   }
 }
 
 TEST(SqlIdentifierTest, QuotesAndQualifiesSqlIdentifiers) {
-  EXPECT_EQ(a2a::server::QuoteSqlIdentifier(kNeedsQuoting), kQuotedIdentifier);
-  EXPECT_EQ(a2a::server::QuoteSqlIdentifier(kContainsQuote), kEscapedQuotedIdentifier);
-  EXPECT_EQ(a2a::server::QualifiedSqlIdentifier(kNeedsQuoting, kTableName), kQualifiedIdentifier);
+  EXPECT_EQ(a2a::server::stores::QuoteSqlIdentifier(kNeedsQuoting), kQuotedIdentifier);
+  EXPECT_EQ(a2a::server::stores::QuoteSqlIdentifier(kContainsQuote), kEscapedQuotedIdentifier);
+  EXPECT_EQ(a2a::server::stores::QualifiedSqlIdentifier(kNeedsQuoting, kTableName), kQualifiedIdentifier);
 }
 
 }  // namespace

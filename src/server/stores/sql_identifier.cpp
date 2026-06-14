@@ -8,7 +8,7 @@
 #include <ranges>
 #include <string>
 
-namespace a2a::server {
+namespace a2a::server::stores {
 
 bool IsAlphaOrUnderscore(unsigned char ch) noexcept { return std::isalpha(ch) != 0 || ch == '_'; }
 
@@ -47,4 +47,4 @@ std::string QualifiedSqlIdentifier(std::string_view schema, std::string_view ide
   return qualified;
 }
 
-}  // namespace a2a::server
+}  // namespace a2a::server::stores
