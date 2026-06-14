@@ -87,7 +87,6 @@ add_library(a2a_server STATIC
   server/task_id_generator.cpp
   server/transport_mux.cpp
   server/server.cpp
-  server/sql_identifier.cpp
   server/stores/store_factory.cpp
 )
 add_library(a2a::server ALIAS a2a_server)
@@ -108,6 +107,7 @@ if(A2A_ENABLE_POSTGRES_STORE)
   find_package(PostgreSQL REQUIRED)
   add_library(a2a_store_postgres STATIC
     server/stores/postgres_common.cpp
+    server/stores/sql_identifier.cpp
     server/stores/postgres_task_store.cpp
     server/stores/postgres_notification_store.cpp
   )

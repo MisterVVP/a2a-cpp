@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "a2a/core/error.h"
-#include "a2a/server/sql_identifier.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
+#include "a2a/server/stores/sql_identifier.h"
 
 namespace a2a::server::stores {
 namespace {
