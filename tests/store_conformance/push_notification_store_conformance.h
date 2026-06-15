@@ -81,6 +81,25 @@ void RunPushNotificationStoreConformance(Factory&& factory) {
   EXPECT_EQ(third_page.value().configs(0).id(), kOrderedPushConfigThird);
   EXPECT_TRUE(third_page.value().next_page_token().empty());
 
+  EXPECT_TRUE(store->Delete(kOrderedPushTask, kOrderedPushConfigFirst).ok());
+  const auto ordered_after_delete = store->List(kOrderedPushTask);
+  ASSERT_TRUE(ordered_after_delete.ok());
+  ASSERT_EQ(ordered_after_delete.value().configs_size(), 2);
+  EXPECT_EQ(ordered_after_delete.value().configs(0).id(), kOrderedPushConfigSecond);
+  EXPECT_EQ(ordered_after_delete.value().configs(1).id(), kOrderedPushConfigThird);
+
+  const auto page_after_delete = store->List(kOrderedPushTask, 1);
+  ASSERT_TRUE(page_after_delete.ok());
+  ASSERT_EQ(page_after_delete.value().configs_size(), 1);
+  EXPECT_EQ(page_after_delete.value().configs(0).id(), kOrderedPushConfigSecond);
+  ASSERT_FALSE(page_after_delete.value().next_page_token().empty());
+
+  const auto second_page_after_delete = store->List(kOrderedPushTask, 1, page_after_delete.value().next_page_token());
+  ASSERT_TRUE(second_page_after_delete.ok());
+  ASSERT_EQ(second_page_after_delete.value().configs_size(), 1);
+  EXPECT_EQ(second_page_after_delete.value().configs(0).id(), kOrderedPushConfigThird);
+  EXPECT_TRUE(second_page_after_delete.value().next_page_token().empty());
+
   EXPECT_TRUE(store->Delete(kPushTask, kPushConfig).ok());
   EXPECT_TRUE(store->Delete(kPushTask, kPushConfig).ok());
   EXPECT_FALSE(store->Get(kPushTask, kPushConfig).ok());
