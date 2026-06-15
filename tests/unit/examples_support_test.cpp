@@ -3,10 +3,35 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "a2a/server/server.h"
 #include "example_support.h"
 
 namespace {
+
+class FixedTaskIdGenerator final : public a2a::server::TaskIdGenerator {
+ public:
+  explicit FixedTaskIdGenerator(std::string task_id) : task_id_(std::move(task_id)) {}
+
+  [[nodiscard]] a2a::core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
+                                                              const a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
+    return task_id_;
+  }
+
+ private:
+  std::string task_id_;
+};
+
+[[nodiscard]] a2a::examples::ExampleExecutor MakeExecutorWithTaskId(std::string task_id) {
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::move(task_id));
+  return a2a::examples::ExampleExecutor(std::move(options));
+}
 
 TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
   EXPECT_EQ(a2a::examples::UrlToTarget("http://agent.local/a2a/tasks?limit=1#frag"), "/a2a/tasks");
@@ -15,7 +40,7 @@ TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
 }
 
 TEST(ExampleSupportTest, ExampleExecutorHandlesSendAndCancelFlow) {
-  a2a::examples::ExampleExecutor executor;
+  auto executor = MakeExecutorWithTaskId("task-test-1");
   a2a::server::RequestContext context;
 
   lf::a2a::v1::SendMessageRequest send;
@@ -80,7 +105,7 @@ TEST(ExampleSupportTest, SendMessageRequiresAtLeastOnePart) {
 }
 
 TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
-  a2a::examples::ExampleExecutor executor;
+  auto executor = MakeExecutorWithTaskId("task-test-1");
   a2a::server::RequestContext context;
 
   lf::a2a::v1::SendMessageRequest first;
