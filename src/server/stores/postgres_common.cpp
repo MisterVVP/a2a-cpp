@@ -42,6 +42,10 @@ std::optional<core::Error> g_test_acquire_failure;
   return QualifiedSqlIdentifier(schema, kTaskCreatedSequenceName);
 }
 
+[[nodiscard]] std::string PushCreatedSequence(std::string_view schema) {
+  return QualifiedSqlIdentifier(schema, kPushCreatedSequenceName);
+}
+
 [[nodiscard]] std::string SqlStringLiteral(const std::string& value) {
   std::string literal = "'";
   for (const char symbol : value) {
@@ -242,8 +246,11 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string tasks = TaskTable(options.schema);
   const std::string push_configs = PushTable(options.schema);
   const std::string task_created_sequence = TaskCreatedSequence(options.schema);
+  const std::string push_created_sequence = PushCreatedSequence(options.schema);
   const std::string task_created_sequence_regclass = SqlStringLiteral(task_created_sequence);
+  const std::string push_created_sequence_regclass = SqlStringLiteral(push_created_sequence);
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
+  const std::string create_push_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + push_created_sequence + ";";
   const std::string create_tasks = "CREATE TABLE IF NOT EXISTS " + tasks +
                                    " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
                                    "has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE, "
@@ -264,12 +271,21 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string create_tasks_state_index = CreateIndexStatement(kTasksStateIndex, tasks, kTasksStateIndexColumns);
   const std::string create_push_configs = "CREATE TABLE IF NOT EXISTS " + push_configs +
                                           " (task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
+                                          "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
+                                          push_created_sequence_regclass +
+                                          "), "
                                           "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
                                           "PRIMARY KEY (task_id, config_id));";
+  const std::string add_push_configs_created_sequence =
+      "ALTER TABLE " + push_configs + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
+      push_created_sequence_regclass + ");";
   const std::string create_push_configs_task_index =
       CreateIndexStatement(kPushConfigsTaskIndex, push_configs, kPushConfigsTaskIndexColumns);
+  const std::string create_push_configs_created_sequence_index = CreateIndexStatement(
+      kPushConfigsCreatedSequenceIndex, push_configs, kPushConfigsCreatedSequenceIndexColumns);
 
   const std::vector<std::string> schema_statements = {create_task_created_sequence,
+                                                      create_push_created_sequence,
                                                       create_tasks,
                                                       add_tasks_created_sequence,
                                                       add_tasks_has_status_timestamp,
@@ -277,7 +293,9 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_tasks_context_index,
                                                       create_tasks_state_index,
                                                       create_push_configs,
-                                                      create_push_configs_task_index};
+                                                      add_push_configs_created_sequence,
+                                                      create_push_configs_task_index,
+                                                      create_push_configs_created_sequence_index};
   for (const auto& statement : schema_statements) {
     const auto executed = Exec(connection, statement, "initialize postgres store schema");
     if (!executed.ok()) {
