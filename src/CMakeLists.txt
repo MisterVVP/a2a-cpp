@@ -112,6 +112,10 @@ if(A2A_ENABLE_POSTGRES_STORE)
     server/stores/postgres_notification_store.cpp
   )
   add_library(a2a::store_postgres ALIAS a2a_store_postgres)
+  set_target_properties(a2a_store_postgres
+    PROPERTIES
+      EXPORT_NAME store_postgres
+  )
 
   target_include_directories(a2a_store_postgres
     PUBLIC
