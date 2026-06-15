@@ -281,21 +281,14 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       push_created_sequence_regclass + ");";
   const std::string create_push_configs_task_index =
       CreateIndexStatement(kPushConfigsTaskIndex, push_configs, kPushConfigsTaskIndexColumns);
-  const std::string create_push_configs_created_sequence_index = CreateIndexStatement(
-      kPushConfigsCreatedSequenceIndex, push_configs, kPushConfigsCreatedSequenceIndexColumns);
+  const std::string create_push_configs_created_sequence_index =
+      CreateIndexStatement(kPushConfigsCreatedSequenceIndex, push_configs, kPushConfigsCreatedSequenceIndexColumns);
 
-  const std::vector<std::string> schema_statements = {create_task_created_sequence,
-                                                      create_push_created_sequence,
-                                                      create_tasks,
-                                                      add_tasks_created_sequence,
-                                                      add_tasks_has_status_timestamp,
-                                                      create_tasks_created_sequence_index,
-                                                      create_tasks_context_index,
-                                                      create_tasks_state_index,
-                                                      create_push_configs,
-                                                      add_push_configs_created_sequence,
-                                                      create_push_configs_task_index,
-                                                      create_push_configs_created_sequence_index};
+  const std::vector<std::string> schema_statements = {
+      create_task_created_sequence,      create_push_created_sequence,   create_tasks,
+      add_tasks_created_sequence,        add_tasks_has_status_timestamp, create_tasks_created_sequence_index,
+      create_tasks_context_index,        create_tasks_state_index,       create_push_configs,
+      add_push_configs_created_sequence, create_push_configs_task_index, create_push_configs_created_sequence_index};
   for (const auto& statement : schema_statements) {
     const auto executed = Exec(connection, statement, "initialize postgres store schema");
     if (!executed.ok()) {

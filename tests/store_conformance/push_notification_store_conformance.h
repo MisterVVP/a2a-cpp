@@ -49,12 +49,12 @@ void RunPushNotificationStoreConformance(Factory&& factory) {
   ASSERT_TRUE(listed.ok());
   EXPECT_EQ(listed.value().configs_size(), 2);
 
-  ASSERT_TRUE(store->CreateOrUpdate(MakeConfig(std::string(kOrderedPushTask), std::string(kOrderedPushConfigFirst)))
-                  .ok());
-  ASSERT_TRUE(store->CreateOrUpdate(MakeConfig(std::string(kOrderedPushTask), std::string(kOrderedPushConfigSecond)))
-                  .ok());
-  ASSERT_TRUE(store->CreateOrUpdate(MakeConfig(std::string(kOrderedPushTask), std::string(kOrderedPushConfigThird)))
-                  .ok());
+  ASSERT_TRUE(
+      store->CreateOrUpdate(MakeConfig(std::string(kOrderedPushTask), std::string(kOrderedPushConfigFirst))).ok());
+  ASSERT_TRUE(
+      store->CreateOrUpdate(MakeConfig(std::string(kOrderedPushTask), std::string(kOrderedPushConfigSecond))).ok());
+  ASSERT_TRUE(
+      store->CreateOrUpdate(MakeConfig(std::string(kOrderedPushTask), std::string(kOrderedPushConfigThird))).ok());
 
   const auto ordered = store->List(kOrderedPushTask);
   ASSERT_TRUE(ordered.ok());
