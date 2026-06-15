@@ -29,6 +29,7 @@ constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";
 constexpr std::string_view kPushTableName = "a2a_push_notification_configs";
 constexpr std::string_view kTaskCreatedSequenceName = "a2a_tasks_created_sequence";
+constexpr std::string_view kPushCreatedSequenceName = "a2a_push_configs_created_sequence";
 constexpr std::string_view kTasksCreatedSequenceIndex = "idx_a2a_tasks_created_sequence";
 constexpr std::string_view kTasksContextIndex = "idx_a2a_tasks_context";
 constexpr std::string_view kTasksStateIndex = "idx_a2a_tasks_state";
@@ -36,7 +37,9 @@ constexpr std::string_view kTasksCreatedSequenceIndexColumns = "(created_sequenc
 constexpr std::string_view kTasksContextIndexColumns = "(context_id, created_sequence ASC)";
 constexpr std::string_view kTasksStateIndexColumns = "(state, created_sequence ASC)";
 constexpr std::string_view kPushConfigsTaskIndex = "idx_a2a_push_configs_task";
+constexpr std::string_view kPushConfigsCreatedSequenceIndex = "idx_a2a_push_configs_created_sequence";
 constexpr std::string_view kPushConfigsTaskIndexColumns = "(task_id)";
+constexpr std::string_view kPushConfigsCreatedSequenceIndexColumns = "(task_id, created_sequence ASC)";
 
 struct PgResultDeleter final {
   void operator()(PGresult* result) const noexcept;
