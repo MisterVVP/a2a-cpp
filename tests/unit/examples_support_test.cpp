@@ -54,8 +54,9 @@ class FailingGetTaskStore final : public a2a::server::TaskStore {
     return error_;
   }
 
-  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendTaskHistory(
-      std::string_view task_id, const lf::a2a::v1::Message& message, HistoryAppendPolicy policy) override {
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                       const lf::a2a::v1::Message& message,
+                                                                       HistoryAppendPolicy policy) override {
     (void)task_id;
     (void)message;
     (void)policy;
