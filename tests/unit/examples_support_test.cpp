@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "a2a/server/server.h"
@@ -27,10 +28,60 @@ class FixedTaskIdGenerator final : public a2a::server::TaskIdGenerator {
   std::string task_id_;
 };
 
+class FailingGetTaskStore final : public a2a::server::TaskStore {
+ public:
+  explicit FailingGetTaskStore(a2a::core::Error error) : error_(std::move(error)) {}
+
+  [[nodiscard]] a2a::core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override {
+    (void)task;
+    ++create_or_update_calls_;
+    return {};
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override {
+    (void)id;
+    return error_;
+  }
+
+  [[nodiscard]] a2a::core::Result<a2a::server::ListTasksResponse> List(
+      const a2a::server::ListTasksRequest& request) const override {
+    (void)request;
+    return a2a::core::Error::Internal("list failed");
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override {
+    (void)id;
+    return error_;
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendTaskHistory(
+      std::string_view task_id, const lf::a2a::v1::Message& message, HistoryAppendPolicy policy) override {
+    (void)task_id;
+    (void)message;
+    (void)policy;
+    return error_;
+  }
+
+  [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override { return {}; }
+
+  [[nodiscard]] int create_or_update_calls() const noexcept { return create_or_update_calls_; }
+
+ private:
+  a2a::core::Error error_;
+  int create_or_update_calls_ = 0;
+};
+
 [[nodiscard]] a2a::examples::ExampleExecutor MakeExecutorWithTaskId(std::string task_id) {
   a2a::examples::ExampleExecutorOptions options;
   options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::move(task_id));
   return a2a::examples::ExampleExecutor(std::move(options));
+}
+
+[[nodiscard]] lf::a2a::v1::SendMessageRequest MakeValidSendRequest(std::string message_id) {
+  lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_message_id(std::move(message_id));
+  send.mutable_message()->add_parts()->set_text("hello");
+  return send;
 }
 
 TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
@@ -102,6 +153,38 @@ TEST(ExampleSupportTest, SendMessageRequiresAtLeastOnePart) {
   send.mutable_message()->set_message_id("invalid");
   const auto result = executor.SendMessage(send, context);
   ASSERT_FALSE(result.ok());
+}
+
+TEST(ExampleSupportTest, SendMessagePropagatesInjectedStoreReadErrors) {
+  FailingGetTaskStore task_store(a2a::core::Error::Internal("read failed"));
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>("task-test-read-error");
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+
+  const auto result = executor.SendMessage(MakeValidSendRequest("read-error-send"), context);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
+  EXPECT_EQ(result.error().message(), "read failed");
+  EXPECT_EQ(task_store.create_or_update_calls(), 0);
+}
+
+TEST(ExampleSupportTest, StreamingPropagatesInjectedStoreReadErrors) {
+  FailingGetTaskStore task_store(a2a::core::Error::Internal("stream read failed"));
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>("task-test-stream-read-error");
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+
+  const auto result = executor.SendStreamingMessage(MakeValidSendRequest("read-error-stream"), context);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
+  EXPECT_EQ(result.error().message(), "stream read failed");
+  EXPECT_EQ(task_store.create_or_update_calls(), 0);
 }
 
 TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
