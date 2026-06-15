@@ -3,6 +3,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -112,6 +113,13 @@ TEST(StoreConformanceTest, PostgresStoreConstructorsRejectInvalidSchemaBeforeCon
                std::invalid_argument);
   EXPECT_THROW((void)a2a::server::stores::PostgresPushNotificationStore(
                    {.connection_string = std::string(kInvalidConnectionString), .schema = std::string(kInvalidSchema)}),
+               std::invalid_argument);
+}
+
+TEST(StoreConformanceTest, PostgresConnectionPoolRejectsZeroSizeBeforeConnecting) {
+  constexpr std::string_view kInvalidConnectionString = "postgresql://invalid-host.invalid/a2a";
+
+  EXPECT_THROW((void)a2a::server::stores::PostgresConnectionPool(std::string(kInvalidConnectionString), 0),
                std::invalid_argument);
 }
 
