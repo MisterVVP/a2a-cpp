@@ -79,7 +79,7 @@ class ExampleExecutor final : public server::AgentExecutor {
         task_store_(options.task_store == nullptr ? owned_task_store_.get() : options.task_store),
         push_store_(options.push_store == nullptr ? owned_push_store_.get() : options.push_store),
         push_delivery_(options.push_delivery == nullptr ? owned_push_delivery_.get() : options.push_delivery),
-        task_id_generator_(options.task_id_generator == nullptr ? std::make_shared<server::SequentialTaskIdGenerator>()
+        task_id_generator_(options.task_id_generator == nullptr ? std::make_shared<server::UuidV7TaskIdGenerator>()
                                                                 : std::move(options.task_id_generator)),
         lifecycle_(task_store_, task_id_generator_),
         push_notifications_(task_store_, push_store_, push_delivery_) {}
