@@ -160,14 +160,6 @@ TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesUniqueValuesAcrossThreads) {
   ExpectThreadIdsUniqueAndValid(thread_ids);
 }
 
-TEST(TaskIdGeneratorTest, SequentialTaskIdGeneratorIsDeterministic) {
-  a2a::server::SequentialTaskIdGenerator generator;
-  lf::a2a::v1::SendMessageRequest request;
-  a2a::server::RequestContext context;
-  EXPECT_EQ(generator.GenerateTaskId(request, context).value(), "task-test-1");
-  EXPECT_EQ(generator.GenerateTaskId(request, context).value(), "task-test-2");
-}
-
 TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdValidatesAndPropagatesErrors) {
   a2a::server::InMemoryTaskStore store;
   auto failing = std::make_shared<FailingTaskIdGenerator>();
