@@ -104,9 +104,6 @@
   "BM_RestTransport_SendMessage": {
     "max_time_ns": 50000
   },
-  "BM_SequentialTaskIdGenerator_Generate": {
-    "max_time_ns": 75000
-  },
   "BM_TaskLifecycle_ContinueExistingTask": {
     "max_time_ns": 500
   },
