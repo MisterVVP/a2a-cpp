@@ -17,6 +17,7 @@
 
 #include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/response_builders.h"
 #include "a2a/core/task_states.h"
@@ -41,6 +42,11 @@ constexpr std::string_view kStructuredDataKey = "key";
 constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
+
+[[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
+  return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
+         *error.protocol_code() == std::string(core::protocol_codes::kTaskNotFound);
+}
 
 }  // namespace
 
@@ -96,8 +102,13 @@ class ExampleExecutor final : public server::AgentExecutor {
     std::string task_id = task_id_result.value();
 
     auto existing = task_store_->Get(task_id);
-    lf::a2a::v1::Task task = existing.ok() ? existing.value() : lf::a2a::v1::Task{};
-    if (!existing.ok()) {
+    lf::a2a::v1::Task task;
+    if (existing.ok()) {
+      task = existing.value();
+    } else {
+      if (!IsTaskNotFoundError(existing.error())) {
+        return existing.error();
+      }
       ordered_ids_.push_back(task_id);
     }
     task.set_id(task_id);
@@ -212,23 +223,32 @@ class ExampleExecutor final : public server::AgentExecutor {
       }
     }
 
-    if (!task_store_->Get(task_id).ok()) {
-      lf::a2a::v1::Task task;
+    auto existing = task_store_->Get(task_id);
+    lf::a2a::v1::Task task;
+    if (existing.ok()) {
+      task = existing.value();
+    } else {
+      if (!IsTaskNotFoundError(existing.error())) {
+        return existing.error();
+      }
       task.set_id(task_id);
       task.set_context_id("ctx-" + task_id);
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-      (void)lifecycle_.CreateOrUpdateTask(task);
+      const auto stored = lifecycle_.CreateOrUpdateTask(task);
+      if (!stored.ok()) {
+        return stored.error();
+      }
       ordered_ids_.push_back(task_id);
     }
 
     lf::a2a::v1::StreamResponse working;
     working.mutable_status_update()->set_task_id(task_id);
-    working.mutable_status_update()->set_context_id(task_store_->Get(task_id).value().context_id());
+    working.mutable_status_update()->set_context_id(task.context_id());
     working.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
 
     lf::a2a::v1::StreamResponse completed;
     completed.mutable_status_update()->set_task_id(task_id);
-    completed.mutable_status_update()->set_context_id(task_store_->Get(task_id).value().context_id());
+    completed.mutable_status_update()->set_context_id(task.context_id());
     completed.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
 
     std::vector<lf::a2a::v1::StreamResponse> events;
