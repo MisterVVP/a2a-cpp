@@ -201,7 +201,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   const std::string limit_value = std::to_string(requested_rows);
   const std::string offset_value = std::to_string(offset.value());
   std::string sql =
-      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY config_id ASC";
+      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY created_sequence ASC";
   std::vector<const char*> values;
   values.push_back(task_id_value.c_str());
   if (page_size != 0) {
