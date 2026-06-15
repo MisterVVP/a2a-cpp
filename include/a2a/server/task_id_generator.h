@@ -59,14 +59,4 @@ class UuidV7TaskIdGenerator final : public TaskIdGenerator {
   std::uint64_t sequence_ = 0;
 };
 
-class SequentialTaskIdGenerator final : public TaskIdGenerator {
- public:
-  [[nodiscard]] core::Result<std::string> GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                         const RequestContext& context) override;
-
- private:
-  std::mutex mutex_;
-  std::uint64_t next_ = 1;
-};
-
 }  // namespace a2a::server
