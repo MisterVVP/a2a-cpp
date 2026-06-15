@@ -154,6 +154,9 @@ Transaction::~Transaction() {
 
 PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, std::size_t size)
     : connection_string_(std::move(connection_string)) {
+  if (size == 0U) {
+    throw std::invalid_argument("Postgres connection pool size must be greater than zero");
+  }
   connections_.reserve(size);
   for (std::size_t index = 0; index < size; ++index) {
     auto connection = OpenConnection();
