@@ -150,12 +150,4 @@ core::Result<std::string> UuidV7TaskIdGenerator::GenerateTaskId(const lf::a2a::v
   return result;
 }
 
-core::Result<std::string> SequentialTaskIdGenerator::GenerateTaskId(const lf::a2a::v1::SendMessageRequest& request,
-                                                                    const RequestContext& context) {
-  (void)request;
-  (void)context;
-  std::scoped_lock<std::mutex> lock(mutex_);
-  return "task-test-" + std::to_string(next_++);
-}
-
 }  // namespace a2a::server
