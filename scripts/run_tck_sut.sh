@@ -7,6 +7,7 @@ SUT_HOST=${SUT_HOST:-127.0.0.1}
 SUT_PORT=${SUT_PORT:-50061}
 SUT_ENDPOINT="${SUT_HOST}:${SUT_PORT}"
 SUT_TARGET=${SUT_TARGET:-tck_http_sut}
+SUT_STORE_BACKEND=${A2A_TCK_STORE_BACKEND:-inmemory}
 SUT_PID_FILE=${SUT_PID_FILE:-"${BUILD_DIR}/tck-sut.pid"}
 SUT_LOG_FILE=${SUT_LOG_FILE:-"${BUILD_DIR}/tck-sut.log"}
 READY_TIMEOUT_SECS=${READY_TIMEOUT_SECS:-30}
@@ -18,37 +19,32 @@ if [[ -f "${SUT_PID_FILE}" ]] && kill -0 "$(cat "${SUT_PID_FILE}")" 2>/dev/null;
   exit 1
 fi
 
-python3 - "${ROOT_DIR}/tests/interop/tck_http_sut.cpp" <<'PY'
-import pathlib
-import sys
+CMAKE_ARGS=(
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo
+)
 
-path = pathlib.Path(sys.argv[1])
-source = path.read_text()
-old = '''    auto response = rest.Handle(request);
-    if (target == "/rpc" || target == "/") {
-      request.target = "/rpc";
-      response = jsonrpc.Handle(request);
-    }
-'''
-new = '''    const auto query_start = target.find('?');
-    std::string normalized_target =
-        query_start == std::string::npos ? target : target.substr(0, query_start);
-    while (normalized_target.size() > 1 && normalized_target.back() == '/') {
-      normalized_target.pop_back();
-    }
-    const bool has_jsonrpc_envelope = body.find("\\\"jsonrpc\\\"") != std::string::npos;
+case "${SUT_STORE_BACKEND}" in
+  inmemory)
+    CMAKE_ARGS+=(
+      -DA2A_ENABLE_POSTGRES_STORE=OFF
+    )
+    ;;
+  postgres)
+    if [[ -z "${A2A_TCK_POSTGRES_DSN:-}" ]]; then
+      echo "[tck-sut] A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres." >&2
+      exit 1
+    fi
+    CMAKE_ARGS+=(
+      -DA2A_ENABLE_POSTGRES_STORE=ON
+    )
+    ;;
+  *)
+    echo "[tck-sut] Unsupported A2A_TCK_STORE_BACKEND: ${SUT_STORE_BACKEND}" >&2
+    exit 1
+    ;;
+esac
 
-    auto response = rest.Handle(request);
-    if (has_jsonrpc_envelope || normalized_target == "/rpc" || normalized_target == "/") {
-      request.target = "/rpc";
-      response = jsonrpc.Handle(request);
-    }
-'''
-if old in source and new not in source:
-    path.write_text(source.replace(old, new))
-PY
-
-cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -G Ninja "${CMAKE_ARGS[@]}"
 cmake --build "${BUILD_DIR}" --parallel --target "${SUT_TARGET}"
 
 SUT_BIN="${BUILD_DIR}/tests/${SUT_TARGET}"
@@ -57,7 +53,7 @@ if [[ ! -x "${SUT_BIN}" ]]; then
   exit 1
 fi
 
-echo "[tck-sut] Starting ${SUT_TARGET} on ${SUT_ENDPOINT}"
+echo "[tck-sut] Starting ${SUT_TARGET} with ${SUT_STORE_BACKEND} store on ${SUT_ENDPOINT}"
 "${SUT_BIN}" "${SUT_ENDPOINT}" >"${SUT_LOG_FILE}" 2>&1 &
 SUT_PID=$!
 echo "${SUT_PID}" > "${SUT_PID_FILE}"

@@ -8,7 +8,7 @@ It supports core A2A workflows including client/server APIs, discovery, REST/JSO
 
 ## TCK Compliance Level
 
-[MUST](https://github.com/a2aproject/a2a-tck/blob/1.0-dev/README.md#compatibility-levels) (validated in CI via `--level must --transport grpc,jsonrpc,http_json` in `.github/workflows/tck.yml`).
+[MUST](https://github.com/a2aproject/a2a-tck/blob/main/README.md#compatibility-levels) (validated in CI via `--level must --transport grpc,jsonrpc,http_json` in `.github/workflows/tck.yml`).
 
 ## Documentation
 

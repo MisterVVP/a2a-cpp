@@ -51,10 +51,4 @@ void BM_UuidV7TaskIdGenerator_GenerateMultiThreaded(benchmark::State& state) {
 }
 BENCHMARK(BM_UuidV7TaskIdGenerator_GenerateMultiThreaded)->Threads(BenchmarkThreadCount());
 
-void BM_SequentialTaskIdGenerator_Generate(benchmark::State& state) {
-  a2a::server::SequentialTaskIdGenerator generator;
-  RunTaskIdGeneratorBenchmark(state, generator);
-}
-BENCHMARK(BM_SequentialTaskIdGenerator_Generate);
-
 }  // namespace

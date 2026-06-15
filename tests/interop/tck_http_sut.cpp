@@ -19,6 +19,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -26,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "a2a/core/agent_card_builder.h"
@@ -35,6 +37,7 @@
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server.h"
 #include "a2a/server/socket_utils.h"
+#include "a2a/server/stores/store_factory.h"
 #include "a2a/server/transport_mux.h"
 #include "example_support.h"
 
@@ -44,11 +47,57 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
+constexpr std::string_view kPostgresBackend = "postgres";
+constexpr std::string_view kInMemoryBackend = "inmemory";
+constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
+constexpr const char* kPostgresDsnEnv = "A2A_TCK_POSTGRES_DSN";
+constexpr const char* kPostgresSchemaEnv = "A2A_TCK_POSTGRES_SCHEMA";
+constexpr std::string_view kDefaultPostgresSchema = "public";
+constexpr std::string_view kMissingPostgresDsnMessage =
+    "A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres";
+constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TCK_STORE_BACKEND: ";
 volatile std::sig_atomic_t kKeepRunning = 1;
 
 void SignalHandler(int signal_number) {
   (void)signal_number;
   kKeepRunning = 0;
+}
+
+[[nodiscard]] std::string_view GetEnvironmentValue(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) {
+    return {};
+  }
+  return value;
+}
+
+[[nodiscard]] a2a::core::Result<a2a::server::stores::StoreBundle> CreateStoreBundleFromEnvironment() {
+  const std::string_view backend = GetEnvironmentValue(kStoreBackendEnv);
+  if (backend.empty() || backend == kInMemoryBackend) {
+    const a2a::server::stores::InMemoryStoreFactory factory;
+    return factory.CreateStoreBundle();
+  }
+
+  if (backend != kPostgresBackend) {
+    std::string message;
+    message.reserve(kUnsupportedStoreBackendMessage.size() + backend.size());
+    message.append(kUnsupportedStoreBackendMessage);
+    message.append(backend);
+    return a2a::core::Error::Validation(std::move(message));
+  }
+
+  const std::string_view dsn = GetEnvironmentValue(kPostgresDsnEnv);
+  if (dsn.empty()) {
+    return a2a::core::Error::Validation(std::string{kMissingPostgresDsnMessage});
+  }
+
+  const std::string_view schema = GetEnvironmentValue(kPostgresSchemaEnv);
+  a2a::server::stores::PostgresStoreOptions options{
+      .connection_string = std::string{dsn},
+      .schema = std::string{schema.empty() ? kDefaultPostgresSchema : schema},
+      .auto_create_schema = true};
+  const a2a::server::stores::PostgresStoreFactory factory(std::move(options));
+  return factory.CreateStoreBundle();
 }
 
 class SocketTransport final : public a2a::server::HttpByteTransport {
@@ -98,7 +147,16 @@ int main(int argc, char** argv) {
                         .WithPushNotifications(true)
                         .Build();
 
-  a2a::examples::ExampleExecutor executor;
+  auto store_bundle = CreateStoreBundleFromEnvironment();
+  if (!store_bundle.ok()) {
+    std::cerr << store_bundle.error().message() << '\n';
+    return 1;
+  }
+
+  a2a::examples::ExampleExecutorOptions executor_options;
+  executor_options.task_store = store_bundle.value().task_store.get();
+  executor_options.push_store = store_bundle.value().push_store.get();
+  a2a::examples::ExampleExecutor executor(std::move(executor_options));
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport grpc(&dispatcher);
   a2a::server::RestServerTransport rest(

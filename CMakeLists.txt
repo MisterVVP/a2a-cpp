@@ -14,6 +14,7 @@ option(A2A_ENABLE_TESTING "Build tests" ON)
 option(A2A_BUILD_EXAMPLES "Build example binaries" ON)
 option(A2A_BUILD_BENCHMARKS "Build a2a-cpp performance benchmarks" OFF)
 option(A2A_ENABLE_LIBCURL "Build default libcurl-backed outbound HTTP support" ON)
+option(A2A_ENABLE_POSTGRES_STORE "Build PostgreSQL-backed A2A stores" OFF)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)

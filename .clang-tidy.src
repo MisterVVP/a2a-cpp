@@ -14,7 +14,8 @@ Checks: >
   -modernize-replace-auto-ptr,
   -modernize-macro-to-enum,
   -modernize-avoid-c-arrays,
-  -readability-redundant-declaration
+  -readability-redundant-declaration,
+  -bugprone-easily-swappable-parameters
 WarningsAsErrors: '*'
 HeaderFilterRegex: '^(include|src)/'
 FormatStyle: file

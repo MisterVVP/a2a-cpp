@@ -7,6 +7,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +17,7 @@
 
 #include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/response_builders.h"
 #include "a2a/core/task_states.h"
@@ -41,7 +43,19 @@ constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
 
+[[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
+  return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
+         *error.protocol_code() == std::string(core::protocol_codes::kTaskNotFound);
+}
+
 }  // namespace
+
+struct ExampleExecutorOptions final {
+  server::TaskStore* task_store = nullptr;
+  server::PushNotificationStore* push_store = nullptr;
+  server::PushNotificationDeliveryClient* push_delivery = nullptr;
+  std::shared_ptr<server::TaskIdGenerator> task_id_generator;
+};
 
 class SequenceStreamSession final : public server::ServerStreamSession {
  public:
@@ -61,6 +75,21 @@ class SequenceStreamSession final : public server::ServerStreamSession {
 
 class ExampleExecutor final : public server::AgentExecutor {
  public:
+  explicit ExampleExecutor(ExampleExecutorOptions options = {})
+      : owned_task_store_(options.task_store == nullptr ? std::make_unique<server::InMemoryTaskStore>() : nullptr),
+        owned_push_store_(options.push_store == nullptr ? std::make_unique<server::InMemoryPushNotificationStore>()
+                                                        : nullptr),
+        owned_push_delivery_(options.push_delivery == nullptr
+                                 ? std::make_unique<server::HttpPushNotificationDeliveryClient>()
+                                 : nullptr),
+        task_store_(options.task_store == nullptr ? owned_task_store_.get() : options.task_store),
+        push_store_(options.push_store == nullptr ? owned_push_store_.get() : options.push_store),
+        push_delivery_(options.push_delivery == nullptr ? owned_push_delivery_.get() : options.push_delivery),
+        task_id_generator_(options.task_id_generator == nullptr ? std::make_shared<server::UuidV7TaskIdGenerator>()
+                                                                : std::move(options.task_id_generator)),
+        lifecycle_(task_store_, task_id_generator_),
+        push_notifications_(task_store_, push_store_, push_delivery_) {}
+
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                              server::RequestContext& context) override {
     if (!request.has_message() || request.message().parts_size() == 0) {
@@ -72,9 +101,14 @@ class ExampleExecutor final : public server::AgentExecutor {
     }
     std::string task_id = task_id_result.value();
 
-    auto existing = store_.Get(task_id);
-    lf::a2a::v1::Task task = existing.ok() ? existing.value() : lf::a2a::v1::Task{};
-    if (!existing.ok()) {
+    auto existing = task_store_->Get(task_id);
+    lf::a2a::v1::Task task;
+    if (existing.ok()) {
+      task = existing.value();
+    } else {
+      if (!IsTaskNotFoundError(existing.error())) {
+        return existing.error();
+      }
       ordered_ids_.push_back(task_id);
     }
     task.set_id(task_id);
@@ -189,23 +223,32 @@ class ExampleExecutor final : public server::AgentExecutor {
       }
     }
 
-    if (!store_.Get(task_id).ok()) {
-      lf::a2a::v1::Task task;
+    auto existing = task_store_->Get(task_id);
+    lf::a2a::v1::Task task;
+    if (existing.ok()) {
+      task = existing.value();
+    } else {
+      if (!IsTaskNotFoundError(existing.error())) {
+        return existing.error();
+      }
       task.set_id(task_id);
       task.set_context_id("ctx-" + task_id);
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-      (void)lifecycle_.CreateOrUpdateTask(task);
+      const auto stored = lifecycle_.CreateOrUpdateTask(task);
+      if (!stored.ok()) {
+        return stored.error();
+      }
       ordered_ids_.push_back(task_id);
     }
 
     lf::a2a::v1::StreamResponse working;
     working.mutable_status_update()->set_task_id(task_id);
-    working.mutable_status_update()->set_context_id(store_.Get(task_id).value().context_id());
+    working.mutable_status_update()->set_context_id(task.context_id());
     working.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
 
     lf::a2a::v1::StreamResponse completed;
     completed.mutable_status_update()->set_task_id(task_id);
-    completed.mutable_status_update()->set_context_id(store_.Get(task_id).value().context_id());
+    completed.mutable_status_update()->set_context_id(task.context_id());
     completed.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
 
     std::vector<lf::a2a::v1::StreamResponse> events;
@@ -219,7 +262,7 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                           server::RequestContext& context) override {
     (void)context;
-    auto task_result = store_.Get(request.id());
+    auto task_result = task_store_->Get(request.id());
     if (!task_result.ok()) return task_result.error();
     lf::a2a::v1::Task task = task_result.value();
     if (request.has_history_length())
@@ -233,7 +276,7 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<server::ListTasksResponse> ListTasks(const server::ListTasksRequest& request,
                                                     server::RequestContext& context) override {
     (void)context;
-    return store_.List(request);
+    return task_store_->List(request);
   }
 
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
@@ -276,12 +319,15 @@ class ExampleExecutor final : public server::AgentExecutor {
 
  private:
   std::vector<std::string> ordered_ids_;
-  server::InMemoryTaskStore store_;
-  server::InMemoryPushNotificationStore push_store_;
-  server::HttpPushNotificationDeliveryClient push_delivery_;
-  std::shared_ptr<server::TaskIdGenerator> task_id_generator_{std::make_shared<server::SequentialTaskIdGenerator>()};
-  server::TaskLifecycleService lifecycle_{&store_, task_id_generator_};
-  server::PushNotificationService push_notifications_{&store_, &push_store_, &push_delivery_};
+  std::unique_ptr<server::InMemoryTaskStore> owned_task_store_;
+  std::unique_ptr<server::InMemoryPushNotificationStore> owned_push_store_;
+  std::unique_ptr<server::HttpPushNotificationDeliveryClient> owned_push_delivery_;
+  server::TaskStore* task_store_ = nullptr;
+  server::PushNotificationStore* push_store_ = nullptr;
+  server::PushNotificationDeliveryClient* push_delivery_ = nullptr;
+  std::shared_ptr<server::TaskIdGenerator> task_id_generator_;
+  server::TaskLifecycleService lifecycle_;
+  server::PushNotificationService push_notifications_;
   std::uint64_t status_timestamp_counter_ = 0;
 };
 

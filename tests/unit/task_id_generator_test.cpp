@@ -1,11 +1,105 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <regex>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <unordered_set>
+#include <vector>
 
 #include "a2a/server/server.h"
 
 namespace {
+
+constexpr std::string_view kTaskPrefix = "task-";
+constexpr std::string_view kFirstMessageId = "m-1";
+constexpr std::string_view kUuidPatternText = R"(^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$)";
+constexpr std::size_t kTaskPrefixSize = 5;
+constexpr std::size_t kUuidVersionOffset = 14;
+constexpr std::size_t kUuidVariantOffset = 19;
+constexpr std::size_t kManyGeneratedIdCount = 2048;
+constexpr std::size_t kThreadCount = 4;
+constexpr std::size_t kIdsPerThread = 512;
+constexpr std::size_t kMaxThreadGenerationAttempts = kIdsPerThread * 8;
+constexpr std::chrono::milliseconds kOverflowRetryDelay{1};
+constexpr char kUuidV7VersionNibble = '7';
+constexpr std::string_view kRfcCompatibleVariantNibbles = "89ab";
+
+[[nodiscard]] bool HasTaskPrefix(const std::string& task_id) { return task_id.starts_with(kTaskPrefix); }
+
+[[nodiscard]] std::string UuidBody(const std::string& task_id) { return task_id.substr(kTaskPrefixSize); }
+
+[[nodiscard]] bool HasRfcCompatibleVariant(char nibble) {
+  return kRfcCompatibleVariantNibbles.find(nibble) != std::string_view::npos;
+}
+
+void ExpectUuidV7TaskIdShape(const std::string& task_id) {
+  EXPECT_TRUE(HasTaskPrefix(task_id));
+
+  const std::string uuid = UuidBody(task_id);
+  const std::regex uuid_pattern{std::string(kUuidPatternText)};
+  EXPECT_TRUE(std::regex_match(uuid, uuid_pattern));
+  EXPECT_EQ(uuid[kUuidVersionOffset], kUuidV7VersionNibble);
+  EXPECT_TRUE(HasRfcCompatibleVariant(uuid[kUuidVariantOffset]));
+}
+
+[[nodiscard]] lf::a2a::v1::SendMessageRequest MakeRequest() {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_message_id(std::string(kFirstMessageId));
+  return request;
+}
+
+void GenerateThreadTaskIds(a2a::server::UuidV7TaskIdGenerator* generator,
+                           const lf::a2a::v1::SendMessageRequest* request, const a2a::server::RequestContext* context,
+                           std::vector<std::string>* ids, std::atomic_bool* failed_generation) {
+  ids->reserve(kIdsPerThread);
+  std::size_t attempts = 0;
+  while (ids->size() < kIdsPerThread && attempts < kMaxThreadGenerationAttempts) {
+    ++attempts;
+    const auto result = generator->GenerateTaskId(*request, *context);
+    if (!result.ok()) {
+      std::this_thread::sleep_for(kOverflowRetryDelay);
+      continue;
+    }
+    ids->push_back(result.value());
+  }
+  if (ids->size() != kIdsPerThread) {
+    *failed_generation = true;
+  }
+}
+
+void StartGeneratorThreads(a2a::server::UuidV7TaskIdGenerator* generator,
+                           const lf::a2a::v1::SendMessageRequest* request, const a2a::server::RequestContext* context,
+                           std::vector<std::vector<std::string>>* thread_ids, std::vector<std::thread>* threads,
+                           std::atomic_bool* failed_generation) {
+  threads->reserve(kThreadCount);
+  for (std::size_t thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+    threads->emplace_back(GenerateThreadTaskIds, generator, request, context, &(*thread_ids)[thread_index],
+                          failed_generation);
+  }
+}
+
+void JoinGeneratorThreads(std::vector<std::thread>* threads) {
+  for (auto& thread : *threads) {
+    thread.join();
+  }
+}
+
+void ExpectThreadIdsUniqueAndValid(const std::vector<std::vector<std::string>>& thread_ids) {
+  std::unordered_set<std::string> generated_ids;
+  generated_ids.reserve(kThreadCount * kIdsPerThread);
+  for (const auto& ids : thread_ids) {
+    ASSERT_EQ(ids.size(), kIdsPerThread);
+    for (const auto& task_id : ids) {
+      ExpectUuidV7TaskIdShape(task_id);
+      EXPECT_TRUE(generated_ids.insert(task_id).second);
+    }
+  }
+}
 
 class FailingTaskIdGenerator final : public a2a::server::TaskIdGenerator {
  public:
@@ -19,8 +113,7 @@ class FailingTaskIdGenerator final : public a2a::server::TaskIdGenerator {
 
 TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesPrefixedUuidV7AndUniqueValues) {
   a2a::server::UuidV7TaskIdGenerator generator;
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_message_id("m-1");
+  const lf::a2a::v1::SendMessageRequest request = MakeRequest();
   a2a::server::RequestContext context;
 
   const auto first = generator.GenerateTaskId(request, context);
@@ -28,22 +121,43 @@ TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesPrefixedUuidV7AndUniqueValues) 
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(second.ok());
   EXPECT_NE(first.value(), second.value());
-  EXPECT_TRUE(first.value().rfind("task-", 0) == 0);
-
-  const std::string uuid = first.value().substr(5);
-  const std::regex uuid_pattern("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
-  EXPECT_TRUE(std::regex_match(uuid, uuid_pattern));
-  EXPECT_EQ(uuid[14], '7');
-  EXPECT_TRUE(uuid[19] == '8' || uuid[19] == '9' || uuid[19] == 'a' || uuid[19] == 'b');
+  ExpectUuidV7TaskIdShape(first.value());
   EXPECT_LT(first.value(), second.value());
 }
 
-TEST(TaskIdGeneratorTest, SequentialTaskIdGeneratorIsDeterministic) {
-  a2a::server::SequentialTaskIdGenerator generator;
-  lf::a2a::v1::SendMessageRequest request;
+TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesManyUniqueMonotonicValues) {
+  a2a::server::UuidV7TaskIdGenerator generator;
+  const lf::a2a::v1::SendMessageRequest request = MakeRequest();
   a2a::server::RequestContext context;
-  EXPECT_EQ(generator.GenerateTaskId(request, context).value(), "task-test-1");
-  EXPECT_EQ(generator.GenerateTaskId(request, context).value(), "task-test-2");
+  std::unordered_set<std::string> generated_ids;
+  generated_ids.reserve(kManyGeneratedIdCount);
+
+  std::string previous_id;
+  for (std::size_t id_index = 0; id_index < kManyGeneratedIdCount; ++id_index) {
+    const auto result = generator.GenerateTaskId(request, context);
+    ASSERT_TRUE(result.ok());
+    ExpectUuidV7TaskIdShape(result.value());
+    EXPECT_TRUE(generated_ids.insert(result.value()).second);
+    if (!previous_id.empty()) {
+      EXPECT_LT(previous_id, result.value());
+    }
+    previous_id = result.value();
+  }
+}
+
+TEST(TaskIdGeneratorTest, UuidV7GeneratorProducesUniqueValuesAcrossThreads) {
+  a2a::server::UuidV7TaskIdGenerator generator;
+  const lf::a2a::v1::SendMessageRequest request = MakeRequest();
+  a2a::server::RequestContext context;
+  std::atomic_bool failed_generation = false;
+  std::vector<std::vector<std::string>> thread_ids(kThreadCount);
+  std::vector<std::thread> threads;
+
+  StartGeneratorThreads(&generator, &request, &context, &thread_ids, &threads, &failed_generation);
+  JoinGeneratorThreads(&threads);
+
+  ASSERT_FALSE(failed_generation);
+  ExpectThreadIdsUniqueAndValid(thread_ids);
 }
 
 TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdValidatesAndPropagatesErrors) {
