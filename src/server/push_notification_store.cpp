@@ -184,10 +184,9 @@ core::Result<void> InMemoryPushNotificationStore::Delete(std::string_view task_i
   const int config_index = config_it->second;
   auto* configs = task_configs.list_response.mutable_configs();
   const int last_index = configs->size() - 1;
-  if (config_index != last_index) {
-    const std::string moved_id = configs->Get(last_index).id();
-    configs->SwapElements(config_index, last_index);
-    task_configs.config_indices[moved_id] = config_index;
+  for (int index = config_index; index < last_index; ++index) {
+    configs->SwapElements(index, index + 1);
+    task_configs.config_indices[configs->Get(index).id()] = index;
   }
   configs->RemoveLast();
   task_configs.config_indices.erase(config_it);
