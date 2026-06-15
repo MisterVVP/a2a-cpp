@@ -71,45 +71,6 @@ void SignalHandler(int signal_number) {
   return value;
 }
 
-[[nodiscard]] std::string NormalizeRequestPath(std::string_view target) {
-  const auto query_start = target.find('?');
-  std::string path(target.substr(0, query_start));
-  if (path.empty()) {
-    path = "/";
-  }
-  if (path.front() != '/') {
-    path.insert(path.begin(), '/');
-  }
-  while (path.size() > 1 && path.back() == '/') {
-    path.pop_back();
-  }
-  return path;
-}
-
-[[nodiscard]] bool LooksLikeJsonRpcEnvelope(std::string_view body) {
-  const auto first_non_space = body.find_first_not_of(" \t\r\n");
-  if (first_non_space == std::string_view::npos || body[first_non_space] != '{') {
-    return false;
-  }
-  return body.find("\"jsonrpc\"") != std::string_view::npos && body.find("\"method\"") != std::string_view::npos;
-}
-
-[[nodiscard]] bool IsJsonRpcEnvelopePostedToRestBase(const a2a::server::HttpServerRequest& request) {
-  return request.method == "POST" && NormalizeRequestPath(request.target) == "/a2a" &&
-         LooksLikeJsonRpcEnvelope(request.body);
-}
-
-[[nodiscard]] a2a::core::Result<a2a::server::HttpServerResponse> RouteTckRequest(
-    const a2a::server::HttpServerRequest& request, const a2a::server::TransportMux& mux,
-    const a2a::server::JsonRpcServerTransport& jsonrpc) {
-  if (!IsJsonRpcEnvelopePostedToRestBase(request)) {
-    return mux.RouteRequest(request);
-  }
-  auto jsonrpc_request = request;
-  jsonrpc_request.target = "/rpc";
-  return jsonrpc.Handle(jsonrpc_request);
-}
-
 [[nodiscard]] a2a::core::Result<a2a::server::stores::StoreBundle> CreateStoreBundleFromEnvironment() {
   const std::string_view backend = GetEnvironmentValue(kStoreBackendEnv);
   if (backend.empty() || backend == kInMemoryBackend) {
@@ -258,7 +219,7 @@ int main(int argc, char** argv) {
     }
 
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = RouteTckRequest(request, mux, jsonrpc);
+    auto response = mux.RouteRequest(request);
     if (response.ok()) {
       (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
     }
