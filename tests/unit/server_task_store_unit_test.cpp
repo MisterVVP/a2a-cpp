@@ -3,13 +3,23 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include "a2a/server/server.h"
+#include "a2a/server/request_context.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_history.h"
+#include "a2a/server/tasks/task_lifecycle_service.h"
+#include "a2a/server/tasks/task_ordering.h"
+#include "a2a/server/tasks/task_store.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace {
 
@@ -241,7 +251,7 @@ TEST(InMemoryTaskStoreUnitTest, EmitsStructuredTelemetryForDedupedRetries) {
   EXPECT_EQ(snapshot.dedupe_dropped_by_fingerprint_without_message_id, 0U);
   ASSERT_EQ(sink->events.size(), 1U);
   EXPECT_EQ(sink->events.front().task_id, kTaskId);
-  EXPECT_EQ(sink->events.front().message_id, "telemetry-1");
+  EXPECT_EQ(sink->events.front().message_id(), "telemetry-1");
 }
 
 TEST(InMemoryTaskStoreUnitTest, HandlesOutOfOrderAndMixedReplayScenarios) {
