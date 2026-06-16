@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <mutex>
 #include <ranges>
 #include <shared_mutex>
 #include <utility>
