@@ -5,9 +5,12 @@
 
 #include <future>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace {
 
