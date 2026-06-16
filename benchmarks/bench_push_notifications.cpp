@@ -12,6 +12,7 @@
 #include "a2a/server/push_notification_delivery.h"
 #include "a2a/server/push_notification_service.h"
 #include "a2a/server/push_notification_store.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
 #include "bench_common.h"
 
 namespace {
@@ -36,7 +37,8 @@ std::string BuildIndexedId(std::string_view prefix, std::size_t index) {
 class BenchmarkDeliveryClient final : public a2a::server::PushNotificationDeliveryClient {
  public:
   a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(const a2a::server::PushDeliveryRequest& request) override {
-    benchmark::DoNotOptimize(request);
+    const auto* request_ptr = &request;
+    benchmark::DoNotOptimize(request_ptr);
     return a2a::server::PushDeliveryResult{.http_status = kHttpNoContentStatus, .error_message = {}};
   }
 };
