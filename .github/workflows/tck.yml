@@ -69,6 +69,9 @@ jobs:
           TCK_LOG_DIR: tck-artifacts/logs/inmemory
         run: ./scripts/run_tck_mandatory.sh
 
+      - name: Verify in-memory TCK report has no gaps
+        run: python3 scripts/summarize_tck_report.py tck-artifacts/reports/inmemory/compatibility.json --require-zero-gaps
+
       - name: Stop deterministic in-memory SUT
         if: always()
         run: ./scripts/stop_tck_sut.sh
@@ -88,6 +91,9 @@ jobs:
           TCK_REPORT_DIR: tck-artifacts/reports/postgres
           TCK_LOG_DIR: tck-artifacts/logs/postgres
         run: ./scripts/run_tck_mandatory.sh
+
+      - name: Verify PostgreSQL TCK report has no gaps
+        run: python3 scripts/summarize_tck_report.py tck-artifacts/reports/postgres/compatibility.json --require-zero-gaps
 
       - name: Stop deterministic PostgreSQL SUT
         if: always()
