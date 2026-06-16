@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "a2a/server/task_id_generator.h"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -13,7 +15,6 @@
 #include <vector>
 
 #include "a2a/server/request_context.h"
-#include "a2a/server/task_id_generator.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "a2a/server/tasks/task_lifecycle_service.h"
 #include "a2a/v1/a2a.pb.h"
