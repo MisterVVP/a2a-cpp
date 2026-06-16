@@ -5,7 +5,10 @@
 #include <memory>
 #include <string>
 
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_history.h"
+#include "a2a/server/tasks/task_store.h"
 #include "bench_common.h"
 
 namespace {
