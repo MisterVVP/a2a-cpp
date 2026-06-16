@@ -8,7 +8,11 @@
 #include <string_view>
 #include <utility>
 
-#include "a2a/server/server.h"
+#include "a2a/server/request_context.h"
+#include "a2a/server/task_id_generator.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_store.h"
+#include "a2a/v1/a2a.pb.h"
 #include "example_support.h"
 
 namespace {
