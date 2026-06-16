@@ -3,7 +3,7 @@
 This repository exposes transport-agnostic interceptors at two layers:
 
 - `a2a::client::A2AClient` interceptors in `include/a2a/client/client.h`
-- `a2a::server::Dispatcher` interceptors in `include/a2a/server/server.h`
+- `a2a::server::Dispatcher` interceptors in `include/a2a/server/server_interceptor.h`
 
 ## Client hook contract
 

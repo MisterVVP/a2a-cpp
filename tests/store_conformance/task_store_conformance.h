@@ -5,10 +5,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_store.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace a2a::tests::store_conformance {
 

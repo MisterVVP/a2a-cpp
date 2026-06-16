@@ -5,7 +5,10 @@
 #include <memory>
 #include <string>
 
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_history.h"
+#include "a2a/server/tasks/task_store.h"
 #include "bench_common.h"
 
 namespace {
@@ -13,7 +16,7 @@ namespace {
 std::unique_ptr<a2a::server::InMemoryTaskStore> BuildStore(std::size_t count, std::size_t history_count = 1) {
   auto store = std::make_unique<a2a::server::InMemoryTaskStore>();
   for (std::size_t index = 0; index < count; ++index) {
-    const auto result = store->CreateOrUpdate(a2a::bench::BuildTask("task-" + std::to_string(index), history_count));
+    auto result = store->CreateOrUpdate(a2a::bench::BuildTask("task-" + std::to_string(index), history_count));
     benchmark::DoNotOptimize(result);
   }
   return store;
@@ -58,7 +61,7 @@ void BM_TaskStore_AppendTaskHistory_NoDuplicate(benchmark::State& state) {
   for (auto _ : state) {
     state.PauseTiming();
     a2a::server::InMemoryTaskStore store;
-    const auto create = store.CreateOrUpdate(a2a::bench::BuildTask());
+    auto create = store.CreateOrUpdate(a2a::bench::BuildTask());
     auto message = a2a::bench::BuildMessage("append-message-" + std::to_string(index));
     ++index;
     benchmark::DoNotOptimize(create);
@@ -72,7 +75,7 @@ BENCHMARK(BM_TaskStore_AppendTaskHistory_NoDuplicate);
 
 void BM_TaskStore_AppendTaskHistory_DuplicateMessageId(benchmark::State& state) {
   auto store = std::make_unique<a2a::server::InMemoryTaskStore>();
-  const auto create = store->CreateOrUpdate(a2a::bench::BuildTask());
+  auto create = store->CreateOrUpdate(a2a::bench::BuildTask());
   benchmark::DoNotOptimize(create);
   const auto message = a2a::bench::BuildMessage("message-history-0");
   for (auto _ : state) {
@@ -85,10 +88,10 @@ BENCHMARK(BM_TaskStore_AppendTaskHistory_DuplicateMessageId);
 
 void BM_TaskStore_AppendTaskHistory_DuplicateFingerprint(benchmark::State& state) {
   auto store = std::make_unique<a2a::server::InMemoryTaskStore>();
-  const auto create = store->CreateOrUpdate(a2a::bench::BuildTask());
+  auto create = store->CreateOrUpdate(a2a::bench::BuildTask());
   benchmark::DoNotOptimize(create);
   auto message = a2a::bench::BuildMessage("", a2a::bench::kTaskId, a2a::bench::kContextId);
-  const auto first =
+  auto first =
       store->AppendTaskHistory(a2a::bench::kTaskId, message, a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
   benchmark::DoNotOptimize(first);
   for (auto _ : state) {

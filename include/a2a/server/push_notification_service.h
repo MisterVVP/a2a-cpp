@@ -8,7 +8,7 @@
 #include "a2a/core/result.h"
 #include "a2a/server/push_notification_delivery.h"
 #include "a2a/server/push_notification_store.h"
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/task_store.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {

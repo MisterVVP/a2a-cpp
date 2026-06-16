@@ -16,8 +16,12 @@
 #include "a2a/core/protojson.h"
 #include "a2a/core/result.h"
 #include "a2a/core/version.h"
+#include "a2a/server/agent_executor.h"
+#include "a2a/server/request_context.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
+#include "a2a/server/rest_transport.h"
+#include "a2a/server/server_stream_session.h"
+#include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::bench {

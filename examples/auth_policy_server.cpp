@@ -3,8 +3,8 @@
 
 #include <iostream>
 
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
 #include "example_support.h"
 
 int main() {

@@ -6,8 +6,8 @@
 
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
 #include "example_support.h"
 
 class LoggingInterceptor final : public a2a::client::ClientInterceptor {

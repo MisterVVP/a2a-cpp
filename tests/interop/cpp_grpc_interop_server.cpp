@@ -12,8 +12,15 @@
 #include <thread>
 #include <vector>
 
+#include "a2a/server/agent_executor.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
-#include "a2a/server/server.h"
+#include "a2a/server/request_context.h"
+#include "a2a/server/server_stream_session.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_store.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace {
 class StreamSession final : public a2a::server::ServerStreamSession {

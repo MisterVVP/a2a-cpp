@@ -10,7 +10,7 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/server/push_notification_service.h"
 #include "a2a/server/push_notification_store.h"
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
 
 namespace {
 

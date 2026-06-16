@@ -6,8 +6,8 @@
 
 #include "a2a/client/client.h"
 #include "a2a/client/json_rpc_transport.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/json_rpc_server_transport.h"
-#include "a2a/server/server.h"
 #include "example_support.h"
 
 int main() {

@@ -3,7 +3,11 @@
 
 #include <gtest/gtest.h>
 
-#include "a2a/server/server.h"
+#include <utility>
+
+#include "a2a/server/request_context.h"
+#include "a2a/server/server_stream_session.h"
+#include "a2a/v1/a2a.pb.h"
 #include "example_support.h"
 
 namespace {

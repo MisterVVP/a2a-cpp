@@ -9,7 +9,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "a2a/server/server.h"
+#include "a2a/server/dispatcher.h"
+#include "a2a/server/request_context.h"
 #include "a2a/v1/a2a.grpc.pb.h"
 
 namespace a2a::server {

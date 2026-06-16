@@ -10,8 +10,9 @@
 #include <unordered_map>
 
 #include "a2a/core/result.h"
+#include "a2a/server/dispatch_types.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
 
 namespace a2a::server {
 

@@ -2,7 +2,9 @@
 
 #include <benchmark/benchmark.h>
 
+#include <cstddef>
 #include <string>
+#include <string_view>
 
 #include "a2a/server/transport_mux.h"
 #include "bench_common.h"

@@ -6,15 +6,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/protojson.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
+#include "a2a/v1/a2a.pb.h"
 #include "example_support.h"
 
 namespace {

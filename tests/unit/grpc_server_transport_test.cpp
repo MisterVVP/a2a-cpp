@@ -11,14 +11,22 @@
 #endif
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/version.h"
-#include "a2a/server/server.h"
+#include "a2a/server/agent_executor.h"
+#include "a2a/server/dispatcher.h"
+#include "a2a/server/request_context.h"
+#include "a2a/server/server_stream_session.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace {
 constexpr int64_t kStatusTimestampSeconds = 10;

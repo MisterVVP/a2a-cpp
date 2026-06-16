@@ -7,8 +7,9 @@
 
 #include "../support/rest_server_test_utils.h"
 #include "a2a/core/protojson.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/json_rpc_server_transport.h"
-#include "a2a/server/server.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
 
 namespace {
 
