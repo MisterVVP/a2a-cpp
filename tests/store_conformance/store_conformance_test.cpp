@@ -8,10 +8,14 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "a2a/core/error.h"
 #include "a2a/server/push_notification_store.h"
-#include "a2a/server/server.h"
+#include "a2a/server/stores/store_factory.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_store.h"
 #include "store_conformance/push_notification_store_conformance.h"
 #include "store_conformance/task_store_conformance.h"
 
