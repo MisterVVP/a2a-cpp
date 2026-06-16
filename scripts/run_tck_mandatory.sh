@@ -28,8 +28,10 @@ copy_tck_reports() {
   fi
   local report
   for report in compatibility.json compatibility.html tck_report.html junitreport.xml; do
-    if [[ -f "${source_dir}/${report}" ]]; then
-      cp "${source_dir}/${report}" "${TCK_REPORT_DIR_ABS}/${report}"
+    local source_file="${source_dir}/${report}"
+    local target_file="${TCK_REPORT_DIR_ABS}/${report}"
+    if [[ -f "${source_file}" && "$(realpath "${source_file}")" != "$(realpath -m "${target_file}")" ]]; then
+      cp "${source_file}" "${target_file}"
     fi
   done
 }
