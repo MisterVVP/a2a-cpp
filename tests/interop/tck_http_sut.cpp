@@ -31,11 +31,11 @@
 #include <vector>
 
 #include "a2a/core/agent_card_builder.h"
+#include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
 #include "a2a/server/socket_utils.h"
 #include "a2a/server/stores/store_factory.h"
 #include "a2a/server/transport_mux.h"
@@ -77,7 +77,6 @@ void SignalHandler(int signal_number) {
     const a2a::server::stores::InMemoryStoreFactory factory;
     return factory.CreateStoreBundle();
   }
-
   if (backend != kPostgresBackend) {
     std::string message;
     message.reserve(kUnsupportedStoreBackendMessage.size() + backend.size());
