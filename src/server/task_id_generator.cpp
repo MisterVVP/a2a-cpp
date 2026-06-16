@@ -34,7 +34,7 @@
 #endif
 
 #include "a2a/core/error.h"
-#include "a2a/server/server.h"
+#include "a2a/server/request_context.h"
 
 namespace a2a::server {
 namespace {

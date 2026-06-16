@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "a2a/core/result.h"
-#include "a2a/server/server.h"
+#include "a2a/server/dispatch_types.h"
+#include "a2a/server/dispatcher.h"
+#include "a2a/server/request_context.h"
 
 namespace a2a::server {
 

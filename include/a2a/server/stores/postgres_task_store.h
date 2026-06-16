@@ -7,9 +7,9 @@
 #include <mutex>
 #include <string_view>
 
-#include "a2a/server/server.h"
 #include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/store_factory.h"
+#include "a2a/server/tasks/task_store.h"
 
 namespace a2a::server::stores {
 
