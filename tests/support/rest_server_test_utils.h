@@ -11,8 +11,13 @@
 
 #include "a2a/core/agent_card_builder.h"
 #include "a2a/core/error.h"
-#include "a2a/server/rest_server_transport.h"
-#include "a2a/server/server.h"
+#include "a2a/server/agent_executor.h"
+#include "a2a/server/request_context.h"
+#include "a2a/server/rest_transport.h"
+#include "a2a/server/server_stream_session.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/server/tasks/task_store.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace a2a::tests::support {
 
@@ -79,12 +84,12 @@ inline lf::a2a::v1::AgentCard BuildJsonRpcAgentCard(std::string_view name, std::
 
 inline server::HttpServerRequest MakeHttpRequest(std::string method, std::string target,
                                                  std::unordered_map<std::string, std::string> headers = {},
-                                                 std::string body = {}, std::string remote_address = {}) {
+                                                 std::string body = {}, std::string remote = {}) {
   return server::HttpServerRequest{.method = std::move(method),
                                    .target = std::move(target),
                                    .headers = std::move(headers),
                                    .body = std::move(body),
-                                   .remote_address = std::move(remote_address)};
+                                   .remote_address = std::move(remote)};
 }
 
 }  // namespace a2a::tests::support
