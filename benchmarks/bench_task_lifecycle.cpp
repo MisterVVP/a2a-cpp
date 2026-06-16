@@ -5,8 +5,10 @@
 #include <memory>
 #include <string>
 
-#include "a2a/server/server.h"
+#include "a2a/server/request_context.h"
 #include "a2a/server/task_id_generator.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+#include "a2a/server/tasks/task_lifecycle_service.h"
 #include "bench_common.h"
 
 namespace {
