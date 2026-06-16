@@ -4,12 +4,21 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "a2a/core/error.h"
-#include "a2a/server/server.h"
+#include "a2a/server/agent_executor.h"
+#include "a2a/server/dispatch_types.h"
+#include "a2a/server/dispatcher.h"
+#include "a2a/server/request_context.h"
+#include "a2a/server/server_interceptor.h"
+#include "a2a/server/server_stream_session.h"
+#include "a2a/server/tasks/list_tasks.h"
+#include "a2a/v1/a2a.pb.h"
 
 namespace {
 
