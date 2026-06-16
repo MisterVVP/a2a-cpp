@@ -251,7 +251,7 @@ TEST(InMemoryTaskStoreUnitTest, EmitsStructuredTelemetryForDedupedRetries) {
   EXPECT_EQ(snapshot.dedupe_dropped_by_fingerprint_without_message_id, 0U);
   ASSERT_EQ(sink->events.size(), 1U);
   EXPECT_EQ(sink->events.front().task_id, kTaskId);
-  EXPECT_EQ(sink->events.front().message_id(), "telemetry-1");
+  EXPECT_EQ(sink->events.front().message_id, "telemetry-1");
 }
 
 TEST(InMemoryTaskStoreUnitTest, HandlesOutOfOrderAndMixedReplayScenarios) {
