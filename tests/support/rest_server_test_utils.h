@@ -13,7 +13,7 @@
 #include "a2a/core/error.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/request_context.h"
-#include "a2a/server/rest_transport.h"
+#include "a2a/server/rest_server_transport.h"
 #include "a2a/server/server_stream_session.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/server/tasks/task_store.h"
