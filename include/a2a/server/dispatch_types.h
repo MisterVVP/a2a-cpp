@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <variant>
 
 #include "a2a/server/server_stream_session.h"
