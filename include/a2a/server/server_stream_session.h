@@ -16,6 +16,7 @@ class ServerStreamSession {
 
   [[nodiscard]] virtual core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() = 0;
   [[nodiscard]] virtual bool IsLive() const noexcept { return false; }
+  virtual void Cancel() noexcept {}
 };
 
 }  // namespace a2a::server
