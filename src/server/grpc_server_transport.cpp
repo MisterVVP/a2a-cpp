@@ -320,9 +320,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   return ::grpc::Status::OK;
 }
 
-::grpc::Status GrpcServerTransport::SendStreamingMessage(
-    ::grpc::ServerContext* context, const lf::a2a::v1::SendMessageRequest* request,
-    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+::grpc::Status GrpcServerTransport::SendStreamingMessage(::grpc::ServerContext* context,
+                                                         const lf::a2a::v1::SendMessageRequest* request,
+                                                         ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
   if (request == nullptr || writer == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
   }
