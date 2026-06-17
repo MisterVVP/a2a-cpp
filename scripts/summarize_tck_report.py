@@ -362,8 +362,8 @@ def main() -> int:
         report = json.load(report_file)
 
     gaps: dict[str, RequirementGap] = {}
-    has_per_requirement = collect_per_requirement(report, gaps)
-    walk(report, gaps, collect_aggregates=not has_per_requirement)
+    collect_per_requirement(report, gaps)
+    walk(report, gaps, collect_aggregates=True)
     failed = sorted((gap for gap in gaps.values() if gap.status == "failed"), key=lambda gap: gap.requirement_id)
     skipped = sorted((gap for gap in gaps.values() if gap.status == "skipped"), key=lambda gap: gap.requirement_id)
     not_tested = sorted((gap for gap in gaps.values() if gap.status == "not-tested"), key=lambda gap: gap.requirement_id)
