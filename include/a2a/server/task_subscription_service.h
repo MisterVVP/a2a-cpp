@@ -43,6 +43,7 @@ class TaskSubscriptionService final {
 
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override;
     [[nodiscard]] bool IsLive() const noexcept override { return true; }
+    void Cancel() noexcept override;
 
    private:
     TaskSubscriptionService* owner_ = nullptr;
