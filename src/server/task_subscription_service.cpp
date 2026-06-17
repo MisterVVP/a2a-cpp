@@ -3,7 +3,6 @@
 
 #include "a2a/server/task_subscription_service.h"
 
-#include <algorithm>
 #include <optional>
 #include <utility>
 
@@ -11,7 +10,7 @@ namespace a2a::server {
 
 TaskSubscriptionService::SubscriptionSession::SubscriptionSession(TaskSubscriptionService* owner,
                                                                   std::shared_ptr<SubscriberState> state)
-    : owner_(owner), state_(std::move(state)) {}
+    : owner_(owner), state_(std::move(state)), coroutine_(TaskSubscriptionService::RunSubscription(state_)) {}
 
 TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() {
   if (owner_ != nullptr && state_ != nullptr) {
@@ -20,14 +19,11 @@ TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() {
 }
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
-  std::unique_lock lock(state_->mutex);
-  state_->ready.wait(lock, [this] { return state_->closed || !state_->events.empty(); });
-  if (state_->events.empty()) {
-    return std::optional<lf::a2a::v1::StreamResponse>{};
+  try {
+    return coroutine_.Next();
+  } catch (const std::exception& ex) {
+    return core::Error::Internal(ex.what());
   }
-  lf::a2a::v1::StreamResponse event = std::move(state_->events.front());
-  state_->events.pop_front();
-  return std::optional<lf::a2a::v1::StreamResponse>{std::move(event)};
 }
 
 core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
@@ -37,13 +33,12 @@ core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subs
 
   auto state = std::make_shared<SubscriberState>();
   state->task_id = task.id();
-  state->events.push_back(BuildCurrentTaskEvent(task));
+  state->current_task = task;
 
   {
     std::lock_guard lock(mutex_);
     subscribers_by_task_id_[state->task_id].push_back(state);
   }
-  state->ready.notify_one();
 
   return std::unique_ptr<ServerStreamSession>(std::make_unique<SubscriptionSession>(this, std::move(state)));
 }
@@ -57,16 +52,14 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
       return;
     }
     auto& weak_subscribers = iterator->second;
-    weak_subscribers.erase(std::remove_if(weak_subscribers.begin(), weak_subscribers.end(),
-                                          [&subscribers](const std::weak_ptr<SubscriberState>& weak_subscriber) {
-                                            auto subscriber = weak_subscriber.lock();
-                                            if (subscriber == nullptr) {
-                                              return true;
-                                            }
-                                            subscribers.push_back(std::move(subscriber));
-                                            return false;
-                                          }),
-                           weak_subscribers.end());
+    std::erase_if(weak_subscribers, [&subscribers](const std::weak_ptr<SubscriberState>& weak_subscriber) {
+      auto subscriber = weak_subscriber.lock();
+      if (subscriber == nullptr) {
+        return true;
+      }
+      subscribers.push_back(std::move(subscriber));
+      return false;
+    });
     if (weak_subscribers.empty() || core::IsTerminalTaskState(task.status().state())) {
       subscribers_by_task_id_.erase(iterator);
     }
@@ -99,14 +92,40 @@ void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<SubscriberS
     return;
   }
   auto& subscribers = iterator->second;
-  subscribers.erase(std::remove_if(subscribers.begin(), subscribers.end(),
-                                   [&state](const std::weak_ptr<SubscriberState>& weak_subscriber) {
-                                     auto subscriber = weak_subscriber.lock();
-                                     return subscriber == nullptr || subscriber == state;
-                                   }),
-                    subscribers.end());
+  std::erase_if(subscribers, [&state](const std::weak_ptr<SubscriberState>& weak_subscriber) {
+    auto subscriber = weak_subscriber.lock();
+    return subscriber == nullptr || subscriber == state;
+  });
   if (subscribers.empty()) {
     subscribers_by_task_id_.erase(iterator);
+  }
+}
+
+std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPublishedEvent(
+    const std::shared_ptr<SubscriberState>& state) {
+  std::unique_lock lock(state->mutex);
+  state->ready.wait(lock, [&state] { return state->closed || !state->events.empty(); });
+  if (state->events.empty()) {
+    return std::nullopt;
+  }
+  lf::a2a::v1::StreamResponse event = std::move(state->events.front());
+  state->events.pop_front();
+  return event;
+}
+
+StreamResponseCoroutine TaskSubscriptionService::RunSubscription(std::shared_ptr<SubscriberState> state) {
+  co_yield BuildCurrentTaskEvent(state->current_task);
+  while (true) {
+    auto event = WaitForPublishedEvent(state);
+    if (!event.has_value()) {
+      co_return;
+    }
+    const bool is_terminal =
+        event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
+    co_yield std::move(event.value());
+    if (is_terminal) {
+      co_return;
+    }
   }
 }
 

@@ -22,8 +22,12 @@ lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
 lf::a2a::v1::StreamResponse NextRequired(a2a::server::ServerStreamSession* session) {
   auto next = session->Next();
   EXPECT_TRUE(next.ok());
-  EXPECT_TRUE(next.value().has_value());
-  return next.value().value();
+  const auto& maybe_event = next.value();
+  EXPECT_TRUE(maybe_event.has_value());
+  if (!maybe_event.has_value()) {
+    return {};
+  }
+  return *maybe_event;
 }
 
 void ExpectClosed(a2a::server::ServerStreamSession* session) {

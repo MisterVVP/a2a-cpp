@@ -460,10 +460,11 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     if (!next.ok()) {
       return ToGrpcStatus(next.error(), context);
     }
-    if (!next.value().has_value()) {
+    const auto& maybe_event = next.value();
+    if (!maybe_event.has_value()) {
       break;
     }
-    if (!writer->Write(next.value().value())) {
+    if (!writer->Write(maybe_event.value())) {
       return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
     }
   }

@@ -308,6 +308,9 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
     if (!append.ok()) {
       return append.error();
     }
+    if (session->IsLive()) {
+      break;
+    }
   }
 
   return response;
@@ -331,6 +334,9 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
     const auto append = AppendSseEvent(response, event.value());
     if (!append.ok()) {
       return append.error();
+    }
+    if (session->IsLive()) {
+      break;
     }
   }
 

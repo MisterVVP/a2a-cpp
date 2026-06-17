@@ -7,6 +7,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "a2a/core/result.h"
 #include "a2a/core/task_states.h"
 #include "a2a/server/server_stream_session.h"
+#include "a2a/server/stream_response_coroutine.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
@@ -27,6 +29,7 @@ class TaskSubscriptionService final {
  private:
   struct SubscriberState final {
     std::string task_id;
+    lf::a2a::v1::Task current_task;
     std::deque<lf::a2a::v1::StreamResponse> events;
     bool closed = false;
     std::mutex mutex;
@@ -39,13 +42,18 @@ class TaskSubscriptionService final {
     ~SubscriptionSession() override;
 
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override;
+    [[nodiscard]] bool IsLive() const noexcept override { return true; }
 
    private:
     TaskSubscriptionService* owner_ = nullptr;
     std::shared_ptr<SubscriberState> state_;
+    StreamResponseCoroutine coroutine_;
   };
 
   void RemoveSubscriber(const std::shared_ptr<SubscriberState>& state);
+  static std::optional<lf::a2a::v1::StreamResponse> WaitForPublishedEvent(
+      const std::shared_ptr<SubscriberState>& state);
+  static StreamResponseCoroutine RunSubscription(std::shared_ptr<SubscriberState> state);
   static lf::a2a::v1::StreamResponse BuildCurrentTaskEvent(const lf::a2a::v1::Task& task);
   static lf::a2a::v1::StreamResponse BuildStatusUpdateEvent(const lf::a2a::v1::Task& task);
 
