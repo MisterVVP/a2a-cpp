@@ -4,9 +4,12 @@
 #include "a2a/server/grpc_server_transport.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "a2a/core/error.h"
@@ -166,6 +169,43 @@ constexpr std::uint64_t kVarintContinuationBit = 0x80U;
 constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
 constexpr std::uint32_t kVarintShiftBits = 7U;
 constexpr int32_t kMaxListTasksPageSize = 100;
+constexpr std::chrono::milliseconds kStreamCancellationPollInterval{50};
+
+class StreamCancellationWatcher final {
+ public:
+  StreamCancellationWatcher(::grpc::ServerContext* context, ServerStreamSession* stream)
+      : context_(context), stream_(stream) {
+    if (context_ != nullptr && stream_ != nullptr && stream_->IsLive()) {
+      worker_ = std::thread([this] { Watch(); });
+    }
+  }
+
+  StreamCancellationWatcher(const StreamCancellationWatcher&) = delete;
+  StreamCancellationWatcher& operator=(const StreamCancellationWatcher&) = delete;
+
+  ~StreamCancellationWatcher() {
+    stopped_.store(true, std::memory_order_release);
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+ private:
+  void Watch() {
+    while (!stopped_.load(std::memory_order_acquire)) {
+      if (context_->IsCancelled()) {
+        stream_->Cancel();
+        return;
+      }
+      std::this_thread::sleep_for(kStreamCancellationPollInterval);
+    }
+  }
+
+  ::grpc::ServerContext* context_ = nullptr;
+  ServerStreamSession* stream_ = nullptr;
+  std::atomic_bool stopped_ = false;
+  std::thread worker_;
+};
 
 void AppendVarint(std::string& out, std::uint64_t value) {
   while (value >= kVarintContinuationBit) {
@@ -280,9 +320,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   return ::grpc::Status::OK;
 }
 
-::grpc::Status GrpcServerTransport::SendStreamingMessage(::grpc::ServerContext* context,
-                                                         const lf::a2a::v1::SendMessageRequest* request,
-                                                         ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+::grpc::Status GrpcServerTransport::SendStreamingMessage(
+    ::grpc::ServerContext* context, const lf::a2a::v1::SendMessageRequest* request,
+    ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
   if (request == nullptr || writer == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
   }
@@ -303,6 +343,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendStreamingMessage);
   }
 
+  StreamCancellationWatcher cancellation_watcher(context, stream->get());
   while (!context->IsCancelled()) {
     const auto next = (*stream)->Next();
     if (!next.ok()) {
@@ -313,6 +354,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
       break;
     }
     if (!writer->Write(*event)) {
+      (*stream)->Cancel();
       break;
     }
   }
@@ -455,6 +497,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   if (stream == nullptr || *stream == nullptr) {
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
   }
+
+  StreamCancellationWatcher cancellation_watcher(context, stream->get());
   while (!context->IsCancelled()) {
     const auto next = (*stream)->Next();
     if (!next.ok()) {
@@ -465,6 +509,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
       break;
     }
     if (!writer->Write(maybe_event.value())) {
+      (*stream)->Cancel();
       return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
     }
   }
