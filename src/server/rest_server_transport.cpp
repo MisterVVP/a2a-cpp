@@ -490,6 +490,7 @@ HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& respo
   http_response.headers = response.headers;
   http_response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   http_response.body = response.body;
+  http_response.stream_writer = response.stream_writer;
   return http_response;
 }
 

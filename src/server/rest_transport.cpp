@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "a2a/core/error.h"
@@ -20,6 +21,7 @@
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
+#include "a2a/server/http_adapter.h"
 
 namespace a2a::server {
 namespace {
@@ -285,6 +287,21 @@ core::Result<void> AppendSseEvent(RestResponse& response, const lf::a2a::v1::Str
   return {};
 }
 
+core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view chunk) {
+  std::size_t sent = 0;
+  while (sent < chunk.size()) {
+    const auto written = transport.Write(chunk.data() + sent, chunk.size() - sent);
+    if (!written.ok()) {
+      return written.error();
+    }
+    if (written.value() == 0) {
+      return core::Error::Internal("Transport write returned zero bytes while streaming SSE");
+    }
+    sent += written.value();
+  }
+  return {};
+}
+
 core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
     return core::Error::Internal("Streaming response session is missing");
@@ -314,25 +331,39 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
 }
 
 core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {
+  if (session == nullptr) {
+    return core::Error::Internal("Subscription response session is missing");
+  }
+
   RestResponse response;
   response.http_status = kHttpOk;
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
-
-  while (true) {
-    auto next = session->Next();
-    if (!next.ok()) {
-      return next.error();
+  response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
+                               HttpByteTransport& transport) -> core::Result<void> {
+    if (*session == nullptr) {
+      return core::Error::Internal("Subscription response session is missing");
     }
-    const auto& event = next.value();
-    if (!event.has_value()) {
-      break;
+    while (true) {
+      auto next = (*session)->Next();
+      if (!next.ok()) {
+        return next.error();
+      }
+      const auto& event = next.value();
+      if (!event.has_value()) {
+        return {};
+      }
+      RestResponse chunk;
+      const auto append = AppendSseEvent(chunk, event.value());
+      if (!append.ok()) {
+        return append.error();
+      }
+      const auto written = WriteSseChunk(transport, chunk.body);
+      if (!written.ok()) {
+        return written.error();
+      }
     }
-    const auto append = AppendSseEvent(response, event.value());
-    if (!append.ok()) {
-      return append.error();
-    }
-  }
+  };
 
   return response;
 }

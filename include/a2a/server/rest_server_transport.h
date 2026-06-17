@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,6 +15,8 @@
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
+
+class HttpByteTransport;
 
 struct HttpServerRequest final {
   std::string method;
@@ -28,6 +31,7 @@ struct HttpServerResponse final {
   int status_code = kDefaultStatusCode;
   std::unordered_map<std::string, std::string> headers;
   std::string body;
+  std::function<core::Result<void>(HttpByteTransport&)> stream_writer;
 };
 
 struct RestServerTransportOptions final {

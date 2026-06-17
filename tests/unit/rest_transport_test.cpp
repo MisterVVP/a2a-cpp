@@ -5,11 +5,49 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "a2a/server/http_adapter.h"
+
 namespace {
+
+class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
+ public:
+  [[nodiscard]] a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+    (void)buffer;
+    (void)size;
+    return a2a::core::Error::Internal("read is not used by this test transport");
+  }
+
+  [[nodiscard]] a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    body.append(buffer, size);
+    return size;
+  }
+
+  std::string body;
+};
+
+class SingleLiveEventSession final : public a2a::server::ServerStreamSession {
+ public:
+  explicit SingleLiveEventSession(lf::a2a::v1::StreamResponse event) : event_(std::move(event)) {}
+
+  [[nodiscard]] a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    if (consumed_) {
+      return std::optional<lf::a2a::v1::StreamResponse>{};
+    }
+    consumed_ = true;
+    return std::optional<lf::a2a::v1::StreamResponse>{event_};
+  }
+
+  [[nodiscard]] bool IsLive() const noexcept override { return true; }
+
+ private:
+  lf::a2a::v1::StreamResponse event_;
+  bool consumed_ = false;
+};
 
 class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -64,6 +102,17 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     task.set_id(request.id());
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
     return task;
+  }
+
+  a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SubscribeTask(
+      const lf::a2a::v1::GetTaskRequest& request, a2a::server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    lf::a2a::v1::StreamResponse event;
+    *event.mutable_task() = task.value();
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleLiveEventSession>(event));
   }
 
   std::string observed_request_id;
@@ -229,7 +278,11 @@ TEST(RestTransportTest, SupportsSubscribeEndpointForNonTerminalTask) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 200);
   EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
-  EXPECT_NE(response.value().body.find("task-77"), std::string::npos);
+  ASSERT_TRUE(response.value().stream_writer);
+  RecordingHttpTransport output;
+  const auto write = response.value().stream_writer(output);
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(output.body.find("task-77"), std::string::npos);
 }
 
 }  // namespace

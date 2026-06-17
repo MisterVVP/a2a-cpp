@@ -6,10 +6,15 @@
 #include <google/protobuf/struct.pb.h>
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/task_states.h"
+#include "a2a/server/http_adapter.h"
 
 namespace {
 
@@ -18,6 +23,22 @@ constexpr int kJsonRpcInternalError = -32603;
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kA2aVersionHeader = "A2A-Version";
 constexpr std::string_view kA2aVersionValue = "1.0";
+
+class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
+ public:
+  [[nodiscard]] a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+    (void)buffer;
+    (void)size;
+    return a2a::core::Error::Internal("read is not used by this test transport");
+  }
+
+  [[nodiscard]] a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    body.append(buffer, size);
+    return size;
+  }
+
+  std::string body;
+};
 constexpr std::string_view kJsonContentTypeHeader = "Content-Type";
 constexpr std::string_view kTextPlainContentType = "text/plain";
 constexpr std::string_view kApplicationJsonWithCharset = "Application/JSON; charset=utf-8";
@@ -30,7 +51,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
   class SingleEventSession final : public a2a::server::ServerStreamSession {
    public:
-    explicit SingleEventSession(lf::a2a::v1::StreamResponse event) : event_(std::move(event)) {}
+    explicit SingleEventSession(lf::a2a::v1::StreamResponse event, bool is_live = false)
+        : event_(std::move(event)), is_live_(is_live) {}
 
     a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
       if (consumed_) {
@@ -40,8 +62,11 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
       return std::optional<lf::a2a::v1::StreamResponse>(event_);
     }
 
+    [[nodiscard]] bool IsLive() const noexcept override { return is_live_; }
+
    private:
     lf::a2a::v1::StreamResponse event_;
+    bool is_live_ = false;
     bool consumed_ = false;
   };
 
@@ -63,6 +88,20 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
     return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(event));
+  }
+
+  a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SubscribeTask(
+      const lf::a2a::v1::GetTaskRequest& request, a2a::server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    if (a2a::core::IsTerminalTaskState(task.value().status().state())) {
+      return a2a::core::protocol_errors::UnsupportedOperation("task is already terminal");
+    }
+    lf::a2a::v1::StreamResponse event;
+    *event.mutable_task() = task.value();
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(event, true));
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -478,7 +517,11 @@ TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTa
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
-  EXPECT_NE(response.value().body.find("task-sub"), std::string::npos);
+  ASSERT_TRUE(response.value().stream_writer);
+  RecordingHttpTransport output;
+  const auto write = response.value().stream_writer(output);
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(output.body.find("task-sub"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, SubscribeToTaskRejectsTerminalTask) {

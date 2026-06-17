@@ -24,6 +24,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
+#include "a2a/server/http_adapter.h"
 
 namespace a2a::server {
 namespace {
@@ -659,6 +660,66 @@ core::Result<void> AppendSseJsonRpcEvent(std::string& body, const google::protob
   return {};
 }
 
+core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view chunk) {
+  std::size_t sent = 0;
+  while (sent < chunk.size()) {
+    const auto written = transport.Write(chunk.data() + sent, chunk.size() - sent);
+    if (!written.ok()) {
+      return written.error();
+    }
+    if (written.value() == 0) {
+      return core::Error::Internal("Transport write returned zero bytes while streaming JSON-RPC SSE");
+    }
+    sent += written.value();
+  }
+  return {};
+}
+
+core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
+                                          const std::shared_ptr<std::unique_ptr<ServerStreamSession>>& session,
+                                          HttpByteTransport& transport) {
+  if (*session == nullptr) {
+    return core::Error::Internal("JSON-RPC streaming session is missing");
+  }
+  while (true) {
+    auto next = (*session)->Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    const auto& event = next.value();
+    if (!event.has_value()) {
+      return {};
+    }
+    std::string chunk;
+    const auto append = AppendSseJsonRpcEvent(chunk, id, event.value_or(lf::a2a::v1::StreamResponse{}));
+    if (!append.ok()) {
+      return append.error();
+    }
+    const auto written = WriteSseChunk(transport, chunk);
+    if (!written.ok()) {
+      return written.error();
+    }
+  }
+}
+
+core::Result<void> BufferJsonRpcSseEvents(const google::protobuf::Value& id, ServerStreamSession& session,
+                                          std::string& body) {
+  while (true) {
+    auto next = session.Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    const auto& event = next.value();
+    if (!event.has_value()) {
+      return {};
+    }
+    const auto append = AppendSseJsonRpcEvent(body, id, event.value_or(lf::a2a::v1::StreamResponse{}));
+    if (!append.ok()) {
+      return append.error();
+    }
+  }
+}
+
 core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value& id,
                                                   std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
@@ -671,19 +732,17 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
   response.headers["Cache-Control"] = "no-cache";
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
 
-  while (true) {
-    auto next = session->Next();
-    if (!next.ok()) {
-      return next.error();
-    }
-    const auto& event = next.value();
-    if (!event.has_value()) {
-      break;
-    }
-    const auto append = AppendSseJsonRpcEvent(response.body, id, event.value_or(lf::a2a::v1::StreamResponse{}));
-    if (!append.ok()) {
-      return append.error();
-    }
+  if (session->IsLive()) {
+    auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
+    response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
+      return StreamJsonRpcSseEvents(id, session_holder, transport);
+    };
+    return response;
+  }
+
+  const auto buffered = BufferJsonRpcSseEvents(id, *session, response.body);
+  if (!buffered.ok()) {
+    return buffered.error();
   }
   return response;
 }
