@@ -12,17 +12,20 @@ TaskSubscriptionService::SubscriptionSession::SubscriptionSession(TaskSubscripti
                                                                   std::shared_ptr<SubscriberState> state)
     : owner_(owner), state_(std::move(state)), coroutine_(TaskSubscriptionService::RunSubscription(state_)) {}
 
-TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() {
-  if (owner_ != nullptr && state_ != nullptr) {
-    owner_->RemoveSubscriber(state_);
-  }
-}
+TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() { Cancel(); }
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
   try {
     return coroutine_.Next();
   } catch (const std::exception& ex) {
     return core::Error::Internal(ex.what());
+  }
+}
+
+void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
+  if (owner_ != nullptr && state_ != nullptr) {
+    owner_->RemoveSubscriber(state_);
+    owner_ = nullptr;
   }
 }
 
