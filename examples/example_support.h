@@ -51,6 +51,7 @@ constexpr std::string_view kStructuredDataKey = "key";
 constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
+constexpr std::string_view kStreamingTaskIdPrefix = "task-stream-";
 
 [[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
   return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
@@ -220,14 +221,13 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
+    (void)context;
     std::string task_id = request.has_message() ? request.message().task_id() : "";
     if (task_id.empty()) {
       if (request.has_message() && !request.message().message_id().empty()) {
-        auto task_id_result = lifecycle_.ResolveTaskIdForSendRequest(request, context);
-        if (!task_id_result.ok()) {
-          return task_id_result.error();
-        }
-        task_id = task_id_result.value();
+        task_id.reserve(kStreamingTaskIdPrefix.size() + request.message().message_id().size());
+        task_id.append(kStreamingTaskIdPrefix);
+        task_id.append(request.message().message_id());
       } else {
         task_id = "task-test-stream-default";
       }

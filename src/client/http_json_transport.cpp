@@ -584,7 +584,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
     endpoint += "?historyLength=" + std::to_string(request.history_length());
   }
 
-  return StartSseStream({.method = "GET", .endpoint = endpoint}, {}, observer, options);
+  return StartSseStream({.method = "POST", .endpoint = endpoint}, {}, observer, options);
 }
 
 core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(HttpOperation operation, std::string body,

@@ -131,7 +131,9 @@ StreamResponseCoroutine TaskSubscriptionService::RunSubscription(std::shared_ptr
 
 lf::a2a::v1::StreamResponse TaskSubscriptionService::BuildCurrentTaskEvent(const lf::a2a::v1::Task& task) {
   lf::a2a::v1::StreamResponse event;
-  *event.mutable_task() = task;
+  auto* current_task = event.mutable_task();
+  *current_task = task;
+  current_task->clear_artifacts();
   return event;
 }
 

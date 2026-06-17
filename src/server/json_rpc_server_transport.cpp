@@ -684,9 +684,6 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
     if (!append.ok()) {
       return append.error();
     }
-    if (session->IsLive()) {
-      break;
-    }
   }
   return response;
 }

@@ -10,6 +10,7 @@ namespace {
 
 constexpr std::string_view kTaskId = "subscription-task";
 constexpr std::string_view kContextId = "subscription-context";
+constexpr std::string_view kTransientArtifactId = "transient-artifact";
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -38,13 +39,16 @@ void ExpectClosed(a2a::server::ServerStreamSession* session) {
 
 TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
   a2a::server::TaskSubscriptionService service;
-  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  auto task = MakeTask(lf::a2a::v1::TASK_STATE_WORKING);
+  task.add_artifacts()->set_artifact_id(std::string(kTransientArtifactId));
+  auto subscription = service.Subscribe(task);
   ASSERT_TRUE(subscription.ok());
 
   const auto first = NextRequired(subscription.value().get());
   ASSERT_TRUE(first.has_task());
   EXPECT_EQ(first.task().id(), kTaskId);
   EXPECT_EQ(first.task().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  EXPECT_EQ(first.task().artifacts_size(), 0);
 }
 
 TEST(TaskSubscriptionServiceTest, RejectsTerminalTask) {

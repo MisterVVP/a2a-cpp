@@ -26,6 +26,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -123,6 +124,20 @@ class SocketTransport final : public a2a::server::HttpByteTransport {
   int fd_;
 };
 
+void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux) {
+  SocketTransport socket_transport(fd);
+  const a2a::server::HttpAdapter adapter;
+  auto parsed = adapter.ReadRequest(socket_transport, "localhost");
+  if (parsed.ok()) {
+    a2a::server::HttpServerRequest request = std::move(parsed.value());
+    auto response = mux.RouteRequest(request);
+    if (response.ok()) {
+      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
+    }
+  }
+  a2a::server::CloseSocketCrossPlatform(fd);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -209,20 +224,7 @@ int main(int argc, char** argv) {
     if (fd < 0) {
       continue;
     }
-    SocketTransport socket_transport(fd);
-    const a2a::server::HttpAdapter adapter;
-    auto parsed = adapter.ReadRequest(socket_transport, "localhost");
-    if (!parsed.ok()) {
-      a2a::server::CloseSocketCrossPlatform(fd);
-      continue;
-    }
-
-    a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = mux.RouteRequest(request);
-    if (response.ok()) {
-      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
-    }
-    a2a::server::CloseSocketCrossPlatform(fd);
+    std::thread(HandleHttpConnection, fd, std::cref(mux)).detach();
   }
   grpc_server->Shutdown();
   a2a::server::CloseSocketCrossPlatform(server_fd);
