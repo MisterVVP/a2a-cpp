@@ -51,7 +51,8 @@ const std::array<RestRoute, 10> kRoutes = {
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
-    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kGetTask},
+    RestRoute{
+        .method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = "POST",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
@@ -312,32 +313,25 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   return response;
 }
 
-core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task) {
-  if (core::IsTerminalTaskState(task.status().state())) {
-    return core::protocol_errors::UnsupportedOperation("task is already terminal");
-  }
-
+core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {
   RestResponse response;
   response.http_status = kHttpOk;
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
 
-  lf::a2a::v1::StreamResponse current_event;
-  *current_event.mutable_task() = task;
-  current_event.mutable_task()->clear_artifacts();
-  current_event.mutable_task()->clear_history();
-  const auto current_append = AppendSseEvent(response, current_event);
-  if (!current_append.ok()) {
-    return current_append.error();
-  }
-
-  lf::a2a::v1::StreamResponse terminal_event;
-  terminal_event.mutable_status_update()->set_task_id(task.id());
-  terminal_event.mutable_status_update()->set_context_id(task.context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-  const auto terminal_append = AppendSseEvent(response, terminal_event);
-  if (!terminal_append.ok()) {
-    return terminal_append.error();
+  while (true) {
+    auto next = session->Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    const auto& event = next.value();
+    if (!event.has_value()) {
+      break;
+    }
+    const auto append = AppendSseEvent(response, event.value());
+    if (!append.ok()) {
+      return append.error();
+    }
   }
 
   return response;
@@ -514,6 +508,14 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       }
       return BuildStreamingResponse(*payload);
     }
+    case DispatcherOperation::kSubscribeTask: {
+      auto* payload = std::get_if<std::unique_ptr<ServerStreamSession>>(&response.payload());
+      if (payload == nullptr) {
+        return InternalResponsePayloadMismatch(
+            core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
+      }
+      return BuildSubscribeResponse(*payload);
+    }
     case DispatcherOperation::kGetTask:
     case DispatcherOperation::kCancelTask: {
       const auto* payload = std::get_if<lf::a2a::v1::Task>(&response.payload());
@@ -626,19 +628,19 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
       lf::a2a::v1::GetTaskRequest get_task_request;
       get_task_request.set_id(*subscribe_task_id);
       RequestContext context = request.context;
-      const auto dispatch_response =
-          dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get_task_request}, context);
+      auto dispatch_response = dispatcher_->Dispatch(
+          {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, context);
       if (!dispatch_response.ok()) {
         return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
       }
-      const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch_response.value().payload());
-      if (task == nullptr) {
+      auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch_response.value().payload());
+      if (stream == nullptr || *stream == nullptr) {
         return BuildErrorResponse(
             core::Error::Internal(core::protocol_error_messages::ToString(
                                       core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask))
                 .WithTransport("rest"));
       }
-      const auto subscribe_response = BuildSubscribeResponse(*task);
+      const auto subscribe_response = BuildSubscribeResponse(*stream);
       if (!subscribe_response.ok()) {
         return BuildErrorResponse(subscribe_response.error().WithTransport("rest"));
       }

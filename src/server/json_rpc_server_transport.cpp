@@ -138,8 +138,11 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   if (IsSendStreamingMessageMethod(method)) {
     return DispatcherOperation::kSendStreamingMessage;
   }
-  if (IsGetTaskMethod(method) || IsSubscribeToTaskMethod(method)) {
+  if (IsGetTaskMethod(method)) {
     return DispatcherOperation::kGetTask;
+  }
+  if (IsSubscribeToTaskMethod(method)) {
+    return DispatcherOperation::kSubscribeTask;
   }
   if (IsCancelTaskMethod(method)) {
     return DispatcherOperation::kCancelTask;
@@ -478,7 +481,8 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
       dispatch_request.payload = std::move(payload.value());
       return dispatch_request;
     }
-    case DispatcherOperation::kGetTask: {
+    case DispatcherOperation::kGetTask:
+    case DispatcherOperation::kSubscribeTask: {
       auto payload = ParseProtoPayload<lf::a2a::v1::GetTaskRequest>(params);
       if (!payload.ok()) {
         return payload.error();
@@ -684,38 +688,6 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
   return response;
 }
 
-core::Result<HttpServerResponse> BuildSubscribeSseResponse(const google::protobuf::Value& id,
-                                                           const lf::a2a::v1::Task& task) {
-  if (core::IsTerminalTaskState(task.status().state())) {
-    return core::protocol_errors::UnsupportedOperation("task is already terminal");
-  }
-
-  HttpServerResponse response;
-  response.status_code = kHttpOk;
-  response.headers["Content-Type"] = "text/event-stream";
-  response.headers["Cache-Control"] = "no-cache";
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-
-  lf::a2a::v1::StreamResponse current_event;
-  *current_event.mutable_task() = task;
-  current_event.mutable_task()->clear_artifacts();
-  current_event.mutable_task()->clear_history();
-  const auto current_append = AppendSseJsonRpcEvent(response.body, id, current_event);
-  if (!current_append.ok()) {
-    return current_append.error();
-  }
-
-  lf::a2a::v1::StreamResponse terminal_event;
-  terminal_event.mutable_status_update()->set_task_id(task.id());
-  terminal_event.mutable_status_update()->set_context_id(task.context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-  const auto terminal_append = AppendSseJsonRpcEvent(response.body, id, terminal_event);
-  if (!terminal_append.ok()) {
-    return terminal_append.error();
-  }
-  return response;
-}
-
 }  // namespace
 
 JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcServerTransportOptions options)
@@ -800,15 +772,15 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   }
 
   if (is_subscribe) {
-    const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
-    if (task == nullptr) {
+    auto* session = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
+    if (session == nullptr || *session == nullptr) {
       const auto error =
           InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSubscribe)
               .WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
-    const auto sse = BuildSubscribeSseResponse(parsed.value().id.value(), *task);
+    const auto sse = BuildSseResponse(parsed.value().id.value(), *session);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
@@ -928,6 +900,7 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
       return value;
     }
     case DispatcherOperation::kSendStreamingMessage:
+    case DispatcherOperation::kSubscribeTask:
       return core::protocol_errors::InvalidAgentResponse("Streaming JSON-RPC responses must be serialized as SSE");
   }
 

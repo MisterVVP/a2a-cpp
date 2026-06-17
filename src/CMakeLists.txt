@@ -86,6 +86,7 @@ add_library(a2a_server STATIC
   server/socket_utils.cpp
   server/stores/sql_identifier.cpp
   server/task_id_generator.cpp
+  server/task_subscription_service.cpp
   server/transport_mux.cpp
   server/dispatcher.cpp
   server/request_context.cpp

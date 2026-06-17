@@ -18,6 +18,7 @@ enum class DispatcherOperation : std::uint8_t {
   kSendMessage,
   kSendStreamingMessage,
   kGetTask,
+  kSubscribeTask,
   kListTasks,
   kCancelTask,
   kCreateTaskPushNotificationConfig,

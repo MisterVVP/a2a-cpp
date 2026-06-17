@@ -1,0 +1,128 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
+
+#include "a2a/server/task_subscription_service.h"
+
+#include <algorithm>
+#include <optional>
+#include <utility>
+
+namespace a2a::server {
+
+TaskSubscriptionService::SubscriptionSession::SubscriptionSession(TaskSubscriptionService* owner,
+                                                                  std::shared_ptr<SubscriberState> state)
+    : owner_(owner), state_(std::move(state)) {}
+
+TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() {
+  if (owner_ != nullptr && state_ != nullptr) {
+    owner_->RemoveSubscriber(state_);
+  }
+}
+
+core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
+  std::unique_lock lock(state_->mutex);
+  state_->ready.wait(lock, [this] { return state_->closed || !state_->events.empty(); });
+  if (state_->events.empty()) {
+    return std::optional<lf::a2a::v1::StreamResponse>{};
+  }
+  lf::a2a::v1::StreamResponse event = std::move(state_->events.front());
+  state_->events.pop_front();
+  return std::optional<lf::a2a::v1::StreamResponse>{std::move(event)};
+}
+
+core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
+  if (core::IsTerminalTaskState(task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+
+  auto state = std::make_shared<SubscriberState>();
+  state->task_id = task.id();
+  state->events.push_back(BuildCurrentTaskEvent(task));
+
+  {
+    std::lock_guard lock(mutex_);
+    subscribers_by_task_id_[state->task_id].push_back(state);
+  }
+  state->ready.notify_one();
+
+  return std::unique_ptr<ServerStreamSession>(std::make_unique<SubscriptionSession>(this, std::move(state)));
+}
+
+void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) {
+  std::vector<std::shared_ptr<SubscriberState>> subscribers;
+  {
+    std::lock_guard lock(mutex_);
+    auto iterator = subscribers_by_task_id_.find(task.id());
+    if (iterator == subscribers_by_task_id_.end()) {
+      return;
+    }
+    auto& weak_subscribers = iterator->second;
+    weak_subscribers.erase(std::remove_if(weak_subscribers.begin(), weak_subscribers.end(),
+                                          [&subscribers](const std::weak_ptr<SubscriberState>& weak_subscriber) {
+                                            auto subscriber = weak_subscriber.lock();
+                                            if (subscriber == nullptr) {
+                                              return true;
+                                            }
+                                            subscribers.push_back(std::move(subscriber));
+                                            return false;
+                                          }),
+                           weak_subscribers.end());
+    if (weak_subscribers.empty() || core::IsTerminalTaskState(task.status().state())) {
+      subscribers_by_task_id_.erase(iterator);
+    }
+  }
+
+  lf::a2a::v1::StreamResponse event = BuildStatusUpdateEvent(task);
+  const bool close_after_event = core::IsTerminalTaskState(task.status().state());
+  for (const auto& subscriber : subscribers) {
+    {
+      std::lock_guard lock(subscriber->mutex);
+      if (!subscriber->closed) {
+        subscriber->events.push_back(event);
+        subscriber->closed = close_after_event;
+      }
+    }
+    subscriber->ready.notify_one();
+  }
+}
+
+void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<SubscriberState>& state) {
+  {
+    std::lock_guard state_lock(state->mutex);
+    state->closed = true;
+  }
+  state->ready.notify_all();
+
+  std::lock_guard lock(mutex_);
+  auto iterator = subscribers_by_task_id_.find(state->task_id);
+  if (iterator == subscribers_by_task_id_.end()) {
+    return;
+  }
+  auto& subscribers = iterator->second;
+  subscribers.erase(std::remove_if(subscribers.begin(), subscribers.end(),
+                                   [&state](const std::weak_ptr<SubscriberState>& weak_subscriber) {
+                                     auto subscriber = weak_subscriber.lock();
+                                     return subscriber == nullptr || subscriber == state;
+                                   }),
+                    subscribers.end());
+  if (subscribers.empty()) {
+    subscribers_by_task_id_.erase(iterator);
+  }
+}
+
+lf::a2a::v1::StreamResponse TaskSubscriptionService::BuildCurrentTaskEvent(const lf::a2a::v1::Task& task) {
+  lf::a2a::v1::StreamResponse event;
+  *event.mutable_task() = task;
+  return event;
+}
+
+lf::a2a::v1::StreamResponse TaskSubscriptionService::BuildStatusUpdateEvent(const lf::a2a::v1::Task& task) {
+  lf::a2a::v1::StreamResponse event;
+  auto* update = event.mutable_status_update();
+  update->set_task_id(task.id());
+  update->set_context_id(task.context_id());
+  *update->mutable_status() = task.status();
+  return event;
+}
+
+}  // namespace a2a::server

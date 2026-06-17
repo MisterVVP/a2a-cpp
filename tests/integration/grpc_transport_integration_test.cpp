@@ -24,6 +24,7 @@
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/request_context.h"
 #include "a2a/server/server_stream_session.h"
+#include "a2a/server/task_subscription_service.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/server/tasks/task_store.h"
@@ -61,6 +62,7 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     if (!saved.ok()) {
       return saved.error();
     }
+    subscriptions_.PublishTaskUpdated(task);
     lf::a2a::v1::SendMessageResponse response;
     *response.mutable_task() = task;
     return response;
@@ -81,6 +83,15 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     return store_->Get(request.id());
   }
 
+  a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SubscribeTask(
+      const lf::a2a::v1::GetTaskRequest& request, a2a::server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    return subscriptions_.Subscribe(task.value());
+  }
+
   a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
                                                               a2a::server::RequestContext& context) override {
     (void)context;
@@ -90,11 +101,16 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                   a2a::server::RequestContext& context) override {
     (void)context;
-    return store_->Cancel(request.id());
+    auto task = store_->Cancel(request.id());
+    if (task.ok()) {
+      subscriptions_.PublishTaskUpdated(task.value());
+    }
+    return task;
   }
 
  private:
   a2a::server::TaskStore* store_;
+  a2a::server::TaskSubscriptionService subscriptions_;
 };
 
 class RecordingObserver final : public a2a::client::StreamObserver {
@@ -107,6 +123,14 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   std::vector<std::string> errors;
   bool completed = false;
 };
+
+void WaitForObservedEvents(const RecordingObserver& observer, std::size_t expected_count) {
+  constexpr int kMaxPolls = 200;
+  constexpr auto kPollInterval = std::chrono::milliseconds(5);
+  for (int poll = 0; poll < kMaxPolls && observer.events.size() < expected_count; ++poll) {
+    std::this_thread::sleep_for(kPollInterval);
+  }
+}
 
 struct GrpcServerHarness final {
   a2a::server::InMemoryTaskStore store;
@@ -271,6 +295,14 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!stream.ok()) {
     return stream.error();
   }
+  WaitForObservedEvents(observer, 1U);
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(std::string(kTaskId));
+  const auto cancel_response = client->CancelTask(cancel_request);
+  if (!cancel_response.ok()) {
+    return cancel_response.error();
+  }
 
   while (stream.value()->IsActive()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -323,14 +355,24 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!first_stream.ok()) {
     return first_stream.error();
   }
-  while (first_stream.value()->IsActive()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  WaitForObservedEvents(first_observer, 1U);
 
   RecordingObserver second_observer;
   const auto second_stream = client->SubscribeTask(subscribe_request, second_observer);
   if (!second_stream.ok()) {
     return second_stream.error();
+  }
+  WaitForObservedEvents(second_observer, 1U);
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(std::string(kTaskId));
+  const auto cancel_response = client->CancelTask(cancel_request);
+  if (!cancel_response.ok()) {
+    return cancel_response.error();
+  }
+
+  while (first_stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   while (second_stream.value()->IsActive()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));

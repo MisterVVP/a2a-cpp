@@ -29,6 +29,7 @@
 #include "a2a/server/request_context.h"
 #include "a2a/server/server_stream_session.h"
 #include "a2a/server/task_id_generator.h"
+#include "a2a/server/task_subscription_service.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/server/tasks/task_history.h"
@@ -195,6 +196,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!notify.ok()) {
       return notify.error();
     }
+    subscriptions_.PublishTaskUpdated(task);
 
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
@@ -281,6 +283,15 @@ class ExampleExecutor final : public server::AgentExecutor {
     return task;
   }
 
+  core::Result<std::unique_ptr<server::ServerStreamSession>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                           server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    return subscriptions_.Subscribe(task.value());
+  }
+
   core::Result<server::ListTasksResponse> ListTasks(const server::ListTasksRequest& request,
                                                     server::RequestContext& context) override {
     (void)context;
@@ -298,6 +309,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!notify.ok()) {
       return notify.error();
     }
+    subscriptions_.PublishTaskUpdated(task.value());
     return task.value();
   }
 
@@ -336,6 +348,7 @@ class ExampleExecutor final : public server::AgentExecutor {
   std::shared_ptr<server::TaskIdGenerator> task_id_generator_;
   server::TaskLifecycleService lifecycle_;
   server::PushNotificationService push_notifications_;
+  server::TaskSubscriptionService subscriptions_;
   std::uint64_t status_timestamp_counter_ = 0;
 };
 

@@ -298,7 +298,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return ToGrpcStatus(dispatch.error(), context);
   }
 
-  auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
+  const auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
   if (stream == nullptr || !(*stream)) {
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendStreamingMessage);
   }
@@ -445,34 +445,27 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
 
   lf::a2a::v1::GetTaskRequest get_task_request;
   get_task_request.set_id(request->id());
-  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get_task_request},
-                                              request_context.value());
+  const auto dispatch = dispatcher_->Dispatch(
+      {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, request_context.value());
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
 
-  const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
-  if (task == nullptr) {
+  const auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
+  if (stream == nullptr || *stream == nullptr) {
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
   }
-  if (core::IsTerminalTaskState(task->status().state())) {
-    return ToGrpcStatus(core::protocol_errors::UnsupportedOperation("task is already terminal"), context);
-  }
-
-  lf::a2a::v1::StreamResponse current_event;
-  *current_event.mutable_task() = *task;
-  current_event.mutable_task()->clear_artifacts();
-  current_event.mutable_task()->clear_history();
-  if (!writer->Write(current_event)) {
-    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
-  }
-
-  lf::a2a::v1::StreamResponse terminal_event;
-  terminal_event.mutable_status_update()->set_task_id(task->id());
-  terminal_event.mutable_status_update()->set_context_id(task->context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-  if (!writer->Write(terminal_event)) {
-    return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+  while (!context->IsCancelled()) {
+    const auto next = (*stream)->Next();
+    if (!next.ok()) {
+      return ToGrpcStatus(next.error(), context);
+    }
+    if (!next.value().has_value()) {
+      break;
+    }
+    if (!writer->Write(next.value().value())) {
+      return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+    }
   }
 
   return ::grpc::Status::OK;
