@@ -55,7 +55,8 @@ const std::array<RestRoute, 10> kRoutes = {
     RestRoute{.method = kHttpMethodGet,
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
-    RestRoute{.method = kHttpMethodPost, .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
+    RestRoute{
+        .method = kHttpMethodPost, .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
     RestRoute{.method = kHttpMethodGet,
               .path_pattern = "/tasks/{id}:subscribe",
               .operation = DispatcherOperation::kSubscribeTask},
