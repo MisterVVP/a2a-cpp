@@ -29,8 +29,6 @@ constexpr int kHttpOk = 200;
 constexpr int kHexAlphabetOffset = 10;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
-constexpr std::string_view kTaskResourcePrefix = "/tasks/";
-constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
 
 struct ErrorBodySpec final {
   int status_code = kHttpBadRequest;
@@ -426,11 +424,8 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
     }
   }
 
-  const bool is_task_subscribe_request =
-      request.method == "GET" && path.starts_with(kTaskResourcePrefix) && path.ends_with(kTaskSubscribeSuffix);
-
   RestRequest rest_request;
-  rest_request.method = is_task_subscribe_request ? "POST" : request.method;
+  rest_request.method = request.method;
   rest_request.path = std::move(path);
   rest_request.body = request.body;
   rest_request.context.remote_address = request.remote_address.empty()
