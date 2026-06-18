@@ -312,7 +312,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
 
-  while (session->IsLive()) {
+  while (true) {
     auto next = session->Next();
     if (!next.ok()) {
       return next.error();
@@ -344,7 +344,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
     if (*session == nullptr) {
       return core::Error::Internal("Subscription response session is missing");
     }
-    while ((*session)->IsLive()) {
+    while (true) {
       auto next = (*session)->Next();
       if (!next.ok()) {
         return next.error();

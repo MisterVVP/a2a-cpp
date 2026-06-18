@@ -681,7 +681,7 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
   if (*session == nullptr) {
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
-  while ((*session)->IsLive()) {
+  while (true) {
     auto next = (*session)->Next();
     if (!next.ok()) {
       return next.error();
@@ -704,7 +704,7 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
 
 core::Result<void> BufferJsonRpcSseEvents(const google::protobuf::Value& id, ServerStreamSession& session,
                                           std::string& body) {
-  while (session.IsLive()) {
+  while (true) {
     auto next = session.Next();
     if (!next.ok()) {
       return next.error();
