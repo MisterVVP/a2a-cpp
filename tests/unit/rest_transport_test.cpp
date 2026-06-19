@@ -131,6 +131,8 @@ TEST(RestTransportTest, ExposesCentralRouteTable) {
   EXPECT_EQ(routes[2].path_pattern, "/tasks/{id}");
   EXPECT_EQ(routes[3].path_pattern, "/tasks");
   EXPECT_EQ(routes[4].path_pattern, "/tasks/{id}:cancel");
+  EXPECT_EQ(routes[5].method, "GET");
+  EXPECT_EQ(routes[5].path_pattern, "/tasks/{id}:subscribe");
   EXPECT_EQ(routes[6].path_pattern, "/tasks/{task_id}/pushNotificationConfigs");
   EXPECT_EQ(routes[7].path_pattern, "/tasks/{task_id}/pushNotificationConfigs/{id}");
 }
@@ -271,7 +273,7 @@ TEST(RestTransportTest, SupportsSubscribeEndpointForNonTerminalTask) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "POST";
+  request.method = "GET";
   request.path = "/tasks/task-77:subscribe";
 
   const auto response = transport.Handle(request);
