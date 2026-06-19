@@ -39,37 +39,32 @@ constexpr int kHttpBadGateway = 502;
 constexpr int kHttpServiceUnavailable = 503;
 constexpr int kHttpInternalServerError = 500;
 constexpr std::size_t kDecimalBase = 10;
-constexpr std::string_view kHttpMethodDelete = "DELETE";
-constexpr std::string_view kHttpMethodGet = "GET";
-constexpr std::string_view kHttpMethodPost = "POST";
 constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
 
 const std::array<RestRoute, 10> kRoutes = {
-    RestRoute{.method = kHttpMethodPost,
+    RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
-    RestRoute{.method = kHttpMethodPost,
+    RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendStreamingMessage,
               .operation = DispatcherOperation::kSendStreamingMessage},
-    RestRoute{.method = kHttpMethodGet, .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
-    RestRoute{.method = kHttpMethodGet,
+    RestRoute{.method = "GET", .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = "GET",
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
+    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
     RestRoute{
-        .method = kHttpMethodPost, .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
-    RestRoute{.method = kHttpMethodGet,
-              .path_pattern = "/tasks/{id}:subscribe",
-              .operation = DispatcherOperation::kSubscribeTask},
-    RestRoute{.method = kHttpMethodPost,
+        .method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kSubscribeTask},
+    RestRoute{.method = "POST",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
-    RestRoute{.method = kHttpMethodGet,
+    RestRoute{.method = "GET",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
               .operation = DispatcherOperation::kGetTaskPushNotificationConfig},
-    RestRoute{.method = kHttpMethodGet,
+    RestRoute{.method = "GET",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kListTaskPushNotificationConfigs},
-    RestRoute{.method = kHttpMethodDelete,
+    RestRoute{.method = "DELETE",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
               .operation = DispatcherOperation::kDeleteTaskPushNotificationConfig},
 };
@@ -368,14 +363,13 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
         return written.error();
       }
     }
-    return {};
   };
 
   return response;
 }
 
 std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& request) {
-  if (request.method != kHttpMethodPost ||
+  if (request.method != "POST" ||
       (request.path != RestEndpointPaths::kSendMessage && request.path != RestEndpointPaths::kSendStreamingMessage)) {
     return std::nullopt;
   }
@@ -393,7 +387,7 @@ std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& re
 }
 
 std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& request) {
-  if (request.method != kHttpMethodGet || request.path != RestEndpointPaths::kTaskCollection) {
+  if (request.method != "GET" || request.path != RestEndpointPaths::kTaskCollection) {
     return std::nullopt;
   }
 
@@ -425,30 +419,8 @@ std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& 
   return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
 }
 
-std::optional<DispatchRequest> BuildSubscribeTaskDispatchRequest(const RestRequest& request) {
-  if (request.method != kHttpMethodGet) {
-    return std::nullopt;
-  }
-
-  const auto task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
-  if (!task_id.has_value()) {
-    return std::nullopt;
-  }
-
-  lf::a2a::v1::GetTaskRequest payload;
-  payload.set_id(*task_id);
-  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
-    const int parsed_history_length = ParsePageSize(*history_length);
-    if (parsed_history_length < 0) {
-      return std::nullopt;
-    }
-    payload.set_history_length(parsed_history_length);
-  }
-  return DispatchRequest{.operation = DispatcherOperation::kSubscribeTask, .payload = payload};
-}
-
 std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& request) {
-  if (request.method != kHttpMethodGet) {
+  if (request.method != "GET") {
     return std::nullopt;
   }
 
@@ -470,7 +442,7 @@ std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& re
 }
 
 std::optional<DispatchRequest> BuildCancelTaskDispatchRequest(const RestRequest& request) {
-  if (request.method != kHttpMethodPost) {
+  if (request.method != "POST") {
     return std::nullopt;
   }
 
@@ -489,7 +461,7 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
   if (!path.has_value()) {
     return std::nullopt;
   }
-  if (request.method == kHttpMethodPost && path->collection) {
+  if (request.method == "POST" && path->collection) {
     lf::a2a::v1::TaskPushNotificationConfig payload;
     const auto parse = core::JsonToMessage(request.body, &payload, {.ignore_unknown_fields = true});
     if (!parse.ok()) {
@@ -498,7 +470,7 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
     payload.set_task_id(path->task_id);
     return DispatchRequest{.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = payload};
   }
-  if (request.method == kHttpMethodGet && path->collection) {
+  if (request.method == "GET" && path->collection) {
     lf::a2a::v1::ListTaskPushNotificationConfigsRequest payload;
     payload.set_task_id(path->task_id);
     if (const auto page_size = LookupQuery(request, "pageSize"); page_size.has_value()) {
@@ -509,13 +481,13 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
     }
     return DispatchRequest{.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = payload};
   }
-  if (request.method == kHttpMethodGet && !path->collection) {
+  if (request.method == "GET" && !path->collection) {
     lf::a2a::v1::GetTaskPushNotificationConfigRequest payload;
     payload.set_task_id(path->task_id);
     payload.set_id(path->config_id);
     return DispatchRequest{.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = payload};
   }
-  if (request.method == kHttpMethodDelete && !path->collection) {
+  if (request.method == "DELETE" && !path->collection) {
     lf::a2a::v1::DeleteTaskPushNotificationConfigRequest payload;
     payload.set_task_id(path->task_id);
     payload.set_id(path->config_id);
@@ -541,9 +513,6 @@ std::optional<DispatchRequest> RestTransport::BuildDispatchRequest(const RestReq
     return dispatch_request;
   }
   if (auto dispatch_request = BuildListTasksDispatchRequest(request); dispatch_request.has_value()) {
-    return dispatch_request;
-  }
-  if (auto dispatch_request = BuildSubscribeTaskDispatchRequest(request); dispatch_request.has_value()) {
     return dispatch_request;
   }
   if (auto dispatch_request = BuildGetTaskDispatchRequest(request); dispatch_request.has_value()) {
@@ -633,7 +602,6 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   auto* error_info_fields = error_info.mutable_fields();
   (*error_info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
   (*error_info_fields)["reason"].set_string_value(ErrorInfoReason(error));
-  (*error_info_fields)["domain"] = google::protobuf::Value{};
   (*error_info_fields)["domain"].set_string_value("a2a-protocol.org");
 
   const auto& transport_value = error.transport();
@@ -683,6 +651,32 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
 core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) const {
   if (dispatcher_ == nullptr) {
     return core::Error::Internal("REST transport dispatcher is not configured");
+  }
+
+  if (request.method == "POST") {
+    const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
+    if (subscribe_task_id.has_value()) {
+      lf::a2a::v1::GetTaskRequest get_task_request;
+      get_task_request.set_id(*subscribe_task_id);
+      RequestContext context = request.context;
+      auto dispatch_response = dispatcher_->Dispatch(
+          {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, context);
+      if (!dispatch_response.ok()) {
+        return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
+      }
+      auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch_response.value().payload());
+      if (stream == nullptr || *stream == nullptr) {
+        return BuildErrorResponse(
+            core::Error::Internal(core::protocol_error_messages::ToString(
+                                      core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask))
+                .WithTransport("rest"));
+      }
+      const auto subscribe_response = BuildSubscribeResponse(*stream);
+      if (!subscribe_response.ok()) {
+        return BuildErrorResponse(subscribe_response.error().WithTransport("rest"));
+      }
+      return subscribe_response.value();
+    }
   }
 
   const auto dispatch_request = BuildDispatchRequest(request);
