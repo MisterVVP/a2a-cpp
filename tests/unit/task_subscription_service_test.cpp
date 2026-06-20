@@ -11,6 +11,7 @@ namespace {
 constexpr std::string_view kTaskId = "subscription-task";
 constexpr std::string_view kContextId = "subscription-context";
 constexpr std::string_view kTransientArtifactId = "transient-artifact";
+constexpr std::string_view kTransientHistoryMessageId = "transient-history-message";
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -41,6 +42,7 @@ TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
   a2a::server::TaskSubscriptionService service;
   auto task = MakeTask(lf::a2a::v1::TASK_STATE_WORKING);
   task.add_artifacts()->set_artifact_id(std::string(kTransientArtifactId));
+  task.add_history()->set_message_id(std::string(kTransientHistoryMessageId));
   auto subscription = service.Subscribe(task);
   ASSERT_TRUE(subscription.ok());
 
@@ -49,6 +51,7 @@ TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
   EXPECT_EQ(first.task().id(), kTaskId);
   EXPECT_EQ(first.task().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
   EXPECT_EQ(first.task().artifacts_size(), 0);
+  EXPECT_EQ(first.task().history_size(), 0);
 }
 
 TEST(TaskSubscriptionServiceTest, RejectsTerminalTask) {
