@@ -18,6 +18,7 @@ namespace {
 constexpr std::string_view kGetMethod = "GET";
 constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kSubscribeTaskPath = "/tasks/task-77:subscribe";
+constexpr int kRequestedHistoryLength = 20;
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -282,6 +283,7 @@ void ExpectSubscribeEndpoint(std::string_view method) {
   a2a::server::RestRequest request;
   request.method = method;
   request.path = kSubscribeTaskPath;
+  request.query_params["historyLength"] = std::to_string(kRequestedHistoryLength);
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
@@ -292,10 +294,27 @@ void ExpectSubscribeEndpoint(std::string_view method) {
   const auto write = response.value().stream_writer(output);
   ASSERT_TRUE(write.ok()) << write.error().message();
   EXPECT_NE(output.body.find("task-77"), std::string::npos);
+  EXPECT_EQ(executor.observed_history_length, kRequestedHistoryLength);
 }
 
 TEST(RestTransportTest, SupportsGetSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kGetMethod); }
 
 TEST(RestTransportTest, SupportsPostSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kPostMethod); }
+
+TEST(RestTransportTest, RejectsMalformedSubscribeHistoryLength) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = kGetMethod;
+  request.path = kSubscribeTaskPath;
+  request.query_params["historyLength"] = "abc";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, 404);
+  EXPECT_EQ(executor.observed_history_length, -1);
+}
 
 }  // namespace
