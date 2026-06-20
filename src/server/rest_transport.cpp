@@ -56,12 +56,10 @@ const std::array<RestRoute, 11> kRoutes = {
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
-    RestRoute{.method = kGetMethod,
-              .path_pattern = kTaskSubscribePath,
-              .operation = DispatcherOperation::kSubscribeTask},
-    RestRoute{.method = kPostMethod,
-              .path_pattern = kTaskSubscribePath,
-              .operation = DispatcherOperation::kSubscribeTask},
+    RestRoute{
+        .method = kGetMethod, .path_pattern = kTaskSubscribePath, .operation = DispatcherOperation::kSubscribeTask},
+    RestRoute{
+        .method = kPostMethod, .path_pattern = kTaskSubscribePath, .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = "POST",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
