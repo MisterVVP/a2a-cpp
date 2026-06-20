@@ -70,7 +70,14 @@ jobs:
         run: ./scripts/run_tck_mandatory.sh
 
       - name: Summarize in-memory TCK report gaps
-        run: python3 scripts/summarize_tck_report.py tck-artifacts/reports/inmemory/compatibility.json
+        if: always()
+        run: |
+          report=tck-artifacts/reports/inmemory/compatibility.json
+          if [[ -f "${report}" ]]; then
+            python3 scripts/summarize_tck_report.py "${report}"
+          else
+            echo "No in-memory compatibility report was generated."
+          fi
 
       - name: Stop deterministic in-memory SUT
         if: always()
@@ -93,7 +100,14 @@ jobs:
         run: ./scripts/run_tck_mandatory.sh
 
       - name: Summarize PostgreSQL TCK report gaps
-        run: python3 scripts/summarize_tck_report.py tck-artifacts/reports/postgres/compatibility.json
+        if: always()
+        run: |
+          report=tck-artifacts/reports/postgres/compatibility.json
+          if [[ -f "${report}" ]]; then
+            python3 scripts/summarize_tck_report.py "${report}"
+          else
+            echo "No PostgreSQL compatibility report was generated."
+          fi
 
       - name: Stop deterministic PostgreSQL SUT
         if: always()
