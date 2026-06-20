@@ -25,8 +25,14 @@ class TaskSubscriptionService final {
  public:
   [[nodiscard]] core::Result<std::unique_ptr<ServerStreamSession>> Subscribe(const lf::a2a::v1::Task& task);
   void PublishTaskUpdated(const lf::a2a::v1::Task& task);
+  void Shutdown();
 
  private:
+  struct LatestTaskState final {
+    std::string context_id;
+    lf::a2a::v1::TaskStatus status;
+  };
+
   struct SubscriberState final {
     std::string task_id;
     lf::a2a::v1::Task current_task;
@@ -60,6 +66,8 @@ class TaskSubscriptionService final {
 
   std::mutex mutex_;
   std::unordered_map<std::string, std::vector<std::weak_ptr<SubscriberState>>> subscribers_by_task_id_;
+  std::unordered_map<std::string, LatestTaskState> latest_task_states_by_id_;
+  bool shutdown_ = false;
 };
 
 }  // namespace a2a::server

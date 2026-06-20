@@ -16,6 +16,7 @@ CORE_CAPABILITY_REQUIREMENT = "CORE-CAP-001"
 CARD_SIGNING_REQUIREMENT = "CARD-SIGN-001"
 STREAM_SUBSCRIPTION_REQUIREMENT = "STREAM-SUB-002"
 AGGREGATE_SKIPPED_LABEL = "aggregate-skipped"
+AGGREGATE_FAILED_LABEL = "aggregate-failed"
 JSONRPC_TRANSPORT = "jsonrpc"
 HTTP_JSON_TRANSPORT = "http_json"
 GRPC_TRANSPORT = "grpc"
@@ -52,6 +53,27 @@ class SummarizeTckReportTest(unittest.TestCase):
         self.assertIn(TERMINAL_ERROR, output)
         self.assertIn("Skipped test cases (1)", output)
         self.assertNotIn(AGGREGATE_SKIPPED_LABEL, output)
+
+    def test_empty_per_requirement_map_falls_back_to_aggregates(self) -> None:
+        report = {
+            "overall": {"passed": 9, "failed": 1, "total": 10},
+            "per_requirement": {},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            compatibility_path = Path(tmpdir) / COMPATIBILITY_FILENAME
+            compatibility_path.write_text(json.dumps(report), encoding="utf-8")
+
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), str(compatibility_path), "--require-zero-gaps"],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        output = completed.stdout + completed.stderr
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(AGGREGATE_FAILED_LABEL, output)
 
     @staticmethod
     def _compatibility_report() -> dict[str, object]:

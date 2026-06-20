@@ -30,15 +30,23 @@ void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
 }
 
 core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
-  if (core::IsTerminalTaskState(task.status().state())) {
-    return core::protocol_errors::UnsupportedOperation("task is already terminal");
-  }
-
   auto state = std::make_shared<SubscriberState>();
   state->task_id = task.id();
-  state->current_task = task;
 
   std::lock_guard lock(mutex_);
+  if (shutdown_) {
+    return core::Error::Internal("task subscription service is shut down");
+  }
+
+  state->current_task = task;
+  const auto latest = latest_task_states_by_id_.find(state->task_id);
+  if (latest != latest_task_states_by_id_.end()) {
+    state->current_task.set_context_id(latest->second.context_id);
+    *state->current_task.mutable_status() = latest->second.status;
+  }
+  if (core::IsTerminalTaskState(state->current_task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
   subscribers_by_task_id_[state->task_id].push_back(state);
 
   return std::unique_ptr<ServerStreamSession>(std::make_unique<SubscriptionSession>(this, std::move(state)));
@@ -48,6 +56,11 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
   std::vector<std::shared_ptr<SubscriberState>> subscribers;
   {
     std::lock_guard lock(mutex_);
+    if (shutdown_) {
+      return;
+    }
+    latest_task_states_by_id_.insert_or_assign(
+        task.id(), LatestTaskState{.context_id = task.context_id(), .status = task.status()});
     auto iterator = subscribers_by_task_id_.find(task.id());
     if (iterator == subscribers_by_task_id_.end()) {
       return;
@@ -77,6 +90,34 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
       }
     }
     subscriber->ready.notify_one();
+  }
+}
+
+void TaskSubscriptionService::Shutdown() {
+  std::vector<std::shared_ptr<SubscriberState>> subscribers;
+  {
+    std::lock_guard lock(mutex_);
+    if (shutdown_) {
+      return;
+    }
+    shutdown_ = true;
+    for (auto& entry : subscribers_by_task_id_) {
+      for (auto& weak_subscriber : entry.second) {
+        if (auto subscriber = weak_subscriber.lock(); subscriber != nullptr) {
+          subscribers.push_back(std::move(subscriber));
+        }
+      }
+    }
+    subscribers_by_task_id_.clear();
+    latest_task_states_by_id_.clear();
+  }
+
+  for (const auto& subscriber : subscribers) {
+    {
+      std::lock_guard lock(subscriber->mutex);
+      subscriber->closed = true;
+    }
+    subscriber->ready.notify_all();
   }
 }
 

@@ -337,6 +337,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     return push_notifications_.DeleteConfig(request);
   }
 
+  void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
+
  private:
   std::vector<std::string> ordered_ids_;
   std::unique_ptr<server::InMemoryTaskStore> owned_task_store_;

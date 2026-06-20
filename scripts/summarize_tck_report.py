@@ -228,16 +228,20 @@ def collect_per_requirement(report: Any, gaps: dict[str, RequirementGap]) -> boo
     if not isinstance(per_requirement, dict):
         return False
 
+    found_requirement = False
     for requirement_id, result in per_requirement.items():
         if not isinstance(requirement_id, str) or not isinstance(result, dict):
             continue
         status = status_from_node(result)
+        if status is None:
+            continue
+        found_requirement = True
         if status not in {"failed", "skipped", "not-tested"}:
             continue
         transport_map = result.get("transports")
         transports = transports_from_status_map(transport_map, status) or collect_transports(result, ())
         merge_gap(gaps, requirement_id, status, transports, find_error(result))
-    return True
+    return found_requirement
 
 
 def walk(

@@ -57,6 +57,26 @@ TEST(TaskSubscriptionServiceTest, RejectsTerminalTask) {
   EXPECT_FALSE(subscription.ok());
 }
 
+TEST(TaskSubscriptionServiceTest, UsesLatestPublishedTaskWhenRegisteringSubscriber) {
+  a2a::server::TaskSubscriptionService service;
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED));
+
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+
+  const auto first = NextRequired(subscription.value().get());
+  ASSERT_TRUE(first.has_task());
+  EXPECT_EQ(first.task().status().state(), lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+}
+
+TEST(TaskSubscriptionServiceTest, RejectsStaleSubscriptionAfterTerminalUpdate) {
+  a2a::server::TaskSubscriptionService service;
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));
+
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  EXPECT_FALSE(subscription.ok());
+}
+
 TEST(TaskSubscriptionServiceTest, BroadcastsUpdatesToMultipleSubscribersAndClosesOnTerminalState) {
   a2a::server::TaskSubscriptionService service;
   auto first = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
@@ -100,6 +120,18 @@ TEST(TaskSubscriptionServiceTest, RemovingOneSubscriberDoesNotAffectOthers) {
   ASSERT_TRUE(update.has_status_update());
   EXPECT_EQ(update.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
   ExpectClosed(second.value().get());
+}
+
+TEST(TaskSubscriptionServiceTest, ShutdownClosesActiveSubscriptions) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  (void)NextRequired(subscription.value().get());
+
+  service.Shutdown();
+
+  ExpectClosed(subscription.value().get());
+  EXPECT_FALSE(service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING)).ok());
 }
 
 }  // namespace
