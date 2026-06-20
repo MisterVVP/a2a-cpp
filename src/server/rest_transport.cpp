@@ -54,7 +54,7 @@ const std::array<RestRoute, 10> kRoutes = {
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
     RestRoute{
-        .method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kSubscribeTask},
+        .method = "GET", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = "POST",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
@@ -649,7 +649,7 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
     return core::Error::Internal("REST transport dispatcher is not configured");
   }
 
-  if (request.method == "POST") {
+  if (request.method == "GET") {
     const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
     if (subscribe_task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest get_task_request;
