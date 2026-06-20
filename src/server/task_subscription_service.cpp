@@ -173,6 +173,7 @@ lf::a2a::v1::StreamResponse TaskSubscriptionService::BuildCurrentTaskEvent(const
   auto* current_task = event.mutable_task();
   *current_task = task;
   current_task->clear_artifacts();
+  current_task->clear_history();
   return event;
 }
 
