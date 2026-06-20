@@ -39,9 +39,12 @@ constexpr int kHttpBadGateway = 502;
 constexpr int kHttpServiceUnavailable = 503;
 constexpr int kHttpInternalServerError = 500;
 constexpr std::size_t kDecimalBase = 10;
+constexpr std::string_view kGetMethod = "GET";
+constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
+constexpr std::string_view kTaskSubscribePath = "/tasks/{id}:subscribe";
 
-const std::array<RestRoute, 10> kRoutes = {
+const std::array<RestRoute, 11> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
@@ -54,7 +57,9 @@ const std::array<RestRoute, 10> kRoutes = {
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
     RestRoute{
-        .method = "GET", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kSubscribeTask},
+        .method = kGetMethod, .path_pattern = kTaskSubscribePath, .operation = DispatcherOperation::kSubscribeTask},
+    RestRoute{
+        .method = kPostMethod, .path_pattern = kTaskSubscribePath, .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = "POST",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
@@ -649,7 +654,7 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
     return core::Error::Internal("REST transport dispatcher is not configured");
   }
 
-  if (request.method == "GET") {
+  if (request.method == kGetMethod || request.method == kPostMethod) {
     const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
     if (subscribe_task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest get_task_request;
