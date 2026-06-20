@@ -174,6 +174,19 @@ std::optional<std::string> LookupQuery(const RestRequest& request, std::string_v
   return it->second;
 }
 
+bool ApplyHistoryLengthQuery(const RestRequest& request, lf::a2a::v1::GetTaskRequest& get_task_request) {
+  const auto history_length = LookupQuery(request, "historyLength");
+  if (!history_length.has_value()) {
+    return true;
+  }
+  const int parsed_history_length = ParsePageSize(*history_length);
+  if (parsed_history_length < 0) {
+    return false;
+  }
+  get_task_request.set_history_length(parsed_history_length);
+  return true;
+}
+
 std::string ErrorStatusName(int http_status) {
   switch (http_status) {
     case kHttpBadRequest:
@@ -432,12 +445,8 @@ std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& re
 
   lf::a2a::v1::GetTaskRequest payload;
   payload.set_id(*task_id);
-  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
-    const int parsed_history_length = ParsePageSize(*history_length);
-    if (parsed_history_length < 0) {
-      return std::nullopt;
-    }
-    payload.set_history_length(parsed_history_length);
+  if (!ApplyHistoryLengthQuery(request, payload)) {
+    return std::nullopt;
   }
   return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
 }
@@ -659,6 +668,10 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
     if (subscribe_task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest get_task_request;
       get_task_request.set_id(*subscribe_task_id);
+      if (!ApplyHistoryLengthQuery(request, get_task_request)) {
+        return BuildErrorResponse(
+            core::Error::Validation("No matching route or request was malformed").WithHttpStatus(kHttpNotFound));
+      }
       RequestContext context = request.context;
       auto dispatch_response = dispatcher_->Dispatch(
           {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, context);
