@@ -8,11 +8,16 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "a2a/server/http_adapter.h"
 
 namespace {
+
+constexpr std::string_view kGetMethod = "GET";
+constexpr std::string_view kPostMethod = "POST";
+constexpr std::string_view kSubscribeTaskPath = "/tasks/task-77:subscribe";
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -124,17 +129,19 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
 TEST(RestTransportTest, ExposesCentralRouteTable) {
   const auto& routes = a2a::server::RestTransport::Routes();
 
-  ASSERT_EQ(routes.size(), 10U);
+  ASSERT_EQ(routes.size(), 11U);
   EXPECT_EQ(routes[0].method, "POST");
   EXPECT_EQ(routes[0].path_pattern, "/message:send");
   EXPECT_EQ(routes[1].path_pattern, "/message:stream");
   EXPECT_EQ(routes[2].path_pattern, "/tasks/{id}");
   EXPECT_EQ(routes[3].path_pattern, "/tasks");
   EXPECT_EQ(routes[4].path_pattern, "/tasks/{id}:cancel");
-  EXPECT_EQ(routes[5].method, "GET");
+  EXPECT_EQ(routes[5].method, kGetMethod);
   EXPECT_EQ(routes[5].path_pattern, "/tasks/{id}:subscribe");
-  EXPECT_EQ(routes[6].path_pattern, "/tasks/{task_id}/pushNotificationConfigs");
-  EXPECT_EQ(routes[7].path_pattern, "/tasks/{task_id}/pushNotificationConfigs/{id}");
+  EXPECT_EQ(routes[6].method, kPostMethod);
+  EXPECT_EQ(routes[6].path_pattern, "/tasks/{id}:subscribe");
+  EXPECT_EQ(routes[7].path_pattern, "/tasks/{task_id}/pushNotificationConfigs");
+  EXPECT_EQ(routes[8].path_pattern, "/tasks/{task_id}/pushNotificationConfigs/{id}");
 }
 
 TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
@@ -267,14 +274,14 @@ TEST(RestTransportTest, RejectsUnsupportedPushNotificationEndpoints) {
   EXPECT_NE(response.value().body.find("PUSH_NOTIFICATION_NOT_SUPPORTED"), std::string::npos);
 }
 
-TEST(RestTransportTest, SupportsSubscribeEndpointForNonTerminalTask) {
+void ExpectSubscribeEndpoint(std::string_view method) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "GET";
-  request.path = "/tasks/task-77:subscribe";
+  request.method = method;
+  request.path = kSubscribeTaskPath;
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
@@ -286,5 +293,9 @@ TEST(RestTransportTest, SupportsSubscribeEndpointForNonTerminalTask) {
   ASSERT_TRUE(write.ok()) << write.error().message();
   EXPECT_NE(output.body.find("task-77"), std::string::npos);
 }
+
+TEST(RestTransportTest, SupportsGetSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kGetMethod); }
+
+TEST(RestTransportTest, SupportsPostSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kPostMethod); }
 
 }  // namespace
