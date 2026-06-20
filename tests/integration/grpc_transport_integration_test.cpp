@@ -8,8 +8,8 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <cstddef>
 #include <condition_variable>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
