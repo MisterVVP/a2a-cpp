@@ -30,15 +30,16 @@ void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
 }
 
 core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
+  if (core::IsTerminalTaskState(task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+
   auto state = std::make_shared<SubscriberState>();
   state->task_id = task.id();
   state->current_task = task;
-  state->closed = core::IsTerminalTaskState(task.status().state());
 
-  if (!state->closed) {
-    std::lock_guard lock(mutex_);
-    subscribers_by_task_id_[state->task_id].push_back(state);
-  }
+  std::lock_guard lock(mutex_);
+  subscribers_by_task_id_[state->task_id].push_back(state);
 
   return std::unique_ptr<ServerStreamSession>(std::make_unique<SubscriptionSession>(this, std::move(state)));
 }
