@@ -681,17 +681,15 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
   if (*session == nullptr) {
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
-  while ((*session)->IsLive()) {
-    auto next = (*session)->Next();
-    if (!next.ok()) {
-      return next.error();
-    }
+
+  auto next = (*session)->Next();
+  for (; next.ok(); next = (*session)->Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
       return {};
     }
     std::string chunk;
-    const auto append = AppendSseJsonRpcEvent(chunk, id, event.value_or(lf::a2a::v1::StreamResponse{}));
+    const auto append = AppendSseJsonRpcEvent(chunk, id, event.value());
     if (!append.ok()) {
       return append.error();
     }
@@ -700,24 +698,23 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
       return written.error();
     }
   }
+  return next.error();
 }
 
 core::Result<void> BufferJsonRpcSseEvents(const google::protobuf::Value& id, ServerStreamSession& session,
                                           std::string& body) {
-  while (session.IsLive()) {
-    auto next = session.Next();
-    if (!next.ok()) {
-      return next.error();
-    }
+  auto next = session.Next();
+  for (; next.ok(); next = session.Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
       return {};
     }
-    const auto append = AppendSseJsonRpcEvent(body, id, event.value_or(lf::a2a::v1::StreamResponse{}));
+    const auto append = AppendSseJsonRpcEvent(body, id, event.value());
     if (!append.ok()) {
       return append.error();
     }
   }
+  return next.error();
 }
 
 core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value& id,

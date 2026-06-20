@@ -118,11 +118,8 @@ std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPubli
 
 StreamResponseCoroutine TaskSubscriptionService::RunSubscription(std::shared_ptr<SubscriberState> state) {
   co_yield BuildCurrentTaskEvent(state->current_task);
-  while (true) {
-    auto event = WaitForPublishedEvent(state);
-    if (!event.has_value()) {
-      co_return;
-    }
+
+  for (auto event = WaitForPublishedEvent(state); event.has_value(); event = WaitForPublishedEvent(state)) {
     const bool is_terminal =
         event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
     co_yield std::move(event.value());

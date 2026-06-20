@@ -312,14 +312,11 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
 
-  while (session->IsLive()) {
-    auto next = session->Next();
-    if (!next.ok()) {
-      return next.error();
-    }
+  auto next = session->Next();
+  for (; next.ok(); next = session->Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
-      break;
+      return response;
     }
     const auto append = AppendSseEvent(response, event.value());
     if (!append.ok()) {
@@ -327,7 +324,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
     }
   }
 
-  return response;
+  return next.error();
 }
 
 core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {
@@ -344,11 +341,9 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
     if (*session == nullptr) {
       return core::Error::Internal("Subscription response session is missing");
     }
-    while ((*session)->IsLive()) {
-      auto next = (*session)->Next();
-      if (!next.ok()) {
-        return next.error();
-      }
+
+    auto next = (*session)->Next();
+    for (; next.ok(); next = (*session)->Next()) {
       const auto& event = next.value();
       if (!event.has_value()) {
         return {};
@@ -363,6 +358,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
         return written.error();
       }
     }
+    return next.error();
   };
 
   return response;
