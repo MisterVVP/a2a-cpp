@@ -51,10 +51,16 @@ TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
   EXPECT_EQ(first.task().artifacts_size(), 0);
 }
 
-TEST(TaskSubscriptionServiceTest, RejectsTerminalTask) {
+TEST(TaskSubscriptionServiceTest, TerminalTaskSubscriptionReturnsCurrentTaskAndCloses) {
   a2a::server::TaskSubscriptionService service;
   auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));
-  EXPECT_FALSE(subscription.ok());
+  ASSERT_TRUE(subscription.ok()) << subscription.error().message();
+
+  const auto first = NextRequired(subscription.value().get());
+  ASSERT_TRUE(first.has_task());
+  EXPECT_EQ(first.task().id(), kTaskId);
+  EXPECT_EQ(first.task().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  ExpectClosed(subscription.value().get());
 }
 
 TEST(TaskSubscriptionServiceTest, BroadcastsUpdatesToMultipleSubscribersAndClosesOnTerminalState) {
