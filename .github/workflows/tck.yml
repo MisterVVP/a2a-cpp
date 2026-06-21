@@ -135,3 +135,16 @@ jobs:
             build-tck/tck-sut-inmemory.log
             build-tck/tck-sut-postgres.log
           if-no-files-found: warn
+
+      - name: Verify TCK reports were generated
+        if: always()
+        run: |
+          missing_reports=0
+          for backend in inmemory postgres; do
+            report="tck-artifacts/reports/${backend}/compatibility.json"
+            if [[ ! -f "${report}" ]]; then
+              echo "Missing required TCK report: ${report}"
+              missing_reports=1
+            fi
+          done
+          exit "${missing_reports}"
