@@ -30,8 +30,8 @@ core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService
   }
 }
 
-core::Result<std::optional<lf::a2a::v1::StreamResponse>>
-TaskSubscriptionService::SubscriptionSession::NextFor(std::chrono::milliseconds timeout) {
+core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
+    std::chrono::milliseconds timeout) {
   try {
     {
       std::lock_guard lock(state_->mutex);
