@@ -6,6 +6,7 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -43,6 +44,8 @@ constexpr std::string_view kGetMethod = "GET";
 constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
 constexpr std::string_view kTaskSubscribePath = "/tasks/{id}:subscribe";
+constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
+constexpr std::chrono::seconds kSseHeartbeatInterval{15};
 
 const std::array<RestRoute, 11> kRoutes = {
     RestRoute{.method = "POST",
@@ -360,11 +363,19 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
       return core::Error::Internal("Subscription response session is missing");
     }
 
-    auto next = (*session)->Next();
-    for (; next.ok(); next = (*session)->Next()) {
+    auto next = (*session)->NextFor(kSseHeartbeatInterval);
+    for (; next.ok(); next = (*session)->NextFor(kSseHeartbeatInterval)) {
       const auto& event = next.value();
       if (!event.has_value()) {
-        return {};
+        if (!(*session)->IsLive()) {
+          return {};
+        }
+        const auto heartbeat = WriteSseChunk(transport, kSseHeartbeat);
+        if (!heartbeat.ok()) {
+          (*session)->Cancel();
+          return heartbeat.error();
+        }
+        continue;
       }
       RestResponse chunk;
       const auto append = AppendSseEvent(chunk, event.value());
@@ -373,6 +384,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
       }
       const auto written = WriteSseChunk(transport, chunk.body);
       if (!written.ok()) {
+        (*session)->Cancel();
         return written.error();
       }
     }

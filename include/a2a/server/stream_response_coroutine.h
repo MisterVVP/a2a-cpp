@@ -47,7 +47,7 @@ class StreamResponseCoroutine final {
   ~StreamResponseCoroutine() { Destroy(); }
 
   [[nodiscard]] std::optional<lf::a2a::v1::StreamResponse> Next() {
-    if (!handle_ || handle_.done()) {
+    if (IsDone()) {
       return std::nullopt;
     }
     handle_.promise().current_value_.reset();
@@ -60,6 +60,8 @@ class StreamResponseCoroutine final {
     }
     return std::move(handle_.promise().current_value_);
   }
+
+  [[nodiscard]] bool IsDone() const noexcept { return !handle_ || handle_.done(); }
 
  private:
   explicit StreamResponseCoroutine(std::coroutine_handle<promise_type> handle) : handle_(handle) {}

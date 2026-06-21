@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -12,6 +13,7 @@ constexpr std::string_view kTaskId = "subscription-task";
 constexpr std::string_view kContextId = "subscription-context";
 constexpr std::string_view kTransientArtifactId = "transient-artifact";
 constexpr std::string_view kTransientHistoryMessageId = "transient-history-message";
+constexpr std::chrono::milliseconds kSubscriptionWaitTimeout{1};
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -70,6 +72,23 @@ TEST(TaskSubscriptionServiceTest, UsesLatestPublishedTaskWhenRegisteringSubscrib
   const auto first = NextRequired(subscription.value().get());
   ASSERT_TRUE(first.has_task());
   EXPECT_EQ(first.task().status().state(), lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+}
+
+TEST(TaskSubscriptionServiceTest, TimedWaitKeepsSubscriptionOpen) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  (void)NextRequired(subscription.value().get());
+
+  const auto timeout = subscription.value()->NextFor(kSubscriptionWaitTimeout);
+  ASSERT_TRUE(timeout.ok());
+  EXPECT_FALSE(timeout.value().has_value());
+  EXPECT_TRUE(subscription.value()->IsLive());
+
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED));
+  const auto update = NextRequired(subscription.value().get());
+  ASSERT_TRUE(update.has_status_update());
+  EXPECT_EQ(update.status_update().status().state(), lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
 }
 
 TEST(TaskSubscriptionServiceTest, RejectsStaleSubscriptionAfterTerminalUpdate) {

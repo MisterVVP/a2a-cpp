@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <memory>
@@ -37,7 +39,8 @@ class TaskSubscriptionService final {
     std::string task_id;
     lf::a2a::v1::Task current_task;
     std::deque<lf::a2a::v1::StreamResponse> events;
-    bool closed = false;
+    std::atomic_bool closed = false;
+    std::optional<std::chrono::milliseconds> wait_timeout;
     std::mutex mutex;
     std::condition_variable ready;
   };
@@ -48,7 +51,9 @@ class TaskSubscriptionService final {
     ~SubscriptionSession() override;
 
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override;
-    [[nodiscard]] bool IsLive() const noexcept override { return true; }
+    [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
+        std::chrono::milliseconds timeout) override;
+    [[nodiscard]] bool IsLive() const noexcept override;
     void Cancel() noexcept override;
 
    private:

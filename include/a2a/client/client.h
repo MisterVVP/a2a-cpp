@@ -77,6 +77,8 @@ class StreamHandle final {
   struct State final {
     std::atomic<bool> cancel_requested{false};
     std::atomic<bool> active{true};
+    std::mutex cancellation_mutex;
+    std::function<void()> cancel_callback;
   };
 
   StreamHandle() = delete;

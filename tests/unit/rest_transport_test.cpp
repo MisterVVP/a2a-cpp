@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,7 +19,9 @@ namespace {
 
 constexpr std::string_view kGetMethod = "GET";
 constexpr std::string_view kPostMethod = "POST";
+constexpr std::string_view kSubscribedTaskId = "task-77";
 constexpr std::string_view kSubscribeTaskPath = "/tasks/task-77:subscribe";
+constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
 constexpr int kRequestedHistoryLength = 20;
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
@@ -29,10 +33,14 @@ class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
   }
 
   [[nodiscard]] a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    if (fail_heartbeat && std::string_view(buffer, size) == kSseHeartbeat) {
+      return a2a::core::Error::Network("client disconnected");
+    }
     body.append(buffer, size);
     return size;
   }
 
+  bool fail_heartbeat = false;
   std::string body;
 };
 
@@ -48,10 +56,39 @@ class SingleLiveEventSession final : public a2a::server::ServerStreamSession {
     return std::optional<lf::a2a::v1::StreamResponse>{event_};
   }
 
-  [[nodiscard]] bool IsLive() const noexcept override { return true; }
+  [[nodiscard]] bool IsLive() const noexcept override { return !consumed_; }
 
  private:
   lf::a2a::v1::StreamResponse event_;
+  bool consumed_ = false;
+};
+
+class HeartbeatEventSession final : public a2a::server::ServerStreamSession {
+ public:
+  HeartbeatEventSession(lf::a2a::v1::StreamResponse event, std::shared_ptr<std::atomic_bool> cancelled)
+      : event_(std::move(event)), cancelled_(std::move(cancelled)) {}
+
+  [[nodiscard]] a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    return NextFor(std::chrono::milliseconds::zero());
+  }
+
+  [[nodiscard]] a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
+      std::chrono::milliseconds timeout) override {
+    (void)timeout;
+    if (!consumed_) {
+      consumed_ = true;
+      return std::optional<lf::a2a::v1::StreamResponse>{event_};
+    }
+    return std::optional<lf::a2a::v1::StreamResponse>{};
+  }
+
+  [[nodiscard]] bool IsLive() const noexcept override { return !cancelled_->load(); }
+
+  void Cancel() noexcept override { cancelled_->store(true); }
+
+ private:
+  lf::a2a::v1::StreamResponse event_;
+  std::shared_ptr<std::atomic_bool> cancelled_;
   bool consumed_ = false;
 };
 
@@ -118,6 +155,10 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     }
     lf::a2a::v1::StreamResponse event;
     *event.mutable_task() = task.value();
+    if (heartbeat_cancellation != nullptr) {
+      return std::unique_ptr<a2a::server::ServerStreamSession>(
+          std::make_unique<HeartbeatEventSession>(event, heartbeat_cancellation));
+    }
     return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleLiveEventSession>(event));
   }
 
@@ -125,6 +166,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   int observed_history_length = -1;
   std::size_t observed_page_size = 0;
   std::string observed_page_token;
+  std::shared_ptr<std::atomic_bool> heartbeat_cancellation;
 };
 
 TEST(RestTransportTest, ExposesCentralRouteTable) {
@@ -292,12 +334,34 @@ void ExpectSubscribeEndpoint(std::string_view method) {
   RecordingHttpTransport output;
   const auto write = response.value().stream_writer(output);
   ASSERT_TRUE(write.ok()) << write.error().message();
-  EXPECT_NE(output.body.find("task-77"), std::string::npos);
+  EXPECT_NE(output.body.find(kSubscribedTaskId), std::string::npos);
 }
 
 TEST(RestTransportTest, SupportsGetSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kGetMethod); }
 
 TEST(RestTransportTest, SupportsPostSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kPostMethod); }
+
+TEST(RestTransportTest, CancelsSubscriptionWhenHeartbeatDetectsDisconnect) {
+  FakeExecutor executor;
+  executor.heartbeat_cancellation = std::make_shared<std::atomic_bool>(false);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = kGetMethod;
+  request.path = kSubscribeTaskPath;
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  ASSERT_TRUE(response.value().stream_writer);
+
+  RecordingHttpTransport output;
+  output.fail_heartbeat = true;
+  const auto write = response.value().stream_writer(output);
+
+  ASSERT_FALSE(write.ok());
+  EXPECT_TRUE(executor.heartbeat_cancellation->load());
+  EXPECT_NE(output.body.find(kSubscribedTaskId), std::string::npos);
+}
 
 TEST(RestTransportTest, ForwardsSubscribeHistoryLength) {
   FakeExecutor executor;

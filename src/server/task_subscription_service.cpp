@@ -16,10 +16,36 @@ TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() { Cancel();
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
   try {
-    return coroutine_.Next();
+    {
+      std::lock_guard lock(state_->mutex);
+      state_->wait_timeout.reset();
+    }
+    auto event = coroutine_.Next();
+    while (!event.has_value() && !coroutine_.IsDone()) {
+      event = coroutine_.Next();
+    }
+    return event;
   } catch (const std::exception& ex) {
     return core::Error::Internal(ex.what());
   }
+}
+
+core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
+    std::chrono::milliseconds timeout) {
+  try {
+    {
+      std::lock_guard lock(state_->mutex);
+      state_->wait_timeout = timeout;
+    }
+    auto event = coroutine_.Next();
+    return event;
+  } catch (const std::exception& ex) {
+    return core::Error::Internal(ex.what());
+  }
+}
+
+bool TaskSubscriptionService::SubscriptionSession::IsLive() const noexcept {
+  return state_ != nullptr && !state_->closed.load();
 }
 
 void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
@@ -84,9 +110,9 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
   for (const auto& subscriber : subscribers) {
     {
       std::lock_guard lock(subscriber->mutex);
-      if (!subscriber->closed) {
+      if (!subscriber->closed.load()) {
         subscriber->events.push_back(event);
-        subscriber->closed = close_after_event;
+        subscriber->closed.store(close_after_event);
       }
     }
     subscriber->ready.notify_one();
@@ -115,7 +141,7 @@ void TaskSubscriptionService::Shutdown() {
   for (const auto& subscriber : subscribers) {
     {
       std::lock_guard lock(subscriber->mutex);
-      subscriber->closed = true;
+      subscriber->closed.store(true);
     }
     subscriber->ready.notify_all();
   }
@@ -124,7 +150,7 @@ void TaskSubscriptionService::Shutdown() {
 void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<SubscriberState>& state) {
   {
     std::lock_guard state_lock(state->mutex);
-    state->closed = true;
+    state->closed.store(true);
   }
   state->ready.notify_all();
 
@@ -146,7 +172,14 @@ void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<SubscriberS
 std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPublishedEvent(
     const std::shared_ptr<SubscriberState>& state) {
   std::unique_lock lock(state->mutex);
-  state->ready.wait(lock, [&state] { return state->closed || !state->events.empty(); });
+  const auto is_ready = [&state] { return state->closed.load() || !state->events.empty(); };
+  if (state->wait_timeout.has_value()) {
+    if (!state->ready.wait_for(lock, state->wait_timeout.value(), is_ready)) {
+      return std::nullopt;
+    }
+  } else {
+    state->ready.wait(lock, is_ready);
+  }
   if (state->events.empty()) {
     return std::nullopt;
   }
@@ -158,7 +191,12 @@ std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPubli
 StreamResponseCoroutine TaskSubscriptionService::RunSubscription(std::shared_ptr<SubscriberState> state) {
   co_yield BuildCurrentTaskEvent(state->current_task);
 
-  for (auto event = WaitForPublishedEvent(state); event.has_value(); event = WaitForPublishedEvent(state)) {
+  for (auto event = WaitForPublishedEvent(state); !state->closed.load() || event.has_value();
+       event = WaitForPublishedEvent(state)) {
+    if (!event.has_value()) {
+      co_await std::suspend_always{};
+      continue;
+    }
     const bool is_terminal =
         event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
     co_yield std::move(event.value());

@@ -7,7 +7,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,7 +24,40 @@ namespace {
 const std::string kGrpcEndpoint = "localhost:50051";
 const std::string kAuthHeaderName = "X-Test-API-Key";
 const std::string kStreamFailureMessage = "stream unavailable";
+const std::string kStreamCancelledMessage = "stream cancelled";
 constexpr int kStreamPollIntervalMs = 1;
+constexpr int kCancellationWaitAttempts = 1000;
+
+struct BlockingStreamState final {
+  void Cancel() {
+    {
+      std::lock_guard lock(mutex);
+      cancelled = true;
+    }
+    ready.notify_all();
+  }
+
+  std::mutex mutex;
+  std::condition_variable ready;
+  bool cancelled = false;
+};
+
+class BlockingStreamReader final : public a2a::client::GrpcTransport::StreamReader {
+ public:
+  explicit BlockingStreamReader(std::shared_ptr<BlockingStreamState> state) : state_(std::move(state)) {}
+
+  bool Read(lf::a2a::v1::StreamResponse* response) override {
+    (void)response;
+    std::unique_lock lock(state_->mutex);
+    state_->ready.wait(lock, [this] { return state_->cancelled; });
+    return false;
+  }
+
+  grpc::Status Finish() override { return {grpc::StatusCode::CANCELLED, kStreamCancelledMessage}; }
+
+ private:
+  std::shared_ptr<BlockingStreamState> state_;
+};
 
 class FakeStreamReader final : public a2a::client::GrpcTransport::StreamReader {
  public:
@@ -68,6 +103,13 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     (void)context;
     last_task_id = request.id();
     return std::move(stream_reader);
+  }
+
+  void CancelStream(grpc::ClientContext* context) override {
+    a2a::client::GrpcTransport::RpcClient::CancelStream(context);
+    if (blocking_stream_state != nullptr) {
+      blocking_stream_state->Cancel();
+    }
   }
 
   grpc::Status GetTask(grpc::ClientContext* context, const lf::a2a::v1::GetTaskRequest& request,
@@ -127,6 +169,7 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
   grpc::Status list_configs_status = grpc::Status::OK;
   grpc::Status delete_config_status = grpc::Status::OK;
   std::unique_ptr<a2a::client::GrpcTransport::StreamReader> stream_reader;
+  std::shared_ptr<BlockingStreamState> blocking_stream_state;
   std::string last_task_id;
 };
 
@@ -301,6 +344,40 @@ TEST(GrpcTransportTest, SubscribeTaskEmitsSingleTaskEvent) {
   ASSERT_EQ(observer.events.size(), 1U);
   EXPECT_EQ(observer.events.front().task().id(), std::string(kTaskId));
   EXPECT_TRUE(observer.completed);
+  EXPECT_FALSE(observer.last_error.has_value());
+}
+
+TEST(GrpcTransportTest, SubscribeTaskCancellationInterruptsBlockedRead) {
+  constexpr std::string_view kTaskId = "blocked-subscription-task";
+  auto blocking_state = std::make_shared<BlockingStreamState>();
+  auto rpc = std::make_unique<FakeRpcClient>();
+  rpc->blocking_stream_state = blocking_state;
+  rpc->stream_reader = std::make_unique<BlockingStreamReader>(blocking_state);
+  a2a::client::GrpcTransport transport(MakeResolvedInterface(), std::move(rpc));
+
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+  RecordingObserver observer;
+  auto stream = transport.SubscribeTask(request, observer, {});
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+
+  std::atomic_bool cancellation_completed = false;
+  std::thread canceller([&stream, &cancellation_completed] {
+    stream.value()->Cancel();
+    cancellation_completed.store(true);
+  });
+
+  for (int attempt = 0; attempt < kCancellationWaitAttempts && !cancellation_completed.load(); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(kStreamPollIntervalMs));
+  }
+  if (!cancellation_completed.load()) {
+    blocking_state->Cancel();
+  }
+  canceller.join();
+
+  EXPECT_TRUE(cancellation_completed.load());
+  EXPECT_FALSE(stream.value()->IsActive());
+  EXPECT_FALSE(observer.completed);
   EXPECT_FALSE(observer.last_error.has_value());
 }
 

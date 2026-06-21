@@ -286,7 +286,15 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SendStreamingMessage(
   }
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto context = std::move(context_result.value());
+  auto context = std::shared_ptr<::grpc::ClientContext>(std::move(context_result.value()));
+  {
+    std::lock_guard lock(state->cancellation_mutex);
+    state->cancel_callback = [this, weak_context = std::weak_ptr<::grpc::ClientContext>(context)] {
+      if (const auto context = weak_context.lock(); context != nullptr) {
+        rpc_client_->CancelStream(context.get());
+      }
+    };
+  }
   auto worker = StreamHandle::WorkerThread([this, state, request, &observer, context = std::move(context)]() mutable {
     auto reader = rpc_client_->SendStreamingMessage(context.get(), request);
     if (reader == nullptr) {
@@ -335,7 +343,15 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
   subscribe_request.set_id(request.id());
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto context = std::move(context_result.value());
+  auto context = std::shared_ptr<::grpc::ClientContext>(std::move(context_result.value()));
+  {
+    std::lock_guard lock(state->cancellation_mutex);
+    state->cancel_callback = [this, weak_context = std::weak_ptr<::grpc::ClientContext>(context)] {
+      if (const auto context = weak_context.lock(); context != nullptr) {
+        rpc_client_->CancelStream(context.get());
+      }
+    };
+  }
   auto worker =
       StreamHandle::WorkerThread([this, state, subscribe_request, &observer, context = std::move(context)]() mutable {
         auto reader = rpc_client_->SubscribeToTask(context.get(), subscribe_request);

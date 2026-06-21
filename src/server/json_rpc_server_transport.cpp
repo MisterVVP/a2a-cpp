@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -43,6 +44,8 @@ constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
 constexpr int kJsonRpcVersionNotSupported = -32009;
+constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
+constexpr std::chrono::seconds kSseHeartbeatInterval{15};
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::size_t kMinListTasksPageSize = 1;
@@ -682,11 +685,19 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
 
-  auto next = (*session)->Next();
-  for (; next.ok(); next = (*session)->Next()) {
+  auto next = (*session)->NextFor(kSseHeartbeatInterval);
+  for (; next.ok(); next = (*session)->NextFor(kSseHeartbeatInterval)) {
     const auto& event = next.value();
     if (!event.has_value()) {
-      return {};
+      if (!(*session)->IsLive()) {
+        return {};
+      }
+      const auto heartbeat = WriteSseChunk(transport, kSseHeartbeat);
+      if (!heartbeat.ok()) {
+        (*session)->Cancel();
+        return heartbeat.error();
+      }
+      continue;
     }
     std::string chunk;
     const auto append = AppendSseJsonRpcEvent(chunk, id, event.value());
@@ -695,6 +706,7 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
     }
     const auto written = WriteSseChunk(transport, chunk);
     if (!written.ok()) {
+      (*session)->Cancel();
       return written.error();
     }
   }

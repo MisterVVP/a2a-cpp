@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <optional>
 
 #include "a2a/core/result.h"
@@ -15,6 +16,11 @@ class ServerStreamSession {
   virtual ~ServerStreamSession() = default;
 
   [[nodiscard]] virtual core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() = 0;
+  [[nodiscard]] virtual core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
+      std::chrono::milliseconds timeout) {
+    (void)timeout;
+    return Next();
+  }
   [[nodiscard]] virtual bool IsLive() const noexcept { return true; }
   virtual void Cancel() noexcept {}
 };

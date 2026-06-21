@@ -25,6 +25,14 @@ void StreamHandle::Cancel() {
   if (state_ != nullptr) {
     state_->cancel_requested.store(true);
     state_->active.store(false);
+    std::function<void()> cancel_callback;
+    {
+      std::lock_guard lock(state_->cancellation_mutex);
+      cancel_callback = state_->cancel_callback;
+    }
+    if (cancel_callback) {
+      cancel_callback();
+    }
   }
   if (worker_.joinable()) {
 #if A2A_HAS_JTHREAD
