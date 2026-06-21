@@ -30,8 +30,8 @@ core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService
   }
 }
 
-core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
-    std::chrono::milliseconds timeout) {
+core::Result<std::optional<lf::a2a::v1::StreamResponse>>
+TaskSubscriptionService::SubscriptionSession::NextFor(std::chrono::milliseconds timeout) {
   try {
     {
       std::lock_guard lock(state_->mutex);
@@ -45,7 +45,7 @@ core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService
 }
 
 bool TaskSubscriptionService::SubscriptionSession::IsLive() const noexcept {
-  return state_ != nullptr && !state_->closed.load();
+  return state_ != nullptr && (!state_->closed.load() || state_->queued_event_count.load() != 0);
 }
 
 void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
@@ -112,6 +112,7 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
       std::lock_guard lock(subscriber->mutex);
       if (!subscriber->closed.load()) {
         subscriber->events.push_back(event);
+        subscriber->queued_event_count.fetch_add(1);
         subscriber->closed.store(close_after_event);
       }
     }
@@ -186,6 +187,7 @@ std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPubli
   }
   lf::a2a::v1::StreamResponse event = std::move(state->events.front());
   state->events.pop_front();
+  state->queued_event_count.fetch_sub(1);
   return event;
 }
 

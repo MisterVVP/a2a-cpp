@@ -91,6 +91,26 @@ TEST(TaskSubscriptionServiceTest, TimedWaitKeepsSubscriptionOpen) {
   EXPECT_EQ(update.status_update().status().state(), lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
 }
 
+TEST(TaskSubscriptionServiceTest, QueuedTerminalEventKeepsSubscriptionLiveUntilDrained) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  (void)NextRequired(subscription.value().get());
+
+  const auto timeout = subscription.value()->NextFor(kSubscriptionWaitTimeout);
+  ASSERT_TRUE(timeout.ok());
+  ASSERT_FALSE(timeout.value().has_value());
+
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));
+  EXPECT_TRUE(subscription.value()->IsLive());
+
+  const auto terminal = NextRequired(subscription.value().get());
+  ASSERT_TRUE(terminal.has_status_update());
+  EXPECT_EQ(terminal.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  EXPECT_FALSE(subscription.value()->IsLive());
+  ExpectClosed(subscription.value().get());
+}
+
 TEST(TaskSubscriptionServiceTest, RejectsStaleSubscriptionAfterTerminalUpdate) {
   a2a::server::TaskSubscriptionService service;
   service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));

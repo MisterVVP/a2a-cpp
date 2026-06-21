@@ -40,6 +40,7 @@ class TaskSubscriptionService final {
     lf::a2a::v1::Task current_task;
     std::deque<lf::a2a::v1::StreamResponse> events;
     std::atomic_bool closed = false;
+    std::atomic_size_t queued_event_count = 0;
     std::optional<std::chrono::milliseconds> wait_timeout;
     std::mutex mutex;
     std::condition_variable ready;
