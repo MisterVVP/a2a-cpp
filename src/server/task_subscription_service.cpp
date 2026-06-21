@@ -173,8 +173,9 @@ std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPubli
     const std::shared_ptr<SubscriberState>& state) {
   std::unique_lock lock(state->mutex);
   const auto is_ready = [&state] { return state->closed.load() || !state->events.empty(); };
+  const auto wait_timeout = state->wait_timeout.value_or(std::chrono::milliseconds::zero());
   if (state->wait_timeout.has_value()) {
-    if (!state->ready.wait_for(lock, state->wait_timeout.value(), is_ready)) {
+    if (!state->ready.wait_for(lock, wait_timeout, is_ready)) {
       return std::nullopt;
     }
   } else {
