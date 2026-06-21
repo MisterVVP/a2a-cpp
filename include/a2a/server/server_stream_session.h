@@ -21,7 +21,8 @@ class ServerStreamSession {
     (void)timeout;
     return Next();
   }
-  [[nodiscard]] virtual bool IsLive() const noexcept { return true; }
+  // Sessions are finite unless they explicitly support waiting for future events.
+  [[nodiscard]] virtual bool IsLive() const noexcept { return false; }
   virtual void Cancel() noexcept {}
 };
 
