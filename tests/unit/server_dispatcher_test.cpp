@@ -70,6 +70,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+    task.add_artifacts()->set_artifact_id("a1");
     task.add_history()->set_task_id("h1");
     task.add_history()->set_task_id("h2");
     return task;
@@ -257,6 +258,24 @@ TEST(ServerDispatcherTest, InterceptorFailureShortCircuitsDispatchAndTriggersAft
 
   const std::vector<std::string> expected = {"i1:before:0", "i2:before:0", "i2:after:0:error", "i1:after:0:error"};
   EXPECT_EQ(events, expected);
+}
+
+TEST(ServerDispatcherTest, DefaultSubscriptionStripsArtifactsAndHistory) {
+  FakeExecutor executor;
+  a2a::server::RequestContext context;
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("task-7");
+
+  auto subscription = executor.SubscribeTask(request, context);
+  ASSERT_TRUE(subscription.ok());
+
+  auto first = subscription.value()->Next();
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(first.value().has_value());
+  ASSERT_TRUE(first.value()->has_task());
+  EXPECT_EQ(first.value()->task().id(), "task-7");
+  EXPECT_EQ(first.value()->task().artifacts_size(), 0);
+  EXPECT_EQ(first.value()->task().history_size(), 0);
 }
 
 }  // namespace
