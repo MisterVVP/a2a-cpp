@@ -271,11 +271,11 @@ TEST(ServerDispatcherTest, DefaultSubscriptionStripsArtifactsAndHistory) {
 
   auto first = subscription.value()->Next();
   ASSERT_TRUE(first.ok());
-  ASSERT_TRUE(first.value().has_value());
-  ASSERT_TRUE(first.value()->has_task());
-  EXPECT_EQ(first.value()->task().id(), "task-7");
-  EXPECT_EQ(first.value()->task().artifacts_size(), 0);
-  EXPECT_EQ(first.value()->task().history_size(), 0);
+  const auto event = first.value().value_or(lf::a2a::v1::StreamResponse{});
+  ASSERT_TRUE(event.has_task());
+  EXPECT_EQ(event.task().id(), "task-7");
+  EXPECT_EQ(event.task().artifacts_size(), 0);
+  EXPECT_EQ(event.task().history_size(), 0);
 }
 
 }  // namespace
