@@ -34,7 +34,12 @@ class AgentExecutor {
       const lf::a2a::v1::GetTaskRequest& request, RequestContext& context) {
     class CurrentTaskStreamSession final : public ServerStreamSession {
      public:
-      explicit CurrentTaskStreamSession(lf::a2a::v1::Task task) { *event_.mutable_task() = std::move(task); }
+      explicit CurrentTaskStreamSession(lf::a2a::v1::Task task) {
+        auto* current_task = event_.mutable_task();
+        *current_task = std::move(task);
+        current_task->clear_artifacts();
+        current_task->clear_history();
+      }
 
       [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
         if (sent_) {
