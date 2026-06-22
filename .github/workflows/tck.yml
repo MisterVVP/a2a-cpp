@@ -141,16 +141,16 @@ jobs:
       - name: Verify mandatory TCK results and reports
         if: always()
         env:
-          INMEMORY_TCK_OUTCOME: ${{ steps.tck_inmemory.outcome }}
-          POSTGRES_TCK_OUTCOME: ${{ steps.tck_postgres.outcome }}
+          INMEMORY_TCK_CONCLUSION: ${{ steps.tck_inmemory.conclusion }}
+          POSTGRES_TCK_CONCLUSION: ${{ steps.tck_postgres.conclusion }}
         run: |
           failed=0
-          if [[ "${INMEMORY_TCK_OUTCOME}" != "success" ]]; then
-            echo "In-memory mandatory TCK outcome: ${INMEMORY_TCK_OUTCOME}"
+          if [[ "${INMEMORY_TCK_CONCLUSION}" != "success" ]]; then
+            echo "In-memory mandatory TCK conclusion: ${INMEMORY_TCK_CONCLUSION}"
             failed=1
           fi
-          if [[ "${POSTGRES_TCK_OUTCOME}" != "success" ]]; then
-            echo "PostgreSQL mandatory TCK outcome: ${POSTGRES_TCK_OUTCOME}"
+          if [[ "${POSTGRES_TCK_CONCLUSION}" != "success" ]]; then
+            echo "PostgreSQL mandatory TCK conclusion: ${POSTGRES_TCK_CONCLUSION}"
             failed=1
           fi
           for backend in inmemory postgres; do
