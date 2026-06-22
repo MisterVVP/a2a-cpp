@@ -8,9 +8,11 @@
 
 namespace a2a::server {
 
-TaskSubscriptionService::SubscriptionSession::SubscriptionSession(TaskSubscriptionService* owner,
+TaskSubscriptionService::SubscriptionSession::SubscriptionSession(std::shared_ptr<ServiceState> service_state,
                                                                   std::shared_ptr<SubscriberState> state)
-    : owner_(owner), state_(std::move(state)), coroutine_(TaskSubscriptionService::RunSubscription(state_)) {}
+    : service_state_(std::move(service_state)),
+      state_(std::move(state)),
+      coroutine_(TaskSubscriptionService::RunSubscription(state_)) {}
 
 TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() { Cancel(); }
 
@@ -49,46 +51,50 @@ bool TaskSubscriptionService::SubscriptionSession::IsLive() const noexcept {
 }
 
 void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
-  auto* owner = owner_.exchange(nullptr);
-  if (owner != nullptr && state_ != nullptr) {
-    owner->RemoveSubscriber(state_);
+  if (!cancelled_.exchange(true) && service_state_ != nullptr && state_ != nullptr) {
+    TaskSubscriptionService::RemoveSubscriber(service_state_, state_);
   }
 }
 
-core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
-  auto state = std::make_shared<SubscriberState>();
-  state->task_id = task.id();
+TaskSubscriptionService::~TaskSubscriptionService() { Shutdown(); }
 
-  std::lock_guard lock(mutex_);
-  if (shutdown_) {
+core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
+  auto subscriber_state = std::make_shared<SubscriberState>();
+  subscriber_state->task_id = task.id();
+  const auto service_state = state_;
+
+  std::lock_guard lock(service_state->mutex);
+  if (service_state->shutdown) {
     return core::Error::Internal("task subscription service is shut down");
   }
 
-  state->current_task = task;
-  const auto latest = latest_task_states_by_id_.find(state->task_id);
-  if (latest != latest_task_states_by_id_.end()) {
-    state->current_task.set_context_id(latest->second.context_id);
-    *state->current_task.mutable_status() = latest->second.status;
+  subscriber_state->current_task = task;
+  const auto latest = service_state->latest_task_states_by_id.find(subscriber_state->task_id);
+  if (latest != service_state->latest_task_states_by_id.end()) {
+    subscriber_state->current_task.set_context_id(latest->second.context_id);
+    *subscriber_state->current_task.mutable_status() = latest->second.status;
   }
-  if (core::IsTerminalTaskState(state->current_task.status().state())) {
+  if (core::IsTerminalTaskState(subscriber_state->current_task.status().state())) {
     return core::protocol_errors::UnsupportedOperation("task is already terminal");
   }
-  subscribers_by_task_id_[state->task_id].push_back(state);
+  service_state->subscribers_by_task_id[subscriber_state->task_id].push_back(subscriber_state);
 
-  return std::unique_ptr<ServerStreamSession>(std::make_unique<SubscriptionSession>(this, std::move(state)));
+  return std::unique_ptr<ServerStreamSession>(
+      std::make_unique<SubscriptionSession>(service_state, std::move(subscriber_state)));
 }
 
 void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) {
+  const auto service_state = state_;
   std::vector<std::shared_ptr<SubscriberState>> subscribers;
   {
-    std::lock_guard lock(mutex_);
-    if (shutdown_) {
+    std::lock_guard lock(service_state->mutex);
+    if (service_state->shutdown) {
       return;
     }
-    latest_task_states_by_id_.insert_or_assign(
+    service_state->latest_task_states_by_id.insert_or_assign(
         task.id(), LatestTaskState{.context_id = task.context_id(), .status = task.status()});
-    auto iterator = subscribers_by_task_id_.find(task.id());
-    if (iterator == subscribers_by_task_id_.end()) {
+    auto iterator = service_state->subscribers_by_task_id.find(task.id());
+    if (iterator == service_state->subscribers_by_task_id.end()) {
       return;
     }
     auto& weak_subscribers = iterator->second;
@@ -101,7 +107,7 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
       return false;
     });
     if (weak_subscribers.empty() || core::IsTerminalTaskState(task.status().state())) {
-      subscribers_by_task_id_.erase(iterator);
+      service_state->subscribers_by_task_id.erase(iterator);
     }
   }
 
@@ -121,22 +127,23 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
 }
 
 void TaskSubscriptionService::Shutdown() {
+  const auto service_state = state_;
   std::vector<std::shared_ptr<SubscriberState>> subscribers;
   {
-    std::lock_guard lock(mutex_);
-    if (shutdown_) {
+    std::lock_guard lock(service_state->mutex);
+    if (service_state->shutdown) {
       return;
     }
-    shutdown_ = true;
-    for (auto& entry : subscribers_by_task_id_) {
+    service_state->shutdown = true;
+    for (auto& entry : service_state->subscribers_by_task_id) {
       for (auto& weak_subscriber : entry.second) {
         if (auto subscriber = weak_subscriber.lock(); subscriber != nullptr) {
           subscribers.push_back(std::move(subscriber));
         }
       }
     }
-    subscribers_by_task_id_.clear();
-    latest_task_states_by_id_.clear();
+    service_state->subscribers_by_task_id.clear();
+    service_state->latest_task_states_by_id.clear();
   }
 
   for (const auto& subscriber : subscribers) {
@@ -148,16 +155,17 @@ void TaskSubscriptionService::Shutdown() {
   }
 }
 
-void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<SubscriberState>& state) {
+void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<ServiceState>& service_state,
+                                               const std::shared_ptr<SubscriberState>& state) {
   {
     std::lock_guard state_lock(state->mutex);
     state->closed.store(true);
   }
   state->ready.notify_all();
 
-  std::lock_guard lock(mutex_);
-  auto iterator = subscribers_by_task_id_.find(state->task_id);
-  if (iterator == subscribers_by_task_id_.end()) {
+  std::lock_guard lock(service_state->mutex);
+  auto iterator = service_state->subscribers_by_task_id.find(state->task_id);
+  if (iterator == service_state->subscribers_by_task_id.end()) {
     return;
   }
   auto& subscribers = iterator->second;
@@ -166,7 +174,7 @@ void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<SubscriberS
     return subscriber == nullptr || subscriber == state;
   });
   if (subscribers.empty()) {
-    subscribers_by_task_id_.erase(iterator);
+    service_state->subscribers_by_task_id.erase(iterator);
   }
 }
 

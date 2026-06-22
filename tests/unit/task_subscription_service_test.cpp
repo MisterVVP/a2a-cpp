@@ -208,4 +208,19 @@ TEST(TaskSubscriptionServiceTest, ShutdownClosesActiveSubscriptions) {
   EXPECT_FALSE(service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING)).ok());
 }
 
+TEST(TaskSubscriptionServiceTest, SubscriptionCanOutliveService) {
+  std::unique_ptr<a2a::server::ServerStreamSession> session;
+  {
+    a2a::server::TaskSubscriptionService service;
+    auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+    ASSERT_TRUE(subscription.ok());
+    session = std::move(subscription.value());
+    (void)NextRequired(session.get());
+  }
+
+  EXPECT_FALSE(session->IsLive());
+  ExpectClosed(session.get());
+  session.reset();
+}
+
 }  // namespace

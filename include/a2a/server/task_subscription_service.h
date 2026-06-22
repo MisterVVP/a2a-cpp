@@ -25,6 +25,8 @@ namespace a2a::server {
 
 class TaskSubscriptionService final {
  public:
+  ~TaskSubscriptionService();
+
   [[nodiscard]] core::Result<std::unique_ptr<ServerStreamSession>> Subscribe(const lf::a2a::v1::Task& task);
   void PublishTaskUpdated(const lf::a2a::v1::Task& task);
   void Shutdown();
@@ -46,9 +48,16 @@ class TaskSubscriptionService final {
     std::condition_variable ready;
   };
 
+  struct ServiceState final {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::vector<std::weak_ptr<SubscriberState>>> subscribers_by_task_id;
+    std::unordered_map<std::string, LatestTaskState> latest_task_states_by_id;
+    bool shutdown = false;
+  };
+
   class SubscriptionSession final : public ServerStreamSession {
    public:
-    SubscriptionSession(TaskSubscriptionService* owner, std::shared_ptr<SubscriberState> state);
+    SubscriptionSession(std::shared_ptr<ServiceState> service_state, std::shared_ptr<SubscriberState> state);
     ~SubscriptionSession() override;
 
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override;
@@ -58,22 +67,21 @@ class TaskSubscriptionService final {
     void Cancel() noexcept override;
 
    private:
-    std::atomic<TaskSubscriptionService*> owner_ = nullptr;
+    std::shared_ptr<ServiceState> service_state_;
     std::shared_ptr<SubscriberState> state_;
+    std::atomic_bool cancelled_ = false;
     StreamResponseCoroutine coroutine_;
   };
 
-  void RemoveSubscriber(const std::shared_ptr<SubscriberState>& state);
+  static void RemoveSubscriber(const std::shared_ptr<ServiceState>& service_state,
+                               const std::shared_ptr<SubscriberState>& state);
   static std::optional<lf::a2a::v1::StreamResponse> WaitForPublishedEvent(
       const std::shared_ptr<SubscriberState>& state);
   static StreamResponseCoroutine RunSubscription(std::shared_ptr<SubscriberState> state);
   static lf::a2a::v1::StreamResponse BuildCurrentTaskEvent(const lf::a2a::v1::Task& task);
   static lf::a2a::v1::StreamResponse BuildStatusUpdateEvent(const lf::a2a::v1::Task& task);
 
-  std::mutex mutex_;
-  std::unordered_map<std::string, std::vector<std::weak_ptr<SubscriberState>>> subscribers_by_task_id_;
-  std::unordered_map<std::string, LatestTaskState> latest_task_states_by_id_;
-  bool shutdown_ = false;
+  std::shared_ptr<ServiceState> state_ = std::make_shared<ServiceState>();
 };
 
 }  // namespace a2a::server
