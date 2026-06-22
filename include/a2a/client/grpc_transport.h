@@ -123,7 +123,7 @@ class GrpcTransport final : public ClientTransport {
   [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
   ResolvedInterface resolved_interface_;
-  std::unique_ptr<RpcClient> rpc_client_;
+  std::shared_ptr<RpcClient> rpc_client_;
   std::chrono::milliseconds default_timeout_;
 };
 
