@@ -60,6 +60,7 @@ jobs:
         run: ./scripts/run_tck_sut.sh
 
       - name: Run mandatory TCK category with in-memory store
+        id: tck_inmemory
         continue-on-error: true
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
@@ -91,6 +92,7 @@ jobs:
         run: ./scripts/run_tck_sut.sh
 
       - name: Run mandatory TCK category with PostgreSQL store
+        id: tck_postgres
         continue-on-error: true
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
@@ -136,15 +138,26 @@ jobs:
             build-tck/tck-sut-postgres.log
           if-no-files-found: warn
 
-      - name: Verify TCK reports were generated
+      - name: Verify mandatory TCK results and reports
         if: always()
+        env:
+          INMEMORY_TCK_OUTCOME: ${{ steps.tck_inmemory.outcome }}
+          POSTGRES_TCK_OUTCOME: ${{ steps.tck_postgres.outcome }}
         run: |
-          missing_reports=0
+          failed=0
+          if [[ "${INMEMORY_TCK_OUTCOME}" != "success" ]]; then
+            echo "In-memory mandatory TCK outcome: ${INMEMORY_TCK_OUTCOME}"
+            failed=1
+          fi
+          if [[ "${POSTGRES_TCK_OUTCOME}" != "success" ]]; then
+            echo "PostgreSQL mandatory TCK outcome: ${POSTGRES_TCK_OUTCOME}"
+            failed=1
+          fi
           for backend in inmemory postgres; do
             report="tck-artifacts/reports/${backend}/compatibility.json"
             if [[ ! -f "${report}" ]]; then
               echo "Missing required TCK report: ${report}"
-              missing_reports=1
+              failed=1
             fi
           done
-          exit "${missing_reports}"
+          exit "${failed}"
