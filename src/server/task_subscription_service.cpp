@@ -30,8 +30,8 @@ core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService
   }
 }
 
-core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
-    std::chrono::milliseconds timeout) {
+core::Result<std::optional<lf::a2a::v1::StreamResponse>>
+TaskSubscriptionService::SubscriptionSession::NextFor(std::chrono::milliseconds timeout) {
   try {
     {
       std::lock_guard lock(state_->mutex);
@@ -49,9 +49,9 @@ bool TaskSubscriptionService::SubscriptionSession::IsLive() const noexcept {
 }
 
 void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
-  if (owner_ != nullptr && state_ != nullptr) {
-    owner_->RemoveSubscriber(state_);
-    owner_ = nullptr;
+  auto* owner = owner_.exchange(nullptr);
+  if (owner != nullptr && state_ != nullptr) {
+    owner->RemoveSubscriber(state_);
   }
 }
 

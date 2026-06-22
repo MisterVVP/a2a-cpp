@@ -58,7 +58,7 @@ class TaskSubscriptionService final {
     void Cancel() noexcept override;
 
    private:
-    TaskSubscriptionService* owner_ = nullptr;
+    std::atomic<TaskSubscriptionService*> owner_ = nullptr;
     std::shared_ptr<SubscriberState> state_;
     StreamResponseCoroutine coroutine_;
   };

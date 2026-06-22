@@ -2,10 +2,13 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -14,6 +17,7 @@ constexpr std::string_view kContextId = "subscription-context";
 constexpr std::string_view kTransientArtifactId = "transient-artifact";
 constexpr std::string_view kTransientHistoryMessageId = "transient-history-message";
 constexpr std::chrono::milliseconds kSubscriptionWaitTimeout{1};
+constexpr std::size_t kConcurrentCancelThreadCount = 8;
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -78,15 +82,16 @@ TEST(TaskSubscriptionServiceTest, TimedWaitKeepsSubscriptionOpen) {
   a2a::server::TaskSubscriptionService service;
   auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
   ASSERT_TRUE(subscription.ok());
-  (void)NextRequired(subscription.value().get());
+  auto* session = subscription.value().get();
+  (void)NextRequired(session);
 
-  const auto timeout = subscription.value()->NextFor(kSubscriptionWaitTimeout);
+  const auto timeout = session->NextFor(kSubscriptionWaitTimeout);
   ASSERT_TRUE(timeout.ok());
   EXPECT_FALSE(timeout.value().has_value());
-  EXPECT_TRUE(subscription.value()->IsLive());
+  EXPECT_TRUE(session->IsLive());
 
   service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED));
-  const auto update = NextRequired(subscription.value().get());
+  const auto update = NextRequired(session);
   ASSERT_TRUE(update.has_status_update());
   EXPECT_EQ(update.status_update().status().state(), lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
 }
@@ -162,6 +167,33 @@ TEST(TaskSubscriptionServiceTest, RemovingOneSubscriberDoesNotAffectOthers) {
   ASSERT_TRUE(update.has_status_update());
   EXPECT_EQ(update.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
   ExpectClosed(second.value().get());
+}
+
+TEST(TaskSubscriptionServiceTest, ConcurrentCancellationIsIdempotent) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto* session = subscription.value().get();
+  (void)NextRequired(session);
+
+  std::atomic_bool start = false;
+  std::vector<std::thread> cancellation_threads;
+  cancellation_threads.reserve(kConcurrentCancelThreadCount);
+  while (cancellation_threads.size() < kConcurrentCancelThreadCount) {
+    cancellation_threads.emplace_back([session, &start] {
+      start.wait(false);
+      session->Cancel();
+    });
+  }
+
+  start.store(true);
+  start.notify_all();
+  for (auto& cancellation_thread : cancellation_threads) {
+    cancellation_thread.join();
+  }
+
+  EXPECT_FALSE(session->IsLive());
+  ExpectClosed(session);
 }
 
 TEST(TaskSubscriptionServiceTest, ShutdownClosesActiveSubscriptions) {
