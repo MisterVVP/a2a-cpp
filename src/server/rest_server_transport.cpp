@@ -3,7 +3,6 @@
 
 #include "a2a/server/rest_server_transport.h"
 
-#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -15,6 +14,8 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/legacy_transport_names.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
@@ -23,45 +24,23 @@
 namespace a2a::server {
 namespace {
 
-constexpr int kHttpBadRequest = 400;
-constexpr int kHttpNotFound = 404;
-constexpr int kHttpOk = 200;
 constexpr int kHexAlphabetOffset = 10;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 struct ErrorBodySpec final {
-  int status_code = kHttpBadRequest;
+  int status_code = core::http::kStatusBadRequest;
   std::string_view message;
   std::string_view reason;
 };
 
 void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1::AgentCard& agent_card);
 
-std::string ToLower(std::string_view value) {
-  std::string lowered;
-  lowered.reserve(value.size());
-  for (const auto ch : value) {
-    lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-  }
-  return lowered;
-}
-
-std::string FindHeader(const std::unordered_map<std::string, std::string>& headers, std::string_view name) {
-  const std::string lowered_name = ToLower(name);
-  for (const auto& [header_name, value] : headers) {
-    if (ToLower(header_name) == lowered_name) {
-      return value;
-    }
-  }
-  return {};
-}
-
 std::string HttpStatusName(int status_code) {
   switch (status_code) {
-    case kHttpBadRequest:
+    case core::http::kStatusBadRequest:
       return "INVALID_ARGUMENT";
-    case kHttpNotFound:
+    case core::http::kStatusNotFound:
       return "NOT_FOUND";
     default:
       return "UNKNOWN";
@@ -103,7 +82,8 @@ std::string ErrorBody(const ErrorBodySpec& spec) {
 HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message, std::string_view reason) {
   HttpServerResponse response;
   response.status_code = status_code;
-  response.headers["Content-Type"] = "application/json";
+  response.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   response.body = ErrorBody({.status_code = status_code, .message = message, .reason = reason});
   return response;
@@ -395,12 +375,13 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
 
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(kHttpBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
 
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed", "UNSUPPORTED_OPERATION");
+    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
+                                  "UNSUPPORTED_OPERATION");
   }
 
   const auto rest_response = transport_.Handle(rest_request.value());
@@ -428,6 +409,7 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
   rest_request.method = request.method;
   rest_request.path = std::move(path);
   rest_request.body = request.body;
+  rest_request.headers = request.headers;
   rest_request.context.remote_address = request.remote_address.empty()
                                             ? std::optional<std::string>{}
                                             : std::optional<std::string>(request.remote_address);
@@ -446,7 +428,8 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
 }
 
 core::Result<void> RestServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
-  const std::string version = FindHeader(request.headers, core::Version::kHeaderName);
+  const auto version_header = core::http::FindHeaderValue(request.headers, core::Version::kHeaderName);
+  const std::string version = version_header.has_value() ? std::string(*version_header) : std::string();
   if (version.empty()) {
     if (options_.require_version_header) {
       return core::Error::UnsupportedVersion("Missing required A2A-Version header");
@@ -461,7 +444,8 @@ core::Result<void> RestServerTransport::ValidateVersionHeader(const HttpServerRe
 
 core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const HttpServerRequest& request) const {
   if (request.method != "GET") {
-    return BuildJsonErrorResponse(kHttpNotFound, "No matching route or request was malformed", "UNSUPPORTED_OPERATION");
+    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
+                                  "UNSUPPORTED_OPERATION");
   }
 
   const auto card = BuildNormalizedAgentCard(agent_card_, options_.include_legacy_transport_fields);
@@ -475,8 +459,9 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   }
 
   HttpServerResponse response;
-  response.status_code = kHttpOk;
-  response.headers["Content-Type"] = "application/json";
+  response.status_code = core::http::kStatusOk;
+  response.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
   ApplyAgentCardCacheHeaders(options_.agent_card_cache_settings, &response);
   response.headers["ETag"] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();

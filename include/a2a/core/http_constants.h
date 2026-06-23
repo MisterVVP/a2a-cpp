@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <string_view>
 
@@ -16,6 +17,10 @@ inline constexpr std::array<char, 4> kHeaderDelimiterBytes{kCarriageReturn, kLin
 inline constexpr std::string_view kLineTerminator{kLineTerminatorBytes.data(), kLineTerminatorBytes.size()};
 inline constexpr std::string_view kHeaderDelimiter{kHeaderDelimiterBytes.data(), kHeaderDelimiterBytes.size()};
 inline constexpr std::string_view kHeaderNameValueSeparator = ": ";
+inline constexpr char kContentTypeParameterSeparator = ';';
+
+inline constexpr std::string_view kMethodGet = "GET";
+inline constexpr std::string_view kMethodPost = "POST";
 
 inline constexpr std::string_view kHttpScheme = "http://";
 inline constexpr std::string_view kHttpsScheme = "https://";
@@ -24,6 +29,9 @@ inline constexpr std::string_view kHttpVersion20 = "HTTP/2.0";
 inline constexpr std::string_view kHttpVersion30 = "HTTP/3.0";
 inline constexpr std::string_view kDefaultPushHttpVersion = kHttpVersion20;
 inline constexpr std::string_view kContentTypeApplicationJson = "application/json";
+inline constexpr std::string_view kContentTypeTextEventStream = "text/event-stream";
+inline constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
+inline constexpr std::chrono::seconds kSseHeartbeatInterval{15};
 inline constexpr std::string_view kContentLengthHeader = "content-length";
 inline constexpr std::string_view kContentLengthHeaderName = "Content-Length";
 inline constexpr std::string_view kConnectionCloseHeaderName = "Connection";
@@ -58,5 +66,6 @@ inline constexpr long kMillisecondsPerSecond = 1000;
 inline constexpr long kMicrosecondsPerMillisecond = 1000;
 inline constexpr std::size_t kAuthorizationHeaderReserveOverhead = 18;
 inline constexpr std::size_t kReceiveBufferSize = 1024;
+inline constexpr std::size_t kDecimalBase = 10;
 
 }  // namespace a2a::core::http

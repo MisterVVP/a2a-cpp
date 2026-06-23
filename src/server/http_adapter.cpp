@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "a2a/core/http_constants.h"
+#include "a2a/core/string_utils.h"
 
 namespace a2a::server {
 namespace {
@@ -38,20 +39,6 @@ std::string Trim(std::string_view value) {
     --end;
   }
   return std::string(value.substr(start, end - start));
-}
-
-[[nodiscard]] bool EqualsAsciiCaseInsensitive(std::string_view lhs, std::string_view rhs) {
-  if (lhs.size() != rhs.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < lhs.size(); ++index) {
-    const auto lhs_char = static_cast<unsigned char>(lhs[index]);
-    const auto rhs_char = static_cast<unsigned char>(rhs[index]);
-    if (std::tolower(lhs_char) != std::tolower(rhs_char)) {
-      return false;
-    }
-  }
-  return true;
 }
 
 [[nodiscard]] std::size_t ResponsePayloadReserveSize(const HttpServerResponse& response,
@@ -152,7 +139,7 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
     return core::Error::Validation("HTTP header name cannot be empty");
   }
 
-  if (EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
+  if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
     const auto parsed_length = ParseContentLength(value);
     if (!parsed_length.ok()) {
       return parsed_length.error();
@@ -347,7 +334,7 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   const bool is_streaming = static_cast<bool>(response.stream_writer);
   bool has_content_length = false;
   for (const auto& [name, value] : response.headers) {
-    if (EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
+    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
       if (is_streaming) {
         return core::Error::Validation("Streaming responses cannot set Content-Length");
       }

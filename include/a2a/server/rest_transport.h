@@ -25,12 +25,15 @@ struct RestEndpointPaths final {
   static constexpr std::string_view kTaskCollection = "/tasks";
   static constexpr std::string_view kTaskResourcePrefix = "/tasks/";
   static constexpr std::string_view kTaskCancelSuffix = ":cancel";
+  static constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
+  static constexpr std::string_view kTaskSubscribePath = "/tasks/{id}:subscribe";
 };
 
 struct RestRequest final {
   std::string method;
   std::string path;
   std::unordered_map<std::string, std::string> query_params;
+  std::unordered_map<std::string, std::string> headers;
   std::string body;
   RequestContext context;
 };
