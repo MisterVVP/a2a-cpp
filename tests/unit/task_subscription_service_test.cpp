@@ -6,6 +6,7 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -18,6 +19,9 @@ constexpr std::string_view kTransientArtifactId = "transient-artifact";
 constexpr std::string_view kTransientHistoryMessageId = "transient-history-message";
 constexpr std::chrono::milliseconds kSubscriptionWaitTimeout{1};
 constexpr std::size_t kConcurrentCancelThreadCount = 8;
+constexpr std::size_t kConcurrentPublisherCount = 8;
+constexpr std::size_t kUpdatesPerPublisher = 16;
+constexpr std::size_t kOrderingSubscriberCount = 8;
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -42,6 +46,16 @@ void ExpectClosed(a2a::server::ServerStreamSession* session) {
   auto next = session->Next();
   EXPECT_TRUE(next.ok());
   EXPECT_FALSE(next.value().has_value());
+}
+
+std::vector<std::string> DrainStatusContextIds(a2a::server::ServerStreamSession* session) {
+  std::vector<std::string> context_ids;
+  for (auto next = session->Next(); next.ok() && next.value().has_value(); next = session->Next()) {
+    if (next.value()->has_status_update()) {
+      context_ids.push_back(next.value()->status_update().context_id());
+    }
+  }
+  return context_ids;
 }
 
 TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
@@ -150,6 +164,45 @@ TEST(TaskSubscriptionServiceTest, BroadcastsUpdatesToMultipleSubscribersAndClose
   EXPECT_EQ(second_terminal.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
   ExpectClosed(first.value().get());
   ExpectClosed(second.value().get());
+}
+
+TEST(TaskSubscriptionServiceTest, ConcurrentPublishersPreserveOrderingAcrossSubscribers) {
+  a2a::server::TaskSubscriptionService service;
+  std::vector<std::unique_ptr<a2a::server::ServerStreamSession>> subscriptions;
+  subscriptions.reserve(kOrderingSubscriberCount);
+  while (subscriptions.size() < kOrderingSubscriberCount) {
+    auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+    ASSERT_TRUE(subscription.ok());
+    (void)NextRequired(subscription.value().get());
+    subscriptions.push_back(std::move(subscription.value()));
+  }
+
+  std::atomic_bool start = false;
+  std::vector<std::thread> publishers;
+  publishers.reserve(kConcurrentPublisherCount);
+  for (std::size_t publisher = 0; publisher < kConcurrentPublisherCount; ++publisher) {
+    publishers.emplace_back([publisher, &service, &start] {
+      start.wait(false);
+      for (std::size_t update = 0; update < kUpdatesPerPublisher; ++update) {
+        auto task = MakeTask(lf::a2a::v1::TASK_STATE_WORKING);
+        task.set_context_id("publisher-" + std::to_string(publisher) + "-update-" + std::to_string(update));
+        service.PublishTaskUpdated(task);
+      }
+    });
+  }
+
+  start.store(true);
+  start.notify_all();
+  for (auto& publisher : publishers) {
+    publisher.join();
+  }
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));
+
+  const auto expected = DrainStatusContextIds(subscriptions.front().get());
+  ASSERT_EQ(expected.size(), (kConcurrentPublisherCount * kUpdatesPerPublisher) + 1);
+  for (std::size_t index = 1; index < subscriptions.size(); ++index) {
+    EXPECT_EQ(DrainStatusContextIds(subscriptions[index].get()), expected);
+  }
 }
 
 TEST(TaskSubscriptionServiceTest, RemovingOneSubscriberDoesNotAffectOthers) {

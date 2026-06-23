@@ -49,6 +49,7 @@ class TaskSubscriptionService final {
   };
 
   struct ServiceState final {
+    std::mutex publication_mutex;
     std::mutex mutex;
     std::unordered_map<std::string, std::vector<std::weak_ptr<SubscriberState>>> subscribers_by_task_id;
     std::unordered_map<std::string, LatestTaskState> latest_task_states_by_id;

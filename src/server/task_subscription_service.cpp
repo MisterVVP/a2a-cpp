@@ -85,6 +85,7 @@ core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subs
 
 void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) {
   const auto service_state = state_;
+  std::lock_guard publication_lock(service_state->publication_mutex);
   std::vector<std::shared_ptr<SubscriberState>> subscribers;
   {
     std::lock_guard lock(service_state->mutex);
