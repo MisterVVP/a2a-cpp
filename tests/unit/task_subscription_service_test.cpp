@@ -9,9 +9,15 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+static_assert(!std::is_copy_constructible_v<a2a::server::TaskSubscriptionService>);
+static_assert(!std::is_copy_assignable_v<a2a::server::TaskSubscriptionService>);
+static_assert(!std::is_move_constructible_v<a2a::server::TaskSubscriptionService>);
+static_assert(!std::is_move_assignable_v<a2a::server::TaskSubscriptionService>);
 
 constexpr std::string_view kTaskId = "subscription-task";
 constexpr std::string_view kContextId = "subscription-context";

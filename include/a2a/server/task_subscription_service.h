@@ -25,6 +25,11 @@ namespace a2a::server {
 
 class TaskSubscriptionService final {
  public:
+  TaskSubscriptionService() = default;
+  TaskSubscriptionService(const TaskSubscriptionService&) = delete;
+  TaskSubscriptionService& operator=(const TaskSubscriptionService&) = delete;
+  TaskSubscriptionService(TaskSubscriptionService&&) = delete;
+  TaskSubscriptionService& operator=(TaskSubscriptionService&&) = delete;
   ~TaskSubscriptionService();
 
   [[nodiscard]] core::Result<std::unique_ptr<ServerStreamSession>> Subscribe(const lf::a2a::v1::Task& task);
