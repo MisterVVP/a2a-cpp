@@ -153,6 +153,20 @@ target_link_libraries(task_id_generator_test
 
 gtest_discover_tests(task_id_generator_test)
 
+add_executable(task_subscription_service_test
+  unit/task_subscription_service_test.cpp
+)
+
+target_link_libraries(task_subscription_service_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(task_subscription_service_test)
+
 add_executable(store_factory_test
   unit/store_factory_test.cpp
 )

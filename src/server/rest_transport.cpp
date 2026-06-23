@@ -6,11 +6,13 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "a2a/core/error.h"
@@ -20,6 +22,7 @@
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
+#include "a2a/server/http_adapter.h"
 
 namespace a2a::server {
 namespace {
@@ -37,9 +40,14 @@ constexpr int kHttpBadGateway = 502;
 constexpr int kHttpServiceUnavailable = 503;
 constexpr int kHttpInternalServerError = 500;
 constexpr std::size_t kDecimalBase = 10;
+constexpr std::string_view kGetMethod = "GET";
+constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kTaskSubscribeSuffix = ":subscribe";
+constexpr std::string_view kTaskSubscribePath = "/tasks/{id}:subscribe";
+constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
+constexpr std::chrono::seconds kSseHeartbeatInterval{15};
 
-const std::array<RestRoute, 10> kRoutes = {
+const std::array<RestRoute, 11> kRoutes = {
     RestRoute{.method = "POST",
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
@@ -51,7 +59,10 @@ const std::array<RestRoute, 10> kRoutes = {
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
-    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:subscribe", .operation = DispatcherOperation::kGetTask},
+    RestRoute{
+        .method = kGetMethod, .path_pattern = kTaskSubscribePath, .operation = DispatcherOperation::kSubscribeTask},
+    RestRoute{
+        .method = kPostMethod, .path_pattern = kTaskSubscribePath, .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = "POST",
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
@@ -164,6 +175,19 @@ std::optional<std::string> LookupQuery(const RestRequest& request, std::string_v
     return std::nullopt;
   }
   return it->second;
+}
+
+bool ApplyHistoryLengthQuery(const RestRequest& request, lf::a2a::v1::GetTaskRequest& get_task_request) {
+  const auto history_length = LookupQuery(request, "historyLength");
+  if (!history_length.has_value()) {
+    return true;
+  }
+  const int parsed_history_length = ParsePageSize(*history_length);
+  if (parsed_history_length < 0) {
+    return false;
+  }
+  get_task_request.set_history_length(parsed_history_length);
+  return true;
 }
 
 std::string ErrorStatusName(int http_status) {
@@ -284,6 +308,21 @@ core::Result<void> AppendSseEvent(RestResponse& response, const lf::a2a::v1::Str
   return {};
 }
 
+core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view chunk) {
+  std::size_t sent = 0;
+  while (sent < chunk.size()) {
+    const auto written = transport.Write(chunk.data() + sent, chunk.size() - sent);
+    if (!written.ok()) {
+      return written.error();
+    }
+    if (written.value() == 0) {
+      return core::Error::Internal("Transport write returned zero bytes while streaming SSE");
+    }
+    sent += written.value();
+  }
+  return {};
+}
+
 core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
     return core::Error::Internal("Streaming response session is missing");
@@ -294,14 +333,11 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
 
-  while (true) {
-    auto next = session->Next();
-    if (!next.ok()) {
-      return next.error();
-    }
+  auto next = session->Next();
+  for (; next.ok(); next = session->Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
-      break;
+      return response;
     }
     const auto append = AppendSseEvent(response, event.value());
     if (!append.ok()) {
@@ -309,36 +345,51 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
     }
   }
 
-  return response;
+  return next.error();
 }
 
-core::Result<RestResponse> BuildSubscribeResponse(const lf::a2a::v1::Task& task) {
-  if (core::IsTerminalTaskState(task.status().state())) {
-    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {
+  if (session == nullptr) {
+    return core::Error::Internal("Subscription response session is missing");
   }
 
   RestResponse response;
   response.http_status = kHttpOk;
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
+  response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
+                               HttpByteTransport& transport) -> core::Result<void> {
+    if (*session == nullptr) {
+      return core::Error::Internal("Subscription response session is missing");
+    }
 
-  lf::a2a::v1::StreamResponse current_event;
-  *current_event.mutable_task() = task;
-  current_event.mutable_task()->clear_artifacts();
-  current_event.mutable_task()->clear_history();
-  const auto current_append = AppendSseEvent(response, current_event);
-  if (!current_append.ok()) {
-    return current_append.error();
-  }
-
-  lf::a2a::v1::StreamResponse terminal_event;
-  terminal_event.mutable_status_update()->set_task_id(task.id());
-  terminal_event.mutable_status_update()->set_context_id(task.context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-  const auto terminal_append = AppendSseEvent(response, terminal_event);
-  if (!terminal_append.ok()) {
-    return terminal_append.error();
-  }
+    auto next = (*session)->NextFor(kSseHeartbeatInterval);
+    for (; next.ok(); next = (*session)->NextFor(kSseHeartbeatInterval)) {
+      const auto& event = next.value();
+      if (!event.has_value()) {
+        if (!(*session)->IsLive()) {
+          return {};
+        }
+        const auto heartbeat = WriteSseChunk(transport, kSseHeartbeat);
+        if (!heartbeat.ok()) {
+          (*session)->Cancel();
+          return heartbeat.error();
+        }
+        continue;
+      }
+      RestResponse chunk;
+      const auto append = AppendSseEvent(chunk, event.value());
+      if (!append.ok()) {
+        return append.error();
+      }
+      const auto written = WriteSseChunk(transport, chunk.body);
+      if (!written.ok()) {
+        (*session)->Cancel();
+        return written.error();
+      }
+    }
+    return next.error();
+  };
 
   return response;
 }
@@ -406,12 +457,8 @@ std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& re
 
   lf::a2a::v1::GetTaskRequest payload;
   payload.set_id(*task_id);
-  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
-    const int parsed_history_length = ParsePageSize(*history_length);
-    if (parsed_history_length < 0) {
-      return std::nullopt;
-    }
-    payload.set_history_length(parsed_history_length);
+  if (!ApplyHistoryLengthQuery(request, payload)) {
+    return std::nullopt;
   }
   return DispatchRequest{.operation = DispatcherOperation::kGetTask, .payload = payload};
 }
@@ -513,6 +560,14 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
             core::protocol_error_messages::kResponsePayloadMismatchForSendStreamingMessage);
       }
       return BuildStreamingResponse(*payload);
+    }
+    case DispatcherOperation::kSubscribeTask: {
+      auto* payload = std::get_if<std::unique_ptr<ServerStreamSession>>(&response.payload());
+      if (payload == nullptr) {
+        return InternalResponsePayloadMismatch(
+            core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
+      }
+      return BuildSubscribeResponse(*payload);
     }
     case DispatcherOperation::kGetTask:
     case DispatcherOperation::kCancelTask: {
@@ -620,25 +675,29 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
     return core::Error::Internal("REST transport dispatcher is not configured");
   }
 
-  if (request.method == "POST") {
+  if (request.method == kGetMethod || request.method == kPostMethod) {
     const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, kTaskSubscribeSuffix);
     if (subscribe_task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest get_task_request;
       get_task_request.set_id(*subscribe_task_id);
+      if (!ApplyHistoryLengthQuery(request, get_task_request)) {
+        return BuildErrorResponse(
+            core::Error::Validation("No matching route or request was malformed").WithHttpStatus(kHttpNotFound));
+      }
       RequestContext context = request.context;
-      const auto dispatch_response =
-          dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get_task_request}, context);
+      auto dispatch_response = dispatcher_->Dispatch(
+          {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, context);
       if (!dispatch_response.ok()) {
         return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
       }
-      const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch_response.value().payload());
-      if (task == nullptr) {
+      auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch_response.value().payload());
+      if (stream == nullptr || *stream == nullptr) {
         return BuildErrorResponse(
             core::Error::Internal(core::protocol_error_messages::ToString(
                                       core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask))
                 .WithTransport("rest"));
       }
-      const auto subscribe_response = BuildSubscribeResponse(*task);
+      const auto subscribe_response = BuildSubscribeResponse(*stream);
       if (!subscribe_response.ok()) {
         return BuildErrorResponse(subscribe_response.error().WithTransport("rest"));
       }

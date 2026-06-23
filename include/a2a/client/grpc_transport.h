@@ -55,6 +55,12 @@ class GrpcTransport final : public ClientTransport {
       return std::unique_ptr<StreamReader>();
     }
 
+    virtual void CancelStream(::grpc::ClientContext* context) {
+      if (context != nullptr) {
+        context->TryCancel();
+      }
+    }
+
     [[nodiscard]] virtual ::grpc::Status CancelTask(::grpc::ClientContext* context,
                                                     const lf::a2a::v1::CancelTaskRequest& request,
                                                     lf::a2a::v1::Task* response) = 0;
@@ -117,7 +123,7 @@ class GrpcTransport final : public ClientTransport {
   [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
   ResolvedInterface resolved_interface_;
-  std::unique_ptr<RpcClient> rpc_client_;
+  std::shared_ptr<RpcClient> rpc_client_;
   std::chrono::milliseconds default_timeout_;
 };
 

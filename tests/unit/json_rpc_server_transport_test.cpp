@@ -6,10 +6,17 @@
 #include <google/protobuf/struct.pb.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/task_states.h"
+#include "a2a/server/http_adapter.h"
 
 namespace {
 
@@ -18,6 +25,29 @@ constexpr int kJsonRpcInternalError = -32603;
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kA2aVersionHeader = "A2A-Version";
 constexpr std::string_view kA2aVersionValue = "1.0";
+constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
+constexpr std::string_view kHeartbeatSubscribeRequestBody =
+    R"({"jsonrpc":"2.0","id":"req-sub-heartbeat","method":"a2a.subscribeToTask","params":{"id":"task-sub"}})";
+
+class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
+ public:
+  [[nodiscard]] a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+    (void)buffer;
+    (void)size;
+    return a2a::core::Error::Internal("read is not used by this test transport");
+  }
+
+  [[nodiscard]] a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    if (fail_heartbeat && std::string_view(buffer, size) == kSseHeartbeat) {
+      return a2a::core::Error::Network("client disconnected");
+    }
+    body.append(buffer, size);
+    return size;
+  }
+
+  bool fail_heartbeat = false;
+  std::string body;
+};
 constexpr std::string_view kJsonContentTypeHeader = "Content-Type";
 constexpr std::string_view kTextPlainContentType = "text/plain";
 constexpr std::string_view kApplicationJsonWithCharset = "Application/JSON; charset=utf-8";
@@ -30,7 +60,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
   class SingleEventSession final : public a2a::server::ServerStreamSession {
    public:
-    explicit SingleEventSession(lf::a2a::v1::StreamResponse event) : event_(std::move(event)) {}
+    explicit SingleEventSession(lf::a2a::v1::StreamResponse event, bool is_live = false)
+        : event_(std::move(event)), is_live_(is_live) {}
 
     a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
       if (consumed_) {
@@ -40,8 +71,39 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
       return std::optional<lf::a2a::v1::StreamResponse>(event_);
     }
 
+    [[nodiscard]] bool IsLive() const noexcept override { return is_live_ && !consumed_; }
+
    private:
     lf::a2a::v1::StreamResponse event_;
+    bool is_live_ = false;
+    bool consumed_ = false;
+  };
+
+  class HeartbeatEventSession final : public a2a::server::ServerStreamSession {
+   public:
+    HeartbeatEventSession(lf::a2a::v1::StreamResponse event, std::shared_ptr<std::atomic_bool> cancelled)
+        : event_(std::move(event)), cancelled_(std::move(cancelled)) {}
+
+    a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+      return NextFor(std::chrono::milliseconds::zero());
+    }
+
+    a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(std::chrono::milliseconds timeout) override {
+      (void)timeout;
+      if (!consumed_) {
+        consumed_ = true;
+        return std::optional<lf::a2a::v1::StreamResponse>{event_};
+      }
+      return std::optional<lf::a2a::v1::StreamResponse>{};
+    }
+
+    [[nodiscard]] bool IsLive() const noexcept override { return !cancelled_->load(); }
+
+    void Cancel() noexcept override { cancelled_->store(true); }
+
+   private:
+    lf::a2a::v1::StreamResponse event_;
+    std::shared_ptr<std::atomic_bool> cancelled_;
     bool consumed_ = false;
   };
 
@@ -63,6 +125,24 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
     return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(event));
+  }
+
+  a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SubscribeTask(
+      const lf::a2a::v1::GetTaskRequest& request, a2a::server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    if (a2a::core::IsTerminalTaskState(task.value().status().state())) {
+      return a2a::core::protocol_errors::UnsupportedOperation("task is already terminal");
+    }
+    lf::a2a::v1::StreamResponse event;
+    *event.mutable_task() = task.value();
+    if (heartbeat_cancellation != nullptr) {
+      return std::unique_ptr<a2a::server::ServerStreamSession>(
+          std::make_unique<HeartbeatEventSession>(event, heartbeat_cancellation));
+    }
+    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(event, true));
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -138,6 +218,7 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
   std::string last_push_auth_scheme;
   std::string last_deleted_push_config_id;
   bool fail_streaming = false;
+  std::shared_ptr<std::atomic_bool> heartbeat_cancellation;
   lf::a2a::v1::TaskState task_state = lf::a2a::v1::TASK_STATE_WORKING;
 };
 
@@ -478,7 +559,34 @@ TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTa
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
-  EXPECT_NE(response.value().body.find("task-sub"), std::string::npos);
+  ASSERT_TRUE(response.value().stream_writer);
+  RecordingHttpTransport output;
+  const auto write = response.value().stream_writer(output);
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(output.body.find("task-sub"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, SubscribeHeartbeatCancelsDisconnectedClient) {
+  JsonRpcEchoExecutor executor;
+  executor.heartbeat_cancellation = std::make_shared<std::atomic_bool>(false);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle({.method = "POST",
+                                       .target = "/rpc",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = std::string(kHeartbeatSubscribeRequestBody),
+                                       .remote_address = {}});
+  ASSERT_TRUE(response.ok());
+  ASSERT_TRUE(response.value().stream_writer);
+
+  RecordingHttpTransport output;
+  output.fail_heartbeat = true;
+  const auto write = response.value().stream_writer(output);
+
+  ASSERT_FALSE(write.ok());
+  EXPECT_TRUE(executor.heartbeat_cancellation->load());
+  EXPECT_NE(output.body.find("task-sub"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, SubscribeToTaskRejectsTerminalTask) {

@@ -286,35 +286,45 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SendStreamingMessage(
   }
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto context = std::move(context_result.value());
-  auto worker = StreamHandle::WorkerThread([this, state, request, &observer, context = std::move(context)]() mutable {
-    auto reader = rpc_client_->SendStreamingMessage(context.get(), request);
-    if (reader == nullptr) {
-      observer.OnError(core::Error::Internal("Failed to create gRPC stream reader"));
-      state->active.store(false);
-      return;
-    }
+  auto rpc_client = rpc_client_;
+  auto context = std::shared_ptr<::grpc::ClientContext>(std::move(context_result.value()));
+  {
+    std::lock_guard lock(state->cancellation_mutex);
+    state->cancel_callback = [rpc_client, weak_context = std::weak_ptr<::grpc::ClientContext>(context)] {
+      if (const auto context = weak_context.lock(); context != nullptr) {
+        rpc_client->CancelStream(context.get());
+      }
+    };
+  }
+  auto worker =
+      StreamHandle::WorkerThread([rpc_client, state, request, &observer, context = std::move(context)]() mutable {
+        auto reader = rpc_client->SendStreamingMessage(context.get(), request);
+        if (reader == nullptr) {
+          observer.OnError(core::Error::Internal("Failed to create gRPC stream reader"));
+          state->active.store(false);
+          return;
+        }
 
-    lf::a2a::v1::StreamResponse event;
-    while (!state->cancel_requested.load() && reader->Read(&event)) {
-      observer.OnEvent(event);
-    }
+        lf::a2a::v1::StreamResponse event;
+        while (!state->cancel_requested.load() && reader->Read(&event)) {
+          observer.OnEvent(event);
+        }
 
-    const auto status = reader->Finish();
-    if (state->cancel_requested.load()) {
-      state->active.store(false);
-      return;
-    }
+        const auto status = reader->Finish();
+        if (state->cancel_requested.load()) {
+          state->active.store(false);
+          return;
+        }
 
-    if (!status.ok()) {
-      observer.OnError(BuildGrpcError(status));
-      state->active.store(false);
-      return;
-    }
+        if (!status.ok()) {
+          observer.OnError(GrpcTransport::BuildGrpcError(status));
+          state->active.store(false);
+          return;
+        }
 
-    observer.OnCompleted();
-    state->active.store(false);
-  });
+        observer.OnCompleted();
+        state->active.store(false);
+      });
 
   return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
@@ -335,10 +345,19 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
   subscribe_request.set_id(request.id());
 
   auto state = std::make_shared<StreamHandle::State>();
-  auto context = std::move(context_result.value());
-  auto worker =
-      StreamHandle::WorkerThread([this, state, subscribe_request, &observer, context = std::move(context)]() mutable {
-        auto reader = rpc_client_->SubscribeToTask(context.get(), subscribe_request);
+  auto rpc_client = rpc_client_;
+  auto context = std::shared_ptr<::grpc::ClientContext>(std::move(context_result.value()));
+  {
+    std::lock_guard lock(state->cancellation_mutex);
+    state->cancel_callback = [rpc_client, weak_context = std::weak_ptr<::grpc::ClientContext>(context)] {
+      if (const auto context = weak_context.lock(); context != nullptr) {
+        rpc_client->CancelStream(context.get());
+      }
+    };
+  }
+  auto worker = StreamHandle::WorkerThread(
+      [rpc_client, state, subscribe_request, &observer, context = std::move(context)]() mutable {
+        auto reader = rpc_client->SubscribeToTask(context.get(), subscribe_request);
         if (reader == nullptr) {
           observer.OnError(core::Error::Internal("Failed to create gRPC subscribe stream reader"));
           state->active.store(false);
@@ -357,7 +376,7 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
         }
 
         if (!status.ok()) {
-          observer.OnError(BuildGrpcError(status));
+          observer.OnError(GrpcTransport::BuildGrpcError(status));
           state->active.store(false);
           return;
         }

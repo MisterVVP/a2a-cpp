@@ -21,12 +21,16 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -123,6 +127,49 @@ class SocketTransport final : public a2a::server::HttpByteTransport {
   int fd_;
 };
 
+class HttpConnectionRegistry final {
+ public:
+  void Add(int fd) {
+    std::lock_guard lock(mutex_);
+    active_fds_.insert(fd);
+  }
+
+  void Remove(int fd) {
+    std::lock_guard lock(mutex_);
+    active_fds_.erase(fd);
+  }
+
+  void ShutdownActiveSockets() {
+    std::lock_guard lock(mutex_);
+    for (const int fd : active_fds_) {
+#ifdef _WIN32
+      (void)::shutdown(fd, SD_BOTH);
+#else
+      (void)::shutdown(fd, SHUT_RDWR);
+#endif
+    }
+  }
+
+ private:
+  std::mutex mutex_;
+  std::unordered_set<int> active_fds_;
+};
+
+void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConnectionRegistry& registry) {
+  SocketTransport socket_transport(fd);
+  const a2a::server::HttpAdapter adapter;
+  auto parsed = adapter.ReadRequest(socket_transport, "localhost");
+  if (parsed.ok()) {
+    a2a::server::HttpServerRequest request = std::move(parsed.value());
+    auto response = mux.RouteRequest(request);
+    if (response.ok()) {
+      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
+    }
+  }
+  registry.Remove(fd);
+  a2a::server::CloseSocketCrossPlatform(fd);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -202,6 +249,8 @@ int main(int argc, char** argv) {
   mux.RegisterJsonRpcRoute(jsonrpc);
   mux.RegisterRestRoute(rest);
 
+  HttpConnectionRegistry connection_registry;
+  std::vector<std::thread> connection_threads;
   while (kKeepRunning != 0) {
     sockaddr_in client{};
     socklen_t len = sizeof(client);
@@ -209,20 +258,15 @@ int main(int argc, char** argv) {
     if (fd < 0) {
       continue;
     }
-    SocketTransport socket_transport(fd);
-    const a2a::server::HttpAdapter adapter;
-    auto parsed = adapter.ReadRequest(socket_transport, "localhost");
-    if (!parsed.ok()) {
-      a2a::server::CloseSocketCrossPlatform(fd);
-      continue;
+    connection_registry.Add(fd);
+    connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::ref(connection_registry));
+  }
+  executor.ShutdownSubscriptions();
+  connection_registry.ShutdownActiveSockets();
+  for (auto& connection_thread : connection_threads) {
+    if (connection_thread.joinable()) {
+      connection_thread.join();
     }
-
-    a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = mux.RouteRequest(request);
-    if (response.ok()) {
-      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
-    }
-    a2a::server::CloseSocketCrossPlatform(fd);
   }
   grpc_server->Shutdown();
   a2a::server::CloseSocketCrossPlatform(server_fd);

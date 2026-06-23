@@ -83,11 +83,25 @@ core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, c
     case DispatcherOperation::kSendMessage:
     case DispatcherOperation::kSendStreamingMessage:
     case DispatcherOperation::kGetTask:
+    case DispatcherOperation::kSubscribeTask:
     case DispatcherOperation::kListTasks:
     case DispatcherOperation::kCancelTask:
       return core::Error::Validation("Dispatch operation is not a push notification operation");
   }
   return core::Error::Validation("Unsupported push notification dispatcher operation");
+}
+
+core::Result<DispatchResponse> DispatchSubscribeToExecutor(AgentExecutor& executor, const DispatchRequest& request,
+                                                           RequestContext& context) {
+  const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
+  if (payload == nullptr) {
+    return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask);
+  }
+  auto response = executor.SubscribeTask(*payload, context);
+  if (!response.ok()) {
+    return response.error();
+  }
+  return DispatchResponse(std::move(response.value()));
 }
 
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
@@ -135,6 +149,9 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
         ApplyHistoryRetention(&task, static_cast<std::size_t>(payload->history_length()));
       }
       return DispatchResponse(std::move(task));
+    }
+    case DispatcherOperation::kSubscribeTask: {
+      return DispatchSubscribeToExecutor(executor, request, context);
     }
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksRequest>(&request.payload);

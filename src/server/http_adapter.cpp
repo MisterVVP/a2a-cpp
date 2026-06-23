@@ -198,6 +198,21 @@ struct BodyReadLimits final {
   std::size_t max_request_size;
 };
 
+core::Result<void> WriteAll(HttpByteTransport& transport, std::string_view payload) {
+  std::size_t sent = 0;
+  while (sent < payload.size()) {
+    const auto written = transport.Write(payload.data() + sent, payload.size() - sent);
+    if (!written.ok()) {
+      return written.error();
+    }
+    if (written.value() == 0) {
+      return core::Error::Internal("Transport write returned zero bytes");
+    }
+    sent += written.value();
+  }
+  return {};
+}
+
 core::Result<void> ReadRemainingBody(HttpByteTransport& transport, const BodyReadLimits& limits,
                                      std::vector<char>& buffer, std::string& raw) {
   while (raw.size() - limits.body_start < limits.expected_body_size) {
@@ -329,9 +344,13 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   payload += reason_phrase;
   payload += core::http::kLineTerminator;
 
+  const bool is_streaming = static_cast<bool>(response.stream_writer);
   bool has_content_length = false;
   for (const auto& [name, value] : response.headers) {
     if (EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
+      if (is_streaming) {
+        return core::Error::Validation("Streaming responses cannot set Content-Length");
+      }
       has_content_length = true;
       const auto parsed_length = ParseContentLength(value);
       if (!parsed_length.ok()) {
@@ -346,7 +365,7 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     payload += value;
     payload += core::http::kLineTerminator;
   }
-  if (!has_content_length) {
+  if (!has_content_length && !is_streaming) {
     payload += core::http::kContentLengthHeaderName;
     payload += core::http::kHeaderNameValueSeparator;
     payload += std::to_string(response.body.size());
@@ -357,18 +376,16 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   payload += core::http::kConnectionCloseHeaderValue;
   payload += core::http::kLineTerminator;
   payload += core::http::kLineTerminator;
-  payload += response.body;
+  if (!is_streaming) {
+    payload += response.body;
+  }
 
-  std::size_t sent = 0;
-  while (sent < payload.size()) {
-    const auto written = transport.Write(payload.data() + sent, payload.size() - sent);
-    if (!written.ok()) {
-      return written.error();
-    }
-    if (written.value() == 0) {
-      return core::Error::Internal("Transport write returned zero bytes");
-    }
-    sent += written.value();
+  const auto headers_written = WriteAll(transport, payload);
+  if (!headers_written.ok()) {
+    return headers_written.error();
+  }
+  if (is_streaming) {
+    return response.stream_writer(transport);
   }
   return {};
 }

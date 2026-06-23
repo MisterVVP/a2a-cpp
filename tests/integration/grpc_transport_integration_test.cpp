@@ -8,8 +8,10 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,6 +26,7 @@
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/request_context.h"
 #include "a2a/server/server_stream_session.h"
+#include "a2a/server/task_subscription_service.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/server/tasks/task_store.h"
@@ -61,6 +64,7 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     if (!saved.ok()) {
       return saved.error();
     }
+    subscriptions_.PublishTaskUpdated(task);
     lf::a2a::v1::SendMessageResponse response;
     *response.mutable_task() = task;
     return response;
@@ -81,6 +85,15 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     return store_->Get(request.id());
   }
 
+  a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SubscribeTask(
+      const lf::a2a::v1::GetTaskRequest& request, a2a::server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    return subscriptions_.Subscribe(task.value());
+  }
+
   a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
                                                               a2a::server::RequestContext& context) override {
     (void)context;
@@ -90,22 +103,67 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                   a2a::server::RequestContext& context) override {
     (void)context;
-    return store_->Cancel(request.id());
+    auto task = store_->Cancel(request.id());
+    if (task.ok()) {
+      subscriptions_.PublishTaskUpdated(task.value());
+    }
+    return task;
   }
 
  private:
   a2a::server::TaskStore* store_;
+  a2a::server::TaskSubscriptionService subscriptions_;
 };
 
 class RecordingObserver final : public a2a::client::StreamObserver {
  public:
-  void OnEvent(const lf::a2a::v1::StreamResponse& response) override { events.push_back(response); }
-  void OnError(const a2a::core::Error& error) override { errors.emplace_back(error.message()); }
-  void OnCompleted() override { completed = true; }
+  struct Snapshot final {
+    std::vector<lf::a2a::v1::StreamResponse> events;
+    std::vector<std::string> errors;
+    bool completed = false;
+  };
 
-  std::vector<lf::a2a::v1::StreamResponse> events;
-  std::vector<std::string> errors;
-  bool completed = false;
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    {
+      std::lock_guard lock(mutex_);
+      events_.push_back(response);
+    }
+    changed_.notify_all();
+  }
+
+  void OnError(const a2a::core::Error& error) override {
+    {
+      std::lock_guard lock(mutex_);
+      errors_.emplace_back(error.message());
+    }
+    changed_.notify_all();
+  }
+
+  void OnCompleted() override {
+    {
+      std::lock_guard lock(mutex_);
+      completed_ = true;
+    }
+    changed_.notify_all();
+  }
+
+  [[nodiscard]] bool WaitForEventCount(std::size_t expected_count) const {
+    constexpr auto kWaitTimeout = std::chrono::seconds(1);
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, kWaitTimeout, [this, expected_count] { return events_.size() >= expected_count; });
+  }
+
+  [[nodiscard]] Snapshot GetSnapshot() const {
+    std::lock_guard lock(mutex_);
+    return Snapshot{.events = events_, .errors = errors_, .completed = completed_};
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  mutable std::condition_variable changed_;
+  std::vector<lf::a2a::v1::StreamResponse> events_;
+  std::vector<std::string> errors_;
+  bool completed_ = false;
 };
 
 struct GrpcServerHarness final {
@@ -182,16 +240,17 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
-  if (observer.events.size() != 1U) {
+  const auto snapshot = observer.GetSnapshot();
+  if (snapshot.events.size() != 1U) {
     return a2a::core::Error::Internal("Unexpected streaming event count");
   }
-  if (observer.events.front().task().id() != "grpc-integration-1") {
+  if (snapshot.events.front().task().id() != "grpc-integration-1") {
     return a2a::core::Error::Internal("Streaming event returned unexpected task id");
   }
-  if (!observer.completed) {
+  if (!snapshot.completed) {
     return a2a::core::Error::Internal("Streaming observer was not completed");
   }
-  if (!observer.errors.empty()) {
+  if (!snapshot.errors.empty()) {
     return a2a::core::Error::Internal("Streaming observer unexpectedly received errors");
   }
   return {};
@@ -271,31 +330,42 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!stream.ok()) {
     return stream.error();
   }
+  if (!observer.WaitForEventCount(1U)) {
+    return a2a::core::Error::Internal("SubscribeTask did not produce its initial event");
+  }
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(std::string(kTaskId));
+  const auto cancel_response = client->CancelTask(cancel_request);
+  if (!cancel_response.ok()) {
+    return cancel_response.error();
+  }
 
   while (stream.value()->IsActive()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
-  if (!observer.errors.empty()) {
+  const auto snapshot = observer.GetSnapshot();
+  if (!snapshot.errors.empty()) {
     return a2a::core::Error::Internal("SubscribeTask unexpectedly returned errors");
   }
-  if (!observer.completed) {
+  if (!snapshot.completed) {
     return a2a::core::Error::Internal("SubscribeTask stream did not complete");
   }
   constexpr std::size_t kExpectedSubscribeEventCount = 2U;
-  if (observer.events.size() != kExpectedSubscribeEventCount) {
+  if (snapshot.events.size() != kExpectedSubscribeEventCount) {
     return a2a::core::Error::Internal("SubscribeTask returned unexpected number of events");
   }
-  if (!observer.events.front().has_task()) {
+  if (!snapshot.events.front().has_task()) {
     return a2a::core::Error::Internal("SubscribeTask first event must contain task payload");
   }
-  if (observer.events.front().task().id() != kTaskId) {
+  if (snapshot.events.front().task().id() != kTaskId) {
     return a2a::core::Error::Internal("SubscribeTask first event returned unexpected task id");
   }
-  if (!observer.events[1].has_status_update()) {
+  if (!snapshot.events[1].has_status_update()) {
     return a2a::core::Error::Internal("SubscribeTask second event must contain status_update payload");
   }
-  if (observer.events[1].status_update().task_id() != kTaskId) {
+  if (snapshot.events[1].status_update().task_id() != kTaskId) {
     return a2a::core::Error::Internal("SubscribeTask second event returned unexpected task id");
   }
   return {};
@@ -323,8 +393,8 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!first_stream.ok()) {
     return first_stream.error();
   }
-  while (first_stream.value()->IsActive()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (!first_observer.WaitForEventCount(1U)) {
+    return a2a::core::Error::Internal("First SubscribeTask stream did not produce its initial event");
   }
 
   RecordingObserver second_observer;
@@ -332,16 +402,32 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!second_stream.ok()) {
     return second_stream.error();
   }
+  if (!second_observer.WaitForEventCount(1U)) {
+    return a2a::core::Error::Internal("Second SubscribeTask stream did not produce its initial event");
+  }
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(std::string(kTaskId));
+  const auto cancel_response = client->CancelTask(cancel_request);
+  if (!cancel_response.ok()) {
+    return cancel_response.error();
+  }
+
+  while (first_stream.value()->IsActive()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
   while (second_stream.value()->IsActive()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
+  const auto first_snapshot = first_observer.GetSnapshot();
+  const auto second_snapshot = second_observer.GetSnapshot();
   constexpr std::size_t kExpectedEventCount = 2U;
-  if (first_observer.events.size() != kExpectedEventCount || second_observer.events.size() != kExpectedEventCount) {
+  if (first_snapshot.events.size() != kExpectedEventCount || second_snapshot.events.size() != kExpectedEventCount) {
     return a2a::core::Error::Internal("SubscribeTask streams returned unexpected event counts");
   }
   for (std::size_t index = 0; index < kExpectedEventCount; ++index) {
-    if (first_observer.events[index].SerializeAsString() != second_observer.events[index].SerializeAsString()) {
+    if (first_snapshot.events[index].SerializeAsString() != second_snapshot.events[index].SerializeAsString()) {
       return a2a::core::Error::Internal("SubscribeTask streams emitted different events or ordering");
     }
   }

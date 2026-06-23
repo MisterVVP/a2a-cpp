@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -24,6 +25,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
+#include "a2a/server/http_adapter.h"
 
 namespace a2a::server {
 namespace {
@@ -42,6 +44,8 @@ constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
 constexpr int kJsonRpcVersionNotSupported = -32009;
+constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
+constexpr std::chrono::seconds kSseHeartbeatInterval{15};
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::size_t kMinListTasksPageSize = 1;
@@ -138,8 +142,11 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   if (IsSendStreamingMessageMethod(method)) {
     return DispatcherOperation::kSendStreamingMessage;
   }
-  if (IsGetTaskMethod(method) || IsSubscribeToTaskMethod(method)) {
+  if (IsGetTaskMethod(method)) {
     return DispatcherOperation::kGetTask;
+  }
+  if (IsSubscribeToTaskMethod(method)) {
+    return DispatcherOperation::kSubscribeTask;
   }
   if (IsCancelTaskMethod(method)) {
     return DispatcherOperation::kCancelTask;
@@ -478,7 +485,8 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
       dispatch_request.payload = std::move(payload.value());
       return dispatch_request;
     }
-    case DispatcherOperation::kGetTask: {
+    case DispatcherOperation::kGetTask:
+    case DispatcherOperation::kSubscribeTask: {
       auto payload = ParseProtoPayload<lf::a2a::v1::GetTaskRequest>(params);
       if (!payload.ok()) {
         return payload.error();
@@ -655,6 +663,72 @@ core::Result<void> AppendSseJsonRpcEvent(std::string& body, const google::protob
   return {};
 }
 
+core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view chunk) {
+  std::size_t sent = 0;
+  while (sent < chunk.size()) {
+    const auto written = transport.Write(chunk.data() + sent, chunk.size() - sent);
+    if (!written.ok()) {
+      return written.error();
+    }
+    if (written.value() == 0) {
+      return core::Error::Internal("Transport write returned zero bytes while streaming JSON-RPC SSE");
+    }
+    sent += written.value();
+  }
+  return {};
+}
+
+core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
+                                          const std::shared_ptr<std::unique_ptr<ServerStreamSession>>& session,
+                                          HttpByteTransport& transport) {
+  if (*session == nullptr) {
+    return core::Error::Internal("JSON-RPC streaming session is missing");
+  }
+
+  auto next = (*session)->NextFor(kSseHeartbeatInterval);
+  for (; next.ok(); next = (*session)->NextFor(kSseHeartbeatInterval)) {
+    const auto& event = next.value();
+    if (!event.has_value()) {
+      if (!(*session)->IsLive()) {
+        return {};
+      }
+      const auto heartbeat = WriteSseChunk(transport, kSseHeartbeat);
+      if (!heartbeat.ok()) {
+        (*session)->Cancel();
+        return heartbeat.error();
+      }
+      continue;
+    }
+    std::string chunk;
+    const auto append = AppendSseJsonRpcEvent(chunk, id, event.value());
+    if (!append.ok()) {
+      return append.error();
+    }
+    const auto written = WriteSseChunk(transport, chunk);
+    if (!written.ok()) {
+      (*session)->Cancel();
+      return written.error();
+    }
+  }
+  return next.error();
+}
+
+core::Result<void> BufferJsonRpcSseEvents(const google::protobuf::Value& id, ServerStreamSession& session,
+                                          std::string& body) {
+  auto next = session.Next();
+  for (; next.ok(); next = session.Next()) {
+    const auto& event = next.value();
+    if (!event.has_value()) {
+      return {};
+    }
+    const auto append = AppendSseJsonRpcEvent(body, id, event.value());
+    if (!append.ok()) {
+      return append.error();
+    }
+  }
+  return next.error();
+}
+
 core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value& id,
                                                   std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
@@ -667,51 +741,17 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
   response.headers["Cache-Control"] = "no-cache";
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
 
-  while (true) {
-    auto next = session->Next();
-    if (!next.ok()) {
-      return next.error();
-    }
-    const auto& event = next.value();
-    if (!event.has_value()) {
-      break;
-    }
-    const auto append = AppendSseJsonRpcEvent(response.body, id, event.value_or(lf::a2a::v1::StreamResponse{}));
-    if (!append.ok()) {
-      return append.error();
-    }
-  }
-  return response;
-}
-
-core::Result<HttpServerResponse> BuildSubscribeSseResponse(const google::protobuf::Value& id,
-                                                           const lf::a2a::v1::Task& task) {
-  if (core::IsTerminalTaskState(task.status().state())) {
-    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  if (session->IsLive()) {
+    auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
+    response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
+      return StreamJsonRpcSseEvents(id, session_holder, transport);
+    };
+    return response;
   }
 
-  HttpServerResponse response;
-  response.status_code = kHttpOk;
-  response.headers["Content-Type"] = "text/event-stream";
-  response.headers["Cache-Control"] = "no-cache";
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-
-  lf::a2a::v1::StreamResponse current_event;
-  *current_event.mutable_task() = task;
-  current_event.mutable_task()->clear_artifacts();
-  current_event.mutable_task()->clear_history();
-  const auto current_append = AppendSseJsonRpcEvent(response.body, id, current_event);
-  if (!current_append.ok()) {
-    return current_append.error();
-  }
-
-  lf::a2a::v1::StreamResponse terminal_event;
-  terminal_event.mutable_status_update()->set_task_id(task.id());
-  terminal_event.mutable_status_update()->set_context_id(task.context_id());
-  terminal_event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-  const auto terminal_append = AppendSseJsonRpcEvent(response.body, id, terminal_event);
-  if (!terminal_append.ok()) {
-    return terminal_append.error();
+  const auto buffered = BufferJsonRpcSseEvents(id, *session, response.body);
+  if (!buffered.ok()) {
+    return buffered.error();
   }
   return response;
 }
@@ -800,15 +840,15 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   }
 
   if (is_subscribe) {
-    const auto* task = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
-    if (task == nullptr) {
+    auto* session = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
+    if (session == nullptr || *session == nullptr) {
       const auto error =
           InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSubscribe)
               .WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
-    const auto sse = BuildSubscribeSseResponse(parsed.value().id.value(), *task);
+    const auto sse = BuildSseResponse(parsed.value().id.value(), *session);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
@@ -928,6 +968,7 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
       return value;
     }
     case DispatcherOperation::kSendStreamingMessage:
+    case DispatcherOperation::kSubscribeTask:
       return core::protocol_errors::InvalidAgentResponse("Streaming JSON-RPC responses must be serialized as SSE");
   }
 

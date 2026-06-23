@@ -55,6 +55,7 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
 
 constexpr std::string_view kBody = "hello";
 constexpr std::string_view kJsonBody = "{}";
+constexpr std::string_view kSseChunk = "data: {}\n\n";
 constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kHostHeaderName = "Host";
@@ -335,6 +336,30 @@ TEST(HttpAdapterTest, WriteResponseCompletesPartialWrites) {
   const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
   ASSERT_TRUE(write.ok());
   EXPECT_NE(transport.output().find(std::string(kJsonBody)), std::string::npos);
+}
+
+TEST(HttpAdapterTest, WriteResponseStreamsBodyWithoutContentLength) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] = "text/event-stream";
+  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
+    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
+    if (!written.ok()) {
+      return written.error();
+    }
+    if (written.value() != kSseChunk.size()) {
+      return a2a::core::Error::Internal("short SSE test write");
+    }
+    return {};
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
+
+  ASSERT_TRUE(write.ok());
+  EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
+  EXPECT_EQ(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
+  EXPECT_NE(transport.output().find(std::string(kSseChunk)), std::string::npos);
 }
 
 TEST(HttpAdapterTest, WriteResponseRejectsZeroByteWrites) {

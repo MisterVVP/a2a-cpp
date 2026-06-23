@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include "a2a/server/request_context.h"
 
 namespace a2a::server {
+
+class HttpByteTransport;
 
 struct RestEndpointPaths final {
   static constexpr std::string_view kSendMessage = "/message:send";
@@ -37,6 +40,7 @@ struct RestResponse final {
   int http_status = kDefaultHttpStatus;
   std::unordered_map<std::string, std::string> headers;
   std::string body;
+  std::function<core::Result<void>(HttpByteTransport&)> stream_writer;
 };
 
 struct RestRoute final {

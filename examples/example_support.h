@@ -29,6 +29,7 @@
 #include "a2a/server/request_context.h"
 #include "a2a/server/server_stream_session.h"
 #include "a2a/server/task_id_generator.h"
+#include "a2a/server/task_subscription_service.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/server/tasks/task_history.h"
@@ -50,6 +51,7 @@ constexpr std::string_view kStructuredDataKey = "key";
 constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
+constexpr std::string_view kStreamingTaskIdPrefix = "task-stream-";
 
 [[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
   return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
@@ -195,6 +197,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!notify.ok()) {
       return notify.error();
     }
+    subscriptions_.PublishTaskUpdated(task);
 
     lf::a2a::v1::SendMessageResponse response;
     response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
@@ -218,14 +221,13 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
+    (void)context;
     std::string task_id = request.has_message() ? request.message().task_id() : "";
     if (task_id.empty()) {
       if (request.has_message() && !request.message().message_id().empty()) {
-        auto task_id_result = lifecycle_.ResolveTaskIdForSendRequest(request, context);
-        if (!task_id_result.ok()) {
-          return task_id_result.error();
-        }
-        task_id = task_id_result.value();
+        task_id.reserve(kStreamingTaskIdPrefix.size() + request.message().message_id().size());
+        task_id.append(kStreamingTaskIdPrefix);
+        task_id.append(request.message().message_id());
       } else {
         task_id = "task-test-stream-default";
       }
@@ -281,6 +283,15 @@ class ExampleExecutor final : public server::AgentExecutor {
     return task;
   }
 
+  core::Result<std::unique_ptr<server::ServerStreamSession>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                                           server::RequestContext& context) override {
+    auto task = GetTask(request, context);
+    if (!task.ok()) {
+      return task.error();
+    }
+    return subscriptions_.Subscribe(task.value());
+  }
+
   core::Result<server::ListTasksResponse> ListTasks(const server::ListTasksRequest& request,
                                                     server::RequestContext& context) override {
     (void)context;
@@ -298,6 +309,7 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!notify.ok()) {
       return notify.error();
     }
+    subscriptions_.PublishTaskUpdated(task.value());
     return task.value();
   }
 
@@ -325,6 +337,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     return push_notifications_.DeleteConfig(request);
   }
 
+  void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
+
  private:
   std::vector<std::string> ordered_ids_;
   std::unique_ptr<server::InMemoryTaskStore> owned_task_store_;
@@ -336,6 +350,7 @@ class ExampleExecutor final : public server::AgentExecutor {
   std::shared_ptr<server::TaskIdGenerator> task_id_generator_;
   server::TaskLifecycleService lifecycle_;
   server::PushNotificationService push_notifications_;
+  server::TaskSubscriptionService subscriptions_;
   std::uint64_t status_timestamp_counter_ = 0;
 };
 

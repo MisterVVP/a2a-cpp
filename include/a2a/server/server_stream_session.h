@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <optional>
 
 #include "a2a/core/result.h"
@@ -15,6 +16,14 @@ class ServerStreamSession {
   virtual ~ServerStreamSession() = default;
 
   [[nodiscard]] virtual core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() = 0;
+  [[nodiscard]] virtual core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
+      std::chrono::milliseconds timeout) {
+    (void)timeout;
+    return Next();
+  }
+  // Sessions are finite unless they explicitly support waiting for future events.
+  [[nodiscard]] virtual bool IsLive() const noexcept { return false; }
+  virtual void Cancel() noexcept {}
 };
 
 }  // namespace a2a::server

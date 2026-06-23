@@ -60,6 +60,8 @@ jobs:
         run: ./scripts/run_tck_sut.sh
 
       - name: Run mandatory TCK category with in-memory store
+        id: tck_inmemory
+        continue-on-error: true
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
@@ -68,6 +70,16 @@ jobs:
           TCK_REPORT_DIR: tck-artifacts/reports/inmemory
           TCK_LOG_DIR: tck-artifacts/logs/inmemory
         run: ./scripts/run_tck_mandatory.sh
+
+      - name: Summarize in-memory TCK report gaps
+        if: always()
+        run: |
+          report=tck-artifacts/reports/inmemory/compatibility.json
+          if [[ -f "${report}" ]]; then
+            python3 scripts/summarize_tck_report.py "${report}"
+          else
+            echo "No in-memory compatibility report was generated."
+          fi
 
       - name: Stop deterministic in-memory SUT
         if: always()
@@ -80,6 +92,8 @@ jobs:
         run: ./scripts/run_tck_sut.sh
 
       - name: Run mandatory TCK category with PostgreSQL store
+        id: tck_postgres
+        continue-on-error: true
         env:
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
@@ -88,6 +102,16 @@ jobs:
           TCK_REPORT_DIR: tck-artifacts/reports/postgres
           TCK_LOG_DIR: tck-artifacts/logs/postgres
         run: ./scripts/run_tck_mandatory.sh
+
+      - name: Summarize PostgreSQL TCK report gaps
+        if: always()
+        run: |
+          report=tck-artifacts/reports/postgres/compatibility.json
+          if [[ -f "${report}" ]]; then
+            python3 scripts/summarize_tck_report.py "${report}"
+          else
+            echo "No PostgreSQL compatibility report was generated."
+          fi
 
       - name: Stop deterministic PostgreSQL SUT
         if: always()
@@ -113,3 +137,27 @@ jobs:
             build-tck/tck-sut-inmemory.log
             build-tck/tck-sut-postgres.log
           if-no-files-found: warn
+
+      - name: Verify mandatory TCK results and reports
+        if: always()
+        env:
+          INMEMORY_TCK_CONCLUSION: ${{ steps.tck_inmemory.conclusion }}
+          POSTGRES_TCK_CONCLUSION: ${{ steps.tck_postgres.conclusion }}
+        run: |
+          failed=0
+          if [[ "${INMEMORY_TCK_CONCLUSION}" != "success" ]]; then
+            echo "In-memory mandatory TCK conclusion: ${INMEMORY_TCK_CONCLUSION}"
+            failed=1
+          fi
+          if [[ "${POSTGRES_TCK_CONCLUSION}" != "success" ]]; then
+            echo "PostgreSQL mandatory TCK conclusion: ${POSTGRES_TCK_CONCLUSION}"
+            failed=1
+          fi
+          for backend in inmemory postgres; do
+            report="tck-artifacts/reports/${backend}/compatibility.json"
+            if [[ ! -f "${report}" ]]; then
+              echo "Missing required TCK report: ${report}"
+              failed=1
+            fi
+          done
+          exit "${failed}"
