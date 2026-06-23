@@ -3,6 +3,7 @@
 
 #include "a2a/server/rest_server_transport.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -14,10 +15,12 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/legacy_transport_names.h"
 #include "a2a/core/protocol_bindings.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -378,6 +381,12 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
 
+  const auto extensions = ValidateRequiredExtensions(request);
+  if (!extensions.ok()) {
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
+                                  "EXTENSION_SUPPORT_REQUIRED");
+  }
+
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
@@ -389,6 +398,26 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     return rest_response.error();
   }
   return ToHttpResponse(rest_response.value());
+}
+
+core::Result<void> RestServerTransport::ValidateRequiredExtensions(const HttpServerRequest& request) const {
+  if (options_.required_extensions.empty()) {
+    return {};
+  }
+  const auto header = core::http::FindHeaderValue(request.headers, core::Extensions::kHeaderName);
+  if (!header.has_value()) {
+    return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
+  }
+  const auto parsed = core::Extensions::Parse(*header);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  for (const auto& required_extension : options_.required_extensions) {
+    if (std::ranges::find(parsed.value(), required_extension) == parsed.value().end()) {
+      return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
+    }
+  }
+  return {};
 }
 
 core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {

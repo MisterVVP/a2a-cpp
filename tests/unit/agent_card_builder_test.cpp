@@ -12,6 +12,7 @@ namespace {
 constexpr std::string_view kVersion = a2a::core::Version::kAgentCardVersion;
 constexpr std::string_view kDescription = "desc";
 constexpr std::string_view kName = "agent";
+constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
 
 TEST(AgentCardBuilderTest, RestPresetBuildsExpectedInterface) {
   const auto card = a2a::core::AgentCardBuilder::RestPreset("REST Agent", "http://agent.local/a2a").Build();
@@ -36,6 +37,9 @@ TEST(AgentCardBuilderTest, ConformancePresetBuildsExpectedDefaults) {
   EXPECT_EQ(card.supported_interfaces_size(), 3);
   EXPECT_TRUE(card.capabilities().streaming());
   EXPECT_FALSE(card.capabilities().push_notifications());
+  ASSERT_EQ(card.capabilities().extensions_size(), 1);
+  EXPECT_EQ(card.capabilities().extensions(0).uri(), kTckRequiredExtensionUri);
+  EXPECT_TRUE(card.capabilities().extensions(0).required());
   ASSERT_EQ(card.skills_size(), 1);
   EXPECT_EQ(card.skills(0).id(), "echo");
   EXPECT_EQ(card.skills(0).tags_size(), 1);

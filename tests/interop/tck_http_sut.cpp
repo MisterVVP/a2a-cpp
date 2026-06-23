@@ -51,6 +51,7 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
+constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
 constexpr std::string_view kPostgresBackend = "postgres";
 constexpr std::string_view kInMemoryBackend = "inmemory";
 constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
@@ -209,10 +210,15 @@ int main(int argc, char** argv) {
       &dispatcher, agent_card,
       {.rest_api_base_path = "/a2a",
        .include_legacy_transport_fields = false,
-       .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
-           .cache_control = "public, max-age=300",
-           .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)}});
-  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
+       .agent_card_cache_settings =
+           a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+               .cache_control = "public, max-age=300",
+               .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)},
+       .required_extensions = {std::string(kTckRequiredExtensionUri)}});
+  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher,
+                                              {.rpc_path = "/rpc",
+                                               .require_version_header = false,
+                                               .required_extensions = {std::string(kTckRequiredExtensionUri)}});
 
 #ifdef _WIN32
   WSADATA wsa_data;

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "a2a/core/result.h"
 #include "a2a/server/rest_transport.h"
@@ -43,7 +44,8 @@ struct RestServerTransportOptions final {
   std::string rest_api_base_path = "/";
   bool require_version_header = true;
   bool include_legacy_transport_fields = true;
-  std::optional<AgentCardCacheSettings> agent_card_cache_settings;
+  std::optional<AgentCardCacheSettings> agent_card_cache_settings = std::nullopt;
+  std::vector<std::string> required_extensions = {};
 };
 
 class RestServerTransport final {
@@ -59,6 +61,7 @@ class RestServerTransport final {
  private:
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
+  [[nodiscard]] core::Result<void> ValidateRequiredExtensions(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
   [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response);
 

@@ -5,6 +5,7 @@
 
 #include <google/protobuf/struct.pb.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -16,6 +17,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
@@ -573,6 +575,9 @@ std::string ErrorInfoReason(const core::Error& error) {
     if (*protocol_code == core::protocol_codes::kVersionNotSupported) {
       return "VERSION_NOT_SUPPORTED";
     }
+    if (*protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+      return "EXTENSION_SUPPORT_REQUIRED";
+    }
   }
 
   switch (error.code()) {
@@ -762,6 +767,12 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
 
+  const auto extensions = ValidateRequiredExtensions(request);
+  if (!extensions.ok()) {
+    const auto error = extensions.error().WithTransport("jsonrpc");
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
+  }
+
   const auto parsed = ParseRequest(request.body, options_);
   if (!parsed.ok()) {
     int parse_code = JsonRpcCodeFromError(parsed.error());
@@ -859,6 +870,26 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServe
     return core::protocol_errors::VersionNotSupported("Unsupported A2A-Version header value");
   }
 
+  return {};
+}
+
+core::Result<void> JsonRpcServerTransport::ValidateRequiredExtensions(const HttpServerRequest& request) const {
+  if (options_.required_extensions.empty()) {
+    return {};
+  }
+  const auto header = core::http::FindHeaderValue(request.headers, core::Extensions::kHeaderName);
+  if (!header.has_value()) {
+    return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
+  }
+  const auto parsed = core::Extensions::Parse(*header);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  for (const auto& required_extension : options_.required_extensions) {
+    if (std::ranges::find(parsed.value(), required_extension) == parsed.value().end()) {
+      return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
+    }
+  }
   return {};
 }
 

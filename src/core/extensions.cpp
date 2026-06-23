@@ -29,7 +29,8 @@ bool IsValidToken(std::string_view token) {
     return false;
   }
   return std::ranges::all_of(token, [](char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_' || c == '.';
+    const auto value = static_cast<unsigned char>(c);
+    return std::isgraph(value) != 0 && c != ',';
   });
 }
 

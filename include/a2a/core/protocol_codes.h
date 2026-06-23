@@ -14,5 +14,6 @@ inline constexpr std::string_view kUnsupportedOperation = "-32004";
 inline constexpr std::string_view kContentTypeNotSupported = "-32005";
 inline constexpr std::string_view kInvalidAgentResponse = "-32006";
 inline constexpr std::string_view kVersionNotSupported = "-32009";
+inline constexpr std::string_view kExtensionSupportRequired = "-32010";
 
 }  // namespace a2a::core::protocol_codes

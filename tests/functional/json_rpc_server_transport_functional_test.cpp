@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <string_view>
 
 #include "../support/rest_server_test_utils.h"
 #include "a2a/core/protojson.h"
@@ -14,6 +15,7 @@
 namespace {
 
 constexpr int kHttpOk = 200;
+constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 
 TEST(JsonRpcServerTransportFunctionalTest, SupportsTaskLifecycleMethodsOverJsonRpc) {
   a2a::server::InMemoryTaskStore store;
@@ -62,6 +64,29 @@ TEST(JsonRpcServerTransportFunctionalTest, RejectsMissingVersionHeaderWhenRequir
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportFunctionalTest, RequiresDeclaredExtensionForJsonRpcRequests) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::tests::support::StoreExecutor executor(&store);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(
+      &dispatcher, {.rpc_path = "/rpc", .required_extensions = {std::string(kRequiredExtension)}});
+
+  const auto missing_extension = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}},
+      R"({"jsonrpc":"2.0","id":"list-missing-extension","method":"a2a.listTasks","params":{}})"));
+  ASSERT_TRUE(missing_extension.ok());
+  EXPECT_EQ(missing_extension.value().status_code, kHttpOk);
+  EXPECT_NE(missing_extension.value().body.find("-32010"), std::string::npos);
+  EXPECT_NE(missing_extension.value().body.find("EXTENSION_SUPPORT_REQUIRED"), std::string::npos);
+
+  const auto with_extension = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}},
+      R"({"jsonrpc":"2.0","id":"list-with-extension","method":"a2a.listTasks","params":{}})"));
+  ASSERT_TRUE(with_extension.ok());
+  EXPECT_EQ(with_extension.value().status_code, kHttpOk);
+  EXPECT_NE(with_extension.value().body.find("\"result\""), std::string::npos);
 }
 
 }  // namespace

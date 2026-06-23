@@ -23,6 +23,8 @@ constexpr std::string_view kConformanceSkillId = "echo";
 constexpr std::string_view kConformanceSkillName = "Echo Skill";
 constexpr std::string_view kConformanceSkillDescription = "Echoes incoming text for conformance validation";
 constexpr std::string_view kConformanceTag = "conformance";
+constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
+constexpr std::string_view kTckRequiredExtensionDescription = "Required extension used by the A2A TCK.";
 
 bool HasHttpScheme(std::string_view url) { return url.starts_with("http://") || url.starts_with("https://"); }
 
@@ -71,6 +73,16 @@ AgentCardBuilder& AgentCardBuilder::AddDefaultOutputMode(std::string_view mode) 
 
 AgentCardBuilder& AgentCardBuilder::WithPushNotifications(bool enabled) {
   card_.mutable_capabilities()->set_push_notifications(enabled);
+  return *this;
+}
+
+AgentCardBuilder& AgentCardBuilder::AddExtension(std::string_view uri, bool required, std::string_view description) {
+  auto* extension = card_.mutable_capabilities()->add_extensions();
+  extension->set_uri(std::string(uri));
+  extension->set_required(required);
+  if (!description.empty()) {
+    extension->set_description(std::string(description));
+  }
   return *this;
 }
 
@@ -167,6 +179,7 @@ AgentCardBuilder AgentCardBuilder::ConformancePreset(const ConformancePresetSpec
                   .AddInterface({.binding = kJsonRpc, .version = kDefaultProtocolVersion, .url = spec.json_rpc_url})
                   .AddInterface({.binding = kHttpJson, .version = kDefaultProtocolVersion, .url = spec.rest_url})
                   .AddInterface({.binding = kGrpc, .version = kDefaultProtocolVersion, .url = spec.grpc_url})
+                  .AddExtension(kTckRequiredExtensionUri, true, kTckRequiredExtensionDescription)
                   .Build();
   auto* capabilities = card.mutable_capabilities();
   capabilities->set_streaming(true);

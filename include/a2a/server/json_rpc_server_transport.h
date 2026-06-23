@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "a2a/core/result.h"
 #include "a2a/server/dispatch_types.h"
@@ -21,6 +22,7 @@ struct JsonRpcServerTransportOptions final {
   bool require_version_header = true;
   std::size_t default_list_tasks_page_size = 50;
   std::size_t max_list_tasks_page_size = 100;
+  std::vector<std::string> required_extensions = {};
 };
 
 class JsonRpcServerTransport final {
@@ -47,6 +49,7 @@ class JsonRpcServerTransport final {
   };
 
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
+  [[nodiscard]] core::Result<void> ValidateRequiredExtensions(const HttpServerRequest& request) const;
   [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(std::string_view body,
                                                                  const JsonRpcServerTransportOptions& options);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
