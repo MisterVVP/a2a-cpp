@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/http_constants.h"
 #include "a2a/core/result.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
@@ -23,8 +24,6 @@ inline constexpr std::string_view kRouteMissJsonSuffix = "\"}";
 
 class TransportMux final {
  public:
-  static constexpr int kHttpNotFound = 404;
-  static constexpr int kHttpMethodNotAllowed = 405;
   static constexpr std::string_view kRouteNotFoundCode = "ROUTE_NOT_FOUND";
   static constexpr std::string_view kRouteMethodNotAllowedCode = "ROUTE_METHOD_NOT_ALLOWED";
 

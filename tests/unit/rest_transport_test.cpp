@@ -13,16 +13,19 @@
 #include <string_view>
 #include <utility>
 
+#include "a2a/core/http_constants.h"
 #include "a2a/server/http_adapter.h"
 
 namespace {
 
-constexpr std::string_view kGetMethod = "GET";
-constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kSubscribedTaskId = "task-77";
 constexpr std::string_view kSubscribeTaskPath = "/tasks/task-77:subscribe";
-constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
 constexpr int kRequestedHistoryLength = 20;
+constexpr std::string_view kContentTypeHeaderName = "Content-Type";
+constexpr std::string_view kApplicationJsonWithCharsetContentType = "Application/JSON; charset=utf-8";
+constexpr std::string_view kTextPlainContentType = "text/plain";
+constexpr std::string_view kContentTypeNotSupportedReason = "CONTENT_TYPE_NOT_SUPPORTED";
+constexpr std::string_view kContentTypeNotSupportedProtocolCode = "-32005";
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -33,7 +36,7 @@ class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
   }
 
   [[nodiscard]] a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
-    if (fail_heartbeat && std::string_view(buffer, size) == kSseHeartbeat) {
+    if (fail_heartbeat && std::string_view(buffer, size) == a2a::core::http::kSseHeartbeat) {
       return a2a::core::Error::Network("client disconnected");
     }
     body.append(buffer, size);
@@ -179,12 +182,30 @@ TEST(RestTransportTest, ExposesCentralRouteTable) {
   EXPECT_EQ(routes[2].path_pattern, "/tasks/{id}");
   EXPECT_EQ(routes[3].path_pattern, "/tasks");
   EXPECT_EQ(routes[4].path_pattern, "/tasks/{id}:cancel");
-  EXPECT_EQ(routes[5].method, kGetMethod);
+  EXPECT_EQ(routes[5].method, a2a::core::http::kMethodGet);
   EXPECT_EQ(routes[5].path_pattern, "/tasks/{id}:subscribe");
-  EXPECT_EQ(routes[6].method, kPostMethod);
+  EXPECT_EQ(routes[6].method, a2a::core::http::kMethodPost);
   EXPECT_EQ(routes[6].path_pattern, "/tasks/{id}:subscribe");
   EXPECT_EQ(routes[7].path_pattern, "/tasks/{task_id}/pushNotificationConfigs");
   EXPECT_EQ(routes[8].path_pattern, "/tasks/{task_id}/pushNotificationConfigs/{id}");
+}
+
+void ExpectUnsupportedContentType(std::string_view path, std::string_view body) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = a2a::core::http::kMethodPost;
+  request.path = path;
+  request.headers[std::string(kContentTypeHeaderName)] = std::string(kTextPlainContentType);
+  request.body = body;
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusUnsupportedMediaType);
+  EXPECT_NE(response.value().body.find(kContentTypeNotSupportedReason), std::string::npos);
+  EXPECT_NE(response.value().body.find(kContentTypeNotSupportedProtocolCode), std::string::npos);
 }
 
 TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
@@ -203,6 +224,37 @@ TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
   EXPECT_EQ(response.value().http_status, 200);
   EXPECT_NE(response.value().body.find("ROLE_AGENT"), std::string::npos);
   EXPECT_EQ(executor.observed_request_id, "req-9");
+}
+
+TEST(RestTransportTest, RejectsTextPlainContentTypeForSendMessage) {
+  ExpectUnsupportedContentType(a2a::server::RestEndpointPaths::kSendMessage,
+                               R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})");
+}
+
+TEST(RestTransportTest, RejectsTextPlainContentTypeForStreamingSendMessage) {
+  ExpectUnsupportedContentType(a2a::server::RestEndpointPaths::kSendStreamingMessage,
+                               R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})");
+}
+
+TEST(RestTransportTest, RejectsTextPlainContentTypeForPushConfigCreate) {
+  ExpectUnsupportedContentType("/tasks/task-1/pushNotificationConfigs",
+                               R"({"id":"push-1","url":"http://127.0.0.1/webhook"})");
+}
+
+TEST(RestTransportTest, AcceptsJsonContentTypeWithParametersForSendMessage) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = a2a::core::http::kMethodPost;
+  request.path = a2a::server::RestEndpointPaths::kSendMessage;
+  request.headers[std::string(kContentTypeHeaderName)] = std::string(kApplicationJsonWithCharsetContentType);
+  request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-42"}})";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, 200);
 }
 
 TEST(RestTransportTest, DispatchesGetTaskUsingPathAndQuery) {
@@ -337,9 +389,13 @@ void ExpectSubscribeEndpoint(std::string_view method) {
   EXPECT_NE(output.body.find(kSubscribedTaskId), std::string::npos);
 }
 
-TEST(RestTransportTest, SupportsGetSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kGetMethod); }
+TEST(RestTransportTest, SupportsGetSubscribeEndpointForNonTerminalTask) {
+  ExpectSubscribeEndpoint(a2a::core::http::kMethodGet);
+}
 
-TEST(RestTransportTest, SupportsPostSubscribeEndpointForNonTerminalTask) { ExpectSubscribeEndpoint(kPostMethod); }
+TEST(RestTransportTest, SupportsPostSubscribeEndpointForNonTerminalTask) {
+  ExpectSubscribeEndpoint(a2a::core::http::kMethodPost);
+}
 
 TEST(RestTransportTest, CancelsSubscriptionWhenHeartbeatDetectsDisconnect) {
   FakeExecutor executor;
@@ -348,7 +404,7 @@ TEST(RestTransportTest, CancelsSubscriptionWhenHeartbeatDetectsDisconnect) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = kGetMethod;
+  request.method = a2a::core::http::kMethodGet;
   request.path = kSubscribeTaskPath;
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
@@ -369,7 +425,7 @@ TEST(RestTransportTest, ForwardsSubscribeHistoryLength) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = kGetMethod;
+  request.method = a2a::core::http::kMethodGet;
   request.path = kSubscribeTaskPath;
   request.query_params["historyLength"] = std::to_string(kRequestedHistoryLength);
 
@@ -385,7 +441,7 @@ TEST(RestTransportTest, RejectsMalformedSubscribeHistoryLength) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = kGetMethod;
+  request.method = a2a::core::http::kMethodGet;
   request.path = kSubscribeTaskPath;
   request.query_params["historyLength"] = "abc";
 

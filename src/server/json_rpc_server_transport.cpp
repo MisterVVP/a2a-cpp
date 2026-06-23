@@ -6,7 +6,6 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <array>
-#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -17,6 +16,8 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
@@ -35,45 +36,21 @@ template <std::size_t MessageSize>
   return core::protocol_errors::InvalidAgentResponse(core::protocol_error_messages::ToString(message));
 }
 
-constexpr int kHttpOk = 200;
-constexpr int kHttpInternalServerError = 500;
-
 constexpr int kJsonRpcParseError = -32700;
 constexpr int kJsonRpcInvalidRequest = -32600;
 constexpr int kJsonRpcMethodNotFound = -32601;
 constexpr int kJsonRpcInvalidParams = -32602;
 constexpr int kJsonRpcInternalError = -32603;
 constexpr int kJsonRpcVersionNotSupported = -32009;
-constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
-constexpr std::chrono::seconds kSseHeartbeatInterval{15};
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::size_t kMinListTasksPageSize = 1;
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 
-std::string ToLower(std::string_view value) {
-  std::string lowered;
-  lowered.reserve(value.size());
-  for (const auto ch : value) {
-    lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-  }
-  return lowered;
-}
-
-std::string FindHeader(const std::unordered_map<std::string, std::string>& headers, std::string_view name) {
-  const std::string lowered_name = ToLower(name);
-  for (const auto& [header_name, header_value] : headers) {
-    if (ToLower(header_name) == lowered_name) {
-      return header_value;
-    }
-  }
-  return {};
-}
-
 bool HasJsonContentType(const HttpServerRequest& request) {
-  const std::string content_type = ToLower(FindHeader(request.headers, "Content-Type"));
-  return content_type.empty() || content_type.find("application/json") != std::string::npos;
+  const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
+  return !content_type.has_value() || core::http::IsJsonContentType(*content_type);
 }
 
 bool IsValidIdType(const google::protobuf::Value& value) {
@@ -569,7 +546,7 @@ core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksRespon
 
 int HttpStatusFromError(const core::Error& error) {
   (void)error;
-  return kHttpOk;
+  return core::http::kStatusOk;
 }
 
 std::string ErrorInfoReason(const core::Error& error) {
@@ -685,14 +662,14 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
 
-  auto next = (*session)->NextFor(kSseHeartbeatInterval);
-  for (; next.ok(); next = (*session)->NextFor(kSseHeartbeatInterval)) {
+  auto next = (*session)->NextFor(core::http::kSseHeartbeatInterval);
+  for (; next.ok(); next = (*session)->NextFor(core::http::kSseHeartbeatInterval)) {
     const auto& event = next.value();
     if (!event.has_value()) {
       if (!(*session)->IsLive()) {
         return {};
       }
-      const auto heartbeat = WriteSseChunk(transport, kSseHeartbeat);
+      const auto heartbeat = WriteSseChunk(transport, core::http::kSseHeartbeat);
       if (!heartbeat.ok()) {
         (*session)->Cancel();
         return heartbeat.error();
@@ -736,7 +713,7 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
   }
 
   HttpServerResponse response;
-  response.status_code = kHttpOk;
+  response.status_code = core::http::kStatusOk;
   response.headers["Content-Type"] = "text/event-stream";
   response.headers["Cache-Control"] = "no-cache";
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
@@ -771,18 +748,18 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   const std::string normalized_target = NormalizePath(request.target);
   if (request.method != "POST" || normalized_target != options_.rpc_path) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{}, std::nullopt,
-                              kHttpOk);
+                              core::http::kStatusOk);
   }
 
   if (!HasJsonContentType(request)) {
     const auto error = core::protocol_errors::ContentTypeNotSupported().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, kHttpOk);
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
 
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
     const auto error = version.error().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, kHttpOk);
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
 
   const auto parsed = ParseRequest(request.body, options_);
@@ -801,7 +778,8 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       case core::ErrorCode::kInternal:
         break;
     }
-    return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(), kHttpOk);
+    return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
+                              core::http::kStatusOk);
   }
 
   const auto method = FindMethodField(request.body);
@@ -868,7 +846,8 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
 }
 
 core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
-  const std::string version = FindHeader(request.headers, core::Version::kHeaderName);
+  const auto version_header = core::http::FindHeaderValue(request.headers, core::Version::kHeaderName);
+  const std::string version = version_header.has_value() ? std::string(*version_header) : std::string();
   if (version.empty()) {
     if (options_.require_version_header) {
       return core::protocol_errors::VersionNotSupported("Missing required A2A-Version header");
@@ -985,8 +964,9 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
   (*fields)["result"] = result;
 
   HttpServerResponse response;
-  response.status_code = kHttpOk;
-  response.headers["Content-Type"] = "application/json";
+  response.status_code = core::http::kStatusOk;
+  response.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
 
   const auto body = core::MessageToJson(envelope);
@@ -994,7 +974,7 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
     response.body = body.value();
   } else {
     response.body = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Failed to serialize response"}})";
-    response.status_code = kHttpInternalServerError;
+    response.status_code = core::http::kStatusInternalServerError;
   }
 
   return response;
@@ -1044,7 +1024,8 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
 
   HttpServerResponse response;
   response.status_code = http_status;
-  response.headers["Content-Type"] = "application/json";
+  response.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
 
   const auto body = core::MessageToJson(envelope);
@@ -1052,7 +1033,7 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
     response.body = body.value();
   } else {
     response.body = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Failed to serialize error"}})";
-    response.status_code = kHttpInternalServerError;
+    response.status_code = core::http::kStatusInternalServerError;
   }
 
   return response;

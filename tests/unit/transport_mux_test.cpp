@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "a2a/core/http_constants.h"
 #include "a2a/server/json_rpc_server_transport.h"
 
 namespace {
@@ -18,9 +19,7 @@ using a2a::server::HttpServerRequest;
 using a2a::server::HttpServerResponse;
 using a2a::server::TransportMux;
 
-constexpr int kHttpOk = 200;
 constexpr int kHttpCreated = 201;
-constexpr int kHttpInternalServerError = 500;
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kNoRouteCode = "ROUTE_NOT_FOUND";
 constexpr std::string_view kCustomNotFoundBody = "custom not found";
@@ -104,7 +103,7 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
        .handler =
            [](const HttpServerRequest&) {
              HttpServerResponse response;
-             response.status_code = kHttpOk;
+             response.status_code = a2a::core::http::kStatusOk;
              return response;
            },
        .priority = kHighPriority});
@@ -112,7 +111,7 @@ TEST(TransportMuxTest, RoutesByPriorityAndNormalizesRootToDefaultPath) {
   HttpServerRequest request{.method = "POST", .target = "/", .headers = {}, .body = "", .remote_address = ""};
   auto result = mux.RouteRequest(request);
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, kHttpOk);
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusOk);
 }
 
 TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
@@ -125,8 +124,9 @@ TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
                      .handler =
                          [](const HttpServerRequest& routed_request) {
                            HttpServerResponse response;
-                           response.status_code =
-                               routed_request.target == kHistoryQueryTarget ? kHttpOk : kHttpInternalServerError;
+                           response.status_code = routed_request.target == kHistoryQueryTarget
+                                                      ? a2a::core::http::kStatusOk
+                                                      : a2a::core::http::kStatusInternalServerError;
                            return response;
                          },
                      .priority = kLowPriority});
@@ -135,7 +135,7 @@ TEST(TransportMuxTest, PreservesQueryStringWhenForwardingNormalizedTarget) {
       .method = "GET", .target = "/a2a/tasks/task-1/?historyLength=0", .headers = {}, .body = "", .remote_address = ""};
   const auto result = mux.RouteRequest(request);
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, kHttpOk);
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusOk);
 }
 
 TEST(TransportMuxTest, NormalizesRelativeTargetsAndTrimsTrailingSlash) {
@@ -147,7 +147,8 @@ TEST(TransportMuxTest, NormalizesRelativeTargetsAndTrimsTrailingSlash) {
        .handler =
            [](const HttpServerRequest& routed_request) {
              HttpServerResponse response;
-             response.status_code = routed_request.target == kRpcPath ? kHttpOk : kHttpInternalServerError;
+             response.status_code = routed_request.target == kRpcPath ? a2a::core::http::kStatusOk
+                                                                      : a2a::core::http::kStatusInternalServerError;
              return response;
            },
        .priority = kLowPriority});
@@ -156,7 +157,7 @@ TEST(TransportMuxTest, NormalizesRelativeTargetsAndTrimsTrailingSlash) {
   const auto result = mux.RouteRequest(request);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, kHttpOk);
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusOk);
 }
 
 TEST(TransportMuxTest, JsonRpcCreatePushConfigPreservesNestedWebhookUrl) {
@@ -173,7 +174,7 @@ TEST(TransportMuxTest, JsonRpcCreatePushConfigPreservesNestedWebhookUrl) {
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(response.value().status_code, a2a::core::http::kStatusOk);
   EXPECT_EQ(executor.last_push_task_id, kPushTaskId);
   EXPECT_EQ(executor.last_push_url, kWebhookUrl);
   EXPECT_NE(response.value().body.find(std::string(kPushConfigId)), std::string::npos);
@@ -186,7 +187,7 @@ TEST(TransportMuxTest, ReturnsStructuredRouteMissForMissingPath) {
   const auto result = mux.RouteRequest(request);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, TransportMux::kHttpNotFound);
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusNotFound);
   EXPECT_NE(result.value().body.find(std::string(kNoRouteCode)), std::string::npos);
   EXPECT_EQ(mux.last_route_miss().normalized_path, "/");
 }
@@ -195,7 +196,7 @@ TEST(TransportMuxTest, UsesCustomNotFoundHandler) {
   TransportMux mux;
   mux.SetNotFoundHandler([](const HttpServerRequest&) {
     HttpServerResponse response;
-    response.status_code = kHttpInternalServerError;
+    response.status_code = a2a::core::http::kStatusInternalServerError;
     response.body = std::string(kCustomNotFoundBody);
     return response;
   });
@@ -205,7 +206,7 @@ TEST(TransportMuxTest, UsesCustomNotFoundHandler) {
   const auto result = mux.RouteRequest(request);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, kHttpInternalServerError);
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusInternalServerError);
   EXPECT_EQ(result.value().body, kCustomNotFoundBody);
 }
 
@@ -218,7 +219,7 @@ TEST(TransportMuxTest, ReturnsStructuredRouteMissForMethodMismatch) {
        .handler =
            [](const HttpServerRequest&) {
              HttpServerResponse response;
-             response.status_code = kHttpOk;
+             response.status_code = a2a::core::http::kStatusOk;
              return response;
            },
        .priority = kLowPriority});
@@ -226,7 +227,7 @@ TEST(TransportMuxTest, ReturnsStructuredRouteMissForMethodMismatch) {
   HttpServerRequest request{.method = "GET", .target = "/rpc", .headers = {}, .body = "", .remote_address = ""};
   auto result = mux.RouteRequest(request);
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(result.value().status_code, TransportMux::kHttpMethodNotAllowed);
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusMethodNotAllowed);
   EXPECT_NE(result.value().body.find("ROUTE_METHOD_NOT_ALLOWED"), std::string::npos);
 }
 

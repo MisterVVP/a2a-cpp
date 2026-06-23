@@ -117,8 +117,9 @@ std::string TransportMux::NormalizeTargetForHandler(std::string_view target) con
 HttpServerResponse TransportMux::BuildDefaultNotFound(const RouteMiss& miss) {
   const bool method_not_allowed = miss.reason == RouteMiss::Reason::kMethodNotAllowed;
   HttpServerResponse response;
-  response.status_code = method_not_allowed ? kHttpMethodNotAllowed : kHttpNotFound;
-  response.headers["content-type"] = "application/json";
+  response.status_code = method_not_allowed ? core::http::kStatusMethodNotAllowed : core::http::kStatusNotFound;
+  response.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
   const std::string_view message =
       method_not_allowed ? "No route matched HTTP method for normalized path" : "No route matched normalized path";
   const std::string_view code = method_not_allowed ? kRouteMethodNotAllowedCode : kRouteNotFoundCode;
