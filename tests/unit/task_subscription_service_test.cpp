@@ -56,12 +56,21 @@ void ExpectClosed(a2a::server::ServerStreamSession* session) {
 
 std::vector<std::string> DrainStatusContextIds(a2a::server::ServerStreamSession* session) {
   std::vector<std::string> context_ids;
-  for (auto next = session->Next(); next.ok() && next.value().has_value(); next = session->Next()) {
-    if (next.value()->has_status_update()) {
-      context_ids.push_back(next.value()->status_update().context_id());
+  while (true) {
+    const auto next = session->Next();
+    EXPECT_TRUE(next.ok());
+    if (!next.ok()) {
+      return context_ids;
+    }
+    const auto& maybe_event = next.value();
+    if (!maybe_event.has_value()) {
+      return context_ids;
+    }
+    const auto event = maybe_event.value_or(lf::a2a::v1::StreamResponse{});
+    if (event.has_status_update()) {
+      context_ids.push_back(event.status_update().context_id());
     }
   }
-  return context_ids;
 }
 
 TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
