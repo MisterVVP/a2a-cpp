@@ -113,11 +113,10 @@ void SignalHandler(int signal_number) {
   response.status_code = a2a::core::http::kStatusBadRequest;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
       std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body =
-      R"({"error":{"code":400,"status":"INVALID_ARGUMENT",)"
-      R"("message":"Missing required A2A extension support","details":[{)"
-      R"("@type":"type.googleapis.com/google.rpc.ErrorInfo",)"
-      R"("reason":"EXTENSION_SUPPORT_REQUIRED","domain":"a2a-protocol.org"}]}})";
+  response.body = R"({"error":{"code":400,"status":"INVALID_ARGUMENT",)"
+                  R"("message":"Missing required A2A extension support","details":[{)"
+                  R"("@type":"type.googleapis.com/google.rpc.ErrorInfo",)"
+                  R"("reason":"EXTENSION_SUPPORT_REQUIRED","domain":"a2a-protocol.org"}]}})";
   return response;
 }
 
@@ -126,11 +125,10 @@ void SignalHandler(int signal_number) {
   response.status_code = a2a::core::http::kStatusOk;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
       std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body =
-      R"({"jsonrpc":"2.0","id":1,"error":{"code":-32008,)"
-      R"("message":"Missing required A2A extension support","data":[{)"
-      R"("@type":"type.googleapis.com/google.rpc.ErrorInfo",)"
-      R"("reason":"EXTENSION_SUPPORT_REQUIRED","domain":"a2a-protocol.org"}]}})";
+  response.body = R"({"jsonrpc":"2.0","id":1,"error":{"code":-32008,)"
+                  R"("message":"Missing required A2A extension support","data":[{)"
+                  R"("@type":"type.googleapis.com/google.rpc.ErrorInfo",)"
+                  R"("reason":"EXTENSION_SUPPORT_REQUIRED","domain":"a2a-protocol.org"}]}})";
   return response;
 }
 
@@ -173,9 +171,8 @@ void SignalHandler(int signal_number) {
       std::string(a2a::core::http::kContentTypeApplicationJson);
   const auto serialized = a2a::core::MessageToJson(agent_card);
   if (!serialized.ok()) {
-    response.body =
-        R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,)"
-        R"("message":"Failed to serialize extended agent card"}})";
+    response.body = R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,)"
+                    R"("message":"Failed to serialize extended agent card"}})";
     return response;
   }
   std::string body = R"({"jsonrpc":"2.0","id":null,"result":)";
