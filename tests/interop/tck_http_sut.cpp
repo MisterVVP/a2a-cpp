@@ -234,7 +234,8 @@ class HttpConnectionRegistry final {
 };
 
 void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux,
-                          const lf::a2a::v1::AgentCard& agent_card, HttpConnectionRegistry& registry) {
+                          const lf::a2a::v1::AgentCard& agent_card,
+                          HttpConnectionRegistry& registry) {
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
   auto parsed = adapter.ReadRequest(socket_transport, "localhost");
@@ -294,10 +295,9 @@ int main(int argc, char** argv) {
   a2a::server::RestServerTransportOptions rest_options;
   rest_options.rest_api_base_path = std::string(kRestApiBasePath);
   rest_options.include_legacy_transport_fields = false;
-  rest_options.agent_card_cache_settings =
-      a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
-          .cache_control = "public, max-age=300",
-          .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
+  rest_options.agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+      .cache_control = "public, max-age=300",
+      .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
   rest_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::RestServerTransport rest(&dispatcher, agent_card, std::move(rest_options));
 
