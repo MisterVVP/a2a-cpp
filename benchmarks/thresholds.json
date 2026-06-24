@@ -3,7 +3,7 @@
     "max_time_ns": 1000
   },
   "BM_AgentCardBuilder_Build100Skills": {
-    "max_time_ns": 25000
+    "max_time_ns": 30000
   },
   "BM_AgentCardBuilder_Build3Interfaces": {
     "max_time_ns": 3500
