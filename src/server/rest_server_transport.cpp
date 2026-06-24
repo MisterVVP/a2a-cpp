@@ -353,7 +353,10 @@ void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1:
 
 RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                                          RestServerTransportOptions options)
-    : transport_(dispatcher), agent_card_(std::move(agent_card)), options_(std::move(options)) {
+    : transport_(dispatcher),
+      agent_card_(std::move(agent_card)),
+      options_(std::move(options)),
+      required_extensions_validator_(options_.required_extensions) {
   options_.rest_api_base_path = NormalizeBasePath(options_.rest_api_base_path);
   for (auto& iface : *agent_card_.mutable_supported_interfaces()) {
     if (iface.protocol_version().empty()) {
@@ -401,23 +404,7 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
 }
 
 core::Result<void> RestServerTransport::ValidateRequiredExtensions(const HttpServerRequest& request) const {
-  if (options_.required_extensions.empty()) {
-    return {};
-  }
-  const auto header = core::http::FindHeaderValue(request.headers, core::Extensions::kHeaderName);
-  if (!header.has_value()) {
-    return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
-  }
-  const auto parsed = core::Extensions::Parse(*header);
-  if (!parsed.ok()) {
-    return parsed.error();
-  }
-  for (const auto& required_extension : options_.required_extensions) {
-    if (std::ranges::find(parsed.value(), required_extension) == parsed.value().end()) {
-      return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
-    }
-  }
-  return {};
+  return required_extensions_validator_.Validate(request.headers);
 }
 
 core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "a2a/core/result.h"
+#include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_transport.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -70,6 +71,7 @@ class RestServerTransport final {
   RestTransport transport_;
   lf::a2a::v1::AgentCard agent_card_;
   RestServerTransportOptions options_;
+  RequiredExtensionsValidator required_extensions_validator_;
 };
 
 }  // namespace a2a::server

@@ -8,11 +8,13 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "a2a/core/result.h"
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/dispatcher.h"
+#include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_server_transport.h"
 
 namespace a2a::server {
@@ -63,6 +65,7 @@ class JsonRpcServerTransport final {
 
   Dispatcher* dispatcher_ = nullptr;
   JsonRpcServerTransportOptions options_;
+  RequiredExtensionsValidator required_extensions_validator_;
 };
 
 }  // namespace a2a::server

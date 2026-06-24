@@ -741,7 +741,9 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
 }  // namespace
 
 JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcServerTransportOptions options)
-    : dispatcher_(dispatcher), options_(std::move(options)) {
+    : dispatcher_(dispatcher),
+      options_(std::move(options)),
+      required_extensions_validator_(options_.required_extensions) {
   options_.rpc_path = NormalizePath(std::move(options_.rpc_path));
 }
 
@@ -874,23 +876,7 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServe
 }
 
 core::Result<void> JsonRpcServerTransport::ValidateRequiredExtensions(const HttpServerRequest& request) const {
-  if (options_.required_extensions.empty()) {
-    return {};
-  }
-  const auto header = core::http::FindHeaderValue(request.headers, core::Extensions::kHeaderName);
-  if (!header.has_value()) {
-    return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
-  }
-  const auto parsed = core::Extensions::Parse(*header);
-  if (!parsed.ok()) {
-    return parsed.error();
-  }
-  for (const auto& required_extension : options_.required_extensions) {
-    if (std::ranges::find(parsed.value(), required_extension) == parsed.value().end()) {
-      return core::protocol_errors::ExtensionSupportRequired("Missing required A2A extension support");
-    }
-  }
-  return {};
+  return required_extensions_validator_.Validate(request.headers);
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
