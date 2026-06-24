@@ -92,6 +92,7 @@ TEST(RestServerTransportFunctionalTest, RequiresDeclaredExtensionForHttpJsonRequ
       "GET", "/api/tasks", {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}}));
   ASSERT_TRUE(with_extension.ok());
   EXPECT_EQ(with_extension.value().status_code, 200);
+  EXPECT_EQ(with_extension.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
 }
 
 }  // namespace
