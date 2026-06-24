@@ -15,6 +15,7 @@ env:
   TCK_LOG_DIR: tck-artifacts/logs
   SUT_HOST: 127.0.0.1
   SUT_PORT: "50061"
+  A2A_TCK_REQUIRED_EXTENSIONS: urn:a2a:tck:required-extension
   A2A_TCK_POSTGRES_DSN: postgresql://a2a:a2a@127.0.0.1:5432/a2a
   A2A_TCK_POSTGRES_SCHEMA: tck_postgres
 

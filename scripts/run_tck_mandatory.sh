@@ -13,13 +13,47 @@ TCK_SUT_URL=${TCK_SUT_URL:-"http://${SUT_HOST}:${SUT_PORT}"}
 TCK_RUN_CMD=${TCK_RUN_CMD:-}
 TCK_TRANSPORTS=${TCK_TRANSPORTS:-grpc,jsonrpc,http_json}
 TCK_SOURCE_REPORT_DIR=${TCK_SOURCE_REPORT_DIR:-"${TCK_WORKDIR}/reports"}
+TCK_REQUIRED_EXTENSIONS=${TCK_REQUIRED_EXTENSIONS:-${A2A_TCK_REQUIRED_EXTENSIONS:-}}
 TCK_WORKDIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_WORKDIR}" && cd "${TCK_WORKDIR}" && pwd)
 TCK_REPORT_DIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_REPORT_DIR}" && cd "${TCK_REPORT_DIR}" && pwd)
 TCK_LOG_DIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_LOG_DIR}" && cd "${TCK_LOG_DIR}" && pwd)
 TCK_SOURCE_REPORT_DIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_SOURCE_REPORT_DIR}" && cd "${TCK_SOURCE_REPORT_DIR}" && pwd)
 TCK_LOG_FILE_ABS="${TCK_LOG_DIR_ABS}/$(basename "${TCK_LOG_FILE}")"
+TCK_PYTHONPATH_DIR="${TCK_LOG_DIR_ABS}/pythonpath"
 
 mkdir -p "${TCK_REPORT_DIR_ABS}" "${TCK_LOG_DIR_ABS}"
+
+install_tck_python_overrides() {
+  if [[ -z "${TCK_REQUIRED_EXTENSIONS}" ]]; then
+    return 0
+  fi
+
+  mkdir -p "${TCK_PYTHONPATH_DIR}"
+  cat > "${TCK_PYTHONPATH_DIR}/sitecustomize.py" <<'PY'
+import os
+
+extension_header = os.environ.get("A2A_TCK_REQUIRED_EXTENSIONS", "")
+if extension_header:
+    try:
+        import httpx
+    except Exception:  # pragma: no cover - only active after TCK dependencies are installed.
+        httpx = None
+    if httpx is not None:
+        original_client_init = httpx.Client.__init__
+
+        def client_init_with_extensions(self, *args, **kwargs):
+            headers = dict(kwargs.get("headers") or {})
+            headers.setdefault("A2A-Extensions", extension_header)
+            kwargs["headers"] = headers
+            return original_client_init(self, *args, **kwargs)
+
+        httpx.Client.__init__ = client_init_with_extensions
+PY
+  export A2A_TCK_REQUIRED_EXTENSIONS="${TCK_REQUIRED_EXTENSIONS}"
+  export PYTHONPATH="${TCK_PYTHONPATH_DIR}:${PYTHONPATH:-}"
+}
+
+install_tck_python_overrides
 
 copy_tck_reports() {
   local source_dir=$1
