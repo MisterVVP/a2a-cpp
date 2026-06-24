@@ -357,7 +357,7 @@ core::Result<void> ParseListTasksIncludeArtifacts(const google::protobuf::Struct
   if (include_artifacts_it->second.kind_case() != ::google::protobuf::Value::kBoolValue) {
     return core::Error::Validation("ListTasksRequest.includeArtifacts must be a boolean");
   }
-  payload->include_artifacts = it->second.bool_value();
+  payload->include_artifacts = include_artifacts_it->second.bool_value();
   return {};
 }
 
