@@ -86,6 +86,7 @@ TEST(JsonRpcServerTransportFunctionalTest, RequiresDeclaredExtensionForJsonRpcRe
       R"({"jsonrpc":"2.0","id":"list-with-extension","method":"a2a.listTasks","params":{}})"));
   ASSERT_TRUE(with_extension.ok());
   EXPECT_EQ(with_extension.value().status_code, kHttpOk);
+  EXPECT_EQ(with_extension.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
   EXPECT_NE(with_extension.value().body.find("\"result\""), std::string::npos);
 }
 
