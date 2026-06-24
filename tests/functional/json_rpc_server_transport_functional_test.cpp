@@ -88,6 +88,14 @@ TEST(JsonRpcServerTransportFunctionalTest, RequiresDeclaredExtensionForJsonRpcRe
   EXPECT_EQ(with_extension.value().status_code, kHttpOk);
   EXPECT_EQ(with_extension.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
   EXPECT_NE(with_extension.value().body.find("\"result\""), std::string::npos);
+
+  const auto invalid_params = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}},
+      R"({"jsonrpc":"2.0","id":"list-invalid-extension","method":"a2a.listTasks","params":{"pageSize":"bad"}})"));
+  ASSERT_TRUE(invalid_params.ok());
+  EXPECT_EQ(invalid_params.value().status_code, kHttpOk);
+  EXPECT_EQ(invalid_params.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
+  EXPECT_NE(invalid_params.value().body.find("\"error\""), std::string::npos);
 }
 
 }  // namespace
