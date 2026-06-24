@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
@@ -90,6 +91,13 @@ HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view mess
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   response.body = ErrorBody({.status_code = status_code, .message = message, .reason = reason});
   return response;
+}
+
+void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_extensions, HttpServerResponse* response) {
+  if (activated_extensions.empty() || response == nullptr) {
+    return;
+  }
+  response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
 }
 
 std::uint64_t ComputeEtagHash(std::string_view data) {
@@ -400,7 +408,7 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   if (!rest_response.ok()) {
     return rest_response.error();
   }
-  return ToHttpResponse(rest_response.value());
+  return ToHttpResponse(rest_response.value(), extensions.value());
 }
 
 core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {
@@ -481,13 +489,15 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   return response;
 }
 
-HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response) {
+HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response,
+                                                       const std::vector<std::string>& activated_extensions) {
   HttpServerResponse http_response;
   http_response.status_code = response.http_status;
   http_response.headers = response.headers;
   http_response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   http_response.body = response.body;
   http_response.stream_writer = response.stream_writer;
+  AddActivatedExtensionsHeader(activated_extensions, &http_response);
   return http_response;
 }
 
