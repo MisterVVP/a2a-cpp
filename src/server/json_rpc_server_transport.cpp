@@ -781,7 +781,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     const auto error = extensions.error().WithTransport("jsonrpc");
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
-  const auto activated_extensions = extensions.value();
+  const auto& activated_extensions = extensions.value();
   const auto build_validated_error_response =
       [&activated_extensions](int json_rpc_code, std::string_view message, const ResponseId& id,
                               const std::optional<core::Error>& error, int http_status) -> HttpServerResponse {
