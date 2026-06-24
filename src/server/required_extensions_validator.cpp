@@ -15,10 +15,10 @@ namespace a2a::server {
 RequiredExtensionsValidator::RequiredExtensionsValidator(std::vector<std::string> required_extensions)
     : required_extensions_(std::move(required_extensions)) {}
 
-core::Result<void> RequiredExtensionsValidator::Validate(
+core::Result<std::vector<std::string>> RequiredExtensionsValidator::Validate(
     const std::unordered_map<std::string, std::string>& headers) const {
   if (required_extensions_.empty()) {
-    return {};
+    return std::vector<std::string>{};
   }
 
   const auto header = core::http::FindHeaderValue(headers, core::Extensions::kHeaderName);
@@ -37,7 +37,7 @@ core::Result<void> RequiredExtensionsValidator::Validate(
     }
   }
 
-  return {};
+  return required_extensions_;
 }
 
 }  // namespace a2a::server
