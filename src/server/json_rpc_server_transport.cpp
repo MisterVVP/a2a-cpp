@@ -14,8 +14,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
@@ -51,6 +53,13 @@ constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationC
 bool HasJsonContentType(const HttpServerRequest& request) {
   const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
   return !content_type.has_value() || core::http::IsJsonContentType(*content_type);
+}
+
+void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_extensions, HttpServerResponse* response) {
+  if (activated_extensions.empty() || response == nullptr) {
+    return;
+  }
+  response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
 }
 
 bool IsValidIdType(const google::protobuf::Value& value) {
@@ -825,7 +834,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
-    return sse.value();
+    auto response = sse.value();
+    AddActivatedExtensionsHeader(extensions.value(), &response);
+    return response;
   }
 
   if (is_subscribe) {
@@ -843,7 +854,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                 HttpStatusFromError(error));
     }
-    return sse.value();
+    auto response = sse.value();
+    AddActivatedExtensionsHeader(extensions.value(), &response);
+    return response;
   }
 
   const auto result = SerializeDispatchResult(parsed.value().dispatch, dispatch.value());
@@ -853,7 +866,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
                               HttpStatusFromError(tagged));
   }
 
-  return BuildSuccessResponse(parsed.value().id, result.value());
+  return BuildSuccessResponse(parsed.value().id, result.value(), extensions.value());
 }
 
 core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
@@ -965,8 +978,9 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
   return core::protocol_errors::InvalidAgentResponse("Unsupported JSON-RPC dispatcher operation");
 }
 
-HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId& id,
-                                                                const google::protobuf::Value& result) {
+HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(
+    const ResponseId& id, const google::protobuf::Value& result,
+    const std::vector<std::string>& activated_extensions) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
 
@@ -979,6 +993,7 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  AddActivatedExtensionsHeader(activated_extensions, &response);
 
   const auto body = core::MessageToJson(envelope);
   if (body.ok()) {
