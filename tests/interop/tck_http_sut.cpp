@@ -233,8 +233,7 @@ class HttpConnectionRegistry final {
   std::unordered_set<int> active_fds_;
 };
 
-void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux,
-                          const lf::a2a::v1::AgentCard& agent_card,
+void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, const lf::a2a::v1::AgentCard& agent_card,
                           HttpConnectionRegistry& registry) {
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
