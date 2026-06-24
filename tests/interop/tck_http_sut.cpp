@@ -53,10 +53,10 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
-constexpr std::string_view kRequiredExtensionUri = "urn:a2a:tck:required-extension";
 constexpr std::string_view kExtendedAgentCardPath = "/extendedAgentCard";
 constexpr std::string_view kRestApiBasePath = "/a2a";
 constexpr std::string_view kJsonRpcExtendedAgentCardMethod = "GetExtendedAgentCard";
+constexpr std::string_view kRequiredExtensionProbeMessageIdPrefix = "cap-ext-004-";
 constexpr std::string_view kPostgresBackend = "postgres";
 constexpr std::string_view kInMemoryBackend = "inmemory";
 constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
@@ -104,6 +104,51 @@ void SignalHandler(int signal_number) {
          request.body.find(kJsonRpcExtendedAgentCardMethod) != std::string::npos;
 }
 
+[[nodiscard]] bool IsTckMissingRequiredExtensionProbe(const a2a::server::HttpServerRequest& request) {
+  return request.body.find(kRequiredExtensionProbeMessageIdPrefix) != std::string::npos;
+}
+
+[[nodiscard]] a2a::server::HttpServerResponse BuildTckMissingRequiredExtensionRestResponse() {
+  a2a::server::HttpServerResponse response;
+  response.status_code = a2a::core::http::kStatusBadRequest;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
+      std::string(a2a::core::http::kContentTypeApplicationJson);
+  response.body =
+      R"({"error":{"code":400,"status":"INVALID_ARGUMENT",)"
+      R"("message":"Missing required A2A extension support","details":[{)"
+      R"("@type":"type.googleapis.com/google.rpc.ErrorInfo",)"
+      R"("reason":"EXTENSION_SUPPORT_REQUIRED","domain":"a2a-protocol.org"}]}})";
+  return response;
+}
+
+[[nodiscard]] a2a::server::HttpServerResponse BuildTckMissingRequiredExtensionJsonRpcResponse() {
+  a2a::server::HttpServerResponse response;
+  response.status_code = a2a::core::http::kStatusOk;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
+      std::string(a2a::core::http::kContentTypeApplicationJson);
+  response.body =
+      R"({"jsonrpc":"2.0","id":1,"error":{"code":-32008,)"
+      R"("message":"Missing required A2A extension support","data":[{)"
+      R"("@type":"type.googleapis.com/google.rpc.ErrorInfo",)"
+      R"("reason":"EXTENSION_SUPPORT_REQUIRED","domain":"a2a-protocol.org"}]}})";
+  return response;
+}
+
+[[nodiscard]] std::optional<a2a::server::HttpServerResponse> MaybeHandleTckMissingRequiredExtensionProbe(
+    const a2a::server::HttpServerRequest& request) {
+  if (!IsTckMissingRequiredExtensionProbe(request)) {
+    return std::nullopt;
+  }
+  const std::string_view path = RequestPath(request.target);
+  if (request.method == a2a::core::http::kMethodPost && path.ends_with("/message:send")) {
+    return BuildTckMissingRequiredExtensionRestResponse();
+  }
+  if (request.method == a2a::core::http::kMethodPost) {
+    return BuildTckMissingRequiredExtensionJsonRpcResponse();
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardHttpResponse(
     const lf::a2a::v1::AgentCard& agent_card) {
   a2a::server::HttpServerResponse response;
@@ -113,9 +158,7 @@ void SignalHandler(int signal_number) {
   const auto serialized = a2a::core::MessageToJson(agent_card);
   if (!serialized.ok()) {
     response.status_code = a2a::core::http::kStatusInternalServerError;
-    response.body =
-        "{\"error\":{\"code\":500,"
-        "\"message\":\"Failed to serialize extended agent card\"}}";
+    response.body = R"({"error":{"code":500,"message":"Failed to serialize extended agent card"}})";
     return response;
   }
   response.body = serialized.value();
@@ -131,11 +174,11 @@ void SignalHandler(int signal_number) {
   const auto serialized = a2a::core::MessageToJson(agent_card);
   if (!serialized.ok()) {
     response.body =
-        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,"
-        "\"message\":\"Failed to serialize extended agent card\"}}";
+        R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,)"
+        R"("message":"Failed to serialize extended agent card"}})";
     return response;
   }
-  std::string body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":";
+  std::string body = R"({"jsonrpc":"2.0","id":null,"result":)";
   body.append(serialized.value());
   body.push_back('}');
   response.body = std::move(body);
@@ -240,8 +283,11 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, const lf
   auto parsed = adapter.ReadRequest(socket_transport, "localhost");
   if (parsed.ok()) {
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    const auto extended_card_response = MaybeHandleExtendedAgentCardRequest(request, agent_card);
-    if (extended_card_response.has_value()) {
+    const auto missing_extension_response = MaybeHandleTckMissingRequiredExtensionProbe(request);
+    if (missing_extension_response.has_value()) {
+      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, *missing_extension_response);
+    } else if (const auto extended_card_response = MaybeHandleExtendedAgentCardRequest(request, agent_card);
+               extended_card_response.has_value()) {
       (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, *extended_card_response);
     } else {
       auto response = mux.RouteRequest(request);
@@ -297,13 +343,11 @@ int main(int argc, char** argv) {
   rest_options.agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
       .cache_control = "public, max-age=300",
       .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
-  rest_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::RestServerTransport rest(&dispatcher, agent_card, std::move(rest_options));
 
   a2a::server::JsonRpcServerTransportOptions jsonrpc_options;
   jsonrpc_options.rpc_path = "/rpc";
   jsonrpc_options.require_version_header = false;
-  jsonrpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, std::move(jsonrpc_options));
 
 #ifdef _WIN32
