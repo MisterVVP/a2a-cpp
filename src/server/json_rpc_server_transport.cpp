@@ -978,9 +978,9 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
   return core::protocol_errors::InvalidAgentResponse("Unsupported JSON-RPC dispatcher operation");
 }
 
-HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(
-    const ResponseId& id, const google::protobuf::Value& result,
-    const std::vector<std::string>& activated_extensions) {
+HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId& id,
+                                                                const google::protobuf::Value& result,
+                                                                const std::vector<std::string>& activated_extensions) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
 
