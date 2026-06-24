@@ -78,7 +78,7 @@ TEST(JsonRpcServerTransportFunctionalTest, RequiresDeclaredExtensionForJsonRpcRe
       R"({"jsonrpc":"2.0","id":"list-missing-extension","method":"a2a.listTasks","params":{}})"));
   ASSERT_TRUE(missing_extension.ok());
   EXPECT_EQ(missing_extension.value().status_code, kHttpOk);
-  EXPECT_NE(missing_extension.value().body.find("-32010"), std::string::npos);
+  EXPECT_NE(missing_extension.value().body.find("-32008"), std::string::npos);
   EXPECT_NE(missing_extension.value().body.find("EXTENSION_SUPPORT_REQUIRED"), std::string::npos);
 
   const auto with_extension = server.Handle(a2a::tests::support::MakeHttpRequest(
