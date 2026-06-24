@@ -92,7 +92,9 @@ void SignalHandler(int signal_number) {
     return false;
   }
   const std::string_view path = RequestPath(request.target);
-  return path == kExtendedAgentCardPath || path == std::string(kRestApiBasePath) + std::string(kExtendedAgentCardPath);
+  const std::string rest_extended_agent_card_path =
+      std::string(kRestApiBasePath) + std::string(kExtendedAgentCardPath);
+  return path == kExtendedAgentCardPath || path == rest_extended_agent_card_path;
 }
 
 [[nodiscard]] bool IsJsonRpcExtendedAgentCardRequest(const a2a::server::HttpServerRequest& request) {
@@ -105,8 +107,7 @@ void SignalHandler(int signal_number) {
   response.status_code = a2a::core::http::kStatusBadRequest;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
       std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body =
-      R"({"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Extended agent card is not configured"}})";
+  response.body = R"({"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Extended agent card is not configured"}})";
   return response;
 }
 
