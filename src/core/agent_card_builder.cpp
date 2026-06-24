@@ -108,6 +108,12 @@ Result<void> AgentCardBuilder::Validate() const {
     return Error::Validation("Agent card must include at least one interface");
   }
 
+  for (const auto& extension : card_.capabilities().extensions()) {
+    if (extension.uri().empty()) {
+      return Error::Validation("Agent card extension URI is required");
+    }
+  }
+
   std::unordered_set<std::string> seen_interfaces;
   for (const auto& iface : card_.supported_interfaces()) {
     if (iface.protocol_binding().empty()) {
