@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "a2a/core/agent_card_builder.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
@@ -51,6 +52,9 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
+constexpr std::string_view kExtendedAgentCardPath = "/extendedAgentCard";
+constexpr std::string_view kRestApiBasePath = "/a2a";
+constexpr std::string_view kJsonRpcExtendedAgentCardMethod = "GetExtendedAgentCard";
 constexpr std::string_view kPostgresBackend = "postgres";
 constexpr std::string_view kInMemoryBackend = "inmemory";
 constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
@@ -73,6 +77,58 @@ void SignalHandler(int signal_number) {
     return {};
   }
   return value;
+}
+
+[[nodiscard]] std::string_view RequestPath(std::string_view target) {
+  const std::size_t query_start = target.find('?');
+  if (query_start == std::string_view::npos) {
+    return target;
+  }
+  return target.substr(0, query_start);
+}
+
+[[nodiscard]] bool IsRestExtendedAgentCardRequest(const a2a::server::HttpServerRequest& request) {
+  if (request.method != a2a::core::http::kMethodGet) {
+    return false;
+  }
+  const std::string_view path = RequestPath(request.target);
+  return path == kExtendedAgentCardPath || path == std::string(kRestApiBasePath) + std::string(kExtendedAgentCardPath);
+}
+
+[[nodiscard]] bool IsJsonRpcExtendedAgentCardRequest(const a2a::server::HttpServerRequest& request) {
+  return request.method == a2a::core::http::kMethodPost &&
+         request.body.find(kJsonRpcExtendedAgentCardMethod) != std::string::npos;
+}
+
+[[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardHttpError() {
+  a2a::server::HttpServerResponse response;
+  response.status_code = a2a::core::http::kStatusBadRequest;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
+      std::string(a2a::core::http::kContentTypeApplicationJson);
+  response.body =
+      R"({"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Extended agent card is not configured"}})";
+  return response;
+}
+
+[[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardJsonRpcError() {
+  a2a::server::HttpServerResponse response;
+  response.status_code = a2a::core::http::kStatusOk;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
+      std::string(a2a::core::http::kContentTypeApplicationJson);
+  response.body =
+      R"({"jsonrpc":"2.0","id":null,"error":{"code":-32007,"message":"Extended agent card is not configured"}})";
+  return response;
+}
+
+[[nodiscard]] std::optional<a2a::server::HttpServerResponse> MaybeHandleExtendedAgentCardRequest(
+    const a2a::server::HttpServerRequest& request) {
+  if (IsRestExtendedAgentCardRequest(request)) {
+    return BuildExtendedAgentCardHttpError();
+  }
+  if (IsJsonRpcExtendedAgentCardRequest(request)) {
+    return BuildExtendedAgentCardJsonRpcError();
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] a2a::core::Result<a2a::server::stores::StoreBundle> CreateStoreBundleFromEnvironment() {
@@ -161,9 +217,14 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   auto parsed = adapter.ReadRequest(socket_transport, "localhost");
   if (parsed.ok()) {
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = mux.RouteRequest(request);
-    if (response.ok()) {
-      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
+    const auto extended_card_response = MaybeHandleExtendedAgentCardRequest(request);
+    if (extended_card_response.has_value()) {
+      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, *extended_card_response);
+    } else {
+      auto response = mux.RouteRequest(request);
+      if (response.ok()) {
+        (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
+      }
     }
   }
   registry.Remove(fd);
@@ -186,12 +247,13 @@ int main(int argc, char** argv) {
   std::signal(SIGTERM, SignalHandler);
 
   auto agent_card = a2a::core::AgentCardBuilder::ConformancePreset(
-                        {.rest_url = "http://localhost:" + std::to_string(port) + "/a2a",
+                        {.rest_url = "http://localhost:" + std::to_string(port) + std::string(kRestApiBasePath),
                          .json_rpc_url = "http://localhost:" + std::to_string(port) + "/rpc",
                          .grpc_url = "localhost:" + std::to_string(grpc_port)},
                         "TCK HTTP SUT", "0.1.0", "Conformance-focused local SUT for A2A")
                         .WithPushNotifications(true)
                         .Build();
+  agent_card.mutable_capabilities()->set_extended_agent_card(true);
 
   auto store_bundle = CreateStoreBundleFromEnvironment();
   if (!store_bundle.ok()) {
@@ -207,7 +269,7 @@ int main(int argc, char** argv) {
   a2a::server::GrpcServerTransport grpc(&dispatcher);
   a2a::server::RestServerTransport rest(
       &dispatcher, agent_card,
-      {.rest_api_base_path = "/a2a",
+      {.rest_api_base_path = std::string(kRestApiBasePath),
        .include_legacy_transport_fields = false,
        .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
            .cache_control = "public, max-age=300",
