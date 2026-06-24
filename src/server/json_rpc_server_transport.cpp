@@ -5,7 +5,6 @@
 
 #include <google/protobuf/struct.pb.h>
 
-#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -17,7 +16,6 @@
 #include <utility>
 
 #include "a2a/core/error.h"
-#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
@@ -359,7 +357,7 @@ core::Result<void> ParseListTasksIncludeArtifacts(const google::protobuf::Struct
   if (include_artifacts_it->second.kind_case() != ::google::protobuf::Value::kBoolValue) {
     return core::Error::Validation("ListTasksRequest.includeArtifacts must be a boolean");
   }
-  payload->include_artifacts = include_artifacts_it->second.bool_value();
+  payload->include_artifacts = it->second.bool_value();
   return {};
 }
 
@@ -769,7 +767,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
 
-  const auto extensions = ValidateRequiredExtensions(request);
+  const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
     const auto error = extensions.error().WithTransport("jsonrpc");
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
@@ -873,10 +871,6 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServe
   }
 
   return {};
-}
-
-core::Result<void> JsonRpcServerTransport::ValidateRequiredExtensions(const HttpServerRequest& request) const {
-  return required_extensions_validator_.Validate(request.headers);
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
