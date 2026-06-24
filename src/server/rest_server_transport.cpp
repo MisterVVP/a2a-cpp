@@ -384,7 +384,7 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
 
-  const auto extensions = ValidateRequiredExtensions(request);
+  const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
                                   "EXTENSION_SUPPORT_REQUIRED");
@@ -401,10 +401,6 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     return rest_response.error();
   }
   return ToHttpResponse(rest_response.value());
-}
-
-core::Result<void> RestServerTransport::ValidateRequiredExtensions(const HttpServerRequest& request) const {
-  return required_extensions_validator_.Validate(request.headers);
 }
 
 core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {
