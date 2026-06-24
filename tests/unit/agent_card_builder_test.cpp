@@ -12,12 +12,10 @@ namespace {
 constexpr std::string_view kVersion = a2a::core::Version::kAgentCardVersion;
 constexpr std::string_view kDescription = "desc";
 constexpr std::string_view kName = "agent";
-constexpr std::string_view kProtocolVersion = "1.0";
-constexpr std::string_view kHttpJsonUrl = "http://agent.local/a2a";
 constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
 
 TEST(AgentCardBuilderTest, RestPresetBuildsExpectedInterface) {
-  const auto card = a2a::core::AgentCardBuilder::RestPreset("REST Agent", kHttpJsonUrl).Build();
+  const auto card = a2a::core::AgentCardBuilder::RestPreset("REST Agent", "http://agent.local/a2a").Build();
 
   ASSERT_EQ(card.supported_interfaces_size(), 1);
   EXPECT_EQ(card.name(), "REST Agent");
@@ -31,7 +29,7 @@ TEST(AgentCardBuilderTest, PresetsValidateSuccessfully) {
 }
 
 TEST(AgentCardBuilderTest, ConformancePresetBuildsExpectedDefaults) {
-  const auto card = a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = kHttpJsonUrl,
+  const auto card = a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = "http://agent.local/a2a",
                                                                     .json_rpc_url = "http://agent.local/rpc",
                                                                     .grpc_url = "agent.local:50051"})
                         .Build();
@@ -60,35 +58,36 @@ TEST(AgentCardBuilderTest, ValidateRejectsInterfaceWithoutVersion) {
           .SetName(kName)
           .SetVersion(kVersion)
           .SetDescription(kDescription)
-          .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson, .version = "", .url = kHttpJsonUrl});
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kHttpJson, .version = "", .url = "http://agent.local/a2a"});
 
   EXPECT_FALSE(builder.Validate().ok());
 }
 
 TEST(AgentCardBuilderTest, ValidateRejectsExtensionWithoutUri) {
-  auto builder = a2a::core::AgentCardBuilder()
-                     .SetName(kName)
-                     .SetVersion(kVersion)
-                     .SetDescription(kDescription)
-                     .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
-                                    .version = kProtocolVersion,
-                                    .url = kHttpJsonUrl})
-                     .AddExtension("", true);
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName(kName)
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
+                         .version = "1.0",
+                         .url = "http://agent.local/a2a"})
+          .AddExtension("", true);
 
   EXPECT_FALSE(builder.Validate().ok());
 }
 
 TEST(AgentCardBuilderTest, ValidateRejectsDuplicateInterfaces) {
-  auto builder = a2a::core::AgentCardBuilder()
-                     .SetName("dup")
-                     .SetVersion(kVersion)
-                     .SetDescription(kDescription)
-                     .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
-                                    .version = kProtocolVersion,
-                                    .url = kHttpJsonUrl})
-                     .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
-                                    .version = kProtocolVersion,
-                                    .url = kHttpJsonUrl});
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName("dup")
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kHttpJson, .version = "1.0", .url = "http://agent.local/a2a"})
+          .AddInterface(
+              {.binding = a2a::core::protocol_bindings::kHttpJson, .version = "1.0", .url = "http://agent.local/a2a"});
 
   EXPECT_FALSE(builder.Validate().ok());
 }
@@ -100,25 +99,24 @@ TEST(AgentCardBuilderTest, ValidateRejectsInvalidUrl) {
           .SetVersion(kVersion)
           .SetDescription(kDescription)
           .AddInterface(
-              {.binding = a2a::core::protocol_bindings::kJsonRpc, .version = kProtocolVersion, .url = "localhost:8080/rpc"});
+              {.binding = a2a::core::protocol_bindings::kJsonRpc, .version = "1.0", .url = "localhost:8080/rpc"});
 
   EXPECT_FALSE(builder.Validate().ok());
 }
 
 TEST(AgentCardBuilderTest, ValidateAcceptsGrpcHostPortUrl) {
-  auto builder = a2a::core::AgentCardBuilder()
-                     .SetName("grpc")
-                     .SetVersion(kVersion)
-                     .SetDescription(kDescription)
-                     .AddInterface({.binding = a2a::core::protocol_bindings::kGrpc,
-                                    .version = kProtocolVersion,
-                                    .url = "localhost:50051"});
+  auto builder =
+      a2a::core::AgentCardBuilder()
+          .SetName("grpc")
+          .SetVersion(kVersion)
+          .SetDescription(kDescription)
+          .AddInterface({.binding = a2a::core::protocol_bindings::kGrpc, .version = "1.0", .url = "localhost:50051"});
 
   EXPECT_TRUE(builder.Validate().ok());
 }
 
 TEST(AgentCardBuilderTest, WithPushNotificationsPreservesExistingCapabilities) {
-  const auto card = a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = kHttpJsonUrl,
+  const auto card = a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = "http://agent.local/a2a",
                                                                     .json_rpc_url = "http://agent.local/rpc",
                                                                     .grpc_url = "agent.local:50051"})
                         .WithPushNotifications(true)
