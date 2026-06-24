@@ -107,7 +107,8 @@ void SignalHandler(int signal_number) {
   response.status_code = a2a::core::http::kStatusBadRequest;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
       std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body = R"({"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Extended agent card is not configured"}})";
+  response.body = "{\"error\":{\"code\":400,\"status\":\"FAILED_PRECONDITION\","
+                  "\"message\":\"Extended agent card is not configured\"}}";
   return response;
 }
 
@@ -116,8 +117,8 @@ void SignalHandler(int signal_number) {
   response.status_code = a2a::core::http::kStatusOk;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
       std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body =
-      R"({"jsonrpc":"2.0","id":null,"error":{"code":-32007,"message":"Extended agent card is not configured"}})";
+  response.body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32007,"
+                  "\"message\":\"Extended agent card is not configured\"}}";
   return response;
 }
 
