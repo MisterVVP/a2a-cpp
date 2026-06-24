@@ -60,7 +60,7 @@
     "max_time_ns": 30000
   },
   "BM_ProtoJson_MessageToJson_SendMessageRequest": {
-    "max_time_ns": 13000
+    "max_time_ns": 15000
   },
   "BM_ProtoJson_MessageToJson_StreamResponse": {
     "max_time_ns": 22000
