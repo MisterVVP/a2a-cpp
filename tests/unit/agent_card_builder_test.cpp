@@ -70,9 +70,7 @@ TEST(AgentCardBuilderTest, ValidateRejectsExtensionWithoutUri) {
           .SetName(kName)
           .SetVersion(kVersion)
           .SetDescription(kDescription)
-          .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson,
-                         .version = "1.0",
-                         .url = "http://agent.local/a2a"})
+          .AddInterface({.binding = a2a::core::protocol_bindings::kHttpJson, .version = "1.0", .url = "http://agent.local/a2a"})
           .AddExtension("", true);
 
   EXPECT_FALSE(builder.Validate().ok());
