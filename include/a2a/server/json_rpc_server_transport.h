@@ -51,7 +51,6 @@ class JsonRpcServerTransport final {
   };
 
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
-  [[nodiscard]] core::Result<void> ValidateRequiredExtensions(const HttpServerRequest& request) const;
   [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(std::string_view body,
                                                                  const JsonRpcServerTransportOptions& options);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
