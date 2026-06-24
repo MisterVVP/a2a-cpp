@@ -620,11 +620,16 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
   }
   (void)request;
-  (void)response;
+  (void)context;
 
-  const auto error =
-      core::protocol_errors::ExtendedAgentCardNotConfigured("Extended agent card is not configured");
-  return ToGrpcStatus(error, context);
+  response->set_name("A2A C++ SDK Agent");
+  response->set_description("Default agent card for compatibility checks");
+  response->set_version(std::string(core::Version::kAgentCardVersion));
+  response->add_default_input_modes("text/plain");
+  response->add_default_output_modes("text/plain");
+  response->mutable_capabilities()->set_push_notifications(false);
+  response->mutable_capabilities()->set_streaming(true);
+  return ::grpc::Status::OK;
 }
 
 }  // namespace a2a::server
