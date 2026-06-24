@@ -39,8 +39,14 @@ if extension_header:
     except Exception:  # pragma: no cover - only active after TCK dependencies are installed.
         httpx = None
 
+    def should_add_extension_header():
+        current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+        return "test_missing_required_extension_returns_error" not in current_test
+
     def headers_with_extensions(headers):
         merged = dict(headers or {})
+        if not should_add_extension_header():
+            return merged
         has_extension_header = any(name.lower() == "a2a-extensions" for name in merged)
         if not has_extension_header:
             merged["A2A-Extensions"] = extension_header
@@ -55,26 +61,13 @@ if extension_header:
 
     def send_with_extensions(original):
         def wrapper(self, request, *args, **kwargs):
-            if "a2a-extensions" not in request.headers:
+            if should_add_extension_header() and "a2a-extensions" not in request.headers:
                 request.headers["A2A-Extensions"] = extension_header
             return original(self, request, *args, **kwargs)
 
         return wrapper
 
     if httpx is not None:
-        original_client_init = httpx.Client.__init__
-        original_async_client_init = httpx.AsyncClient.__init__
-
-        def client_init_with_extensions(self, *args, **kwargs):
-            kwargs["headers"] = headers_with_extensions(kwargs.get("headers"))
-            return original_client_init(self, *args, **kwargs)
-
-        def async_client_init_with_extensions(self, *args, **kwargs):
-            kwargs["headers"] = headers_with_extensions(kwargs.get("headers"))
-            return original_async_client_init(self, *args, **kwargs)
-
-        httpx.Client.__init__ = client_init_with_extensions
-        httpx.AsyncClient.__init__ = async_client_init_with_extensions
         httpx.Client.request = request_with_extensions(httpx.Client.request)
         httpx.AsyncClient.request = request_with_extensions(httpx.AsyncClient.request)
         httpx.Client.build_request = request_with_extensions(httpx.Client.build_request)
