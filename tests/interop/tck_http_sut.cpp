@@ -36,6 +36,7 @@
 
 #include "a2a/core/agent_card_builder.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/protojson.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
@@ -52,6 +53,7 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
+constexpr std::string_view kRequiredExtensionUri = "urn:a2a:tck:required-extension";
 constexpr std::string_view kExtendedAgentCardPath = "/extendedAgentCard";
 constexpr std::string_view kRestApiBasePath = "/a2a";
 constexpr std::string_view kJsonRpcExtendedAgentCardMethod = "GetExtendedAgentCard";
@@ -102,33 +104,45 @@ void SignalHandler(int signal_number) {
          request.body.find(kJsonRpcExtendedAgentCardMethod) != std::string::npos;
 }
 
-[[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardHttpError() {
-  a2a::server::HttpServerResponse response;
-  response.status_code = a2a::core::http::kStatusBadRequest;
-  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
-      std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body = "{\"error\":{\"code\":400,\"status\":\"FAILED_PRECONDITION\","
-                  "\"message\":\"Extended agent card is not configured\"}}";
-  return response;
-}
-
-[[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardJsonRpcError() {
+[[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardHttpResponse(
+    const lf::a2a::v1::AgentCard& agent_card) {
   a2a::server::HttpServerResponse response;
   response.status_code = a2a::core::http::kStatusOk;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
       std::string(a2a::core::http::kContentTypeApplicationJson);
-  response.body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32007,"
-                  "\"message\":\"Extended agent card is not configured\"}}";
+  const auto serialized = a2a::core::MessageToJson(agent_card);
+  if (!serialized.ok()) {
+    response.status_code = a2a::core::http::kStatusInternalServerError;
+    response.body = "{\"error\":{\"code\":500,\"message\":\"Failed to serialize extended agent card\"}}";
+    return response;
+  }
+  response.body = serialized.value();
+  return response;
+}
+
+[[nodiscard]] a2a::server::HttpServerResponse BuildExtendedAgentCardJsonRpcResponse(
+    const lf::a2a::v1::AgentCard& agent_card) {
+  a2a::server::HttpServerResponse response;
+  response.status_code = a2a::core::http::kStatusOk;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] =
+      std::string(a2a::core::http::kContentTypeApplicationJson);
+  const auto serialized = a2a::core::MessageToJson(agent_card);
+  if (!serialized.ok()) {
+    response.body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,"
+                    "\"message\":\"Failed to serialize extended agent card\"}}";
+    return response;
+  }
+  response.body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":" + serialized.value() + "}";
   return response;
 }
 
 [[nodiscard]] std::optional<a2a::server::HttpServerResponse> MaybeHandleExtendedAgentCardRequest(
-    const a2a::server::HttpServerRequest& request) {
+    const a2a::server::HttpServerRequest& request, const lf::a2a::v1::AgentCard& agent_card) {
   if (IsRestExtendedAgentCardRequest(request)) {
-    return BuildExtendedAgentCardHttpError();
+    return BuildExtendedAgentCardHttpResponse(agent_card);
   }
   if (IsJsonRpcExtendedAgentCardRequest(request)) {
-    return BuildExtendedAgentCardJsonRpcError();
+    return BuildExtendedAgentCardJsonRpcResponse(agent_card);
   }
   return std::nullopt;
 }
@@ -213,13 +227,14 @@ class HttpConnectionRegistry final {
   std::unordered_set<int> active_fds_;
 };
 
-void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConnectionRegistry& registry) {
+void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, const lf::a2a::v1::AgentCard& agent_card,
+                          HttpConnectionRegistry& registry) {
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
   auto parsed = adapter.ReadRequest(socket_transport, "localhost");
   if (parsed.ok()) {
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    const auto extended_card_response = MaybeHandleExtendedAgentCardRequest(request);
+    const auto extended_card_response = MaybeHandleExtendedAgentCardRequest(request, agent_card);
     if (extended_card_response.has_value()) {
       (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, *extended_card_response);
     } else {
@@ -275,8 +290,12 @@ int main(int argc, char** argv) {
        .include_legacy_transport_fields = false,
        .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
            .cache_control = "public, max-age=300",
-           .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)}});
-  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
+           .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)},
+       .required_extensions = {std::string(kRequiredExtensionUri)}});
+  a2a::server::JsonRpcServerTransport jsonrpc(
+      &dispatcher, {.rpc_path = "/rpc",
+                    .require_version_header = false,
+                    .required_extensions = {std::string(kRequiredExtensionUri)}});
 
 #ifdef _WIN32
   WSADATA wsa_data;
@@ -323,7 +342,8 @@ int main(int argc, char** argv) {
       continue;
     }
     connection_registry.Add(fd);
-    connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::ref(connection_registry));
+    connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::cref(agent_card),
+                                    std::ref(connection_registry));
   }
   executor.ShutdownSubscriptions();
   connection_registry.ShutdownActiveSockets();
