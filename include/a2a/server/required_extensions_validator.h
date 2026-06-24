@@ -19,7 +19,8 @@ class RequiredExtensionsValidator final {
   RequiredExtensionsValidator() = default;
   explicit RequiredExtensionsValidator(std::vector<std::string> required_extensions);
 
-  [[nodiscard]] core::Result<void> Validate(const std::unordered_map<std::string, std::string>& headers) const;
+  [[nodiscard]] core::Result<std::vector<std::string>> Validate(
+      const std::unordered_map<std::string, std::string>& headers) const;
 
  private:
   std::vector<std::string> required_extensions_;
