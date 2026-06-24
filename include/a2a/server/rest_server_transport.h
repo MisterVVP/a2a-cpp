@@ -63,7 +63,8 @@ class RestServerTransport final {
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
-  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response);
+  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
+                                                         const std::vector<std::string>& activated_extensions);
 
   static std::string NormalizeBasePath(std::string_view path);
 
