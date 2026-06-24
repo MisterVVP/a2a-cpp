@@ -89,6 +89,9 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
     return "UNSUPPORTED_OPERATION";
   }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
+    return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+  }
   switch (error.code()) {
     case core::ErrorCode::kValidation:
       return "VALIDATION_ERROR";
@@ -617,16 +620,11 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
   }
   (void)request;
-  (void)context;
+  (void)response;
 
-  response->set_name("A2A C++ SDK Agent");
-  response->set_description("Default agent card for compatibility checks");
-  response->set_version(std::string(core::Version::kAgentCardVersion));
-  response->add_default_input_modes("text/plain");
-  response->add_default_output_modes("text/plain");
-  response->mutable_capabilities()->set_push_notifications(false);
-  response->mutable_capabilities()->set_streaming(true);
-  return ::grpc::Status::OK;
+  const auto error =
+      core::protocol_errors::ExtendedAgentCardNotConfigured("Extended agent card is not configured");
+  return ToGrpcStatus(error, context);
 }
 
 }  // namespace a2a::server
