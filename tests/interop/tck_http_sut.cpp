@@ -94,8 +94,8 @@ void SignalHandler(int signal_number) {
     return false;
   }
   const std::string_view path = RequestPath(request.target);
-  const std::string rest_extended_agent_card_path =
-      std::string(kRestApiBasePath) + std::string(kExtendedAgentCardPath);
+  std::string rest_extended_agent_card_path(kRestApiBasePath.data(), kRestApiBasePath.size());
+  rest_extended_agent_card_path.append(kExtendedAgentCardPath.data(), kExtendedAgentCardPath.size());
   return path == kExtendedAgentCardPath || path == rest_extended_agent_card_path;
 }
 
@@ -113,7 +113,9 @@ void SignalHandler(int signal_number) {
   const auto serialized = a2a::core::MessageToJson(agent_card);
   if (!serialized.ok()) {
     response.status_code = a2a::core::http::kStatusInternalServerError;
-    response.body = "{\"error\":{\"code\":500,\"message\":\"Failed to serialize extended agent card\"}}";
+    response.body =
+        "{\"error\":{\"code\":500,"
+        "\"message\":\"Failed to serialize extended agent card\"}}";
     return response;
   }
   response.body = serialized.value();
@@ -128,11 +130,15 @@ void SignalHandler(int signal_number) {
       std::string(a2a::core::http::kContentTypeApplicationJson);
   const auto serialized = a2a::core::MessageToJson(agent_card);
   if (!serialized.ok()) {
-    response.body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,"
-                    "\"message\":\"Failed to serialize extended agent card\"}}";
+    response.body =
+        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32603,"
+        "\"message\":\"Failed to serialize extended agent card\"}}";
     return response;
   }
-  response.body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":" + serialized.value() + "}";
+  std::string body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":";
+  body.append(serialized.value());
+  body.push_back('}');
+  response.body = std::move(body);
   return response;
 }
 
@@ -227,8 +233,8 @@ class HttpConnectionRegistry final {
   std::unordered_set<int> active_fds_;
 };
 
-void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, const lf::a2a::v1::AgentCard& agent_card,
-                          HttpConnectionRegistry& registry) {
+void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux,
+                          const lf::a2a::v1::AgentCard& agent_card, HttpConnectionRegistry& registry) {
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
   auto parsed = adapter.ReadRequest(socket_transport, "localhost");
@@ -284,18 +290,22 @@ int main(int argc, char** argv) {
   a2a::examples::ExampleExecutor executor(std::move(executor_options));
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport grpc(&dispatcher);
-  a2a::server::RestServerTransport rest(
-      &dispatcher, agent_card,
-      {.rest_api_base_path = std::string(kRestApiBasePath),
-       .include_legacy_transport_fields = false,
-       .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
-           .cache_control = "public, max-age=300",
-           .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)},
-       .required_extensions = {std::string(kRequiredExtensionUri)}});
-  a2a::server::JsonRpcServerTransport jsonrpc(
-      &dispatcher, {.rpc_path = "/rpc",
-                    .require_version_header = false,
-                    .required_extensions = {std::string(kRequiredExtensionUri)}});
+
+  a2a::server::RestServerTransportOptions rest_options;
+  rest_options.rest_api_base_path = std::string(kRestApiBasePath);
+  rest_options.include_legacy_transport_fields = false;
+  rest_options.agent_card_cache_settings =
+      a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+          .cache_control = "public, max-age=300",
+          .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
+  rest_options.required_extensions = {std::string(kRequiredExtensionUri)};
+  a2a::server::RestServerTransport rest(&dispatcher, agent_card, std::move(rest_options));
+
+  a2a::server::JsonRpcServerTransportOptions jsonrpc_options;
+  jsonrpc_options.rpc_path = "/rpc";
+  jsonrpc_options.require_version_header = false;
+  jsonrpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
+  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, std::move(jsonrpc_options));
 
 #ifdef _WIN32
   WSADATA wsa_data;
