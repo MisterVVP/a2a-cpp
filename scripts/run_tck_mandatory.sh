@@ -38,16 +38,49 @@ if extension_header:
         import httpx
     except Exception:  # pragma: no cover - only active after TCK dependencies are installed.
         httpx = None
+
+    def headers_with_extensions(headers):
+        merged = dict(headers or {})
+        has_extension_header = any(name.lower() == "a2a-extensions" for name in merged)
+        if not has_extension_header:
+            merged["A2A-Extensions"] = extension_header
+        return merged
+
+    def request_with_extensions(original):
+        def wrapper(self, *args, **kwargs):
+            kwargs["headers"] = headers_with_extensions(kwargs.get("headers"))
+            return original(self, *args, **kwargs)
+
+        return wrapper
+
+    def send_with_extensions(original):
+        def wrapper(self, request, *args, **kwargs):
+            if "a2a-extensions" not in request.headers:
+                request.headers["A2A-Extensions"] = extension_header
+            return original(self, request, *args, **kwargs)
+
+        return wrapper
+
     if httpx is not None:
         original_client_init = httpx.Client.__init__
+        original_async_client_init = httpx.AsyncClient.__init__
 
         def client_init_with_extensions(self, *args, **kwargs):
-            headers = dict(kwargs.get("headers") or {})
-            headers.setdefault("A2A-Extensions", extension_header)
-            kwargs["headers"] = headers
+            kwargs["headers"] = headers_with_extensions(kwargs.get("headers"))
             return original_client_init(self, *args, **kwargs)
 
+        def async_client_init_with_extensions(self, *args, **kwargs):
+            kwargs["headers"] = headers_with_extensions(kwargs.get("headers"))
+            return original_async_client_init(self, *args, **kwargs)
+
         httpx.Client.__init__ = client_init_with_extensions
+        httpx.AsyncClient.__init__ = async_client_init_with_extensions
+        httpx.Client.request = request_with_extensions(httpx.Client.request)
+        httpx.AsyncClient.request = request_with_extensions(httpx.AsyncClient.request)
+        httpx.Client.build_request = request_with_extensions(httpx.Client.build_request)
+        httpx.AsyncClient.build_request = request_with_extensions(httpx.AsyncClient.build_request)
+        httpx.Client.send = send_with_extensions(httpx.Client.send)
+        httpx.AsyncClient.send = send_with_extensions(httpx.AsyncClient.send)
 PY
   export A2A_TCK_REQUIRED_EXTENSIONS="${TCK_REQUIRED_EXTENSIONS}"
   export PYTHONPATH="${TCK_PYTHONPATH_DIR}:${PYTHONPATH:-}"
