@@ -369,7 +369,7 @@ TEST(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
             grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsUnconfiguredError) {
+TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -380,8 +380,16 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsUnconfiguredError) {
 
   auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
   const auto status = service->GetExtendedAgentCard(&context, &request, &response);
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
-  EXPECT_NE(status.error_message().find("Extended agent card is not configured"), std::string::npos);
+  EXPECT_TRUE(status.ok());
+  EXPECT_EQ(response.name(), "A2A C++ SDK Agent");
+  EXPECT_EQ(response.description(), "Default agent card for compatibility checks");
+  EXPECT_EQ(response.version(), a2a::core::Version::kAgentCardVersion);
+  ASSERT_EQ(response.default_input_modes_size(), 1);
+  ASSERT_EQ(response.default_output_modes_size(), 1);
+  EXPECT_EQ(response.default_input_modes(0), "text/plain");
+  EXPECT_EQ(response.default_output_modes(0), "text/plain");
+  EXPECT_FALSE(response.capabilities().push_notifications());
+  EXPECT_TRUE(response.capabilities().streaming());
 }
 
 TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
