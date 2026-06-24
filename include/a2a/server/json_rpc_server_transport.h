@@ -55,8 +55,8 @@ class JsonRpcServerTransport final {
                                                                  const JsonRpcServerTransportOptions& options);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
                                                                                      const DispatchResponse& response);
-  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
-                                                               const google::protobuf::Value& result);
+  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id, const google::protobuf::Value& result,
+                                                               const std::vector<std::string>& activated_extensions);
   [[nodiscard]] static HttpServerResponse BuildErrorResponse(int json_rpc_code, std::string_view message,
                                                              const ResponseId& id,
                                                              const std::optional<core::Error>& error, int http_status);
