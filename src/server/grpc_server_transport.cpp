@@ -258,7 +258,8 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
 }  // namespace
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher, GrpcServerTransportOptions options)
-    : dispatcher_(dispatcher), required_extensions_validator_(std::move(options.required_extensions)) {}
+    : dispatcher_(dispatcher),
+      required_extensions_validator_(std::move(options.required_extensions)) {}
 
 core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::grpc::ServerContext& context) const {
   if (dispatcher_ == nullptr) {
