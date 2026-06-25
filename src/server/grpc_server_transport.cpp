@@ -92,6 +92,9 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
     return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
   }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+    return "EXTENSION_SUPPORT_REQUIRED";
+  }
   switch (error.code()) {
     case core::ErrorCode::kValidation:
       return "VALIDATION_ERROR";
@@ -254,7 +257,8 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
 
 }  // namespace
 
-GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher) : dispatcher_(dispatcher) {}
+GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher, GrpcServerTransportOptions options)
+    : dispatcher_(dispatcher), required_extensions_validator_(std::move(options.required_extensions)) {}
 
 core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::grpc::ServerContext& context) const {
   if (dispatcher_ == nullptr) {
@@ -278,6 +282,11 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   if (version_it->second != core::Version::HeaderValue()) {
     return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
         .WithTransport(std::string(GrpcServerTransport::kTransportName));
+  }
+
+  const auto extensions = required_extensions_validator_.Validate(request_context.client_headers);
+  if (!extensions.ok()) {
+    return extensions.error().WithTransport(std::string(GrpcServerTransport::kTransportName));
   }
   return request_context;
 }
