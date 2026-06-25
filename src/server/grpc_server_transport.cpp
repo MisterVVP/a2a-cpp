@@ -89,12 +89,10 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
     return "UNSUPPORTED_OPERATION";
   }
-  if (protocol_code.has_value() &&
-      *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
     return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
   }
-  if (protocol_code.has_value() &&
-      *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
     return "EXTENSION_SUPPORT_REQUIRED";
   }
   switch (error.code()) {
@@ -260,8 +258,7 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
 }  // namespace
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher, GrpcServerTransportOptions options)
-    : dispatcher_(dispatcher),
-      required_extensions_validator_(std::move(options.required_extensions)) {}
+    : dispatcher_(dispatcher), required_extensions_validator_(std::move(options.required_extensions)) {}
 
 core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::grpc::ServerContext& context) const {
   if (dispatcher_ == nullptr) {

@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "a2a/server/dispatcher.h"
-#include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/request_context.h"
+#include "a2a/server/required_extensions_validator.h"
 #include "a2a/v1/a2a.grpc.pb.h"
 
 namespace a2a::server {
