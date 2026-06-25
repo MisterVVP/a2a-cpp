@@ -93,7 +93,8 @@ std::string ErrorInfoReason(const core::Error& error) {
       *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
     return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
   }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+  if (protocol_code.has_value() &&
+      *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
     return "EXTENSION_SUPPORT_REQUIRED";
   }
   switch (error.code()) {
