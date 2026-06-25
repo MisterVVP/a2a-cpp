@@ -89,7 +89,8 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
     return "UNSUPPORTED_OPERATION";
   }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
+  if (protocol_code.has_value() &&
+      *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
     return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
