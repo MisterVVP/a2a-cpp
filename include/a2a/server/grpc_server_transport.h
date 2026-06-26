@@ -18,7 +18,7 @@
 namespace a2a::server {
 
 struct GrpcServerTransportOptions final {
-  std::vector<std::string> required_extensions = {};
+  std::vector<std::string> required_extensions;
 };
 
 class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
