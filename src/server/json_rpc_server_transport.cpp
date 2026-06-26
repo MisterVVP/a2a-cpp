@@ -161,6 +161,18 @@ core::Result<google::protobuf::Value> FindIdField(const google::protobuf::Struct
   return id_it->second;
 }
 
+std::optional<google::protobuf::Value> FindIdFieldBestEffort(std::string_view body) {
+  const auto envelope = ParseJsonObject(body);
+  if (!envelope.ok()) {
+    return std::nullopt;
+  }
+  const auto id = FindIdField(envelope.value());
+  if (!id.ok()) {
+    return std::nullopt;
+  }
+  return id.value();
+}
+
 core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelope) {
   const auto& fields = envelope.fields();
   const auto method_it = fields.find("method");
@@ -776,10 +788,14 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
 
+  const auto requested_id = FindIdFieldBestEffort(request.body);
+  const ResponseId extension_error_id =
+      requested_id.has_value() ? ResponseId(requested_id.value()) : ResponseId{};
   const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
     const auto error = extensions.error().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), extension_error_id, error,
+                              core::http::kStatusOk);
   }
   const auto& activated_extensions = extensions.value();
   const auto build_validated_error_response =
