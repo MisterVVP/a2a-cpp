@@ -161,7 +161,7 @@ core::Result<google::protobuf::Value> FindIdField(const google::protobuf::Struct
   return id_it->second;
 }
 
-std::optional<google::protobuf::Value> FindIdFieldBestEffort(std::string_view body) {
+[[nodiscard]] std::optional<google::protobuf::Value> FindIdFieldBestEffort(std::string_view body) {
   const auto envelope = ParseJsonObject(body);
   if (!envelope.ok()) {
     return std::nullopt;

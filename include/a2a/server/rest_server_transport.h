@@ -45,8 +45,8 @@ struct RestServerTransportOptions final {
   std::string rest_api_base_path = "/";
   bool require_version_header = true;
   bool include_legacy_transport_fields = true;
-  std::optional<AgentCardCacheSettings> agent_card_cache_settings = std::nullopt;
-  std::vector<std::string> required_extensions = {};
+  std::optional<AgentCardCacheSettings> agent_card_cache_settings;
+  std::vector<std::string> required_extensions;
 };
 
 class RestServerTransport final {
