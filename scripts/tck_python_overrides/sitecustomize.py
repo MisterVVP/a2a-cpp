@@ -11,10 +11,16 @@ cases while leaving the negative missing-extension tests untouched.
 
 from __future__ import annotations
 
+from collections import namedtuple
 import os
 from typing import Any, Callable, Iterable
 
 EXTENSION_HEADER = os.environ.get("A2A_TCK_CLIENT_REQUIRED_EXTENSIONS", "")
+
+_ClientCallDetails = namedtuple(
+    "_ClientCallDetails",
+    ("method", "timeout", "metadata", "credentials", "wait_for_ready", "compression"),
+)
 
 
 def _should_add_extension_header() -> bool:
@@ -57,6 +63,17 @@ def _send_with_extensions(original: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _client_call_details_with_extensions(client_call_details: Any) -> _ClientCallDetails:
+    return _ClientCallDetails(
+        method=client_call_details.method,
+        timeout=client_call_details.timeout,
+        metadata=_metadata_with_extensions(client_call_details.metadata),
+        credentials=client_call_details.credentials,
+        wait_for_ready=client_call_details.wait_for_ready,
+        compression=client_call_details.compression,
+    )
+
+
 class _GrpcCallableWithExtensions:
     def __init__(self, original: Any) -> None:
         self._original = original
@@ -64,6 +81,14 @@ class _GrpcCallableWithExtensions:
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         kwargs["metadata"] = _metadata_with_extensions(kwargs.get("metadata"))
         return self._original(*args, **kwargs)
+
+    def future(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs["metadata"] = _metadata_with_extensions(kwargs.get("metadata"))
+        return self._original.future(*args, **kwargs)
+
+    def with_call(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs["metadata"] = _metadata_with_extensions(kwargs.get("metadata"))
+        return self._original.with_call(*args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._original, name)
@@ -95,6 +120,37 @@ def _patch_grpc() -> None:
         import grpc
     except Exception:  # pragma: no cover - only active after TCK dependencies are installed.
         return
+
+    class _GrpcExtensionClientInterceptor(
+        grpc.UnaryUnaryClientInterceptor,
+        grpc.UnaryStreamClientInterceptor,
+        grpc.StreamUnaryClientInterceptor,
+        grpc.StreamStreamClientInterceptor,
+    ):
+        def intercept_unary_unary(self, continuation: Any, client_call_details: Any, request: Any) -> Any:
+            return continuation(_client_call_details_with_extensions(client_call_details), request)
+
+        def intercept_unary_stream(self, continuation: Any, client_call_details: Any, request: Any) -> Any:
+            return continuation(_client_call_details_with_extensions(client_call_details), request)
+
+        def intercept_stream_unary(self, continuation: Any, client_call_details: Any, request_iterator: Any) -> Any:
+            return continuation(_client_call_details_with_extensions(client_call_details), request_iterator)
+
+        def intercept_stream_stream(self, continuation: Any, client_call_details: Any, request_iterator: Any) -> Any:
+            return continuation(_client_call_details_with_extensions(client_call_details), request_iterator)
+
+    interceptor = _GrpcExtensionClientInterceptor()
+    original_insecure_channel = grpc.insecure_channel
+    original_secure_channel = grpc.secure_channel
+
+    def insecure_channel_with_extensions(*args: Any, **kwargs: Any) -> Any:
+        return grpc.intercept_channel(original_insecure_channel(*args, **kwargs), interceptor)
+
+    def secure_channel_with_extensions(*args: Any, **kwargs: Any) -> Any:
+        return grpc.intercept_channel(original_secure_channel(*args, **kwargs), interceptor)
+
+    grpc.insecure_channel = insecure_channel_with_extensions
+    grpc.secure_channel = secure_channel_with_extensions
 
     aio_channel = getattr(getattr(grpc, "aio", None), "Channel", None)
     for channel_type in (grpc.Channel, aio_channel):
