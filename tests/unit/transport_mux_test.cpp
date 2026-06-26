@@ -163,7 +163,8 @@ TEST(TransportMuxTest, NormalizesRelativeTargetsAndTrimsTrailingSlash) {
 TEST(TransportMuxTest, JsonRpcCreatePushConfigPreservesNestedWebhookUrl) {
   JsonRpcPushConfigRecordingExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
