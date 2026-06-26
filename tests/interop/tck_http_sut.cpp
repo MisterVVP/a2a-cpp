@@ -205,8 +205,9 @@ int main(int argc, char** argv) {
   executor_options.push_store = store_bundle.value().push_store.get();
   a2a::examples::ExampleExecutor executor(std::move(executor_options));
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::GrpcServerTransport grpc(&dispatcher,
-                                         {.required_extensions = {std::string(kTckRequiredExtensionUri)}});
+  a2a::server::GrpcServerTransportOptions grpc_options;
+  grpc_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  a2a::server::GrpcServerTransport grpc(&dispatcher, std::move(grpc_options));
 
   a2a::server::RestServerTransportOptions rest_options;
   rest_options.rest_api_base_path = std::string(kRestApiBasePath);
