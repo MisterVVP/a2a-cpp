@@ -789,8 +789,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   }
 
   const auto requested_id = FindIdFieldBestEffort(request.body);
-  const ResponseId extension_error_id =
-      requested_id.has_value() ? ResponseId(requested_id.value()) : ResponseId{};
+  const ResponseId extension_error_id = requested_id.has_value() ? ResponseId(requested_id.value()) : ResponseId{};
   const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
     const auto error = extensions.error().WithTransport("jsonrpc");

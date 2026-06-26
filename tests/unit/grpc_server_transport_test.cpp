@@ -183,8 +183,7 @@ TEST(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
 TEST(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::GrpcServerTransport transport(
-      &dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
 
   grpc::ServerContext missing_context;
   grpc::testing::ServerContextTestSpouse missing_spouse(&missing_context);
