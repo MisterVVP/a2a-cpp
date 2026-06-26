@@ -89,7 +89,8 @@ a2a::server::RestServerTransportOptions RestOptions(
   return {.rest_api_base_path = std::move(rest_api_base_path),
           .require_version_header = true,
           .include_legacy_transport_fields = true,
-          .agent_card_cache_settings = std::move(cache_settings)};
+          .agent_card_cache_settings = std::move(cache_settings),
+          .required_extensions = {}};
 }
 
 TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
