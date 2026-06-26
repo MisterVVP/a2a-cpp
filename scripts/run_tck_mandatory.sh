@@ -28,54 +28,15 @@ install_tck_python_overrides() {
     return 0
   fi
 
+  local override_source="${ROOT_DIR}/scripts/tck_python_overrides/sitecustomize.py"
+  if [[ ! -f "${override_source}" ]]; then
+    echo "Missing TCK Python override shim: ${override_source}" >&2
+    return 1
+  fi
+
   mkdir -p "${TCK_PYTHONPATH_DIR}"
-  cat > "${TCK_PYTHONPATH_DIR}/sitecustomize.py" <<'PY'
-import os
-
-extension_header = os.environ.get("A2A_TCK_REQUIRED_EXTENSIONS", "")
-if extension_header:
-    try:
-        import httpx
-    except Exception:  # pragma: no cover - only active after TCK dependencies are installed.
-        httpx = None
-
-    def should_add_extension_header():
-        current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
-        return "test_missing_required_extension_returns_error" not in current_test
-
-    def headers_with_extensions(headers):
-        merged = dict(headers or {})
-        if not should_add_extension_header():
-            return merged
-        has_extension_header = any(name.lower() == "a2a-extensions" for name in merged)
-        if not has_extension_header:
-            merged["A2A-Extensions"] = extension_header
-        return merged
-
-    def request_with_extensions(original):
-        def wrapper(self, *args, **kwargs):
-            kwargs["headers"] = headers_with_extensions(kwargs.get("headers"))
-            return original(self, *args, **kwargs)
-
-        return wrapper
-
-    def send_with_extensions(original):
-        def wrapper(self, request, *args, **kwargs):
-            if should_add_extension_header() and "a2a-extensions" not in request.headers:
-                request.headers["A2A-Extensions"] = extension_header
-            return original(self, request, *args, **kwargs)
-
-        return wrapper
-
-    if httpx is not None:
-        httpx.Client.request = request_with_extensions(httpx.Client.request)
-        httpx.AsyncClient.request = request_with_extensions(httpx.AsyncClient.request)
-        httpx.Client.build_request = request_with_extensions(httpx.Client.build_request)
-        httpx.AsyncClient.build_request = request_with_extensions(httpx.AsyncClient.build_request)
-        httpx.Client.send = send_with_extensions(httpx.Client.send)
-        httpx.AsyncClient.send = send_with_extensions(httpx.AsyncClient.send)
-PY
-  export A2A_TCK_REQUIRED_EXTENSIONS="${TCK_REQUIRED_EXTENSIONS}"
+  cp "${override_source}" "${TCK_PYTHONPATH_DIR}/sitecustomize.py"
+  export A2A_TCK_CLIENT_REQUIRED_EXTENSIONS="${TCK_REQUIRED_EXTENSIONS}"
   export PYTHONPATH="${TCK_PYTHONPATH_DIR}:${PYTHONPATH:-}"
 }
 
