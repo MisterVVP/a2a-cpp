@@ -636,8 +636,15 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   response->set_version(std::string(core::Version::kAgentCardVersion));
   response->add_default_input_modes("text/plain");
   response->add_default_output_modes("text/plain");
-  response->mutable_capabilities()->set_push_notifications(false);
-  response->mutable_capabilities()->set_streaming(true);
+  auto* capabilities = response->mutable_capabilities();
+  capabilities->set_push_notifications(false);
+  capabilities->set_streaming(true);
+  for (const auto& required_extension : required_extensions_validator_.required_extensions()) {
+    auto* extension = capabilities->add_extensions();
+    extension->set_uri(required_extension);
+    extension->set_required(true);
+  }
+
   return ::grpc::Status::OK;
 }
 
