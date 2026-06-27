@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
@@ -176,6 +177,7 @@ constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
 constexpr std::uint32_t kVarintShiftBits = 7U;
 constexpr int32_t kMaxListTasksPageSize = 100;
 constexpr std::chrono::milliseconds kStreamCancellationPollInterval{50};
+constexpr std::string_view kExtensionsMetadataKey = "a2a-extensions";
 
 class StreamCancellationWatcher final {
  public:
@@ -255,12 +257,21 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
   return message;
 }
 
+void AddActivatedExtensionsMetadata(const std::vector<std::string>& activated_extensions,
+                                    ::grpc::ServerContext* context) {
+  if (activated_extensions.empty() || context == nullptr) {
+    return;
+  }
+  context->AddTrailingMetadata(std::string(kExtensionsMetadataKey), core::Extensions::Format(activated_extensions));
+}
+
 }  // namespace
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher, GrpcServerTransportOptions options)
     : dispatcher_(dispatcher), required_extensions_validator_(std::move(options.required_extensions)) {}
 
-core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::grpc::ServerContext& context) const {
+core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::BuildRequestContext(
+    const ::grpc::ServerContext& context) const {
   if (dispatcher_ == nullptr) {
     return core::Error::Internal("Server dispatcher is not configured");
   }
@@ -288,7 +299,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   if (!extensions.ok()) {
     return extensions.error().WithTransport(std::string(GrpcServerTransport::kTransportName));
   }
-  return request_context;
+  return ValidatedRequestContext{.request_context = std::move(request_context),
+                                 .activated_extensions = extensions.value()};
 }
 
 ::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context) {
@@ -318,7 +330,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = *request},
-                                              request_context.value());
+                                              request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -329,6 +341,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   *response = *payload;
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -345,7 +358,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendStreamingMessage, .payload = *request},
-                                        request_context.value());
+                                        request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -355,6 +368,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendStreamingMessage);
   }
 
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   StreamCancellationWatcher cancellation_watcher(context, stream->get());
   while (!context->IsCancelled()) {
     const auto next = (*stream)->Next();
@@ -385,8 +399,8 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = *request}, request_context.value());
+  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = *request},
+                                              request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -397,6 +411,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   *response = *payload;
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -413,7 +428,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kCancelTask, .payload = *request},
-                                              request_context.value());
+                                              request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -424,6 +439,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   *response = *payload;
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -466,7 +482,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
 
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
-                                              request_context.value());
+                                              request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -482,6 +498,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   response->set_page_size(static_cast<int32_t>(payload->page_size));
   response->set_total_size(static_cast<int32_t>(payload->total_size));
   response->set_next_page_token(payload->next_page_token);
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -499,8 +516,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
 
   lf::a2a::v1::GetTaskRequest get_task_request;
   get_task_request.set_id(request->id());
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, request_context.value());
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request},
+                            request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -510,6 +528,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
   }
 
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   StreamCancellationWatcher cancellation_watcher(context, stream->get());
   while (!context->IsCancelled()) {
     const auto next = (*stream)->Next();
@@ -541,7 +560,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
   const auto dispatch =
       dispatcher_->Dispatch({.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = *request},
-                            request_context.value());
+                            request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -551,6 +570,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCreateTaskPushNotificationConfig);
   }
   *response = *payload;
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -564,8 +584,9 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   if (!request_context.ok()) {
     return ToGrpcStatus(request_context.error(), context);
   }
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = *request}, request_context.value());
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = *request},
+                            request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -575,6 +596,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTaskPushNotificationConfig);
   }
   *response = *payload;
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -590,7 +612,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
   const auto dispatch =
       dispatcher_->Dispatch({.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = *request},
-                            request_context.value());
+                            request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
@@ -600,6 +622,7 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTaskPushNotificationConfigs);
   }
   *response = *payload;
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 
@@ -615,10 +638,11 @@ core::Result<RequestContext> GrpcServerTransport::BuildRequestContext(const ::gr
   }
   const auto dispatch =
       dispatcher_->Dispatch({.operation = DispatcherOperation::kDeleteTaskPushNotificationConfig, .payload = *request},
-                            request_context.value());
+                            request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context);
   }
+  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
   return ::grpc::Status::OK;
 }
 

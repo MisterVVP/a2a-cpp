@@ -100,6 +100,13 @@ void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_exte
   response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
 }
 
+HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view message, std::string_view reason,
+                                               const std::vector<std::string>& activated_extensions) {
+  auto response = BuildJsonErrorResponse(status_code, message, reason);
+  AddActivatedExtensionsHeader(activated_extensions, &response);
+  return response;
+}
+
 std::uint64_t ComputeEtagHash(std::string_view data) {
   std::uint64_t hash = kFnvOffsetBasis;
   for (const char ch : data) {
@@ -400,8 +407,8 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
 
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
-                                  "UNSUPPORTED_OPERATION");
+    return BuildValidatedErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
+                                       "UNSUPPORTED_OPERATION", extensions.value());
   }
 
   const auto rest_response = transport_.Handle(rest_request.value());
