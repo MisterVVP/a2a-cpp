@@ -233,6 +233,49 @@ TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) 
   EXPECT_TRUE(trailing.contains("grpc-status-details-bin"));
 }
 
+TEST(GrpcServerTransportTest, DispatchErrorIncludesActivatedExtensionTrailingMetadata) {
+  FakeExecutor executor;
+  executor.fail_get_task = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  AddRequiredExtensionHeader(spouse);
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task response;
+
+  const auto status = transport.GetTask(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::NOT_FOUND);
+
+  const auto trailing = spouse.GetTrailingMetadata();
+  ASSERT_TRUE(trailing.contains(std::string(kGrpcExtensionsMetadataKey)));
+  EXPECT_EQ(trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
+}
+
+TEST(GrpcServerTransportTest, PostValidationInputErrorIncludesActivatedExtensionTrailingMetadata) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  AddRequiredExtensionHeader(spouse);
+  lf::a2a::v1::ListTasksRequest request;
+  request.set_page_size(0);
+  lf::a2a::v1::ListTasksResponse response;
+
+  const auto status = transport.ListTasks(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+
+  const auto trailing = spouse.GetTrailingMetadata();
+  ASSERT_TRUE(trailing.contains(std::string(kGrpcExtensionsMetadataKey)));
+  EXPECT_EQ(trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
+}
+
 TEST(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {
   FakeExecutor executor;
   executor.fail_get_task = true;
