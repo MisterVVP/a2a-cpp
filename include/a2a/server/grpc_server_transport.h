@@ -53,7 +53,8 @@ class GrpcServerTransport final : public lf::a2a::v1::A2AService::Service {
   };
 
   [[nodiscard]] core::Result<ValidatedRequestContext> BuildRequestContext(const ::grpc::ServerContext& context) const;
-  [[nodiscard]] static ::grpc::Status ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context);
+  [[nodiscard]] static ::grpc::Status ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context,
+                                                   const std::vector<std::string>& activated_extensions = {});
 
   ::grpc::Status CreateTaskPushNotificationConfig(::grpc::ServerContext* context,
                                                   const lf::a2a::v1::TaskPushNotificationConfig* request,

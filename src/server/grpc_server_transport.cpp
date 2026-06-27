@@ -257,9 +257,9 @@ std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Erro
   return message;
 }
 
-void AddActivatedExtensionsMetadata(const std::vector<std::string>& activated_extensions,
-                                    ::grpc::ServerContext* context) {
-  if (activated_extensions.empty() || context == nullptr) {
+void AddActivatedExtensionsTrailingMetadata(::grpc::ServerContext* context,
+                                            const std::vector<std::string>& activated_extensions) {
+  if (context == nullptr || activated_extensions.empty()) {
     return;
   }
   context->AddTrailingMetadata(std::string(kExtensionsMetadataKey), core::Extensions::Format(activated_extensions));
@@ -303,9 +303,11 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
                                  .activated_extensions = extensions.value()};
 }
 
-::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context) {
+::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context,
+                                                 const std::vector<std::string>& activated_extensions) {
   const auto status_code = ToStatusCode(error);
   if (context != nullptr) {
+    AddActivatedExtensionsTrailingMetadata(context, activated_extensions);
     context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
     context->AddTrailingMetadata("grpc-status-details-bin", SerializeGrpcStatusDetails(status_code, error));
     const auto& protocol_code = error.protocol_code();
@@ -332,7 +334,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = *request},
                                               request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
   const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&dispatch.value().payload());
@@ -341,7 +343,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   *response = *payload;
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -360,7 +362,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendStreamingMessage, .payload = *request},
                                         request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
   const auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
@@ -368,12 +370,12 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendStreamingMessage);
   }
 
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   StreamCancellationWatcher cancellation_watcher(context, stream->get());
   while (!context->IsCancelled()) {
     const auto next = (*stream)->Next();
     if (!next.ok()) {
-      return ToGrpcStatus(next.error(), context);
+      return ToGrpcStatus(next.error(), context, request_context.value().activated_extensions);
     }
     const auto& event = next.value();
     if (!event.has_value()) {
@@ -402,7 +404,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = *request},
                                               request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
   const auto* payload = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
@@ -411,7 +413,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   *response = *payload;
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -430,7 +432,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kCancelTask, .payload = *request},
                                               request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
   const auto* payload = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
@@ -439,7 +441,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   *response = *payload;
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -459,7 +461,8 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (request->has_page_size()) {
     const int32_t page_size = request->page_size();
     if (page_size <= 0 || page_size > kMaxListTasksPageSize) {
-      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context);
+      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context,
+                          request_context.value().activated_extensions);
     }
     list_request.page_size = static_cast<std::size_t>(page_size);
   }
@@ -470,7 +473,8 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
   if (request->has_history_length()) {
     if (request->history_length() < 0) {
-      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context);
+      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context,
+                          request_context.value().activated_extensions);
     }
     list_request.history_length = static_cast<std::size_t>(request->history_length());
   }
@@ -484,7 +488,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
                                               request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
   const auto* payload = std::get_if<ListTasksResponse>(&dispatch.value().payload());
@@ -498,7 +502,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   response->set_page_size(static_cast<int32_t>(payload->page_size));
   response->set_total_size(static_cast<int32_t>(payload->total_size));
   response->set_next_page_token(payload->next_page_token);
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -520,7 +524,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       dispatcher_->Dispatch({.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request},
                             request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
   const auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch.value().payload());
@@ -528,12 +532,12 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
   }
 
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   StreamCancellationWatcher cancellation_watcher(context, stream->get());
   while (!context->IsCancelled()) {
     const auto next = (*stream)->Next();
     if (!next.ok()) {
-      return ToGrpcStatus(next.error(), context);
+      return ToGrpcStatus(next.error(), context, request_context.value().activated_extensions);
     }
     const auto& maybe_event = next.value();
     if (!maybe_event.has_value()) {
@@ -562,7 +566,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       dispatcher_->Dispatch({.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = *request},
                             request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
   const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&dispatch.value().payload());
   if (payload == nullptr) {
@@ -570,7 +574,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCreateTaskPushNotificationConfig);
   }
   *response = *payload;
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -588,7 +592,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = *request},
                             request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
   const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&dispatch.value().payload());
   if (payload == nullptr) {
@@ -596,7 +600,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTaskPushNotificationConfig);
   }
   *response = *payload;
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -614,7 +618,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       dispatcher_->Dispatch({.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = *request},
                             request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
   const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&dispatch.value().payload());
   if (payload == nullptr) {
@@ -622,7 +626,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTaskPushNotificationConfigs);
   }
   *response = *payload;
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -640,9 +644,9 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       dispatcher_->Dispatch({.operation = DispatcherOperation::kDeleteTaskPushNotificationConfig, .payload = *request},
                             request_context.value().request_context);
   if (!dispatch.ok()) {
-    return ToGrpcStatus(dispatch.error(), context);
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
-  AddActivatedExtensionsMetadata(request_context.value().activated_extensions, context);
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
