@@ -74,33 +74,6 @@ def _client_call_details_with_extensions(client_call_details: Any) -> _ClientCal
     )
 
 
-class _GrpcCallableWithExtensions:
-    def __init__(self, original: Any) -> None:
-        self._original = original
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        kwargs["metadata"] = _metadata_with_extensions(kwargs.get("metadata"))
-        return self._original(*args, **kwargs)
-
-    def future(self, *args: Any, **kwargs: Any) -> Any:
-        kwargs["metadata"] = _metadata_with_extensions(kwargs.get("metadata"))
-        return self._original.future(*args, **kwargs)
-
-    def with_call(self, *args: Any, **kwargs: Any) -> Any:
-        kwargs["metadata"] = _metadata_with_extensions(kwargs.get("metadata"))
-        return self._original.with_call(*args, **kwargs)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
-
-
-def _grpc_channel_method_with_extensions(original: Callable[..., Any]) -> Callable[..., Any]:
-    def wrapper(self: Any, *args: Any, **kwargs: Any) -> _GrpcCallableWithExtensions:
-        return _GrpcCallableWithExtensions(original(self, *args, **kwargs))
-
-    return wrapper
-
-
 def _patch_httpx() -> None:
     try:
         import httpx
@@ -151,15 +124,6 @@ def _patch_grpc() -> None:
 
     grpc.insecure_channel = insecure_channel_with_extensions
     grpc.secure_channel = secure_channel_with_extensions
-
-    aio_channel = getattr(getattr(grpc, "aio", None), "Channel", None)
-    for channel_type in (grpc.Channel, aio_channel):
-        if channel_type is None:
-            continue
-        channel_type.unary_unary = _grpc_channel_method_with_extensions(channel_type.unary_unary)
-        channel_type.unary_stream = _grpc_channel_method_with_extensions(channel_type.unary_stream)
-        channel_type.stream_unary = _grpc_channel_method_with_extensions(channel_type.stream_unary)
-        channel_type.stream_stream = _grpc_channel_method_with_extensions(channel_type.stream_stream)
 
 
 if EXTENSION_HEADER:
