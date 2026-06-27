@@ -428,8 +428,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults)
 TEST(GrpcServerTransportTest, GetExtendedAgentCardAdvertisesRequiredExtensions) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::GrpcServerTransport transport(
-      &dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
 
   grpc::ServerContext context;
   lf::a2a::v1::GetExtendedAgentCardRequest request;

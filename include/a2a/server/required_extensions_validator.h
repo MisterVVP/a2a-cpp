@@ -22,9 +22,7 @@ class RequiredExtensionsValidator final {
   [[nodiscard]] core::Result<std::vector<std::string>> Validate(
       const std::unordered_map<std::string, std::string>& headers) const;
 
-  [[nodiscard]] const std::vector<std::string>& required_extensions() const noexcept {
-    return required_extensions_;
-  }
+  [[nodiscard]] const std::vector<std::string>& required_extensions() const noexcept { return required_extensions_; }
 
  private:
   std::vector<std::string> required_extensions_;
