@@ -195,6 +195,7 @@ TEST(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
   const auto missing_status = transport.SendMessage(&missing_context, &request, &missing_response);
   EXPECT_EQ(missing_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_NE(missing_status.error_message().find("Missing required A2A extension support"), std::string::npos);
+  EXPECT_FALSE(missing_spouse.GetTrailingMetadata().contains(std::string(kGrpcExtensionsMetadataKey)));
 
   grpc::ServerContext activated_context;
   grpc::testing::ServerContextTestSpouse activated_spouse(&activated_context);
@@ -205,6 +206,9 @@ TEST(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
   const auto activated_status = transport.SendMessage(&activated_context, &request, &activated_response);
   EXPECT_TRUE(activated_status.ok());
   EXPECT_EQ(activated_response.task().id(), std::string(kTaskIdOne));
+  const auto activated_trailing = activated_spouse.GetTrailingMetadata();
+  ASSERT_TRUE(activated_trailing.contains(std::string(kGrpcExtensionsMetadataKey)));
+  EXPECT_EQ(activated_trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
 }
 
 TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) {
