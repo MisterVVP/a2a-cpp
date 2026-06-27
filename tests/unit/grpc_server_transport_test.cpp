@@ -425,6 +425,25 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults)
   EXPECT_TRUE(response.capabilities().streaming());
 }
 
+TEST(GrpcServerTransportTest, GetExtendedAgentCardAdvertisesRequiredExtensions) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(
+      &dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext context;
+  lf::a2a::v1::GetExtendedAgentCardRequest request;
+  lf::a2a::v1::AgentCard response;
+
+  auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
+  const auto status = service->GetExtendedAgentCard(&context, &request, &response);
+
+  ASSERT_TRUE(status.ok());
+  ASSERT_EQ(response.capabilities().extensions_size(), 1);
+  EXPECT_EQ(response.capabilities().extensions(0).uri(), std::string(kRequiredExtension));
+  EXPECT_TRUE(response.capabilities().extensions(0).required());
+}
+
 TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
   a2a::server::GrpcServerTransport transport(nullptr);
   grpc::ServerContext context;
