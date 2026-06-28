@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_APPS=(hello_agent streaming_server push_notifications)
+DEFAULT_APPS=(
+  hello_agent
+  simple_client
+  rest_server
+  json_rpc_server
+  grpc_server
+  streaming_client
+  streaming_server
+  push_notifications
+  auth_policy_server
+)
 DEFAULT_BUILD_PREFIX="build-example"
 EXAMPLES_APPS_DIR="examples/apps"
 
 build_prefix="${A2A_EXAMPLE_BUILD_PREFIX:-$DEFAULT_BUILD_PREFIX}"
-reuse_build_dir=0
 args=("$@")
 
-# Backward compatibility: the legacy runner accepted an optional build
-# directory as its first positional argument. CI still invokes
-# `./scripts/run_examples.sh build-examples`, so treat a first argument that is
-# not an app name as the build prefix and use any remaining arguments as apps.
+# Backward compatibility: the legacy runner accepted an optional build directory
+# as its first positional argument. Treat a first argument that is not an app
+# name as the build prefix and use any remaining arguments as apps.
 if [[ "${#args[@]}" -gt 0 && ! -d "${EXAMPLES_APPS_DIR}/${args[0]}" ]]; then
   build_prefix="${args[0]}"
-  reuse_build_dir=1
   args=("${args[@]:1}")
 fi
 
@@ -35,11 +42,7 @@ for app in "${APPS[@]}"; do
     exit 1
   fi
 
-  if [[ "${reuse_build_dir}" == "1" ]]; then
-    build_dir="${build_prefix}"
-  else
-    build_dir="${build_prefix}-${app}"
-  fi
+  build_dir="${build_prefix}-${app}"
   echo "[run_examples] configuring ${app}"
   cmake -S examples/fetch_content_consumer \
     -B "${build_dir}" \
