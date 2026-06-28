@@ -83,9 +83,9 @@ add_library(a2a_server STATIC
   server/required_extensions_validator.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp
-  server/push_notification_delivery.cpp
-  server/push_notification_service.cpp
-  server/push_notification_store.cpp
+  server/push_notifications/push_notification_delivery.cpp
+  server/push_notifications/push_notification_service.cpp
+  server/push_notifications/push_notification_store.cpp
   server/socket_utils.cpp
   server/stores/sql_identifier.cpp
   server/task_id_generator.cpp
