@@ -6,34 +6,38 @@
 
 It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg/Conan build integration.
 
-## Install With CMake
+## Use With CMake FetchContent
 
-```bash
-cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DA2A_ENABLE_TESTING=OFF \
-  -DA2A_BUILD_EXAMPLES=OFF
+For application projects, the simplest integration path is to fetch `a2a-cpp` from GitHub and link the exported CMake targets:
 
-cmake --build build --parallel
-cmake --install build --prefix /tmp/a2a-cpp-install
+```cmake
+include(FetchContent)
+
+set(A2A_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(A2A_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(A2A_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  a2a_cpp
+  GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
+  GIT_TAG main
+)
+FetchContent_MakeAvailable(a2a_cpp)
+
+target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-Use the installed package from another CMake project:
+Pin `GIT_TAG` to a release tag or commit for reproducible builds. See [`examples/fetch_content_consumer/`](examples/fetch_content_consumer/) for a minimal consumer project.
+
+## Use Installed CMake Package
+
+When `a2a-cpp` is installed by CMake or a package manager, downstream projects can consume it with `find_package`:
 
 ```cmake
 find_package(a2a_cpp CONFIG REQUIRED)
 
 target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
-
-Configure the consumer with the install prefix:
-
-```bash
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-install
-cmake --build build --parallel
-```
-
-See [`examples/cmake_package_consumer/`](examples/cmake_package_consumer/) for a minimal installed-package consumer.
 
 ## TCK Compliance Level
 
