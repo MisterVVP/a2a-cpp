@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(a2a_cpp VERSION 0.1.0 LANGUAGES CXX)
+project(a2a_cpp VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(A2A_HAS_LIBCURL OFF)
 
 option(A2A_ENABLE_TESTING "Build tests" ON)
 option(A2A_BUILD_EXAMPLES "Build example binaries" ON)
@@ -21,6 +23,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 find_package(gRPC CONFIG REQUIRED)
+
 if(A2A_ENABLE_LIBCURL)
   find_package(CURL QUIET)
   if(CURL_FOUND AND TARGET CURL::libcurl)
@@ -32,6 +35,7 @@ if(A2A_ENABLE_LIBCURL)
 else()
   message(STATUS "libcurl disabled: default outbound HTTP support disabled")
 endif()
+
 if(NOT TARGET protobuf::libprotobuf)
   set(protobuf_MODULE_COMPATIBLE ON)
   find_package(Protobuf REQUIRED)
@@ -41,7 +45,7 @@ add_subdirectory(proto)
 add_subdirectory(src)
 
 if(A2A_BUILD_EXAMPLES)
-  add_subdirectory(examples)
+  message(STATUS "A2A_BUILD_EXAMPLES is enabled; use examples/fetch_content_consumer or examples/installed_package_consumer to build curated examples")
 endif()
 
 if(A2A_BUILD_BENCHMARKS)
@@ -55,7 +59,12 @@ if(A2A_ENABLE_TESTING)
 endif()
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(DIRECTORY ${CMAKE_BINARY_DIR}/generated/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+install(
+  DIRECTORY "${PROJECT_BINARY_DIR}/generated/"
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h"
+)
 
 install(EXPORT a2a_cppTargets
   FILE a2a_cppTargets.cmake

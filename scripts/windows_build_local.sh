@@ -20,7 +20,7 @@ set -Eeuo pipefail
 #   RUN_TESTS=1                      # enable and run tests with ctest
 #   UPDATE_REPO=0                    # do not git fetch/pull when already inside repo
 #   RUN_EXAMPLES=0                   # build only; do not run examples
-#   A2A_RUN_GRPC_EXAMPLE=1           # also run example_grpc_client; requires localhost:50051 server
+#   A2A_RUN_GRPC_EXAMPLE=1           # also run grpc_server consumer example
 #   RUN_PUSH_EXAMPLE=1               # also run example_push_notification_config_client
 
 REPO_URL="https://github.com/MisterVVP/a2a-cpp.git"
@@ -219,10 +219,10 @@ cmake -S . -B "$BUILD_DIR" \
   -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
   -DVCPKG_HOST_TRIPLET="$HOST_TRIPLET" \
   -DVCPKG_OVERLAY_TRIPLETS="$overlay_triplets" \
-  -DA2A_BUILD_EXAMPLES=ON \
+  -DA2A_BUILD_EXAMPLES=OFF \
   -DA2A_ENABLE_TESTING="$enable_testing"
 
-log "Building SDK and examples"
+log "Building SDK"
 cmake --build "$BUILD_DIR" --config "$CONFIG" --parallel
 
 if [[ "${RUN_TESTS:-0}" == "1" ]]; then
@@ -236,50 +236,22 @@ if [[ "$RUN_EXAMPLES" != "1" ]]; then
   exit 0
 fi
 
-example_path() {
-  local name="$1"
-  local candidates=(
-    "$BUILD_DIR/examples/$CONFIG/$name.exe"
-    "$BUILD_DIR/examples/$name.exe"
-    "$BUILD_DIR/$CONFIG/examples/$name.exe"
-  )
-
-  for candidate in "${candidates[@]}"; do
-    if [[ -f "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-examples=(
-  example_discovery_only_client
-  example_rest_client
-  example_json_rpc_client
-  example_streaming_client
-  example_minimal_server_custom_executor
-  example_list_tasks_client
-  example_cancel_task_client
-  example_interceptor_client
-  example_auth_policy_server
-  example_push_notifications
-)
-
-if [[ "${RUN_PUSH_EXAMPLE:-0}" == "1" ]]; then
-  examples+=(example_push_notification_config_client)
-fi
+examples=(hello_agent streaming_server push_notifications)
 
 if [[ "${A2A_RUN_GRPC_EXAMPLE:-0}" == "1" ]]; then
-  examples+=(example_grpc_client)
+  examples+=(grpc_server)
 fi
 
-log "Running examples"
+log "Running examples through FetchContent consumer"
 for example in "${examples[@]}"; do
-  exe="$(example_path "$example")" || fail "Could not find executable for $example under $BUILD_DIR/examples"
-  log "Running $example"
-  "$exe"
+  example_build_dir="$BUILD_DIR/example-$example"
+  cmake -S examples/fetch_content_consumer \
+    -B "$example_build_dir" \
+    -DA2A_EXAMPLE_APP="$example" \
+    -DA2A_CPP_GIT_REPOSITORY="file://$ROOT" \
+    -DA2A_CPP_GIT_TAG=HEAD
+  cmake --build "$example_build_dir" --config "$CONFIG" --parallel
+  "$example_build_dir/a2a_example"
 done
 
 log "Done"

@@ -1,13 +1,16 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+
 find_dependency(Protobuf)
 find_dependency(gRPC)
-set(A2A_CPP_HAS_LIBCURL @A2A_HAS_LIBCURL@)
+
+set(A2A_CPP_HAS_LIBCURL "@A2A_HAS_LIBCURL@")
 if(A2A_CPP_HAS_LIBCURL)
   find_dependency(CURL)
 endif()
-set(A2A_CPP_HAS_POSTGRES_STORE @A2A_ENABLE_POSTGRES_STORE@)
+
+set(A2A_CPP_HAS_POSTGRES_STORE "@A2A_ENABLE_POSTGRES_STORE@")
 if(A2A_CPP_HAS_POSTGRES_STORE)
   find_dependency(PostgreSQL)
 endif()

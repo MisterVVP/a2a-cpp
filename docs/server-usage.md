@@ -11,7 +11,7 @@ Minimal in-process setup:
 2. Create `a2a::server::Dispatcher` with the executor.
 3. Create a transport and forward inbound HTTP requests to `Handle(...)`.
 
-See `examples/minimal_server_custom_executor.cpp` for a minimal setup.
+See `examples/apps/rest_server/main.cpp` for a minimal setup.
 
 ## Push notifications
 
@@ -25,7 +25,7 @@ Recommended executor flow:
 4. Forward create/get/list/delete push-config RPCs to `CreateConfig`, `GetConfig`, `ListConfigs`, and `DeleteConfig`.
 5. Advertise push support in the Agent Card only after the store and delivery client are configured.
 
-The built-in `HttpPushNotificationDeliveryClient` is synchronous and intended for local examples, tests, and simple deployments. Production servers should usually inject a durable queued sender with retries, backoff, webhook URL validation, credential protection, SSRF controls, and delivery telemetry. See `examples/push_notifications.cpp` for a focused service-level example and `examples/example_support.h` for executor wiring.
+The built-in `HttpPushNotificationDeliveryClient` is synchronous and intended for local examples, tests, and simple deployments. Production servers should usually inject a durable queued sender with retries, backoff, webhook URL validation, credential protection, SSRF controls, and delivery telemetry. See `examples/apps/push_notifications/main.cpp` for a focused service-level example and `tests/support/example_support/example_support.h` for executor wiring.
 
 ### Built-in HTTP delivery requirements
 

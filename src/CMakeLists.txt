@@ -10,8 +10,9 @@ add_library(a2a_core STATIC
   core/version.cpp
 )
 add_library(a2a::core ALIAS a2a_core)
+set_target_properties(a2a_core PROPERTIES EXPORT_NAME core)
 
-set(A2A_PUBLIC_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
+set(A2A_PUBLIC_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/include")
 
 target_include_directories(a2a_core
   PUBLIC
@@ -29,6 +30,7 @@ add_library(a2a_http STATIC
   http/http_client.cpp
 )
 add_library(a2a::http ALIAS a2a_http)
+set_target_properties(a2a_http PROPERTIES EXPORT_NAME http)
 
 target_include_directories(a2a_http
   PUBLIC
@@ -52,7 +54,6 @@ if(A2A_HAS_LIBCURL)
   )
 endif()
 
-
 add_library(a2a_client STATIC
   client/auth.cpp
   client/client.cpp
@@ -63,6 +64,7 @@ add_library(a2a_client STATIC
   client/sse_parser.cpp
 )
 add_library(a2a::client ALIAS a2a_client)
+set_target_properties(a2a_client PROPERTIES EXPORT_NAME client)
 
 target_include_directories(a2a_client
   PUBLIC
@@ -101,6 +103,7 @@ add_library(a2a_server STATIC
   server/stores/store_factory.cpp
 )
 add_library(a2a::server ALIAS a2a_server)
+set_target_properties(a2a_server PROPERTIES EXPORT_NAME server)
 
 target_include_directories(a2a_server
   PUBLIC
@@ -116,6 +119,7 @@ target_link_libraries(a2a_server
 
 if(A2A_ENABLE_POSTGRES_STORE)
   find_package(PostgreSQL REQUIRED)
+
   add_library(a2a_store_postgres STATIC
     server/stores/postgres_common.cpp
     server/stores/postgres_task_store.cpp

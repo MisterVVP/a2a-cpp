@@ -25,4 +25,8 @@ The SDK supports production-focused A2A capabilities including:
 - REST, JSON-RPC, and gRPC transport integrations,
 - Streaming event consumption,
 - Client credential providers and server auth metadata propagation,
-- Build integration with CMake, vcpkg, and Conan.
+- Build integration with CMake and vcpkg.
+
+## Examples
+
+Curated CMake consumer examples live in the repository [`examples/`](../../examples/) directory and cover FetchContent plus installed-package usage.

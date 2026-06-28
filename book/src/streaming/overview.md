@@ -23,5 +23,5 @@ Use `StreamHandle` to cancel long-running streams.
 
 ## Example and tests
 
-- `examples/streaming_client.cpp`
+- `examples/apps/streaming_client/main.cpp`
 - `tests/functional/examples_functional_test.cpp`

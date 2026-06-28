@@ -21,4 +21,4 @@ Inbound auth headers can be mapped into request context metadata and consumed by
 ## Related files
 
 - `tests/integration/rest_server_transport_integration_test.cpp`
-- `examples/minimal_server_custom_executor.cpp`
+- `examples/apps/rest_server/main.cpp`

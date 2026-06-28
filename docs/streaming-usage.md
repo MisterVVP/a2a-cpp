@@ -10,4 +10,4 @@ Implement `a2a::client::StreamObserver`:
 
 Use the returned `StreamHandle` to cancel long-running streams.
 
-See `examples/streaming_client.cpp` and `tests/functional/examples_functional_test.cpp`.
+See `examples/apps/streaming_client/main.cpp` and `tests/functional/examples_functional_test.cpp`.

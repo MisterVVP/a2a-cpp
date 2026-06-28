@@ -14,7 +14,7 @@ cmake --build build
 ## 2) Run a minimal example
 
 ```bash
-./build/examples/example_rest_client
+./build-example/a2a_example
 ```
 
 Expected behavior: the client performs a minimal REST workflow and exits successfully.
@@ -22,10 +22,10 @@ Expected behavior: the client performs a minimal REST workflow and exits success
 ## 3) Try additional examples
 
 ```bash
-./build/examples/discovery_only_client
-./build/examples/rest_client
-./build/examples/json_rpc_client
-./build/examples/streaming_client
+./build-example/a2a_example
+./build-example/a2a_example
+./build-example/a2a_example
+./build-example/a2a_example
 ```
 
 ## 4) Run quality gates locally

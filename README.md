@@ -4,7 +4,40 @@
 
 **a2a-cpp** is a modern C++ SDK for building Agent2Agent protocol clients and servers.
 
-It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg/Conan build integration.
+It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg build integration.
+
+## Use With CMake FetchContent
+
+For application projects, the simplest integration path is to fetch `a2a-cpp` from GitHub and link the exported CMake targets:
+
+```cmake
+include(FetchContent)
+
+set(A2A_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(A2A_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(A2A_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  a2a_cpp
+  GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
+  GIT_TAG main
+)
+FetchContent_MakeAvailable(a2a_cpp)
+
+target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
+```
+
+Pin `GIT_TAG` to a release tag or commit for reproducible builds. See [`examples/fetch_content_consumer/`](examples/fetch_content_consumer/) for a minimal consumer project.
+
+## Use Installed CMake Package
+
+When `a2a-cpp` is installed by CMake or a package manager, downstream projects can consume it with `find_package`:
+
+```cmake
+find_package(a2a_cpp CONFIG REQUIRED)
+
+target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
+```
 
 ## TCK Compliance Level
 
@@ -26,6 +59,7 @@ It supports core A2A workflows including client/server APIs, discovery, REST/JSO
 - `scripts/` local tooling and CI helpers
 - `benchmarks/` optional Google Benchmark performance suite
 - `tools/bench_runner/` Go benchmark threshold/report utility
+- `examples/` curated consumer apps for FetchContent and installed-package CMake flows
 
 ## Performance benchmarks
 
@@ -59,3 +93,23 @@ go run ./tools/bench_runner/cmd/a2a-bench-runner \
 ```
 
 See [`benchmarks/README.md`](benchmarks/README.md) for threshold strategy, Release-mode guidance, and instructions for adding benchmarks.
+
+## Examples
+
+The [`examples/`](examples/) directory contains curated SDK consumer apps. Build `hello_agent` with `FetchContent`:
+
+```bash
+cmake -S examples/fetch_content_consumer -B build-example -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-example --parallel
+./build-example/a2a_example
+```
+
+Or build the same app source against an installed package with `find_package(a2a_cpp CONFIG REQUIRED)`:
+
+```bash
+cmake -S examples/installed_package_consumer -B build-installed-example \
+  -DCMAKE_PREFIX_PATH=<install-prefix> \
+  -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-installed-example --parallel
+./build-installed-example/a2a_example
+```

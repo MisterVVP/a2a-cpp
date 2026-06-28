@@ -10,7 +10,7 @@ cmake --build build
 2. Run a minimal end-to-end example:
 
 ```bash
-./build/examples/example_rest_client
+./build-example/a2a_example
 ```
 
 3. Validate local quality gates before opening a PR:

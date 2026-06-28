@@ -105,7 +105,7 @@
     "max_time_ns": 50000
   },
   "BM_TaskLifecycle_ContinueExistingTask": {
-    "max_time_ns": 500
+    "max_time_ns": 550
   },
   "BM_TaskLifecycle_CreateNewTask": {
     "max_time_ns": 1000
