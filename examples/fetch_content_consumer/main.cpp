@@ -3,6 +3,4 @@
 
 #include "a2a/core/version.h"
 
-int main() {
-  return a2a::core::Version::HeaderValue().empty() ? 1 : 0;
-}
+int main() { return a2a::core::Version::HeaderValue().empty() ? 1 : 0; }
