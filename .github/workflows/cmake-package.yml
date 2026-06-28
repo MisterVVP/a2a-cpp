@@ -1,4 +1,4 @@
-name: CMake Package
+name: CMake Consumption
 
 on:
   workflow_dispatch:
@@ -8,29 +8,22 @@ on:
       - main
 
 jobs:
-  package-consumer-smoke:
+  fetch-content-consumer-smoke:
     runs-on: ubuntu-24.04
+    env:
+      A2A_CPP_GIT_REPOSITORY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.clone_url || 'https://github.com/MisterVVP/a2a-cpp.git' }}
+      A2A_CPP_GIT_TAG: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v6
       - name: Install deps
         run: ./scripts/install_build_deps.sh
-      - name: Configure package build
+      - name: Configure FetchContent consumer
         run: |
-          cmake -S . -B build-package \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DA2A_ENABLE_TESTING=OFF \
-            -DA2A_BUILD_EXAMPLES=OFF \
-            -DA2A_BUILD_BENCHMARKS=OFF
-      - name: Build package
-        run: cmake --build build-package --parallel
-      - name: Install package
-        run: cmake --install build-package --prefix "$PWD/a2a-install"
-      - name: Configure installed-package consumer
-        run: |
-          cmake -S examples/cmake_package_consumer \
-            -B build-package-consumer \
-            -DCMAKE_PREFIX_PATH="$PWD/a2a-install"
-      - name: Build installed-package consumer
-        run: cmake --build build-package-consumer --parallel
-      - name: Run installed-package consumer
-        run: ./build-package-consumer/a2a_cpp_package_consumer
+          cmake -S examples/fetch_content_consumer \
+            -B build-fetch-content-consumer \
+            -DA2A_CPP_GIT_REPOSITORY="$A2A_CPP_GIT_REPOSITORY" \
+            -DA2A_CPP_GIT_TAG="$A2A_CPP_GIT_TAG"
+      - name: Build FetchContent consumer
+        run: cmake --build build-fetch-content-consumer --parallel
+      - name: Run FetchContent consumer
+        run: ./build-fetch-content-consumer/a2a_cpp_fetch_content_consumer
