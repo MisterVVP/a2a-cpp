@@ -82,10 +82,45 @@ This generates Doxygen documentation from public headers in `include/a2a/**` and
 ## CI
 
 - `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
-- `.github/workflows/cmake-package.yml` validates that the installed CMake package can be consumed by an external project.
+- `.github/workflows/cmake-package.yml` validates that an external CMake project can consume `a2a-cpp` from a public GitHub URL with `FetchContent`.
 - `.github/workflows/codeql.yml` runs CodeQL analysis for C/C++ on push, pull request, and a weekly schedule.
 
+## Use With CMake FetchContent
+
+For application projects, prefer `FetchContent` when you want CMake to fetch and build `a2a-cpp` as part of the consumer build:
+
+```cmake
+cmake_minimum_required(VERSION 3.25)
+
+project(my_a2a_agent LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+include(FetchContent)
+
+set(A2A_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(A2A_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(A2A_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(A2A_ENABLE_POSTGRES_STORE OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  a2a_cpp
+  GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
+  GIT_TAG main
+)
+FetchContent_MakeAvailable(a2a_cpp)
+
+add_executable(my_a2a_agent main.cpp)
+target_link_libraries(my_a2a_agent PRIVATE a2a::client a2a::server a2a::core)
+```
+
+Pin `GIT_TAG` to a release tag or commit for reproducible builds. See `examples/fetch_content_consumer/` for a minimal consumer project. The CI workflow overrides the repository and tag to validate the current PR head through a public GitHub clone URL.
+
 ## Install package
+
+Use install mode when you want to package `a2a-cpp`, install it into a prefix, or consume it through package managers such as vcpkg:
 
 ```bash
 cmake -S . -B build-install \
@@ -95,14 +130,14 @@ cmake -S . -B build-install \
   -DA2A_BUILD_BENCHMARKS=OFF
 
 cmake --build build-install --parallel
-cmake --install build-install --prefix /tmp/a2a-cpp-install
+cmake --install build-install --prefix <install-prefix>
 ```
 
 This installs headers, generated protobuf headers, static libraries, and exported CMake package files under `lib/cmake/a2a_cpp`.
 
 ## Use installed CMake package
 
-A downstream CMake project can consume the installed SDK with `find_package`:
+A downstream CMake project can consume an installed SDK with `find_package`:
 
 ```cmake
 cmake_minimum_required(VERSION 3.25)
@@ -119,12 +154,7 @@ add_executable(my_a2a_agent main.cpp)
 target_link_libraries(my_a2a_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-Configure the downstream project with the install prefix:
-
-```bash
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-install
-cmake --build build --parallel
-```
+Configure the downstream project with the SDK install prefix in `CMAKE_PREFIX_PATH`.
 
 The exported targets are:
 
@@ -134,8 +164,6 @@ The exported targets are:
 - `a2a::server`
 - `a2a::proto_generated`
 - `a2a::store_postgres`, when built with `A2A_ENABLE_POSTGRES_STORE=ON`
-
-See `examples/cmake_package_consumer/` for a minimal installed-package consumer that is also validated in CI.
 
 
 ## Run coverage with thresholds
