@@ -4,7 +4,7 @@
 
 **a2a-cpp** is a modern C++ SDK for building Agent2Agent protocol clients and servers.
 
-It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg/Conan build integration.
+It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg build integration.
 
 ## Use With CMake FetchContent
 
