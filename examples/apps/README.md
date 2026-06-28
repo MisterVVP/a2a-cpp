@@ -1,6 +1,6 @@
 # Example apps
 
-All apps are deterministic and avoid external services unless an app README states otherwise. CI builds and runs `hello_agent` through both CMake consumer modes.
+All apps are deterministic and avoid external services unless an app README states otherwise. CI builds and runs every app in this directory through `scripts/run_examples.sh`.
 
 - `hello_agent`: smallest end-to-end in-process client/server example.
 - `simple_client`: client-side request construction and task fetch flow.
