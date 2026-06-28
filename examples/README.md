@@ -7,7 +7,7 @@ This directory contains user-facing CMake consumer examples for the a2a-cpp SDK.
 
 ## Applications
 
-- `hello_agent`: smallest end-to-end in-process client/server example and the CI smoke-test default.
+- `hello_agent`: smallest end-to-end in-process client/server example.
 - `simple_client`: deterministic client-side request construction and task fetch flow.
 - `rest_server`: REST server transport setup and in-process request handling.
 - `json_rpc_server`: JSON-RPC server transport setup with a client request.
@@ -31,4 +31,18 @@ cmake --build build-example --parallel
 cmake -S examples/installed_package_consumer -B build-installed-example -DCMAKE_PREFIX_PATH=<install-prefix> -DA2A_EXAMPLE_APP=hello_agent
 cmake --build build-installed-example --parallel
 ./build-installed-example/a2a_example
+```
+
+## Smoke runner
+
+Run every app through the FetchContent consumer template:
+
+```bash
+./scripts/run_examples.sh
+```
+
+Run selected apps:
+
+```bash
+./scripts/run_examples.sh hello_agent streaming_server push_notifications
 ```
