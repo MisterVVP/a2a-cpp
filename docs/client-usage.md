@@ -24,9 +24,9 @@ SSE streaming still uses the existing `HttpStreamRequester` path. Provide a stre
 
 See runnable examples:
 
-- `examples/discovery_only_client.cpp`
-- `examples/rest_client.cpp`
-- `examples/json_rpc_client.cpp`
-- `examples/streaming_client.cpp`
+- `examples/apps/simple_client/main.cpp`
+- `examples/apps/rest_server/main.cpp`
+- `examples/apps/json_rpc_server/main.cpp`
+- `examples/apps/streaming_client/main.cpp`
 
 See `docs/sdk-idempotency.md` for the normative duplicate/retry behavior and telemetry model.

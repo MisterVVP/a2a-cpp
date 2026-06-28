@@ -17,10 +17,10 @@ Use `a2a::client::A2AClient` to interact with A2A servers over multiple transpor
 
 ## Runnable examples
 
-- `examples/discovery_only_client.cpp`
-- `examples/rest_client.cpp`
-- `examples/json_rpc_client.cpp`
-- `examples/streaming_client.cpp`
+- `examples/apps/simple_client/main.cpp`
+- `examples/apps/rest_server/main.cpp`
+- `examples/apps/json_rpc_server/main.cpp`
+- `examples/apps/streaming_client/main.cpp`
 
 ## Related chapters
 

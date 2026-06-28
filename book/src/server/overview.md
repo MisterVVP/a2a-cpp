@@ -26,10 +26,10 @@ Server integration starts by implementing executor logic and attaching it to a t
 
 ## Example
 
-See `examples/minimal_server_custom_executor.cpp` for a minimal in-process setup.
+See `examples/apps/rest_server/main.cpp` for a minimal in-process setup.
 
 ## Push notifications
 
 Servers that advertise push support should compose `PushNotificationService` from a task store, a push-config store, and a delivery client. The executor should register inline configs from send-message requests, expose push-config CRUD methods, and call `NotifyTaskUpdated(task)` after task status changes. Propagate that `Result<void>` back to the caller so failed webhook delivery is visible instead of silently ignored.
 
-`NotifyTaskUpdated` sends a `StreamResponse` status-update payload to each stored config. A delivery-client error, a populated `PushDeliveryResult::error_message`, or a non-2xx delivery status makes the service return an error. For production, prefer a custom delivery client that queues and retries notifications while preserving observability and webhook security controls. The focused sample is `examples/push_notifications.cpp`; the reusable executor wiring is in `examples/example_support.h`.
+`NotifyTaskUpdated` sends a `StreamResponse` status-update payload to each stored config. A delivery-client error, a populated `PushDeliveryResult::error_message`, or a non-2xx delivery status makes the service return an error. For production, prefer a custom delivery client that queues and retries notifications while preserving observability and webhook security controls. The focused sample is `examples/apps/push_notifications/main.cpp`; the reusable executor wiring is in `tests/support/example_support/example_support.h`.

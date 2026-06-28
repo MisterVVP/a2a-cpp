@@ -22,4 +22,4 @@ Discovery resolves where and how to call an A2A agent.
 
 ## Example
 
-See `examples/discovery_only_client.cpp` for a minimal discovery flow.
+See `examples/apps/simple_client/main.cpp` for a minimal discovery flow.

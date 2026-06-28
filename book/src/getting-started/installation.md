@@ -28,8 +28,9 @@ cmake --build build
 ## Build examples
 
 ```bash
-cmake -S . -B build -DA2A_BUILD_EXAMPLES=ON
-cmake --build build --target example_rest_client
+cmake -S examples/fetch_content_consumer -B build-example -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-example --parallel
+./build-example/a2a_example
 ```
 
 ## Generate protobuf code only

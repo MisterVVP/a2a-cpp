@@ -23,7 +23,7 @@ Add first-class gRPC transport support so the C++ SDK reaches transport-level pa
 - `include/a2a/server/grpc_server_transport.h`
 - `src/server/grpc_server_transport.cpp`
 - unit + integration tests for gRPC client/server interoperability
-- one minimal `examples/grpc_client.cpp` and optional `examples/grpc_server.cpp`
+- one minimal `examples/apps/grpc_server/main.cpp`
 
 ## Constraints
 

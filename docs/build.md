@@ -36,9 +36,22 @@ When `A2A_ENABLE_LIBCURL=ON` (the default), CMake enables the shared libcurl-bac
 
 ## Build examples
 
+Curated examples are standalone consumer projects under `examples/`. Build them through the same CMake paths used by downstream applications instead of through the repository root:
+
 ```bash
-cmake -S . -B build -DA2A_BUILD_EXAMPLES=ON
-cmake --build build --target example_rest_client
+cmake -S examples/fetch_content_consumer -B build-example -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-example --parallel
+./build-example/a2a_example
+```
+
+After installing the SDK, the same app sources can be built with `find_package`:
+
+```bash
+cmake -S examples/installed_package_consumer -B build-installed-example \
+  -DCMAKE_PREFIX_PATH=<install-prefix> \
+  -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-installed-example --parallel
+./build-installed-example/a2a_example
 ```
 
 To run only proto generation:
@@ -178,8 +191,10 @@ This enforces:
 - `src/client` line coverage >= 80%
 - `src/server` line coverage >= 80%
 
-## Run all examples
+## Run selected examples
 
 ```bash
-./scripts/run_examples.sh
+./scripts/run_examples.sh hello_agent streaming_server push_notifications
 ```
+
+With no arguments, the script runs a small deterministic default set through `examples/fetch_content_consumer/`.
