@@ -82,15 +82,60 @@ This generates Doxygen documentation from public headers in `include/a2a/**` and
 ## CI
 
 - `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
+- `.github/workflows/cmake-package.yml` validates that the installed CMake package can be consumed by an external project.
 - `.github/workflows/codeql.yml` runs CodeQL analysis for C/C++ on push, pull request, and a weekly schedule.
 
 ## Install package
 
 ```bash
-cmake --install build --prefix /tmp/a2a-cpp-install
+cmake -S . -B build-install \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DA2A_ENABLE_TESTING=OFF \
+  -DA2A_BUILD_EXAMPLES=OFF \
+  -DA2A_BUILD_BENCHMARKS=OFF
+
+cmake --build build-install --parallel
+cmake --install build-install --prefix /tmp/a2a-cpp-install
 ```
 
 This installs headers, generated protobuf headers, static libraries, and exported CMake package files under `lib/cmake/a2a_cpp`.
+
+## Use installed CMake package
+
+A downstream CMake project can consume the installed SDK with `find_package`:
+
+```cmake
+cmake_minimum_required(VERSION 3.25)
+
+project(my_a2a_agent LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(a2a_cpp CONFIG REQUIRED)
+
+add_executable(my_a2a_agent main.cpp)
+target_link_libraries(my_a2a_agent PRIVATE a2a::client a2a::server a2a::core)
+```
+
+Configure the downstream project with the install prefix:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-install
+cmake --build build --parallel
+```
+
+The exported targets are:
+
+- `a2a::core`
+- `a2a::http`
+- `a2a::client`
+- `a2a::server`
+- `a2a::proto_generated`
+- `a2a::store_postgres`, when built with `A2A_ENABLE_POSTGRES_STORE=ON`
+
+See `examples/cmake_package_consumer/` for a minimal installed-package consumer that is also validated in CI.
 
 
 ## Run coverage with thresholds
