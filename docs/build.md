@@ -94,8 +94,7 @@ This generates Doxygen documentation from public headers in `include/a2a/**` and
 
 ## CI
 
-- `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
-- `.github/workflows/cmake-package.yml` validates that external CMake projects can consume `a2a-cpp` through both `FetchContent` and installed `find_package` flows.
+- `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, tests, and all example apps through `scripts/run_examples.sh`.
 - `.github/workflows/codeql.yml` runs CodeQL analysis for C/C++ on push, pull request, and a weekly schedule.
 
 ## Use With CMake FetchContent
@@ -129,7 +128,7 @@ add_executable(my_a2a_agent main.cpp)
 target_link_libraries(my_a2a_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-Pin `GIT_TAG` to a release tag or commit for reproducible builds. See `examples/fetch_content_consumer/` for a minimal consumer project. The CI workflow overrides the repository and tag to validate the current PR head through a public GitHub clone URL.
+Pin `GIT_TAG` to a release tag or commit for reproducible builds. See `examples/fetch_content_consumer/` for a minimal consumer project.
 
 ## Install package
 
@@ -197,4 +196,4 @@ This enforces:
 ./scripts/run_examples.sh hello_agent streaming_server push_notifications
 ```
 
-With no arguments, the script runs a small deterministic default set through `examples/fetch_content_consumer/`.
+With no arguments, the script runs every app under `examples/apps/` through `examples/fetch_content_consumer/`.
