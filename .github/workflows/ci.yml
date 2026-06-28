@@ -151,6 +151,15 @@ jobs:
             benchmark-output.log
           if-no-files-found: warn
 
+  examples-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: ./scripts/install_build_deps.sh
+      - name: Run example apps smoke
+        run: ./scripts/run_examples.sh build-examples
+
   coverage:
     runs-on: ubuntu-24.04
     steps:
