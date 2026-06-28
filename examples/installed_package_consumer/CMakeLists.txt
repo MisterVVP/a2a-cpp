@@ -8,10 +8,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(a2a_cpp CONFIG REQUIRED)
 
-add_executable(a2a_cpp_installed_package_consumer ../fetch_content_consumer/main.cpp)
-target_link_libraries(a2a_cpp_installed_package_consumer
-  PRIVATE
-    a2a::client
-    a2a::server
-    a2a::core
-)
+set(A2A_EXAMPLE_APP "hello_agent" CACHE STRING "Example app to build")
+set(A2A_EXAMPLE_APP_DIR "${CMAKE_CURRENT_LIST_DIR}/../apps/${A2A_EXAMPLE_APP}")
+set(A2A_EXAMPLE_APP_SOURCE "${A2A_EXAMPLE_APP_DIR}/main.cpp")
+if(NOT EXISTS "${A2A_EXAMPLE_APP_SOURCE}")
+  message(FATAL_ERROR "Unknown A2A_EXAMPLE_APP='${A2A_EXAMPLE_APP}'. Expected ${A2A_EXAMPLE_APP_SOURCE} to exist.")
+endif()
+
+add_executable(a2a_example "${A2A_EXAMPLE_APP_SOURCE}")
+target_link_libraries(a2a_example PRIVATE a2a::client a2a::server a2a::core)

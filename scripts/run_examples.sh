@@ -1,29 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUILD_DIR="${1:-build}"
-
-cmake -S . -B "${BUILD_DIR}" -DA2A_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build "${BUILD_DIR}" --parallel
-
-examples=(
-  example_discovery_only_client
-  example_rest_client
-  example_json_rpc_client
-  example_streaming_client
-  example_minimal_server_custom_executor
-  example_list_tasks_client
-  example_cancel_task_client
-  example_interceptor_client
-  example_auth_policy_server
-  example_push_notifications
-)
-
-if [[ "${A2A_RUN_GRPC_EXAMPLE:-0}" == "1" ]]; then
-  examples+=(example_grpc_client)
+DEFAULT_APPS=(hello_agent streaming_server push_notifications)
+if [[ "$#" -gt 0 ]]; then
+  APPS=("$@")
+else
+  APPS=("${DEFAULT_APPS[@]}")
 fi
+A2A_CPP_GIT_REPOSITORY="${A2A_CPP_GIT_REPOSITORY:-file://${PWD}}"
+A2A_CPP_GIT_TAG="${A2A_CPP_GIT_TAG:-HEAD}"
 
-for target in "${examples[@]}"; do
-  echo "[run_examples] running ${target}"
-  "./${BUILD_DIR}/examples/${target}"
+for app in "${APPS[@]}"; do
+  build_dir="build-example-${app}"
+  echo "[run_examples] configuring ${app}"
+  cmake -S examples/fetch_content_consumer \
+    -B "${build_dir}" \
+    -DA2A_EXAMPLE_APP="${app}" \
+    -DA2A_CPP_GIT_REPOSITORY="${A2A_CPP_GIT_REPOSITORY}" \
+    -DA2A_CPP_GIT_TAG="${A2A_CPP_GIT_TAG}"
+  cmake --build "${build_dir}" --parallel
+  echo "[run_examples] running ${app}"
+  "./${build_dir}/a2a_example"
 done

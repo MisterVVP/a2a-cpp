@@ -10,6 +10,7 @@ include(FetchContent)
 
 set(A2A_CPP_GIT_REPOSITORY "https://github.com/MisterVVP/a2a-cpp.git" CACHE STRING "a2a-cpp Git repository")
 set(A2A_CPP_GIT_TAG "main" CACHE STRING "a2a-cpp Git tag, branch, or commit")
+set(A2A_EXAMPLE_APP "hello_agent" CACHE STRING "Example app to build")
 
 set(A2A_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(A2A_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -23,10 +24,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(a2a_cpp)
 
-add_executable(a2a_cpp_fetch_content_consumer main.cpp)
-target_link_libraries(a2a_cpp_fetch_content_consumer
-  PRIVATE
-    a2a::client
-    a2a::server
-    a2a::core
-)
+set(A2A_EXAMPLE_APP_DIR "${CMAKE_CURRENT_LIST_DIR}/../apps/${A2A_EXAMPLE_APP}")
+set(A2A_EXAMPLE_APP_SOURCE "${A2A_EXAMPLE_APP_DIR}/main.cpp")
+if(NOT EXISTS "${A2A_EXAMPLE_APP_SOURCE}")
+  message(FATAL_ERROR "Unknown A2A_EXAMPLE_APP='${A2A_EXAMPLE_APP}'. Expected ${A2A_EXAMPLE_APP_SOURCE} to exist.")
+endif()
+
+add_executable(a2a_example "${A2A_EXAMPLE_APP_SOURCE}")
+target_link_libraries(a2a_example PRIVATE a2a::client a2a::server a2a::core)

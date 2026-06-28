@@ -45,7 +45,7 @@ add_subdirectory(proto)
 add_subdirectory(src)
 
 if(A2A_BUILD_EXAMPLES)
-  add_subdirectory(examples)
+  message(STATUS "A2A_BUILD_EXAMPLES is enabled; use examples/fetch_content_consumer or examples/installed_package_consumer to build curated examples")
 endif()
 
 if(A2A_BUILD_BENCHMARKS)

@@ -126,7 +126,7 @@ add_executable(examples_support_test
 
 target_include_directories(examples_support_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/examples
+    ${CMAKE_SOURCE_DIR}/tests/support/example_support
 )
 
 target_link_libraries(examples_support_test
@@ -557,7 +557,7 @@ add_executable(examples_functional_test
 
 target_include_directories(examples_functional_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/examples
+    ${CMAKE_SOURCE_DIR}/tests/support/example_support
 )
 
 target_link_libraries(examples_functional_test
@@ -679,7 +679,7 @@ add_executable(examples_interop_integration_test
 
 target_include_directories(examples_interop_integration_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/examples
+    ${CMAKE_SOURCE_DIR}/tests/support/example_support
 )
 
 target_link_libraries(examples_interop_integration_test
@@ -714,7 +714,7 @@ target_link_libraries(cpp_grpc_interop_server
 )
 
 add_executable(tck_http_sut interop/tck_http_sut.cpp)
-target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/examples)
+target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support)
 target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
 
 if(A2A_ENABLE_POSTGRES_STORE)

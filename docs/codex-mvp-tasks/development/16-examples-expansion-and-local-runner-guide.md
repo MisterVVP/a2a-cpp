@@ -23,7 +23,7 @@ Expand SDK examples from minimal snippets into a practical runnable matrix that 
 
 ## Deliverables
 
-- Additional `examples/*.cpp` programs.
+- Additional curated programs under `examples/apps/*/main.cpp`.
 - Expanded `examples/README.md` and quickstart cross-links.
 - Example runner script.
 - Example smoke tests or CI step.
