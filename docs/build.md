@@ -82,7 +82,7 @@ This generates Doxygen documentation from public headers in `include/a2a/**` and
 ## CI
 
 - `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
-- `.github/workflows/cmake-package.yml` validates that an external CMake project can consume `a2a-cpp` from a public GitHub URL with `FetchContent`.
+- `.github/workflows/cmake-package.yml` validates that external CMake projects can consume `a2a-cpp` through both `FetchContent` and installed `find_package` flows.
 - `.github/workflows/codeql.yml` runs CodeQL analysis for C/C++ on push, pull request, and a weekly schedule.
 
 ## Use With CMake FetchContent
@@ -154,7 +154,7 @@ add_executable(my_a2a_agent main.cpp)
 target_link_libraries(my_a2a_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-Configure the downstream project with the SDK install prefix in `CMAKE_PREFIX_PATH`.
+Configure the downstream project with the SDK install prefix in `CMAKE_PREFIX_PATH`. See `examples/installed_package_consumer/` for a minimal installed-package consumer project.
 
 The exported targets are:
 
