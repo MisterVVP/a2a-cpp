@@ -38,36 +38,9 @@ jobs:
         run: cmake --build build-install --parallel
       - name: Install SDK package
         run: cmake --install build-install --prefix "$PWD/a2a-install"
-      - name: Create installed-package consumer
-        run: |
-          mkdir -p build-installed-package-consumer-src
-          cat > build-installed-package-consumer-src/CMakeLists.txt <<'EOF'
-          cmake_minimum_required(VERSION 3.25)
-
-          project(a2a_cpp_installed_package_consumer LANGUAGES CXX)
-
-          set(CMAKE_CXX_STANDARD 20)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          set(CMAKE_CXX_EXTENSIONS OFF)
-
-          find_package(a2a_cpp CONFIG REQUIRED)
-
-          add_executable(a2a_cpp_installed_package_consumer main.cpp)
-          target_link_libraries(a2a_cpp_installed_package_consumer
-            PRIVATE
-              a2a::client
-              a2a::server
-              a2a::core
-          )
-          EOF
-          cat > build-installed-package-consumer-src/main.cpp <<'EOF'
-          #include "a2a/core/version.h"
-
-          int main() { return a2a::core::Version::HeaderValue().empty() ? 1 : 0; }
-          EOF
       - name: Configure installed-package consumer
         run: |
-          cmake -S build-installed-package-consumer-src \
+          cmake -S examples/installed_package_consumer \
             -B build-installed-package-consumer \
             -DCMAKE_PREFIX_PATH="$PWD/a2a-install"
       - name: Build installed-package consumer
