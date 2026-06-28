@@ -3,6 +3,7 @@
 
 #include "a2a/server/rest_server_transport.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -12,12 +13,15 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/legacy_transport_names.h"
 #include "a2a/core/protocol_bindings.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -86,6 +90,20 @@ HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view mess
       std::string(core::http::kContentTypeApplicationJson);
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   response.body = ErrorBody({.status_code = status_code, .message = message, .reason = reason});
+  return response;
+}
+
+void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_extensions, HttpServerResponse* response) {
+  if (activated_extensions.empty() || response == nullptr) {
+    return;
+  }
+  response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
+}
+
+HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view message, std::string_view reason,
+                                               const std::vector<std::string>& activated_extensions) {
+  auto response = BuildJsonErrorResponse(status_code, message, reason);
+  AddActivatedExtensionsHeader(activated_extensions, &response);
   return response;
 }
 
@@ -350,7 +368,10 @@ void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1:
 
 RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                                          RestServerTransportOptions options)
-    : transport_(dispatcher), agent_card_(std::move(agent_card)), options_(std::move(options)) {
+    : transport_(dispatcher),
+      agent_card_(std::move(agent_card)),
+      options_(std::move(options)),
+      required_extensions_validator_(options_.required_extensions) {
   options_.rest_api_base_path = NormalizeBasePath(options_.rest_api_base_path);
   for (auto& iface : *agent_card_.mutable_supported_interfaces()) {
     if (iface.protocol_version().empty()) {
@@ -378,17 +399,23 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
 
+  const auto extensions = required_extensions_validator_.Validate(request.headers);
+  if (!extensions.ok()) {
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
+                                  "EXTENSION_SUPPORT_REQUIRED");
+  }
+
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
-                                  "UNSUPPORTED_OPERATION");
+    return BuildValidatedErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
+                                       "UNSUPPORTED_OPERATION", extensions.value());
   }
 
   const auto rest_response = transport_.Handle(rest_request.value());
   if (!rest_response.ok()) {
     return rest_response.error();
   }
-  return ToHttpResponse(rest_response.value());
+  return ToHttpResponse(rest_response.value(), extensions.value());
 }
 
 core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {
@@ -469,13 +496,15 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   return response;
 }
 
-HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response) {
+HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response,
+                                                       const std::vector<std::string>& activated_extensions) {
   HttpServerResponse http_response;
   http_response.status_code = response.http_status;
   http_response.headers = response.headers;
   http_response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   http_response.body = response.body;
   http_response.stream_writer = response.stream_writer;
+  AddActivatedExtensionsHeader(activated_extensions, &http_response);
   return http_response;
 }
 

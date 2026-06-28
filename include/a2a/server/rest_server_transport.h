@@ -9,8 +9,10 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "a2a/core/result.h"
+#include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_transport.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -44,6 +46,7 @@ struct RestServerTransportOptions final {
   bool require_version_header = true;
   bool include_legacy_transport_fields = true;
   std::optional<AgentCardCacheSettings> agent_card_cache_settings;
+  std::vector<std::string> required_extensions;
 };
 
 class RestServerTransport final {
@@ -60,13 +63,15 @@ class RestServerTransport final {
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
-  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response);
+  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
+                                                         const std::vector<std::string>& activated_extensions);
 
   static std::string NormalizeBasePath(std::string_view path);
 
   RestTransport transport_;
   lf::a2a::v1::AgentCard agent_card_;
   RestServerTransportOptions options_;
+  RequiredExtensionsValidator required_extensions_validator_;
 };
 
 }  // namespace a2a::server

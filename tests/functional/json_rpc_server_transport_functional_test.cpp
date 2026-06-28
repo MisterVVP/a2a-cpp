@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <string_view>
 
 #include "../support/rest_server_test_utils.h"
 #include "a2a/core/protojson.h"
@@ -14,12 +15,23 @@
 namespace {
 
 constexpr int kHttpOk = 200;
+constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
+constexpr std::string_view kJsonRpcIdNullCompact = R"("id":null)";
+constexpr std::string_view kJsonRpcIdNullSpaced = R"("id": null)";
+
+bool BodyContains(std::string_view body, std::string_view expected) {
+  return body.find(expected) != std::string_view::npos;
+}
+
+bool BodyContainsNullId(std::string_view body) {
+  return BodyContains(body, kJsonRpcIdNullCompact) || BodyContains(body, kJsonRpcIdNullSpaced);
+}
 
 TEST(JsonRpcServerTransportFunctionalTest, SupportsTaskLifecycleMethodsOverJsonRpc) {
   a2a::server::InMemoryTaskStore store;
   a2a::tests::support::StoreExecutor executor(&store);
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto send_response = server.Handle(a2a::tests::support::MakeHttpRequest(
       "POST", "/rpc", {{"A2A-Version", "1.0"}},
@@ -53,7 +65,7 @@ TEST(JsonRpcServerTransportFunctionalTest, RejectsMissingVersionHeaderWhenRequir
   a2a::server::InMemoryTaskStore store;
   a2a::tests::support::StoreExecutor executor(&store);
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(a2a::tests::support::MakeHttpRequest(
       "POST", "/rpc", {},
@@ -61,7 +73,80 @@ TEST(JsonRpcServerTransportFunctionalTest, RejectsMissingVersionHeaderWhenRequir
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
-  EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
+  EXPECT_TRUE(BodyContains(response.value().body, "Missing required A2A-Version header"));
+  EXPECT_TRUE(BodyContains(response.value().body, R"("id":"send-no-version")"));
+  EXPECT_FALSE(BodyContainsNullId(response.value().body));
+}
+
+TEST(JsonRpcServerTransportFunctionalTest, RequiresDeclaredExtensionForJsonRpcRequests) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::tests::support::StoreExecutor executor(&store);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(
+      &dispatcher, {.rpc_path = "/rpc", .required_extensions = {std::string(kRequiredExtension)}});
+
+  const auto missing_extension = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}},
+      R"({"jsonrpc":"2.0","id":"list-missing-extension","method":"a2a.listTasks","params":{}})"));
+  ASSERT_TRUE(missing_extension.ok());
+  EXPECT_EQ(missing_extension.value().status_code, kHttpOk);
+  EXPECT_NE(missing_extension.value().body.find("-32008"), std::string::npos);
+  EXPECT_NE(missing_extension.value().body.find("EXTENSION_SUPPORT_REQUIRED"), std::string::npos);
+  EXPECT_NE(missing_extension.value().body.find("\"id\":\"list-missing-extension\""), std::string::npos);
+
+  const auto with_extension = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}},
+      R"({"jsonrpc":"2.0","id":"list-with-extension","method":"a2a.listTasks","params":{}})"));
+  ASSERT_TRUE(with_extension.ok());
+  EXPECT_EQ(with_extension.value().status_code, kHttpOk);
+  EXPECT_EQ(with_extension.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
+  EXPECT_NE(with_extension.value().body.find("\"result\""), std::string::npos);
+
+  const auto invalid_params = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}},
+      R"({"jsonrpc":"2.0","id":"list-invalid-params","method":"a2a.listTasks","params":{"pageSize":"bad"}})"));
+  ASSERT_TRUE(invalid_params.ok());
+  EXPECT_EQ(invalid_params.value().status_code, kHttpOk);
+  EXPECT_EQ(invalid_params.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
+  EXPECT_TRUE(BodyContains(invalid_params.value().body, R"("error")"));
+  EXPECT_TRUE(BodyContains(invalid_params.value().body, R"("id":"list-invalid-params")"));
+  EXPECT_FALSE(BodyContainsNullId(invalid_params.value().body));
+}
+
+TEST(JsonRpcServerTransportFunctionalTest, PreservesParsedIdForUnsupportedMethod) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::tests::support::StoreExecutor executor(&store);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
+
+  const auto response = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}},
+      R"({"jsonrpc":"2.0","id":"unsupported-method","method":"a2a.noSuchMethod","params":{}})"));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_TRUE(BodyContains(response.value().body, R"("id":"unsupported-method")"));
+  EXPECT_FALSE(BodyContainsNullId(response.value().body));
+}
+
+TEST(JsonRpcServerTransportFunctionalTest, UsesNullIdWhenJsonRpcIdCannotBeReliablyParsed) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::tests::support::StoreExecutor executor(&store);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
+
+  const auto invalid_json = server.Handle(a2a::tests::support::MakeHttpRequest("POST", "/rpc", {{"A2A-Version", "1.0"}},
+                                                                               R"({"jsonrpc":"2.0","id":"bad-json",)"));
+  ASSERT_TRUE(invalid_json.ok());
+  EXPECT_EQ(invalid_json.value().status_code, kHttpOk);
+  EXPECT_TRUE(BodyContainsNullId(invalid_json.value().body)) << invalid_json.value().body;
+
+  const auto invalid_id = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "POST", "/rpc", {{"A2A-Version", "1.0"}},
+      R"({"jsonrpc":"2.0","id":{"bad":true},"method":"a2a.listTasks","params":{}})"));
+  ASSERT_TRUE(invalid_id.ok());
+  EXPECT_EQ(invalid_id.value().status_code, kHttpOk);
+  EXPECT_TRUE(BodyContainsNullId(invalid_id.value().body)) << invalid_id.value().body;
 }
 
 }  // namespace

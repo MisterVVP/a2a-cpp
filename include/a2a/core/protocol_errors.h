@@ -47,10 +47,23 @@ namespace a2a::core::protocol_errors {
       .WithProtocolCode(std::string(protocol_codes::kInvalidAgentResponse));
 }
 
+[[nodiscard]] inline Error ExtendedAgentCardNotConfigured(
+    std::string message = "extended agent card is not configured") {
+  return Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(400)
+      .WithProtocolCode(std::string(protocol_codes::kExtendedAgentCardNotConfigured));
+}
+
 [[nodiscard]] inline Error VersionNotSupported(std::string message = "version is not supported") {
   return Error::UnsupportedVersion(std::move(message))
       .WithHttpStatus(400)
       .WithProtocolCode(std::string(protocol_codes::kVersionNotSupported));
+}
+
+[[nodiscard]] inline Error ExtensionSupportRequired(std::string message = "required extension support is missing") {
+  return Error::RemoteProtocol(std::move(message))
+      .WithHttpStatus(400)
+      .WithProtocolCode(std::string(protocol_codes::kExtensionSupportRequired));
 }
 
 }  // namespace a2a::core::protocol_errors

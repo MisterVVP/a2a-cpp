@@ -8,10 +8,13 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "a2a/core/result.h"
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/dispatcher.h"
+#include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_server_transport.h"
 
 namespace a2a::server {
@@ -21,6 +24,7 @@ struct JsonRpcServerTransportOptions final {
   bool require_version_header = true;
   std::size_t default_list_tasks_page_size = 50;
   std::size_t max_list_tasks_page_size = 100;
+  std::vector<std::string> required_extensions;
 };
 
 class JsonRpcServerTransport final {
@@ -32,7 +36,7 @@ class JsonRpcServerTransport final {
  private:
   class ResponseId final {
    public:
-    ResponseId() = default;
+    ResponseId() { value_.set_null_value(google::protobuf::NULL_VALUE); }
     explicit ResponseId(google::protobuf::Value value) : value_(std::move(value)) {}
 
     [[nodiscard]] const google::protobuf::Value& value() const noexcept { return value_; }
@@ -41,18 +45,26 @@ class JsonRpcServerTransport final {
     google::protobuf::Value value_;
   };
 
+  struct JsonRpcEnvelope final {
+    ResponseId id;
+    std::string method;
+    google::protobuf::Struct params;
+  };
+
   struct JsonRpcRequest final {
     ResponseId id;
     DispatchRequest dispatch;
   };
 
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
-  [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(std::string_view body,
+  [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
+  [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(const JsonRpcEnvelope& envelope,
                                                                  const JsonRpcServerTransportOptions& options);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
                                                                                      const DispatchResponse& response);
   [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
-                                                               const google::protobuf::Value& result);
+                                                               const google::protobuf::Value& result,
+                                                               const std::vector<std::string>& activated_extensions);
   [[nodiscard]] static HttpServerResponse BuildErrorResponse(int json_rpc_code, std::string_view message,
                                                              const ResponseId& id,
                                                              const std::optional<core::Error>& error, int http_status);
@@ -60,6 +72,7 @@ class JsonRpcServerTransport final {
 
   Dispatcher* dispatcher_ = nullptr;
   JsonRpcServerTransportOptions options_;
+  RequiredExtensionsValidator required_extensions_validator_;
 };
 
 }  // namespace a2a::server

@@ -35,6 +35,8 @@ constexpr int32_t kValidPageSize = 10;
 constexpr std::string_view kTaskIdOne = "task-1";
 constexpr std::string_view kTaskIdTwo = "task-2";
 constexpr std::string_view kSubscribeTaskId = "sub-task";
+constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
+constexpr std::string_view kGrpcExtensionsMetadataKey = "a2a-extensions";
 
 class FakeStreamSession final : public a2a::server::ServerStreamSession {
  public:
@@ -157,6 +159,10 @@ void AddValidVersionHeader(grpc::testing::ServerContextTestSpouse& spouse) {
                            a2a::core::Version::HeaderValue());
 }
 
+void AddRequiredExtensionHeader(grpc::testing::ServerContextTestSpouse& spouse) {
+  spouse.AddClientMetadata(std::string(kGrpcExtensionsMetadataKey), std::string(kRequiredExtension));
+}
+
 TEST(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -172,6 +178,37 @@ TEST(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
   const auto status = transport.SendMessage(&context, &request, &response);
   EXPECT_TRUE(status.ok());
   EXPECT_EQ(response.task().id(), std::string(kTaskIdOne));
+}
+
+TEST(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext missing_context;
+  grpc::testing::ServerContextTestSpouse missing_spouse(&missing_context);
+  AddValidVersionHeader(missing_spouse);
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_task_id(std::string(kTaskIdOne));
+  lf::a2a::v1::SendMessageResponse missing_response;
+
+  const auto missing_status = transport.SendMessage(&missing_context, &request, &missing_response);
+  EXPECT_EQ(missing_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_NE(missing_status.error_message().find("Missing required A2A extension support"), std::string::npos);
+  EXPECT_FALSE(missing_spouse.GetTrailingMetadata().contains(std::string(kGrpcExtensionsMetadataKey)));
+
+  grpc::ServerContext activated_context;
+  grpc::testing::ServerContextTestSpouse activated_spouse(&activated_context);
+  AddValidVersionHeader(activated_spouse);
+  AddRequiredExtensionHeader(activated_spouse);
+  lf::a2a::v1::SendMessageResponse activated_response;
+
+  const auto activated_status = transport.SendMessage(&activated_context, &request, &activated_response);
+  EXPECT_TRUE(activated_status.ok());
+  EXPECT_EQ(activated_response.task().id(), std::string(kTaskIdOne));
+  const auto activated_trailing = activated_spouse.GetTrailingMetadata();
+  ASSERT_TRUE(activated_trailing.contains(std::string(kGrpcExtensionsMetadataKey)));
+  EXPECT_EQ(activated_trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
 }
 
 TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) {
@@ -194,6 +231,49 @@ TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) 
   EXPECT_TRUE(trailing.contains("a2a-error-code"));
   EXPECT_TRUE(trailing.contains(std::string(a2a::server::GrpcServerTransport::kProtocolCodeMetadataKey)));
   EXPECT_TRUE(trailing.contains("grpc-status-details-bin"));
+}
+
+TEST(GrpcServerTransportTest, DispatchErrorIncludesActivatedExtensionTrailingMetadata) {
+  FakeExecutor executor;
+  executor.fail_get_task = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  AddRequiredExtensionHeader(spouse);
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskIdOne));
+  lf::a2a::v1::Task response;
+
+  const auto status = transport.GetTask(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::NOT_FOUND);
+
+  const auto trailing = spouse.GetTrailingMetadata();
+  ASSERT_TRUE(trailing.contains(std::string(kGrpcExtensionsMetadataKey)));
+  EXPECT_EQ(trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
+}
+
+TEST(GrpcServerTransportTest, PostValidationInputErrorIncludesActivatedExtensionTrailingMetadata) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  AddRequiredExtensionHeader(spouse);
+  lf::a2a::v1::ListTasksRequest request;
+  request.set_page_size(0);
+  lf::a2a::v1::ListTasksResponse response;
+
+  const auto status = transport.ListTasks(&context, &request, &response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+
+  const auto trailing = spouse.GetTrailingMetadata();
+  ASSERT_TRUE(trailing.contains(std::string(kGrpcExtensionsMetadataKey)));
+  EXPECT_EQ(trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
 }
 
 TEST(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {
@@ -390,6 +470,24 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults)
   EXPECT_EQ(response.default_output_modes(0), "text/plain");
   EXPECT_FALSE(response.capabilities().push_notifications());
   EXPECT_TRUE(response.capabilities().streaming());
+}
+
+TEST(GrpcServerTransportTest, GetExtendedAgentCardAdvertisesRequiredExtensions) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
+
+  grpc::ServerContext context;
+  lf::a2a::v1::GetExtendedAgentCardRequest request;
+  lf::a2a::v1::AgentCard response;
+
+  auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
+  const auto status = service->GetExtendedAgentCard(&context, &request, &response);
+
+  ASSERT_TRUE(status.ok());
+  ASSERT_EQ(response.capabilities().extensions_size(), 1);
+  EXPECT_EQ(response.capabilities().extensions(0).uri(), std::string(kRequiredExtension));
+  EXPECT_TRUE(response.capabilities().extensions(0).required());
 }
 
 TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {

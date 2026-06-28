@@ -14,8 +14,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
@@ -51,6 +53,13 @@ constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationC
 bool HasJsonContentType(const HttpServerRequest& request) {
   const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
   return !content_type.has_value() || core::http::IsJsonContentType(*content_type);
+}
+
+void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_extensions, HttpServerResponse* response) {
+  if (activated_extensions.empty() || response == nullptr) {
+    return;
+  }
+  response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
 }
 
 bool IsValidIdType(const google::protobuf::Value& value) {
@@ -160,14 +169,6 @@ core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelo
     return core::Error::Validation("JSON-RPC request method must be a non-empty string");
   }
   return method_it->second.string_value();
-}
-
-core::Result<std::string> FindMethodField(std::string_view body) {
-  const auto envelope = ParseJsonObject(body);
-  if (!envelope.ok()) {
-    return envelope.error();
-  }
-  return FindMethodField(envelope.value());
 }
 
 core::Result<google::protobuf::Struct> FindParamsField(const google::protobuf::Struct& envelope) {
@@ -573,6 +574,9 @@ std::string ErrorInfoReason(const core::Error& error) {
     if (*protocol_code == core::protocol_codes::kVersionNotSupported) {
       return "VERSION_NOT_SUPPORTED";
     }
+    if (*protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+      return "EXTENSION_SUPPORT_REQUIRED";
+    }
   }
 
   switch (error.code()) {
@@ -615,6 +619,21 @@ int JsonRpcCodeFromError(const core::Error& error) {
       return kJsonRpcInternalError;
   }
   return kJsonRpcInternalError;
+}
+
+int ParseErrorCodeForRequestParsing(const core::Error& error) {
+  switch (error.code()) {
+    case core::ErrorCode::kValidation:
+      return kJsonRpcInvalidParams;
+    case core::ErrorCode::kSerialization:
+      return kJsonRpcParseError;
+    case core::ErrorCode::kUnsupportedVersion:
+    case core::ErrorCode::kNetwork:
+    case core::ErrorCode::kRemoteProtocol:
+    case core::ErrorCode::kInternal:
+      return JsonRpcCodeFromError(error);
+  }
+  return JsonRpcCodeFromError(error);
 }
 
 core::Result<void> AppendSseJsonRpcEvent(std::string& body, const google::protobuf::Value& id,
@@ -736,7 +755,9 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
 }  // namespace
 
 JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcServerTransportOptions options)
-    : dispatcher_(dispatcher), options_(std::move(options)) {
+    : dispatcher_(dispatcher),
+      options_(std::move(options)),
+      required_extensions_validator_(options_.required_extensions) {
   options_.rpc_path = NormalizePath(std::move(options_.rpc_path));
 }
 
@@ -756,35 +777,42 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
   }
 
+  const auto envelope = ParseEnvelope(request.body);
+  if (!envelope.ok()) {
+    return BuildErrorResponse(ParseErrorCodeForRequestParsing(envelope.error()), envelope.error().message(),
+                              ResponseId{}, envelope.error(), core::http::kStatusOk);
+  }
+
   const auto version = ValidateVersionHeader(request);
   if (!version.ok()) {
     const auto error = version.error().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), ResponseId{}, error, core::http::kStatusOk);
-  }
-
-  const auto parsed = ParseRequest(request.body, options_);
-  if (!parsed.ok()) {
-    int parse_code = JsonRpcCodeFromError(parsed.error());
-    switch (parsed.error().code()) {
-      case core::ErrorCode::kValidation:
-        parse_code = kJsonRpcInvalidParams;
-        break;
-      case core::ErrorCode::kSerialization:
-        parse_code = kJsonRpcParseError;
-        break;
-      case core::ErrorCode::kUnsupportedVersion:
-      case core::ErrorCode::kNetwork:
-      case core::ErrorCode::kRemoteProtocol:
-      case core::ErrorCode::kInternal:
-        break;
-    }
-    return BuildErrorResponse(parse_code, parsed.error().message(), ResponseId{}, parsed.error(),
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), envelope.value().id, error,
                               core::http::kStatusOk);
   }
 
-  const auto method = FindMethodField(request.body);
-  const bool is_streaming = method.ok() && IsSendStreamingMessageMethod(method.value());
-  const bool is_subscribe = method.ok() && IsSubscribeToTaskMethod(method.value());
+  const auto extensions = required_extensions_validator_.Validate(request.headers);
+  if (!extensions.ok()) {
+    const auto error = extensions.error().WithTransport("jsonrpc");
+    return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), envelope.value().id, error,
+                              core::http::kStatusOk);
+  }
+  const auto& activated_extensions = extensions.value();
+  const auto build_validated_error_response =
+      [&activated_extensions](int json_rpc_code, std::string_view message, const ResponseId& id,
+                              const std::optional<core::Error>& error, int http_status) -> HttpServerResponse {
+    auto response = BuildErrorResponse(json_rpc_code, message, id, error, http_status);
+    AddActivatedExtensionsHeader(activated_extensions, &response);
+    return response;
+  };
+
+  const auto parsed = ParseRequest(envelope.value(), options_);
+  if (!parsed.ok()) {
+    return build_validated_error_response(ParseErrorCodeForRequestParsing(parsed.error()), parsed.error().message(),
+                                          envelope.value().id, parsed.error(), core::http::kStatusOk);
+  }
+
+  const bool is_streaming = IsSendStreamingMessageMethod(envelope.value().method);
+  const bool is_subscribe = IsSubscribeToTaskMethod(envelope.value().method);
 
   RequestContext context;
   context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
@@ -795,8 +823,8 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   auto dispatch = dispatcher_->Dispatch(parsed.value().dispatch, context);
   if (!dispatch.ok()) {
     const int http_status = HttpStatusFromError(dispatch.error());
-    return BuildErrorResponse(JsonRpcCodeFromError(dispatch.error()), dispatch.error().message(), parsed.value().id,
-                              dispatch.error().WithTransport("jsonrpc"), http_status);
+    return build_validated_error_response(JsonRpcCodeFromError(dispatch.error()), dispatch.error().message(),
+                                          parsed.value().id, dispatch.error().WithTransport("jsonrpc"), http_status);
   }
 
   if (is_streaming) {
@@ -805,16 +833,18 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       const auto error =
           InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForStreaming)
               .WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
-                                HttpStatusFromError(error));
+      return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                            HttpStatusFromError(error));
     }
     const auto sse = BuildSseResponse(parsed.value().id.value(), *session);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
-                                HttpStatusFromError(error));
+      return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                            HttpStatusFromError(error));
     }
-    return sse.value();
+    auto response = sse.value();
+    AddActivatedExtensionsHeader(activated_extensions, &response);
+    return response;
   }
 
   if (is_subscribe) {
@@ -823,26 +853,28 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       const auto error =
           InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForSubscribe)
               .WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
-                                HttpStatusFromError(error));
+      return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                            HttpStatusFromError(error));
     }
     const auto sse = BuildSseResponse(parsed.value().id.value(), *session);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport("jsonrpc");
-      return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
-                                HttpStatusFromError(error));
+      return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                            HttpStatusFromError(error));
     }
-    return sse.value();
+    auto response = sse.value();
+    AddActivatedExtensionsHeader(activated_extensions, &response);
+    return response;
   }
 
   const auto result = SerializeDispatchResult(parsed.value().dispatch, dispatch.value());
   if (!result.ok()) {
     const auto tagged = result.error().WithTransport("jsonrpc");
-    return BuildErrorResponse(JsonRpcCodeFromError(tagged), tagged.message(), parsed.value().id, tagged,
-                              HttpStatusFromError(tagged));
+    return build_validated_error_response(JsonRpcCodeFromError(tagged), tagged.message(), parsed.value().id, tagged,
+                                          HttpStatusFromError(tagged));
   }
 
-  return BuildSuccessResponse(parsed.value().id, result.value());
+  return BuildSuccessResponse(parsed.value().id, result.value(), activated_extensions);
 }
 
 core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
@@ -862,8 +894,7 @@ core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServe
   return {};
 }
 
-core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
-    std::string_view body, const JsonRpcServerTransportOptions& options) {
+core::Result<JsonRpcServerTransport::JsonRpcEnvelope> JsonRpcServerTransport::ParseEnvelope(std::string_view body) {
   const auto envelope = ParseJsonObject(body);
   if (!envelope.ok()) {
     return envelope.error();
@@ -889,12 +920,17 @@ core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::Par
     return params.error();
   }
 
-  const auto dispatch = BuildDispatchRequestFromMethod(method.value(), params.value(), options);
+  return JsonRpcEnvelope{.id = ResponseId(id.value()), .method = method.value(), .params = params.value()};
+}
+
+core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
+    const JsonRpcEnvelope& envelope, const JsonRpcServerTransportOptions& options) {
+  const auto dispatch = BuildDispatchRequestFromMethod(envelope.method, envelope.params, options);
   if (!dispatch.ok()) {
     return dispatch.error();
   }
 
-  return JsonRpcRequest{.id = ResponseId(id.value()), .dispatch = dispatch.value()};
+  return JsonRpcRequest{.id = envelope.id, .dispatch = dispatch.value()};
 }
 
 core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchResult(
@@ -955,7 +991,8 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
 }
 
 HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId& id,
-                                                                const google::protobuf::Value& result) {
+                                                                const google::protobuf::Value& result,
+                                                                const std::vector<std::string>& activated_extensions) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
 
@@ -968,6 +1005,7 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  AddActivatedExtensionsHeader(activated_extensions, &response);
 
   const auto body = core::MessageToJson(envelope);
   if (body.ok()) {

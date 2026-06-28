@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "../support/rest_server_test_utils.h"
 #include "a2a/core/protojson.h"
@@ -14,11 +15,22 @@
 
 namespace {
 
+constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
+
 a2a::server::RestServerTransportOptions RestOptions(std::string rest_api_base_path) {
   return {.rest_api_base_path = std::move(rest_api_base_path),
           .require_version_header = true,
           .include_legacy_transport_fields = true,
-          .agent_card_cache_settings = std::nullopt};
+          .agent_card_cache_settings = std::nullopt,
+          .required_extensions = {}};
+}
+
+a2a::server::RestServerTransportOptions RestOptionsWithRequiredExtension(std::string rest_api_base_path) {
+  return {.rest_api_base_path = std::move(rest_api_base_path),
+          .require_version_header = true,
+          .include_legacy_transport_fields = true,
+          .agent_card_cache_settings = std::nullopt,
+          .required_extensions = {std::string(kRequiredExtension)}};
 }
 
 TEST(RestServerTransportFunctionalTest, SupportsCoreTaskLifecycleOverHttpTargetMapping) {
@@ -61,6 +73,27 @@ TEST(RestServerTransportFunctionalTest, ReturnsStructuredNotFoundForMalformedInp
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 404);
   EXPECT_FALSE(response.value().body.empty());
+}
+
+TEST(RestServerTransportFunctionalTest, RequiresDeclaredExtensionForHttpJsonRequests) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::tests::support::StoreExecutor executor(&store);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(
+      &dispatcher, a2a::tests::support::BuildRestAgentCard("Functional REST Agent", "http://localhost:9090/api"),
+      RestOptionsWithRequiredExtension("/api"));
+
+  const auto missing_extension =
+      server.Handle(a2a::tests::support::MakeHttpRequest("GET", "/api/tasks", {{"A2A-Version", "1.0"}}));
+  ASSERT_TRUE(missing_extension.ok());
+  EXPECT_EQ(missing_extension.value().status_code, 400);
+  EXPECT_NE(missing_extension.value().body.find("EXTENSION_SUPPORT_REQUIRED"), std::string::npos);
+
+  const auto with_extension = server.Handle(a2a::tests::support::MakeHttpRequest(
+      "GET", "/api/tasks", {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}}));
+  ASSERT_TRUE(with_extension.ok());
+  EXPECT_EQ(with_extension.value().status_code, 200);
+  EXPECT_EQ(with_extension.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
 }
 
 }  // namespace

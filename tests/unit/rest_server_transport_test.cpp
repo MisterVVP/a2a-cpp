@@ -17,6 +17,7 @@
 namespace {
 
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
+constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -89,7 +90,14 @@ a2a::server::RestServerTransportOptions RestOptions(
   return {.rest_api_base_path = std::move(rest_api_base_path),
           .require_version_header = true,
           .include_legacy_transport_fields = true,
-          .agent_card_cache_settings = std::move(cache_settings)};
+          .agent_card_cache_settings = std::move(cache_settings),
+          .required_extensions = {}};
+}
+
+a2a::server::RestServerTransportOptions RestOptionsWithRequiredExtension(std::string rest_api_base_path) {
+  auto options = RestOptions(std::move(rest_api_base_path));
+  options.required_extensions = {std::string(kRequiredExtension)};
+  return options;
 }
 
 TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
@@ -227,6 +235,40 @@ TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_EQ(executor.observed_bearer_token, "token-rest");
   EXPECT_EQ(executor.observed_api_key, "rest-key");
+}
+
+TEST(RestServerTransportTest, EchoesActivatedExtensionsOnPostValidationRouteErrors) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+
+  const auto response =
+      server.Handle({.method = "GET",
+                     .target = "/wrong-base/tasks/task-7",
+                     .headers = {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}},
+                     .body = {},
+                     .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 404);
+  ASSERT_TRUE(response.value().headers.contains("A2A-Extensions"));
+  EXPECT_EQ(response.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
+}
+
+TEST(RestServerTransportTest, DoesNotEchoActivatedExtensionsWhenRequiredExtensionValidationFails) {
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/a2a/tasks/task-7",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 400);
+  EXPECT_FALSE(response.value().headers.contains("A2A-Extensions"));
 }
 
 }  // namespace

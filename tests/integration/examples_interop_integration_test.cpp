@@ -27,7 +27,8 @@ a2a::server::RestServerTransportOptions RestOptions(std::string rest_api_base_pa
   return {.rest_api_base_path = std::move(rest_api_base_path),
           .require_version_header = true,
           .include_legacy_transport_fields = true,
-          .agent_card_cache_settings = std::nullopt};
+          .agent_card_cache_settings = std::nullopt,
+          .required_extensions = {}};
 }
 
 TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery) {
@@ -83,7 +84,7 @@ TEST(ExamplesInteropIntegrationTest, RestExampleServerRoundTripWorksViaDiscovery
 TEST(ExamplesInteropIntegrationTest, JsonRpcExampleServerRoundTripWorks) {
   a2a::examples::ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   auto transport = std::make_unique<a2a::client::JsonRpcTransport>(
       a2a::client::ResolvedInterface{.transport = a2a::client::PreferredTransport::kJsonRpc,

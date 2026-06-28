@@ -233,7 +233,7 @@ a2a::server::HttpServerRequest BuildJsonRpcRequest(std::string body) {
 TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -253,7 +253,7 @@ TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
 TEST(JsonRpcServerTransportTest, RejectsMalformedEnvelope) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle({.method = "POST",
                                        .target = "/rpc",
@@ -269,7 +269,7 @@ TEST(JsonRpcServerTransportTest, RejectsMalformedEnvelope) {
 TEST(JsonRpcServerTransportTest, RejectsMissingMethod) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle({.method = "POST",
                                        .target = "/rpc",
@@ -285,7 +285,7 @@ TEST(JsonRpcServerTransportTest, RejectsMissingMethod) {
 TEST(JsonRpcServerTransportTest, RejectsInvalidParamsShape) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -302,7 +302,7 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidParamsShape) {
 TEST(JsonRpcServerTransportTest, ReturnsMethodNotFoundError) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle({
       .method = "POST",
@@ -320,7 +320,7 @@ TEST(JsonRpcServerTransportTest, ReturnsMethodNotFoundError) {
 TEST(JsonRpcServerTransportTest, MapsExecutorFailureToJsonRpcError) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -343,7 +343,8 @@ TEST(JsonRpcServerTransportTest, MapsExecutorFailureToJsonRpcError) {
 TEST(JsonRpcServerTransportTest, CreatePushConfigParsesNestedProtocolParams) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response = server.Handle(BuildJsonRpcRequest(
       R"({"jsonrpc":"2.0","id":"req-push","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":{"url":"https://example.test/push","authentication":{"scheme":"Bearer"}}}})"));
@@ -359,7 +360,8 @@ TEST(JsonRpcServerTransportTest, CreatePushConfigParsesNestedProtocolParams) {
 TEST(JsonRpcServerTransportTest, CreatePushConfigRejectsInvalidNestedConfigShape) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response = server.Handle(BuildJsonRpcRequest(
       R"({"jsonrpc":"2.0","id":"req-push-invalid","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":"https://example.test/push"}})"));
@@ -372,7 +374,7 @@ TEST(JsonRpcServerTransportTest, CreatePushConfigRejectsInvalidNestedConfigShape
 TEST(JsonRpcServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -390,7 +392,7 @@ TEST(JsonRpcServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
 TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -408,7 +410,8 @@ TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(
-      &dispatcher, {.rpc_path = "/rpc", .default_list_tasks_page_size = kDefaultListTasksPageSize});
+      &dispatcher,
+      {.rpc_path = "/rpc", .default_list_tasks_page_size = kDefaultListTasksPageSize, .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -425,7 +428,7 @@ TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
 TEST(JsonRpcServerTransportTest, UnknownRouteUsesMethodNotFoundCode) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -442,7 +445,7 @@ TEST(JsonRpcServerTransportTest, UnknownRouteUsesMethodNotFoundCode) {
 TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -459,7 +462,7 @@ TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
 TEST(JsonRpcServerTransportTest, RejectsUnsupportedContentType) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -476,7 +479,7 @@ TEST(JsonRpcServerTransportTest, RejectsUnsupportedContentType) {
 TEST(JsonRpcServerTransportTest, RejectsInvalidJsonRpcVersion) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -493,7 +496,7 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidJsonRpcVersion) {
 TEST(JsonRpcServerTransportTest, RejectsInvalidIdType) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -510,7 +513,8 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidIdType) {
 TEST(JsonRpcServerTransportTest, RejectsMissingProtocolVersionHeaderWhenConfigured) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .require_version_header = true});
+  a2a::server::JsonRpcServerTransport server(
+      &dispatcher, {.rpc_path = "/rpc", .require_version_header = true, .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -527,7 +531,7 @@ TEST(JsonRpcServerTransportTest, RejectsMissingProtocolVersionHeaderWhenConfigur
 TEST(JsonRpcServerTransportTest, SupportsStreamingMethodWithSseResponse) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -547,7 +551,7 @@ TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTa
   JsonRpcEchoExecutor executor;
   executor.task_state = lf::a2a::v1::TASK_STATE_WORKING;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -570,7 +574,7 @@ TEST(JsonRpcServerTransportTest, SubscribeHeartbeatCancelsDisconnectedClient) {
   JsonRpcEchoExecutor executor;
   executor.heartbeat_cancellation = std::make_shared<std::atomic_bool>(false);
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle({.method = "POST",
                                        .target = "/rpc",
@@ -593,7 +597,7 @@ TEST(JsonRpcServerTransportTest, SubscribeToTaskRejectsTerminalTask) {
   JsonRpcEchoExecutor executor;
   executor.task_state = lf::a2a::v1::TASK_STATE_COMPLETED;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -610,7 +614,7 @@ TEST(JsonRpcServerTransportTest, SubscribeToTaskRejectsTerminalTask) {
 TEST(JsonRpcServerTransportTest, RejectsInvalidListTasksValues) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -627,7 +631,8 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidListTasksValues) {
 TEST(JsonRpcServerTransportTest, RejectsPlainTextContentTypeWithProtocolErrorReason) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -644,7 +649,8 @@ TEST(JsonRpcServerTransportTest, RejectsPlainTextContentTypeWithProtocolErrorRea
 TEST(JsonRpcServerTransportTest, AcceptsJsonContentTypeWithDifferentCasing) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -662,7 +668,8 @@ TEST(JsonRpcServerTransportTest, AcceptsJsonContentTypeWithDifferentCasing) {
 TEST(JsonRpcServerTransportTest, RejectsUnsupportedVersionHeaderValue) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response = server.Handle(
       {.method = "POST",
@@ -679,7 +686,8 @@ TEST(JsonRpcServerTransportTest, RejectsUnsupportedVersionHeaderValue) {
 TEST(JsonRpcServerTransportTest, ParsesListTasksFilters) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto response = server.Handle(BuildJsonRpcRequest(
       R"({"jsonrpc":"2.0","id":"req-list-filters","method":"a2a.listTasks","params":{"pageSize":3,"pageToken":"12","context_id":"ctx-1","status":"TASK_STATE_WORKING","statusTimestampAfter":"2026-01-02T03:04:05Z","historyLength":2,"includeArtifacts":true}})"));
@@ -692,7 +700,8 @@ TEST(JsonRpcServerTransportTest, ParsesListTasksFilters) {
 TEST(JsonRpcServerTransportTest, RejectsInvalidListTaskFilterTypes) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto context_response = server.Handle(BuildJsonRpcRequest(
       R"({"jsonrpc":"2.0","id":"req-list-context","method":"a2a.listTasks","params":{"contextId":7}})"));
@@ -713,7 +722,8 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidListTaskFilterTypes) {
 TEST(JsonRpcServerTransportTest, HandlesPushNotificationConfigMethods) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = std::string(kRpcPath)});
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
   const auto create_response = server.Handle(BuildJsonRpcRequest(
       R"({"jsonrpc":"2.0","id":"req-push-create","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":{"url":"https://example.test/push"}}})"));

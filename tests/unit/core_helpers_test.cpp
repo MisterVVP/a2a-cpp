@@ -25,11 +25,11 @@ TEST(CoreExtensionsTest, FormatSortsAndDeduplicatesExtensionsDeterministically) 
 }
 
 TEST(CoreExtensionsTest, ParseHandlesWhitespaceAndValidation) {
-  const auto parsed = a2a::core::Extensions::Parse("  streaming , auth,streaming  ");
+  const auto parsed = a2a::core::Extensions::Parse("  streaming , urn:a2a:tck:required-extension,streaming  ");
   ASSERT_TRUE(parsed.ok());
-  EXPECT_EQ(parsed.value(), (std::vector<std::string>{"auth", "streaming"}));
+  EXPECT_EQ(parsed.value(), (std::vector<std::string>{"streaming", "urn:a2a:tck:required-extension"}));
 
-  const auto invalid = a2a::core::Extensions::Parse("valid,bad/token");
+  const auto invalid = a2a::core::Extensions::Parse("valid,bad token");
   ASSERT_FALSE(invalid.ok());
   EXPECT_EQ(invalid.error().code(), a2a::core::ErrorCode::kValidation);
 }

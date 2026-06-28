@@ -29,7 +29,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -51,6 +50,8 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
+constexpr std::string_view kRestApiBasePath = "/a2a";
+constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
 constexpr std::string_view kPostgresBackend = "postgres";
 constexpr std::string_view kInMemoryBackend = "inmemory";
 constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
@@ -186,7 +187,7 @@ int main(int argc, char** argv) {
   std::signal(SIGTERM, SignalHandler);
 
   auto agent_card = a2a::core::AgentCardBuilder::ConformancePreset(
-                        {.rest_url = "http://localhost:" + std::to_string(port) + "/a2a",
+                        {.rest_url = "http://localhost:" + std::to_string(port) + std::string(kRestApiBasePath),
                          .json_rpc_url = "http://localhost:" + std::to_string(port) + "/rpc",
                          .grpc_url = "localhost:" + std::to_string(grpc_port)},
                         "TCK HTTP SUT", "0.1.0", "Conformance-focused local SUT for A2A")
@@ -204,15 +205,24 @@ int main(int argc, char** argv) {
   executor_options.push_store = store_bundle.value().push_store.get();
   a2a::examples::ExampleExecutor executor(std::move(executor_options));
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::GrpcServerTransport grpc(&dispatcher);
-  a2a::server::RestServerTransport rest(
-      &dispatcher, agent_card,
-      {.rest_api_base_path = "/a2a",
-       .include_legacy_transport_fields = false,
-       .agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
-           .cache_control = "public, max-age=300",
-           .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)}});
-  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, {.rpc_path = "/rpc", .require_version_header = false});
+  a2a::server::GrpcServerTransportOptions grpc_options;
+  grpc_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  a2a::server::GrpcServerTransport grpc(&dispatcher, std::move(grpc_options));
+
+  a2a::server::RestServerTransportOptions rest_options;
+  rest_options.rest_api_base_path = std::string(kRestApiBasePath);
+  rest_options.include_legacy_transport_fields = false;
+  rest_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  rest_options.agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
+      .cache_control = "public, max-age=300",
+      .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
+  a2a::server::RestServerTransport rest(&dispatcher, agent_card, std::move(rest_options));
+
+  a2a::server::JsonRpcServerTransportOptions jsonrpc_options;
+  jsonrpc_options.rpc_path = "/rpc";
+  jsonrpc_options.require_version_header = false;
+  jsonrpc_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, std::move(jsonrpc_options));
 
 #ifdef _WIN32
   WSADATA wsa_data;

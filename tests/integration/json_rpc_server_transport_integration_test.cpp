@@ -41,7 +41,7 @@ class JsonRpcIntegrationHarness final {
       : executor_(&store_),
         dispatcher_(&executor_),
         card_(a2a::tests::support::BuildJsonRpcAgentCard("Integration JSON-RPC Agent", "http://agent.local/rpc")),
-        server_(&dispatcher_, {.rpc_path = "/rpc"}) {}
+        server_(&dispatcher_, {.rpc_path = "/rpc", .required_extensions = {}}) {}
 
   a2a::client::DiscoveryClient CreateDiscoveryClient() {
     return a2a::client::DiscoveryClient([this](std::string_view url) { return FetchAgentCard(url); });

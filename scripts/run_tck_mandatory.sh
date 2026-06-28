@@ -13,13 +13,34 @@ TCK_SUT_URL=${TCK_SUT_URL:-"http://${SUT_HOST}:${SUT_PORT}"}
 TCK_RUN_CMD=${TCK_RUN_CMD:-}
 TCK_TRANSPORTS=${TCK_TRANSPORTS:-grpc,jsonrpc,http_json}
 TCK_SOURCE_REPORT_DIR=${TCK_SOURCE_REPORT_DIR:-"${TCK_WORKDIR}/reports"}
+TCK_REQUIRED_EXTENSIONS=${TCK_REQUIRED_EXTENSIONS:-${A2A_TCK_REQUIRED_EXTENSIONS:-}}
 TCK_WORKDIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_WORKDIR}" && cd "${TCK_WORKDIR}" && pwd)
 TCK_REPORT_DIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_REPORT_DIR}" && cd "${TCK_REPORT_DIR}" && pwd)
 TCK_LOG_DIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_LOG_DIR}" && cd "${TCK_LOG_DIR}" && pwd)
 TCK_SOURCE_REPORT_DIR_ABS=$(cd "${ROOT_DIR}" && mkdir -p "${TCK_SOURCE_REPORT_DIR}" && cd "${TCK_SOURCE_REPORT_DIR}" && pwd)
 TCK_LOG_FILE_ABS="${TCK_LOG_DIR_ABS}/$(basename "${TCK_LOG_FILE}")"
+TCK_PYTHONPATH_DIR="${TCK_LOG_DIR_ABS}/pythonpath"
 
 mkdir -p "${TCK_REPORT_DIR_ABS}" "${TCK_LOG_DIR_ABS}"
+
+install_tck_python_overrides() {
+  if [[ -z "${TCK_REQUIRED_EXTENSIONS}" ]]; then
+    return 0
+  fi
+
+  local override_source="${ROOT_DIR}/scripts/tck_python_overrides/sitecustomize.py"
+  if [[ ! -f "${override_source}" ]]; then
+    echo "Missing TCK Python override shim: ${override_source}" >&2
+    return 1
+  fi
+
+  mkdir -p "${TCK_PYTHONPATH_DIR}"
+  cp "${override_source}" "${TCK_PYTHONPATH_DIR}/sitecustomize.py"
+  export A2A_TCK_CLIENT_REQUIRED_EXTENSIONS="${TCK_REQUIRED_EXTENSIONS}"
+  export PYTHONPATH="${TCK_PYTHONPATH_DIR}:${PYTHONPATH:-}"
+}
+
+install_tck_python_overrides
 
 copy_tck_reports() {
   local source_dir=$1
