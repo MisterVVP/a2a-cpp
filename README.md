@@ -6,6 +6,35 @@
 
 It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg/Conan build integration.
 
+## Install With CMake
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DA2A_ENABLE_TESTING=OFF \
+  -DA2A_BUILD_EXAMPLES=OFF
+
+cmake --build build --parallel
+cmake --install build --prefix /tmp/a2a-cpp-install
+```
+
+Use the installed package from another CMake project:
+
+```cmake
+find_package(a2a_cpp CONFIG REQUIRED)
+
+target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
+```
+
+Configure the consumer with the install prefix:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-install
+cmake --build build --parallel
+```
+
+See [`examples/cmake_package_consumer/`](examples/cmake_package_consumer/) for a minimal installed-package consumer.
+
 ## TCK Compliance Level
 
 [MUST](https://github.com/a2aproject/a2a-tck/blob/main/README.md#compatibility-levels) (validated in CI via `--level must --transport grpc,jsonrpc,http_json` in `.github/workflows/tck.yml`).
