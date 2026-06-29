@@ -656,23 +656,23 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (request == nullptr || response == nullptr) {
     return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
   }
-  (void)request;
-  (void)context;
-
-  response->set_name("A2A C++ SDK Agent");
-  response->set_description("Default agent card for compatibility checks");
-  response->set_version(std::string(core::Version::kAgentCardVersion));
-  response->add_default_input_modes("text/plain");
-  response->add_default_output_modes("text/plain");
-  auto* capabilities = response->mutable_capabilities();
-  capabilities->set_push_notifications(false);
-  capabilities->set_streaming(true);
-  for (const auto& required_extension : required_extensions_validator_.required_extensions()) {
-    auto* extension = capabilities->add_extensions();
-    extension->set_uri(required_extension);
-    extension->set_required(true);
+  auto request_context = BuildRequestContext(*context);
+  if (!request_context.ok()) {
+    return ToGrpcStatus(request_context.error(), context);
+  }
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = *request},
+                            request_context.value().request_context);
+  if (!dispatch.ok()) {
+    return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
+  }
+  const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return {::grpc::StatusCode::INTERNAL, "GetExtendedAgentCard dispatch returned an unexpected payload"};
   }
 
+  *response = *payload;
+  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 

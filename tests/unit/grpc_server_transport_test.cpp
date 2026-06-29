@@ -3,6 +3,8 @@
 
 #include "a2a/server/grpc_server_transport.h"
 
+#include "a2a/core/agent_card/agent_card_provider.h"
+
 #if __has_include(<grpcpp/test/server_context_test_spouse.h>)
 #include <grpcpp/test/server_context_test_spouse.h>
 #define A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE 1
@@ -449,9 +451,17 @@ TEST(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
             grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults) {
+TEST(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigured) {
   FakeExecutor executor;
-  a2a::server::Dispatcher dispatcher(&executor);
+  lf::a2a::v1::AgentCard extended_card;
+  extended_card.set_name("Extended Unit Agent");
+  extended_card.set_description("Configured extended card");
+  extended_card.set_version(std::string(a2a::core::Version::kAgentCardVersion));
+  extended_card.add_default_input_modes("text/plain");
+  extended_card.add_default_output_modes("text/plain");
+  extended_card.mutable_capabilities()->set_streaming(true);
+  auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::GrpcServerTransport transport(&dispatcher);
 
   grpc::ServerContext context;
@@ -460,21 +470,34 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardProvidesCompatibilityDefaults)
 
   auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
   const auto status = service->GetExtendedAgentCard(&context, &request, &response);
-  EXPECT_TRUE(status.ok());
-  EXPECT_EQ(response.name(), "A2A C++ SDK Agent");
-  EXPECT_EQ(response.description(), "Default agent card for compatibility checks");
-  EXPECT_EQ(response.version(), a2a::core::Version::kAgentCardVersion);
-  ASSERT_EQ(response.default_input_modes_size(), 1);
-  ASSERT_EQ(response.default_output_modes_size(), 1);
-  EXPECT_EQ(response.default_input_modes(0), "text/plain");
-  EXPECT_EQ(response.default_output_modes(0), "text/plain");
-  EXPECT_FALSE(response.capabilities().push_notifications());
-  EXPECT_TRUE(response.capabilities().streaming());
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, GetExtendedAgentCardAdvertisesRequiredExtensions) {
+TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredWhenMissingProvider) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::GetExtendedAgentCardRequest request;
+  lf::a2a::v1::AgentCard response;
+
+  auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
+  const auto status = service->GetExtendedAgentCard(&context, &request, &response);
+
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
+}
+
+TEST(GrpcServerTransportTest, GetExtendedAgentCardValidatesRequiredExtensions) {
+  FakeExecutor executor;
+  lf::a2a::v1::AgentCard extended_card;
+  extended_card.set_name("Extended Unit Agent");
+  extended_card.set_description("Configured extended card");
+  extended_card.set_version(std::string(a2a::core::Version::kAgentCardVersion));
+  auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
 
   grpc::ServerContext context;
@@ -484,10 +507,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardAdvertisesRequiredExtensions) 
   auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
   const auto status = service->GetExtendedAgentCard(&context, &request, &response);
 
-  ASSERT_TRUE(status.ok());
-  ASSERT_EQ(response.capabilities().extensions_size(), 1);
-  EXPECT_EQ(response.capabilities().extensions(0).uri(), std::string(kRequiredExtension));
-  EXPECT_TRUE(response.capabilities().extensions(0).required());
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
 TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {

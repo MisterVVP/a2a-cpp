@@ -1,5 +1,6 @@
 add_library(a2a_core STATIC
-  core/agent_card_builder.cpp
+  core/agent_card/agent_card_builder.cpp
+  core/agent_card/agent_card_provider.cpp
   core/core.cpp
   core/error.cpp
   core/extensions.cpp
@@ -79,6 +80,7 @@ target_link_libraries(a2a_client
 )
 
 add_library(a2a_server STATIC
+  server/agent_card/agent_card_serializer.cpp
   server/grpc_server_transport.cpp
   server/http_adapter.cpp
   server/rest_server_transport.cpp

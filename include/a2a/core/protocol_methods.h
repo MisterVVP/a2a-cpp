@@ -17,6 +17,7 @@ inline constexpr std::string_view kCreateTaskPushNotificationConfig = "CreateTas
 inline constexpr std::string_view kGetTaskPushNotificationConfig = "GetTaskPushNotificationConfig";
 inline constexpr std::string_view kListTaskPushNotificationConfigs = "ListTaskPushNotificationConfigs";
 inline constexpr std::string_view kDeleteTaskPushNotificationConfig = "DeleteTaskPushNotificationConfig";
+inline constexpr std::string_view kGetExtendedAgentCard = "GetExtendedAgentCard";
 inline constexpr std::string_view kPushNotificationConfigsSegment = "/pushNotificationConfigs";
 
 }  // namespace a2a::core::protocol_methods

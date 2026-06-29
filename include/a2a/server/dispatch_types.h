@@ -25,6 +25,7 @@ enum class DispatcherOperation : std::uint8_t {
   kGetTaskPushNotificationConfig,
   kListTaskPushNotificationConfigs,
   kDeleteTaskPushNotificationConfig,
+  kGetExtendedAgentCard,
 };
 
 struct DispatchRequest final {
@@ -32,13 +33,14 @@ struct DispatchRequest final {
   std::variant<lf::a2a::v1::SendMessageRequest, lf::a2a::v1::GetTaskRequest, ListTasksRequest,
                lf::a2a::v1::CancelTaskRequest, lf::a2a::v1::TaskPushNotificationConfig,
                lf::a2a::v1::GetTaskPushNotificationConfigRequest, lf::a2a::v1::ListTaskPushNotificationConfigsRequest,
-               lf::a2a::v1::DeleteTaskPushNotificationConfigRequest>
+               lf::a2a::v1::DeleteTaskPushNotificationConfigRequest, lf::a2a::v1::GetExtendedAgentCardRequest>
       payload = ListTasksRequest{};
 };
 
-using DispatchPayload = std::variant<lf::a2a::v1::SendMessageResponse, std::unique_ptr<ServerStreamSession>,
-                                     lf::a2a::v1::Task, ListTasksResponse, lf::a2a::v1::TaskPushNotificationConfig,
-                                     lf::a2a::v1::ListTaskPushNotificationConfigsResponse, std::monostate>;
+using DispatchPayload =
+    std::variant<lf::a2a::v1::SendMessageResponse, std::unique_ptr<ServerStreamSession>, lf::a2a::v1::Task,
+                 ListTasksResponse, lf::a2a::v1::TaskPushNotificationConfig,
+                 lf::a2a::v1::ListTaskPushNotificationConfigsResponse, lf::a2a::v1::AgentCard, std::monostate>;
 
 class DispatchResponse final {
  public:
@@ -52,6 +54,8 @@ class DispatchResponse final {
   explicit DispatchResponse(const lf::a2a::v1::TaskPushNotificationConfig& payload) : payload_(payload) {}
   explicit DispatchResponse(lf::a2a::v1::TaskPushNotificationConfig&& payload) : payload_(std::move(payload)) {}
   explicit DispatchResponse(const lf::a2a::v1::ListTaskPushNotificationConfigsResponse& payload) : payload_(payload) {}
+  explicit DispatchResponse(const lf::a2a::v1::AgentCard& payload) : payload_(payload) {}
+  explicit DispatchResponse(lf::a2a::v1::AgentCard&& payload) : payload_(std::move(payload)) {}
   explicit DispatchResponse(lf::a2a::v1::ListTaskPushNotificationConfigsResponse&& payload)
       : payload_(std::move(payload)) {}
   DispatchResponse() : payload_(std::monostate{}) {}

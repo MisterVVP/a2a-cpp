@@ -28,6 +28,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
+#include "a2a/server/agent_card/agent_card_serializer.h"
 #include "a2a/server/http_adapter.h"
 
 namespace a2a::server {
@@ -119,6 +120,10 @@ bool IsListPushConfigMethod(std::string_view method) {
 bool IsDeletePushConfigMethod(std::string_view method) {
   return IsMethod(method, core::protocol_methods::kDeleteTaskPushNotificationConfig,
                   core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig);
+}
+
+bool IsGetExtendedAgentCardMethod(std::string_view method) {
+  return method == core::protocol_methods::kGetExtendedAgentCard;
 }
 
 std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
@@ -411,6 +416,11 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view method_name,
                                                              const google::protobuf::Struct& params,
                                                              const JsonRpcServerTransportOptions& options) {
+  if (IsGetExtendedAgentCardMethod(method_name)) {
+    (void)params;
+    return DispatchRequest{.operation = DispatcherOperation::kGetExtendedAgentCard,
+                           .payload = lf::a2a::v1::GetExtendedAgentCardRequest{}};
+  }
   if (IsCreatePushConfigMethod(method_name)) {
     auto payload = ParseCreatePushConfigPayload(params);
     if (!payload.ok()) {
@@ -494,6 +504,8 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
     case DispatcherOperation::kListTaskPushNotificationConfigs:
     case DispatcherOperation::kDeleteTaskPushNotificationConfig:
       return core::Error::Internal("Push notification operations are handled before the generic JSON-RPC switch");
+    case DispatcherOperation::kGetExtendedAgentCard:
+      return core::Error::Internal("GetExtendedAgentCard is handled before the generic JSON-RPC switch");
   }
 
   return core::Error::Internal("Unsupported JSON-RPC dispatcher operation");
@@ -981,6 +993,14 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
       google::protobuf::Value value;
       value.mutable_struct_value();
       return value;
+    }
+    case DispatcherOperation::kGetExtendedAgentCard: {
+      const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&response.payload());
+      if (payload == nullptr) {
+        return core::protocol_errors::InvalidAgentResponse(
+            "JSON-RPC GetExtendedAgentCard response payload type mismatch");
+      }
+      return BuildAgentCardJsonValue(*payload, false);
     }
     case DispatcherOperation::kSendStreamingMessage:
     case DispatcherOperation::kSubscribeTask:

@@ -6,10 +6,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -269,6 +271,43 @@ TEST(RestServerTransportTest, DoesNotEchoActivatedExtensionsWhenRequiredExtensio
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 400);
   EXPECT_FALSE(response.value().headers.contains("A2A-Extensions"));
+}
+
+TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCard) {
+  constexpr std::string_view kExtendedName = "Extended REST Agent";
+  EchoExecutor executor;
+  auto extended_card = BuildCard();
+  extended_card.set_name(std::string(kExtendedName));
+  auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/extendedAgentCard",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_NE(response.value().body.find(kExtendedName), std::string::npos);
+}
+
+TEST(RestServerTransportTest, ExtendedAgentCardReturnsNotConfiguredWhenMissing) {
+  constexpr std::string_view kErrorReason = "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+  EchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/extendedAgentCard",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 400);
+  EXPECT_NE(response.value().body.find(kErrorReason), std::string::npos);
 }
 
 }  // namespace

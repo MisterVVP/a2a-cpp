@@ -24,7 +24,7 @@ struct JsonRpcServerTransportOptions final {
   bool require_version_header = true;
   std::size_t default_list_tasks_page_size = 50;
   std::size_t max_list_tasks_page_size = 100;
-  std::vector<std::string> required_extensions;
+  std::vector<std::string> required_extensions = {};
 };
 
 class JsonRpcServerTransport final {

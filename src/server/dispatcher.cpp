@@ -12,6 +12,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_error_messages.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/server/tasks/task_history.h"
 
 namespace a2a::server {
@@ -27,6 +28,12 @@ bool IsPushNotificationOperation(DispatcherOperation operation) {
          operation == DispatcherOperation::kGetTaskPushNotificationConfig ||
          operation == DispatcherOperation::kListTaskPushNotificationConfigs ||
          operation == DispatcherOperation::kDeleteTaskPushNotificationConfig;
+}
+
+core::AgentCardRequestContext ToAgentCardRequestContext(const RequestContext& context) {
+  return {.remote_address = context.remote_address,
+          .client_headers = context.client_headers,
+          .auth_metadata = context.auth_metadata};
 }
 
 core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, const DispatchRequest& request,
@@ -86,6 +93,7 @@ core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, c
     case DispatcherOperation::kSubscribeTask:
     case DispatcherOperation::kListTasks:
     case DispatcherOperation::kCancelTask:
+    case DispatcherOperation::kGetExtendedAgentCard:
       return core::Error::Validation("Dispatch operation is not a push notification operation");
   }
   return core::Error::Validation("Unsupported push notification dispatcher operation");
@@ -105,7 +113,8 @@ core::Result<DispatchResponse> DispatchSubscribeToExecutor(AgentExecutor& execut
 }
 
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                  RequestContext& context) {
+                                                  RequestContext& context,
+                                                  const std::shared_ptr<core::AgentCardProvider>& agent_card_provider) {
   if (IsPushNotificationOperation(request.operation)) {
     return DispatchPushToExecutor(executor, request, context);
   }
@@ -182,6 +191,21 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
     case DispatcherOperation::kListTaskPushNotificationConfigs:
     case DispatcherOperation::kDeleteTaskPushNotificationConfig:
       return core::Error::Validation("Push notification dispatch was not handled by push dispatcher");
+    case DispatcherOperation::kGetExtendedAgentCard: {
+      const auto* payload = std::get_if<lf::a2a::v1::GetExtendedAgentCardRequest>(&request.payload);
+      if (payload == nullptr) {
+        return core::Error::Validation("Dispatch payload type mismatch for GetExtendedAgentCard");
+      }
+      (void)payload;
+      if (agent_card_provider == nullptr) {
+        return core::protocol_errors::ExtendedAgentCardNotConfigured();
+      }
+      auto response = agent_card_provider->GetExtendedAgentCard(ToAgentCardRequestContext(context));
+      if (!response.ok()) {
+        return response.error();
+      }
+      return DispatchResponse(std::move(response.value()));
+    }
   }
 
   return core::Error::Validation("Unsupported dispatcher operation");
@@ -191,8 +215,17 @@ core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const
 
 Dispatcher::Dispatcher(AgentExecutor* executor) : executor_(executor) {}
 
+Dispatcher::Dispatcher(AgentExecutor* executor, std::shared_ptr<core::AgentCardProvider> agent_card_provider)
+    : executor_(executor), agent_card_provider_(std::move(agent_card_provider)) {}
+
 Dispatcher::Dispatcher(AgentExecutor* executor, std::vector<std::shared_ptr<ServerInterceptor>> interceptors)
-    : executor_(executor), interceptors_(std::move(interceptors)) {}
+    : Dispatcher(executor, std::move(interceptors), nullptr) {}
+
+Dispatcher::Dispatcher(AgentExecutor* executor, std::vector<std::shared_ptr<ServerInterceptor>> interceptors,
+                       std::shared_ptr<core::AgentCardProvider> agent_card_provider)
+    : executor_(executor),
+      agent_card_provider_(std::move(agent_card_provider)),
+      interceptors_(std::move(interceptors)) {}
 
 core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request, RequestContext& context) const {
   if (executor_ == nullptr) {
@@ -214,7 +247,7 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   }
   read_lock.unlock();
 
-  auto dispatch_result = DispatchToExecutor(*executor_, request, context);
+  auto dispatch_result = DispatchToExecutor(*executor_, request, context, agent_card_provider_);
   RunAfterInterceptors(request, context, dispatch_result);
   return dispatch_result;
 }

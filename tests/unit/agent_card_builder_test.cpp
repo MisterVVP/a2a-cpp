@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 
 #include <gtest/gtest.h>
 
@@ -126,3 +126,11 @@ TEST(AgentCardBuilderTest, WithPushNotificationsPreservesExistingCapabilities) {
 }
 
 }  // namespace
+
+TEST(AgentCardBuilderTest, WithExtendedAgentCardSetsCapability) {
+  const auto card = a2a::core::AgentCardBuilder::RestPreset("REST Agent", "http://agent.local/a2a")
+                        .WithExtendedAgentCard(true)
+                        .Build();
+
+  EXPECT_TRUE(card.capabilities().extended_agent_card());
+}

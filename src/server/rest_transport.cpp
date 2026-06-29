@@ -620,6 +620,8 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       google::protobuf::Struct empty;
       return BuildJsonResponse(empty);
     }
+    case DispatcherOperation::kGetExtendedAgentCard:
+      return core::Error::Validation("Extended agent card is handled by the server transport");
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
