@@ -293,6 +293,26 @@ TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCard) {
   EXPECT_NE(response.value().body.find(kExtendedName), std::string::npos);
 }
 
+TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCardUnderRestBasePath) {
+  constexpr std::string_view kExtendedName = "Extended REST Base Agent";
+  EchoExecutor executor;
+  auto extended_card = BuildCard();
+  extended_card.set_name(std::string(kExtendedName));
+  auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/a2a/extendedAgentCard",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_NE(response.value().body.find(kExtendedName), std::string::npos);
+}
+
 TEST(RestServerTransportTest, ExtendedAgentCardReturnsNotConfiguredWhenMissing) {
   constexpr std::string_view kErrorReason = "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
   EchoExecutor executor;

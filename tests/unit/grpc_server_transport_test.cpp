@@ -473,6 +473,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigured)
   EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
+#if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredWhenMissingProvider) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -489,6 +490,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredWhenMissin
 
   EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
+#endif  // A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 
 TEST(GrpcServerTransportTest, GetExtendedAgentCardValidatesRequiredExtensions) {
   FakeExecutor executor;

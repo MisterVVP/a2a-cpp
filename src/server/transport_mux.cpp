@@ -47,7 +47,8 @@ void TransportMux::RegisterRestRoute(RestServerTransport& transport, RestRouteOp
           [rest_api_prefix = std::move(options.rest_api_prefix),
            well_known_prefix = std::move(options.well_known_prefix)](std::string_view method, std::string_view path) {
             (void)method;
-            return path.starts_with(rest_api_prefix) || path.starts_with(well_known_prefix);
+            return path == RestServerTransport::kExtendedAgentCardPath || path.starts_with(rest_api_prefix) ||
+                   path.starts_with(well_known_prefix);
           },
       .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },
       .priority = options.priority,

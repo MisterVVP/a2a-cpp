@@ -258,11 +258,13 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   const std::string_view path = query_start == std::string::npos
                                     ? std::string_view(request.target)
                                     : std::string_view(request.target).substr(0, query_start);
+  const bool is_base_path_extended_agent_card =
+      options_.rest_api_base_path != "/" && path == options_.rest_api_base_path + std::string(kExtendedAgentCardPath);
 
   if (path == kAgentCardPath || path == kLegacyAgentCardPath) {
     return HandleAgentCard(request);
   }
-  if (path == kExtendedAgentCardPath) {
+  if (path == kExtendedAgentCardPath || is_base_path_extended_agent_card) {
     return HandleExtendedAgentCard(request);
   }
 
