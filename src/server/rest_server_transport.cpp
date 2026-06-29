@@ -135,6 +135,21 @@ std::string BuildQuotedEtag(std::uint64_t hash_value) {
   return etag;
 }
 
+void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::AgentCardCacheSettings>& settings,
+                                HttpServerResponse* response) {
+  if (settings.has_value() && settings->cache_control.has_value()) {
+    response->headers["Cache-Control"] = *settings->cache_control;
+  }
+  if (!settings.has_value() || !settings->last_modified.has_value()) {
+    return;
+  }
+
+  const std::string formatted = FormatHttpDate(*settings->last_modified);
+  if (!formatted.empty()) {
+    response->headers["Last-Modified"] = formatted;
+  }
+}
+
 core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
   std::string decoded;
   decoded.reserve(raw.size());
