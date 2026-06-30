@@ -64,7 +64,8 @@ class RestServerTransport final {
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
-  [[nodiscard]] core::Result<HttpServerResponse> HandleExtendedAgentCard(const HttpServerRequest& request) const;
+  [[nodiscard]] core::Result<HttpServerResponse> HandleExtendedAgentCard(const HttpServerRequest& request,
+                                                                         std::string_view tenant) const;
   [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
                                                          const std::vector<std::string>& activated_extensions);
 
