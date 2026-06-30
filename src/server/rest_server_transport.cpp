@@ -306,9 +306,8 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   const std::string_view path = query_start == std::string::npos
                                     ? std::string_view(request.target)
                                     : std::string_view(request.target).substr(0, query_start);
-  const std::string_view query = query_start == std::string::npos
-                                     ? std::string_view{}
-                                     : std::string_view(request.target).substr(query_start + 1);
+  const std::string_view query =
+      query_start == std::string::npos ? std::string_view{} : std::string_view(request.target).substr(query_start + 1);
   const bool is_base_path_extended_agent_card =
       options_.rest_api_base_path != "/" && path == options_.rest_api_base_path + std::string(kExtendedAgentCardPath);
 
@@ -328,7 +327,8 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   if (path == kExtendedAgentCardPath || is_base_path_extended_agent_card) {
     return HandleExtendedAgentCard(request, {});
   }
-  if (const auto tenant = ExtractTenantFromExtendedAgentCardPath(path, options_.rest_api_base_path); tenant.has_value()) {
+  if (const auto tenant = ExtractTenantFromExtendedAgentCardPath(path, options_.rest_api_base_path);
+      tenant.has_value()) {
     return HandleExtendedAgentCard(request, *tenant);
   }
 
