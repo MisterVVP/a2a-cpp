@@ -25,6 +25,7 @@ constexpr int kHttpStatusOkMin = 200;
 constexpr int kHttpStatusOkMax = 299;
 constexpr int kHttpStatusNotFound = 404;
 constexpr std::string_view kDiscoveryGetMethod = "GET";
+constexpr std::string_view kExtendedAgentCardPath = "/extendedAgentCard";
 
 std::string Trim(std::string_view input) {
   std::string value(input);
@@ -99,6 +100,7 @@ HttpFetcher MakeDefaultHttpFetcher() {
     a2a::http::Request request;
     request.method = std::string(kDiscoveryGetMethod);
     request.url = std::string(url);
+    request.headers.push_back({std::string(core::Version::kHeaderName), core::Version::HeaderValue()});
     auto response = client.SendRequest(request);
     if (!response.ok()) {
       return response.error();
@@ -207,11 +209,19 @@ core::Result<std::string> DiscoveryClient::BuildDiscoveryUrl(std::string_view ba
 }
 
 core::Result<std::string> DiscoveryClient::BuildExtendedDiscoveryUrl(std::string_view base_url) {
-  const auto standard = BuildDiscoveryUrl(base_url);
-  if (!standard.ok()) {
-    return standard.error();
+  std::string normalized = Trim(base_url);
+  if (normalized.empty()) {
+    return core::Error::Validation("Base URL is required for extended Agent Card discovery");
   }
-  return standard.value() + "?view=extended";
+  if (!HasHttpScheme(normalized)) {
+    return core::Error::Validation("Base URL must start with http:// or https://");
+  }
+
+  while (!normalized.empty() && normalized.back() == '/') {
+    normalized.pop_back();
+  }
+  normalized.append(kExtendedAgentCardPath.data(), kExtendedAgentCardPath.size());
+  return normalized;
 }
 
 core::Result<void> DiscoveryClient::ValidateAgentCard(const lf::a2a::v1::AgentCard& card) {
