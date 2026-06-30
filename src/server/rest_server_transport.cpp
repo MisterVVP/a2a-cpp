@@ -144,8 +144,9 @@ std::string_view ProtocolCodeToRestReason(std::string_view protocol_code) {
 }
 
 std::string_view RestReasonFromError(const core::Error& error) {
-  if (error.protocol_code().has_value()) {
-    return ProtocolCodeToRestReason(*error.protocol_code());
+  const auto& protocol_code = error.protocol_code();
+  if (protocol_code.has_value()) {
+    return ProtocolCodeToRestReason(*protocol_code);
   }
   if (error.code() == core::ErrorCode::kUnsupportedVersion) {
     return "VERSION_NOT_SUPPORTED";
@@ -157,8 +158,9 @@ std::string_view RestReasonFromError(const core::Error& error) {
 }
 
 int HttpStatusFromError(const core::Error& error) {
-  if (error.http_status().has_value()) {
-    return *error.http_status();
+  const auto& http_status = error.http_status();
+  if (http_status.has_value()) {
+    return *http_status;
   }
   if (error.code() == core::ErrorCode::kInternal || error.code() == core::ErrorCode::kSerialization) {
     return core::http::kStatusInternalServerError;
