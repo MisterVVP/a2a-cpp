@@ -29,6 +29,7 @@ constexpr std::string_view kA2aVersionValue = "1.0";
 constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
 constexpr std::string_view kHeartbeatSubscribeRequestBody =
     R"({"jsonrpc":"2.0","id":"req-sub-heartbeat","method":"a2a.subscribeToTask","params":{"id":"task-sub"}})";
+constexpr std::string_view kTenantId = "tenant-1";
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -230,6 +231,23 @@ a2a::server::HttpServerRequest BuildJsonRpcRequest(std::string body) {
           .body = std::move(body),
           .remote_address = {}};
 }
+
+class RecordingAgentCardProvider final : public a2a::core::AgentCardProvider {
+ public:
+  explicit RecordingAgentCardProvider(lf::a2a::v1::AgentCard extended_agent_card)
+      : extended_agent_card_(std::move(extended_agent_card)) {}
+
+  a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
+      const a2a::core::AgentCardRequestContext& context) const override {
+    observed_tenant = context.tenant;
+    return extended_agent_card_;
+  }
+
+  mutable std::optional<std::string> observed_tenant;
+
+ private:
+  lf::a2a::v1::AgentCard extended_agent_card_;
+};
 
 TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
   JsonRpcEchoExecutor executor;
@@ -767,6 +785,27 @@ TEST(JsonRpcServerTransportTest, GetExtendedAgentCardReturnsConfiguredCard) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find(kExpectedNameJson), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, GetExtendedAgentCardPropagatesTenantParam) {
+  constexpr std::string_view kRequestBody =
+      R"({"jsonrpc":"2.0","id":"req-card-tenant","method":"GetExtendedAgentCard","params":{"tenant":"tenant-1"}})";
+  constexpr std::string_view kExpectedNameJson = R"("name":"Tenant JSON-RPC Agent")";
+  JsonRpcEchoExecutor executor;
+  lf::a2a::v1::AgentCard extended_card;
+  extended_card.set_name("Tenant JSON-RPC Agent");
+  extended_card.set_description("Configured tenant extended card");
+  extended_card.set_version("1.0.0");
+  auto provider = std::make_shared<RecordingAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(std::string(kRequestBody)));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find(kExpectedNameJson), std::string::npos);
+  EXPECT_EQ(provider->observed_tenant, std::optional<std::string>(std::string(kTenantId)));
 }
 
 TEST(JsonRpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredErrorWhenMissing) {

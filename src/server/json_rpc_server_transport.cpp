@@ -417,9 +417,12 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
                                                              const google::protobuf::Struct& params,
                                                              const JsonRpcServerTransportOptions& options) {
   if (IsGetExtendedAgentCardMethod(method_name)) {
-    (void)params;
+    auto payload = ParseProtoPayload<lf::a2a::v1::GetExtendedAgentCardRequest>(params);
+    if (!payload.ok()) {
+      return payload.error();
+    }
     return DispatchRequest{.operation = DispatcherOperation::kGetExtendedAgentCard,
-                           .payload = lf::a2a::v1::GetExtendedAgentCardRequest{}};
+                           .payload = std::move(payload.value())};
   }
   if (IsCreatePushConfigMethod(method_name)) {
     auto payload = ParseCreatePushConfigPayload(params);

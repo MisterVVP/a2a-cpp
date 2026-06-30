@@ -13,6 +13,7 @@
 
 #include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/protocol_bindings.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
@@ -88,6 +89,15 @@ class RecordingAgentCardProvider final : public a2a::core::AgentCardProvider {
 
  private:
   lf::a2a::v1::AgentCard extended_agent_card_;
+};
+
+class FailingAgentCardProvider final : public a2a::core::AgentCardProvider {
+ public:
+  a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
+      const a2a::core::AgentCardRequestContext& context) const override {
+    (void)context;
+    return a2a::core::protocol_errors::InvalidAgentResponse("extended card provider failed");
+  }
 };
 
 lf::a2a::v1::AgentCard BuildCard() {
@@ -384,6 +394,26 @@ TEST(RestServerTransportTest, ExtendedAgentCardReturnsNotConfiguredWhenMissing) 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 400);
   EXPECT_NE(response.value().body.find(kErrorReason), std::string::npos);
+}
+
+TEST(RestServerTransportTest, ExtendedAgentCardPreservesProviderErrorReason) {
+  constexpr std::string_view kExpectedReason = "INVALID_AGENT_RESPONSE";
+  constexpr std::string_view kUnexpectedReason = "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+  EchoExecutor executor;
+  auto provider = std::make_shared<FailingAgentCardProvider>();
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/extendedAgentCard",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 502);
+  EXPECT_NE(response.value().body.find(kExpectedReason), std::string::npos);
+  EXPECT_EQ(response.value().body.find(kUnexpectedReason), std::string::npos);
 }
 
 }  // namespace

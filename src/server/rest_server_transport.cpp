@@ -21,6 +21,7 @@
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -47,6 +48,18 @@ std::string HttpStatusName(int status_code) {
       return "INVALID_ARGUMENT";
     case core::http::kStatusNotFound:
       return "NOT_FOUND";
+    case core::http::kStatusUnauthorized:
+      return "UNAUTHENTICATED";
+    case core::http::kStatusForbidden:
+      return "PERMISSION_DENIED";
+    case core::http::kStatusConflict:
+      return "CONFLICT";
+    case core::http::kStatusUnsupportedMediaType:
+      return "UNSUPPORTED_MEDIA_TYPE";
+    case core::http::kStatusInternalServerError:
+      return "INTERNAL";
+    case core::http::kStatusBadGateway:
+      return "BAD_GATEWAY";
     default:
       return "UNKNOWN";
   }
@@ -106,6 +119,54 @@ HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view
   auto response = BuildJsonErrorResponse(status_code, message, reason);
   AddActivatedExtensionsHeader(activated_extensions, &response);
   return response;
+}
+
+std::string_view ProtocolCodeToRestReason(std::string_view protocol_code) {
+  if (protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
+    return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+  }
+  if (protocol_code == core::protocol_codes::kUnsupportedOperation) {
+    return "UNSUPPORTED_OPERATION";
+  }
+  if (protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+    return "CONTENT_TYPE_NOT_SUPPORTED";
+  }
+  if (protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+    return "INVALID_AGENT_RESPONSE";
+  }
+  if (protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+    return "EXTENSION_SUPPORT_REQUIRED";
+  }
+  if (protocol_code == core::protocol_codes::kVersionNotSupported) {
+    return "VERSION_NOT_SUPPORTED";
+  }
+  return "REMOTE_PROTOCOL_ERROR";
+}
+
+std::string_view RestReasonFromError(const core::Error& error) {
+  if (error.protocol_code().has_value()) {
+    return ProtocolCodeToRestReason(*error.protocol_code());
+  }
+  if (error.code() == core::ErrorCode::kUnsupportedVersion) {
+    return "VERSION_NOT_SUPPORTED";
+  }
+  if (error.code() == core::ErrorCode::kInternal || error.code() == core::ErrorCode::kSerialization) {
+    return "INTERNAL";
+  }
+  return "INVALID_ARGUMENT";
+}
+
+int HttpStatusFromError(const core::Error& error) {
+  if (error.http_status().has_value()) {
+    return *error.http_status();
+  }
+  if (error.code() == core::ErrorCode::kInternal || error.code() == core::ErrorCode::kSerialization) {
+    return core::http::kStatusInternalServerError;
+  }
+  if (error.code() == core::ErrorCode::kNetwork) {
+    return core::http::kStatusBadGateway;
+  }
+  return core::http::kStatusBadRequest;
 }
 
 std::uint64_t ComputeEtagHash(std::string_view data) {
@@ -461,8 +522,8 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
   const auto dispatch = dispatcher_->Dispatch(
       {.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = card_request}, context);
   if (!dispatch.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, dispatch.error().message(),
-                                  "EXTENDED_AGENT_CARD_NOT_CONFIGURED");
+    return BuildValidatedErrorResponse(HttpStatusFromError(dispatch.error()), dispatch.error().message(),
+                                       RestReasonFromError(dispatch.error()), extensions.value());
   }
   const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
   if (payload == nullptr) {
