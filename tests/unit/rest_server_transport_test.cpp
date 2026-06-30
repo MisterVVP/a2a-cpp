@@ -20,6 +20,7 @@ namespace {
 
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
+constexpr std::string_view kTenantId = "tenant-1";
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -70,6 +71,23 @@ class EchoExecutor final : public a2a::server::AgentExecutor {
   int observed_history_length = -1;
   std::string observed_bearer_token;
   std::string observed_api_key;
+};
+
+class RecordingAgentCardProvider final : public a2a::core::AgentCardProvider {
+ public:
+  explicit RecordingAgentCardProvider(lf::a2a::v1::AgentCard extended_agent_card)
+      : extended_agent_card_(std::move(extended_agent_card)) {}
+
+  a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
+      const a2a::core::AgentCardRequestContext& context) const override {
+    observed_tenant = context.tenant;
+    return extended_agent_card_;
+  }
+
+  mutable std::optional<std::string> observed_tenant;
+
+ private:
+  lf::a2a::v1::AgentCard extended_agent_card_;
 };
 
 lf::a2a::v1::AgentCard BuildCard() {
@@ -293,6 +311,26 @@ TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCard) {
   EXPECT_NE(response.value().body.find(kExtendedName), std::string::npos);
 }
 
+TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCardFromDiscoveryView) {
+  constexpr std::string_view kExtendedName = "Extended Discovery Agent";
+  EchoExecutor executor;
+  auto extended_card = BuildCard();
+  extended_card.set_name(std::string(kExtendedName));
+  auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/.well-known/agent-card.json?view=extended",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_NE(response.value().body.find(kExtendedName), std::string::npos);
+}
+
 TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCardUnderRestBasePath) {
   constexpr std::string_view kExtendedName = "Extended REST Base Agent";
   EchoExecutor executor;
@@ -311,6 +349,24 @@ TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCardUnderRestBasePath
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
   EXPECT_NE(response.value().body.find(kExtendedName), std::string::npos);
+}
+
+TEST(RestServerTransportTest, PropagatesTenantFromExtendedAgentCardPath) {
+  EchoExecutor executor;
+  auto extended_card = BuildCard();
+  auto provider = std::make_shared<RecordingAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
+
+  const auto response = server.Handle({.method = "GET",
+                                       .target = "/a2a/tenant-1/extendedAgentCard",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = {},
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_EQ(provider->observed_tenant, std::optional<std::string>(std::string(kTenantId)));
 }
 
 TEST(RestServerTransportTest, ExtendedAgentCardReturnsNotConfiguredWhenMissing) {
