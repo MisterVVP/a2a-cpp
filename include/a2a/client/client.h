@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "a2a/client/call_options.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -72,7 +73,7 @@ class StreamObserver {
   virtual void OnCompleted() = 0;
 };
 
-class StreamHandle final {
+class StreamHandle final : private core::NonCopyable {
  public:
   struct State final {
     std::atomic<bool> cancel_requested{false};
@@ -82,8 +83,6 @@ class StreamHandle final {
   };
 
   StreamHandle() = delete;
-  StreamHandle(const StreamHandle&) = delete;
-  StreamHandle& operator=(const StreamHandle&) = delete;
   StreamHandle(StreamHandle&&) noexcept;
   StreamHandle& operator=(StreamHandle&&) noexcept;
   ~StreamHandle();

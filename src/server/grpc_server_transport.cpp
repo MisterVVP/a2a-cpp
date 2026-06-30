@@ -14,6 +14,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
@@ -179,7 +180,7 @@ constexpr int32_t kMaxListTasksPageSize = 100;
 constexpr std::chrono::milliseconds kStreamCancellationPollInterval{50};
 constexpr std::string_view kExtensionsMetadataKey = "a2a-extensions";
 
-class StreamCancellationWatcher final {
+class StreamCancellationWatcher final : private core::NonCopyable {
  public:
   StreamCancellationWatcher(::grpc::ServerContext* context, ServerStreamSession* stream)
       : context_(context), stream_(stream) {
@@ -187,9 +188,6 @@ class StreamCancellationWatcher final {
       worker_ = std::thread([this] { Watch(); });
     }
   }
-
-  StreamCancellationWatcher(const StreamCancellationWatcher&) = delete;
-  StreamCancellationWatcher& operator=(const StreamCancellationWatcher&) = delete;
 
   ~StreamCancellationWatcher() {
     stopped_.store(true, std::memory_order_release);

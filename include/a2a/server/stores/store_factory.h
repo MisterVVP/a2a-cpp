@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/result.h"
 #include "a2a/server/push_notification_store.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
@@ -28,13 +29,9 @@ struct StoreBundle final {
   std::unique_ptr<PushNotificationStore> push_store;
 };
 
-class StoreFactory {
+class StoreFactory : private core::NonCopyableOrMovable {
  public:
   StoreFactory() = default;
-  StoreFactory(const StoreFactory&) = delete;
-  StoreFactory& operator=(const StoreFactory&) = delete;
-  StoreFactory(StoreFactory&&) = delete;
-  StoreFactory& operator=(StoreFactory&&) = delete;
   virtual ~StoreFactory() = default;
 
   [[nodiscard]] virtual StoreBackendKind backend_kind() const noexcept = 0;

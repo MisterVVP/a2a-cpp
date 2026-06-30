@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -18,13 +19,9 @@ struct AgentCardRequestContext final {
   std::unordered_map<std::string, std::string> auth_metadata;
 };
 
-class AgentCardProvider {
+class AgentCardProvider : private NonCopyableOrMovable {
  public:
   AgentCardProvider() = default;
-  AgentCardProvider(const AgentCardProvider&) = delete;
-  AgentCardProvider& operator=(const AgentCardProvider&) = delete;
-  AgentCardProvider(AgentCardProvider&&) = delete;
-  AgentCardProvider& operator=(AgentCardProvider&&) = delete;
   virtual ~AgentCardProvider() = default;
 
   [[nodiscard]] virtual Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
