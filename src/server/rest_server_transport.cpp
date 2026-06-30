@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -31,6 +32,8 @@ namespace {
 constexpr int kHexAlphabetOffset = 10;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+constexpr std::string_view kAgentCardViewQueryKey = "view";
+constexpr std::string_view kExtendedAgentCardViewQueryValue = "extended";
 
 struct ErrorBodySpec final {
   int status_code = core::http::kStatusBadRequest;
@@ -232,6 +235,51 @@ core::Result<void> ParseQueryString(std::string_view raw, std::unordered_map<std
   return {};
 }
 
+core::Result<bool> HasExtendedAgentCardView(std::string_view query) {
+  std::unordered_map<std::string, std::string> query_params;
+  const auto parsed = ParseQueryString(query, &query_params);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+
+  const auto view = query_params.find(std::string(kAgentCardViewQueryKey));
+  return view != query_params.end() && view->second == kExtendedAgentCardViewQueryValue;
+}
+
+bool PathStartsWithBasePath(std::string_view path, std::string_view base_path) {
+  return !base_path.empty() && base_path != "/" && path.starts_with(base_path) &&
+         (path.size() == base_path.size() || path[base_path.size()] == '/');
+}
+
+std::optional<std::string> ExtractTenantFromRelativeExtendedAgentCardPath(std::string_view path) {
+  if (!path.starts_with('/') || !path.ends_with(RestServerTransport::kExtendedAgentCardPath)) {
+    return std::nullopt;
+  }
+
+  const std::size_t tenant_end = path.size() - RestServerTransport::kExtendedAgentCardPath.size();
+  if (tenant_end <= 1 || path[tenant_end] != '/') {
+    return std::nullopt;
+  }
+
+  const std::string_view tenant = path.substr(1, tenant_end - 1);
+  if (tenant.empty() || tenant.find('/') != std::string_view::npos) {
+    return std::nullopt;
+  }
+  return std::string(tenant);
+}
+
+std::optional<std::string> ExtractTenantFromExtendedAgentCardPath(std::string_view path, std::string_view base_path) {
+  if (auto tenant = ExtractTenantFromRelativeExtendedAgentCardPath(path); tenant.has_value()) {
+    return tenant;
+  }
+  if (!PathStartsWithBasePath(path, base_path)) {
+    return std::nullopt;
+  }
+
+  const std::string_view relative_path = path.substr(base_path.size());
+  return ExtractTenantFromRelativeExtendedAgentCardPath(relative_path);
+}
+
 }  // namespace
 
 RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
@@ -258,14 +306,30 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   const std::string_view path = query_start == std::string::npos
                                     ? std::string_view(request.target)
                                     : std::string_view(request.target).substr(0, query_start);
+  const std::string_view query = query_start == std::string::npos
+                                     ? std::string_view{}
+                                     : std::string_view(request.target).substr(query_start + 1);
   const bool is_base_path_extended_agent_card =
       options_.rest_api_base_path != "/" && path == options_.rest_api_base_path + std::string(kExtendedAgentCardPath);
 
-  if (path == kAgentCardPath || path == kLegacyAgentCardPath) {
+  if (path == kAgentCardPath) {
+    const auto extended_view = HasExtendedAgentCardView(query);
+    if (!extended_view.ok()) {
+      return extended_view.error();
+    }
+    if (extended_view.value()) {
+      return HandleExtendedAgentCard(request, {});
+    }
+    return HandleAgentCard(request);
+  }
+  if (path == kLegacyAgentCardPath) {
     return HandleAgentCard(request);
   }
   if (path == kExtendedAgentCardPath || is_base_path_extended_agent_card) {
-    return HandleExtendedAgentCard(request);
+    return HandleExtendedAgentCard(request, {});
+  }
+  if (const auto tenant = ExtractTenantFromExtendedAgentCardPath(path, options_.rest_api_base_path); tenant.has_value()) {
+    return HandleExtendedAgentCard(request, *tenant);
   }
 
   const auto version = ValidateVersionHeader(request);
@@ -370,7 +434,8 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   return response;
 }
 
-core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(const HttpServerRequest& request) const {
+core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(const HttpServerRequest& request,
+                                                                              std::string_view tenant) const {
   if (request.method != "GET") {
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
                                   "UNSUPPORTED_OPERATION");
@@ -390,6 +455,9 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
   context.client_headers = request.headers;
   context.auth_metadata = ExtractAuthMetadata(request.headers);
   lf::a2a::v1::GetExtendedAgentCardRequest card_request;
+  if (!tenant.empty()) {
+    card_request.set_tenant(std::string(tenant));
+  }
   const auto dispatch = dispatcher_->Dispatch(
       {.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = card_request}, context);
   if (!dispatch.ok()) {
