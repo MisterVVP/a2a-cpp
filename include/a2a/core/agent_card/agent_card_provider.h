@@ -14,6 +14,7 @@
 namespace a2a::core {
 
 struct AgentCardRequestContext final {
+  std::optional<std::string> tenant;
   std::optional<std::string> remote_address;
   std::unordered_map<std::string, std::string> client_headers;
   std::unordered_map<std::string, std::string> auth_metadata;
