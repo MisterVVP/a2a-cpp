@@ -3,9 +3,9 @@
 
 #include "a2a/core/non_copyable.h"
 
-#include <type_traits>
-
 #include <gtest/gtest.h>
+
+#include <type_traits>
 
 namespace {
 
