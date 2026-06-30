@@ -30,8 +30,9 @@ bool IsPushNotificationOperation(DispatcherOperation operation) {
          operation == DispatcherOperation::kDeleteTaskPushNotificationConfig;
 }
 
-core::AgentCardRequestContext ToAgentCardRequestContext(const RequestContext& context) {
-  return {.remote_address = context.remote_address,
+core::AgentCardRequestContext ToAgentCardRequestContext(const RequestContext& context, std::string_view tenant) {
+  return {.tenant = tenant.empty() ? std::optional<std::string>{} : std::optional<std::string>(tenant),
+          .remote_address = context.remote_address,
           .client_headers = context.client_headers,
           .auth_metadata = context.auth_metadata};
 }
@@ -190,11 +191,10 @@ core::Result<DispatchResponse> DispatchExtendedAgentCard(
   if (payload == nullptr) {
     return core::Error::Validation("Dispatch payload type mismatch for GetExtendedAgentCard");
   }
-  (void)payload;
   if (agent_card_provider == nullptr) {
     return core::protocol_errors::ExtendedAgentCardNotConfigured();
   }
-  auto response = agent_card_provider->GetExtendedAgentCard(ToAgentCardRequestContext(context));
+  auto response = agent_card_provider->GetExtendedAgentCard(ToAgentCardRequestContext(context, payload->tenant()));
   if (!response.ok()) {
     return response.error();
   }
