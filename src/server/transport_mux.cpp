@@ -6,15 +6,17 @@
 #include <algorithm>
 #include <ranges>
 
+#include "a2a/core/protocol_paths.h"
+
 namespace a2a::server {
 namespace {
 
 bool IsTenantExtendedAgentCardPath(std::string_view path) {
-  if (!path.starts_with('/') || !path.ends_with(RestServerTransport::kExtendedAgentCardPath)) {
+  if (!path.starts_with('/') || !path.ends_with(core::protocol_paths::kExtendedAgentCard)) {
     return false;
   }
 
-  const std::size_t tenant_end = path.size() - RestServerTransport::kExtendedAgentCardPath.size();
+  const std::size_t tenant_end = path.size() - core::protocol_paths::kExtendedAgentCard.size();
   if (tenant_end <= 1 || path[tenant_end] != '/') {
     return false;
   }
@@ -64,7 +66,7 @@ void TransportMux::RegisterRestRoute(RestServerTransport& transport, RestRouteOp
           [rest_api_prefix = std::move(options.rest_api_prefix),
            well_known_prefix = std::move(options.well_known_prefix)](std::string_view method, std::string_view path) {
             (void)method;
-            return path == RestServerTransport::kExtendedAgentCardPath || IsTenantExtendedAgentCardPath(path) ||
+            return path == core::protocol_paths::kExtendedAgentCard || IsTenantExtendedAgentCardPath(path) ||
                    path.starts_with(rest_api_prefix) || path.starts_with(well_known_prefix);
           },
       .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },

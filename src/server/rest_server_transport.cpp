@@ -372,9 +372,10 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   const std::string_view query =
       query_start == std::string::npos ? std::string_view{} : std::string_view(request.target).substr(query_start + 1);
   const bool is_base_path_extended_agent_card =
-      options_.rest_api_base_path != "/" && path == options_.rest_api_base_path + std::string(kExtendedAgentCardPath);
+      options_.rest_api_base_path != "/" &&
+      path == options_.rest_api_base_path + std::string(core::protocol_paths::kExtendedAgentCard);
 
-  if (path == kAgentCardPath) {
+  if (path == core::protocol_paths::kAgentCard) {
     const auto extended_view = HasExtendedAgentCardView(query);
     if (!extended_view.ok()) {
       return extended_view.error();
@@ -384,10 +385,10 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     }
     return HandleAgentCard(request);
   }
-  if (path == kLegacyAgentCardPath) {
+  if (path == core::protocol_paths::kLegacyAgentCard) {
     return HandleAgentCard(request);
   }
-  if (path == kExtendedAgentCardPath || is_base_path_extended_agent_card) {
+  if (path == core::protocol_paths::kExtendedAgentCard || is_base_path_extended_agent_card) {
     return HandleExtendedAgentCard(request, {});
   }
   if (const auto tenant = ExtractTenantFromExtendedAgentCardPath(path, options_.rest_api_base_path);
@@ -471,7 +472,7 @@ core::Result<void> RestServerTransport::ValidateVersionHeader(const HttpServerRe
 }
 
 core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const HttpServerRequest& request) const {
-  if (request.method != "GET") {
+  if (request.method != core::http::kMethodGet) {
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
                                   "UNSUPPORTED_OPERATION");
   }
@@ -499,7 +500,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
 
 core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(const HttpServerRequest& request,
                                                                               std::string_view tenant) const {
-  if (request.method != "GET") {
+  if (request.method != core::http::kMethodGet) {
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
                                   "UNSUPPORTED_OPERATION");
   }

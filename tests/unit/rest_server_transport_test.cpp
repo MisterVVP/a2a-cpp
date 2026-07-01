@@ -79,7 +79,7 @@ class RecordingAgentCardProvider final : public a2a::core::AgentCardProvider {
   explicit RecordingAgentCardProvider(lf::a2a::v1::AgentCard extended_agent_card)
       : extended_agent_card_(std::move(extended_agent_card)) {}
 
-  a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
       const a2a::core::AgentCardRequestContext& context) const override {
     observed_tenant = context.tenant;
     return extended_agent_card_;
@@ -93,7 +93,7 @@ class RecordingAgentCardProvider final : public a2a::core::AgentCardProvider {
 
 class FailingAgentCardProvider final : public a2a::core::AgentCardProvider {
  public:
-  a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::AgentCard> GetExtendedAgentCard(
       const a2a::core::AgentCardRequestContext& context) const override {
     (void)context;
     return a2a::core::protocol_errors::InvalidAgentResponse("extended card provider failed");

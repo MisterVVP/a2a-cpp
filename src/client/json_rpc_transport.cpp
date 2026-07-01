@@ -18,6 +18,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -200,7 +201,7 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::strin
   }
 
   HttpRequest http_request;
-  http_request.method = "POST";
+  http_request.method = std::string(core::http::kMethodPost);
   http_request.url = JoinUrl(resolved_interface_.url);
   http_request.body = std::move(request_body);
   http_request.timeout = options.timeout.value_or(default_timeout_);
