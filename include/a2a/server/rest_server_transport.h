@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "a2a/core/protocol_paths.h"
 #include "a2a/core/result.h"
 #include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_transport.h"
@@ -51,9 +52,9 @@ struct RestServerTransportOptions final {
 
 class RestServerTransport final {
  public:
-  static constexpr std::string_view kAgentCardPath = "/.well-known/agent-card.json";
-  static constexpr std::string_view kLegacyAgentCardPath = "/.well-known/agent.json";
-  static constexpr std::string_view kExtendedAgentCardPath = "/extendedAgentCard";
+  static constexpr std::string_view kAgentCardPath = core::protocol_paths::kAgentCard;
+  static constexpr std::string_view kLegacyAgentCardPath = core::protocol_paths::kLegacyAgentCard;
+  static constexpr std::string_view kExtendedAgentCardPath = core::protocol_paths::kExtendedAgentCard;
 
   RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                       RestServerTransportOptions options = {});

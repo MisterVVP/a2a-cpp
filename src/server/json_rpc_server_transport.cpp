@@ -782,7 +782,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   }
 
   const std::string normalized_target = NormalizePath(request.target);
-  if (request.method != "POST" || normalized_target != options_.rpc_path) {
+  if (request.method != core::http::kMethodPost || normalized_target != options_.rpc_path) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{}, std::nullopt,
                               core::http::kStatusOk);
   }

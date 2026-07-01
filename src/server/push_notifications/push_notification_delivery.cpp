@@ -17,7 +17,6 @@
 namespace a2a::server {
 namespace {
 
-constexpr std::string_view kPostMethod = "POST";
 constexpr std::string_view kUnsupportedSchemeMessage = "push notification URL must use http or https";
 constexpr std::string_view kUnsupportedHttpVersionMessage =
     "push notification delivery supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
@@ -75,7 +74,7 @@ std::vector<http::Header> BuildHeaders(const lf::a2a::v1::TaskPushNotificationCo
 http::Request BuildHttpRequest(const PushDeliveryRequest& request, std::string body, std::string_view http_version,
                                std::chrono::milliseconds timeout) {
   http::Request http_request;
-  http_request.method = std::string(kPostMethod);
+  http_request.method = std::string(core::http::kMethodPost);
   http_request.url = request.config.url();
   http_request.headers = BuildHeaders(request.config);
   http_request.body = std::move(body);
