@@ -17,7 +17,23 @@ inline constexpr std::string_view kCreateTaskPushNotificationConfig = "CreateTas
 inline constexpr std::string_view kGetTaskPushNotificationConfig = "GetTaskPushNotificationConfig";
 inline constexpr std::string_view kListTaskPushNotificationConfigs = "ListTaskPushNotificationConfigs";
 inline constexpr std::string_view kDeleteTaskPushNotificationConfig = "DeleteTaskPushNotificationConfig";
-inline constexpr std::string_view kGetExtendedAgentCard = "GetExtendedAgentCard";
 inline constexpr std::string_view kPushNotificationConfigsSegment = "/pushNotificationConfigs";
+
+struct GetExtendedAgentCardMethodName final {
+  static constexpr std::string_view kCanonical = "GetExtendedAgentCard";
+  static constexpr std::string_view kJsonRpcAlias = "a2a.getExtendedAgentCard";
+
+  constexpr operator std::string_view() const noexcept { return kCanonical; }
+};
+
+inline constexpr GetExtendedAgentCardMethodName kGetExtendedAgentCard{};
+
+constexpr bool operator==(std::string_view actual, GetExtendedAgentCardMethodName) noexcept {
+  return actual == GetExtendedAgentCardMethodName::kCanonical || actual == GetExtendedAgentCardMethodName::kJsonRpcAlias;
+}
+
+constexpr bool operator==(GetExtendedAgentCardMethodName method, std::string_view actual) noexcept {
+  return actual == method;
+}
 
 }  // namespace a2a::core::protocol_methods
