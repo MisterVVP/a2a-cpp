@@ -512,6 +512,10 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
                                   "EXTENSION_SUPPORT_REQUIRED");
   }
+  if (dispatcher_ == nullptr) {
+    return BuildValidatedErrorResponse(core::http::kStatusInternalServerError,
+                                       "REST transport dispatcher is not configured", "INTERNAL", extensions.value());
+  }
   RequestContext context;
   context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
                                                           : std::optional<std::string>(request.remote_address);
