@@ -29,7 +29,8 @@ struct GetExtendedAgentCardMethodName final {
 inline constexpr GetExtendedAgentCardMethodName kGetExtendedAgentCard{};
 
 constexpr bool operator==(std::string_view actual, GetExtendedAgentCardMethodName) noexcept {
-  return actual == GetExtendedAgentCardMethodName::kCanonical || actual == GetExtendedAgentCardMethodName::kJsonRpcAlias;
+  return actual == GetExtendedAgentCardMethodName::kCanonical ||
+         actual == GetExtendedAgentCardMethodName::kJsonRpcAlias;
 }
 
 constexpr bool operator==(GetExtendedAgentCardMethodName method, std::string_view actual) noexcept {
