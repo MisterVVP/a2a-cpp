@@ -12,18 +12,20 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
-#include "a2a/core/legacy_transport_names.h"
-#include "a2a/core/protocol_bindings.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "a2a/server/agent_card/agent_card_serializer.h"
 
 namespace a2a::server {
 namespace {
@@ -31,6 +33,8 @@ namespace {
 constexpr int kHexAlphabetOffset = 10;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+constexpr std::string_view kAgentCardViewQueryKey = "view";
+constexpr std::string_view kExtendedAgentCardViewQueryValue = "extended";
 
 struct ErrorBodySpec final {
   int status_code = core::http::kStatusBadRequest;
@@ -38,14 +42,24 @@ struct ErrorBodySpec final {
   std::string_view reason;
 };
 
-void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1::AgentCard& agent_card);
-
 std::string HttpStatusName(int status_code) {
   switch (status_code) {
     case core::http::kStatusBadRequest:
       return "INVALID_ARGUMENT";
     case core::http::kStatusNotFound:
       return "NOT_FOUND";
+    case core::http::kStatusUnauthorized:
+      return "UNAUTHENTICATED";
+    case core::http::kStatusForbidden:
+      return "PERMISSION_DENIED";
+    case core::http::kStatusConflict:
+      return "CONFLICT";
+    case core::http::kStatusUnsupportedMediaType:
+      return "UNSUPPORTED_MEDIA_TYPE";
+    case core::http::kStatusInternalServerError:
+      return "INTERNAL";
+    case core::http::kStatusBadGateway:
+      return "BAD_GATEWAY";
     default:
       return "UNKNOWN";
   }
@@ -107,6 +121,56 @@ HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view
   return response;
 }
 
+std::string_view ProtocolCodeToRestReason(std::string_view protocol_code) {
+  if (protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
+    return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+  }
+  if (protocol_code == core::protocol_codes::kUnsupportedOperation) {
+    return "UNSUPPORTED_OPERATION";
+  }
+  if (protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+    return "CONTENT_TYPE_NOT_SUPPORTED";
+  }
+  if (protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+    return "INVALID_AGENT_RESPONSE";
+  }
+  if (protocol_code == core::protocol_codes::kExtensionSupportRequired) {
+    return "EXTENSION_SUPPORT_REQUIRED";
+  }
+  if (protocol_code == core::protocol_codes::kVersionNotSupported) {
+    return "VERSION_NOT_SUPPORTED";
+  }
+  return "REMOTE_PROTOCOL_ERROR";
+}
+
+std::string_view RestReasonFromError(const core::Error& error) {
+  const auto& protocol_code = error.protocol_code();
+  if (protocol_code.has_value()) {
+    return ProtocolCodeToRestReason(*protocol_code);
+  }
+  if (error.code() == core::ErrorCode::kUnsupportedVersion) {
+    return "VERSION_NOT_SUPPORTED";
+  }
+  if (error.code() == core::ErrorCode::kInternal || error.code() == core::ErrorCode::kSerialization) {
+    return "INTERNAL";
+  }
+  return "INVALID_ARGUMENT";
+}
+
+int HttpStatusFromError(const core::Error& error) {
+  const auto& http_status = error.http_status();
+  if (http_status.has_value()) {
+    return *http_status;
+  }
+  if (error.code() == core::ErrorCode::kInternal || error.code() == core::ErrorCode::kSerialization) {
+    return core::http::kStatusInternalServerError;
+  }
+  if (error.code() == core::ErrorCode::kNetwork) {
+    return core::http::kStatusBadGateway;
+  }
+  return core::http::kStatusBadRequest;
+}
+
 std::uint64_t ComputeEtagHash(std::string_view data) {
   std::uint64_t hash = kFnvOffsetBasis;
   for (const char ch : data) {
@@ -137,86 +201,12 @@ std::string BuildQuotedEtag(std::uint64_t hash_value) {
   return etag;
 }
 
-google::protobuf::Value* EnsureStructField(google::protobuf::Struct* object, std::string key) {
-  auto& value = (*object->mutable_fields())[std::move(key)];
-  if (!value.has_struct_value()) {
-    value.mutable_struct_value();
-  }
-  return &value;
-}
-
-google::protobuf::Value* EnsureListField(google::protobuf::Struct* object, std::string key) {
-  auto& value = (*object->mutable_fields())[std::move(key)];
-  if (!value.has_list_value()) {
-    value.mutable_list_value();
-  }
-  return &value;
-}
-
-void EnsureStringField(google::protobuf::Struct* object, std::string_view key, std::string_view fallback) {
-  auto* fields = object->mutable_fields();
-  if (fields->find(std::string(key)) == fields->end()) {
-    (*fields)[std::string(key)].set_string_value(std::string(fallback));
-  }
-}
-
-void EnsureBoolField(google::protobuf::Struct* object, std::string_view key, bool fallback) {
-  auto* fields = object->mutable_fields();
-  if (fields->find(std::string(key)) == fields->end()) {
-    (*fields)[std::string(key)].set_bool_value(fallback);
-  }
-}
-
-void EnsureDefaultModeField(google::protobuf::Struct* card, std::string_view key) {
-  auto* fields = card->mutable_fields();
-  if (fields->find(std::string(key)) != fields->end()) {
-    return;
-  }
-  auto* modes = EnsureListField(card, std::string(key))->mutable_list_value();
-  modes->add_values()->set_string_value("text/plain");
-}
-
-void EnsureSkillTags(google::protobuf::Struct* card) {
-  auto* fields = card->mutable_fields();
-  if (fields->find("skills") == fields->end()) {
-    EnsureListField(card, "skills");
-  }
-
-  auto skills_it = fields->find("skills");
-  if (skills_it == fields->end() || !skills_it->second.has_list_value()) {
-    return;
-  }
-
-  for (auto& skill : *skills_it->second.mutable_list_value()->mutable_values()) {
-    if (!skill.has_struct_value()) {
-      continue;
-    }
-    EnsureListField(skill.mutable_struct_value(), "tags");
-  }
-}
-
-void NormalizeAgentCardFields(google::protobuf::Struct* card) {
-  EnsureStringField(card, "version", "0.1.0");
-  EnsureStringField(card, "description", "");
-
-  auto* capabilities = EnsureStructField(card, "capabilities")->mutable_struct_value();
-  EnsureBoolField(capabilities, "streaming", false);
-  EnsureBoolField(capabilities, "pushNotifications", false);
-
-  EnsureDefaultModeField(card, "defaultInputModes");
-  EnsureDefaultModeField(card, "defaultOutputModes");
-  EnsureSkillTags(card);
-}
-
 void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::AgentCardCacheSettings>& settings,
                                 HttpServerResponse* response) {
-  if (!settings.has_value()) {
-    return;
-  }
-  if (settings->cache_control.has_value()) {
+  if (settings.has_value() && settings->cache_control.has_value()) {
     response->headers["Cache-Control"] = *settings->cache_control;
   }
-  if (!settings->last_modified.has_value()) {
+  if (!settings.has_value() || !settings->last_modified.has_value()) {
     return;
   }
 
@@ -224,26 +214,6 @@ void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::
   if (!formatted.empty()) {
     response->headers["Last-Modified"] = formatted;
   }
-}
-
-core::Result<google::protobuf::Struct> BuildNormalizedAgentCard(const lf::a2a::v1::AgentCard& agent_card,
-                                                                bool include_legacy_transport_fields) {
-  const auto body = core::MessageToJson(agent_card);
-  if (!body.ok()) {
-    return body.error();
-  }
-
-  google::protobuf::Struct card;
-  const auto parsed = core::JsonToMessage(body.value(), &card, {.ignore_unknown_fields = false});
-  if (!parsed.ok()) {
-    return parsed.error();
-  }
-
-  NormalizeAgentCardFields(&card);
-  if (include_legacy_transport_fields) {
-    AddLegacyTransportFields(&card, agent_card);
-  }
-  return card;
 }
 
 core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
@@ -328,47 +298,57 @@ core::Result<void> ParseQueryString(std::string_view raw, std::unordered_map<std
   return {};
 }
 
-void AddLegacyTransportFields(google::protobuf::Struct* card, const lf::a2a::v1::AgentCard& agent_card) {
-  if (card == nullptr) {
-    return;
+core::Result<bool> HasExtendedAgentCardView(std::string_view query) {
+  std::unordered_map<std::string, std::string> query_params;
+  const auto parsed = ParseQueryString(query, &query_params);
+  if (!parsed.ok()) {
+    return parsed.error();
   }
 
-  auto* fields = card->mutable_fields();
-  auto interfaces_it = fields->find("supportedInterfaces");
-  if (interfaces_it != fields->end() && interfaces_it->second.has_list_value()) {
-    for (auto& interface_value : *interfaces_it->second.mutable_list_value()->mutable_values()) {
-      if (!interface_value.has_struct_value()) {
-        continue;
-      }
-      auto* interface_fields = interface_value.mutable_struct_value()->mutable_fields();
-      const auto binding_it = interface_fields->find("protocolBinding");
-      if (binding_it == interface_fields->end() ||
-          binding_it->second.kind_case() != google::protobuf::Value::kStringValue) {
-        continue;
-      }
-      (*interface_fields)[std::string(a2a::core::legacy_transport_names::kTransportField)].set_string_value(
-          binding_it->second.string_value());
-    }
+  const auto view = query_params.find(std::string(kAgentCardViewQueryKey));
+  return view != query_params.end() && view->second == kExtendedAgentCardViewQueryValue;
+}
+
+bool PathStartsWithBasePath(std::string_view path, std::string_view base_path) {
+  return !base_path.empty() && base_path != "/" && path.starts_with(base_path) &&
+         (path.size() == base_path.size() || path[base_path.size()] == '/');
+}
+
+std::optional<std::string> ExtractTenantFromRelativeExtendedAgentCardPath(std::string_view path) {
+  if (!path.starts_with('/') || !path.ends_with(RestServerTransport::kExtendedAgentCardPath)) {
+    return std::nullopt;
   }
 
-  if (fields->find(std::string(a2a::core::legacy_transport_names::kEndpointField)) == fields->end()) {
-    for (const auto& iface : agent_card.supported_interfaces()) {
-      if (iface.protocol_binding() == a2a::core::protocol_bindings::kJsonRpc ||
-          iface.protocol_binding() == a2a::core::protocol_bindings::kHttpJson) {
-        (*fields)[std::string(a2a::core::legacy_transport_names::kEndpointField)].set_string_value(iface.url());
-        (*fields)[std::string(a2a::core::legacy_transport_names::kPreferredTransportField)].set_string_value(
-            iface.protocol_binding());
-        break;
-      }
-    }
+  const std::size_t tenant_end = path.size() - RestServerTransport::kExtendedAgentCardPath.size();
+  if (tenant_end <= 1 || path[tenant_end] != '/') {
+    return std::nullopt;
   }
+
+  const std::string_view tenant = path.substr(1, tenant_end - 1);
+  if (tenant.empty() || tenant.find('/') != std::string_view::npos) {
+    return std::nullopt;
+  }
+  return std::string(tenant);
+}
+
+std::optional<std::string> ExtractTenantFromExtendedAgentCardPath(std::string_view path, std::string_view base_path) {
+  if (auto tenant = ExtractTenantFromRelativeExtendedAgentCardPath(path); tenant.has_value()) {
+    return tenant;
+  }
+  if (!PathStartsWithBasePath(path, base_path)) {
+    return std::nullopt;
+  }
+
+  const std::string_view relative_path = path.substr(base_path.size());
+  return ExtractTenantFromRelativeExtendedAgentCardPath(relative_path);
 }
 
 }  // namespace
 
 RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                                          RestServerTransportOptions options)
-    : transport_(dispatcher),
+    : dispatcher_(dispatcher),
+      transport_(dispatcher),
       agent_card_(std::move(agent_card)),
       options_(std::move(options)),
       required_extensions_validator_(options_.required_extensions) {
@@ -389,9 +369,31 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   const std::string_view path = query_start == std::string::npos
                                     ? std::string_view(request.target)
                                     : std::string_view(request.target).substr(0, query_start);
+  const std::string_view query =
+      query_start == std::string::npos ? std::string_view{} : std::string_view(request.target).substr(query_start + 1);
+  const bool is_base_path_extended_agent_card =
+      options_.rest_api_base_path != "/" &&
+      path == options_.rest_api_base_path + std::string(core::protocol_paths::kExtendedAgentCard);
 
-  if (path == kAgentCardPath || path == kLegacyAgentCardPath) {
+  if (path == core::protocol_paths::kAgentCard) {
+    const auto extended_view = HasExtendedAgentCardView(query);
+    if (!extended_view.ok()) {
+      return extended_view.error();
+    }
+    if (extended_view.value()) {
+      return HandleExtendedAgentCard(request, {});
+    }
     return HandleAgentCard(request);
+  }
+  if (path == core::protocol_paths::kLegacyAgentCard) {
+    return HandleAgentCard(request);
+  }
+  if (path == core::protocol_paths::kExtendedAgentCard || is_base_path_extended_agent_card) {
+    return HandleExtendedAgentCard(request, {});
+  }
+  if (const auto tenant = ExtractTenantFromExtendedAgentCardPath(path, options_.rest_api_base_path);
+      tenant.has_value()) {
+    return HandleExtendedAgentCard(request, *tenant);
   }
 
   const auto version = ValidateVersionHeader(request);
@@ -470,7 +472,7 @@ core::Result<void> RestServerTransport::ValidateVersionHeader(const HttpServerRe
 }
 
 core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const HttpServerRequest& request) const {
-  if (request.method != "GET") {
+  if (request.method != core::http::kMethodGet) {
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
                                   "UNSUPPORTED_OPERATION");
   }
@@ -492,6 +494,65 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   ApplyAgentCardCacheHeaders(options_.agent_card_cache_settings, &response);
   response.headers["ETag"] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
   response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  response.body = normalized.value();
+  return response;
+}
+
+core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(const HttpServerRequest& request,
+                                                                              std::string_view tenant) const {
+  if (request.method != core::http::kMethodGet) {
+    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
+                                  "UNSUPPORTED_OPERATION");
+  }
+  const auto version = ValidateVersionHeader(request);
+  if (!version.ok()) {
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
+  }
+  const auto extensions = required_extensions_validator_.Validate(request.headers);
+  if (!extensions.ok()) {
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
+                                  "EXTENSION_SUPPORT_REQUIRED");
+  }
+  if (dispatcher_ == nullptr) {
+    return BuildValidatedErrorResponse(core::http::kStatusInternalServerError,
+                                       "REST transport dispatcher is not configured", "INTERNAL", extensions.value());
+  }
+  RequestContext context;
+  context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
+                                                          : std::optional<std::string>(request.remote_address);
+  context.client_headers = request.headers;
+  context.auth_metadata = ExtractAuthMetadata(request.headers);
+  lf::a2a::v1::GetExtendedAgentCardRequest card_request;
+  if (!tenant.empty()) {
+    card_request.set_tenant(std::string(tenant));
+  }
+  const auto dispatch = dispatcher_->Dispatch(
+      {.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = card_request}, context);
+  if (!dispatch.ok()) {
+    return BuildValidatedErrorResponse(HttpStatusFromError(dispatch.error()), dispatch.error().message(),
+                                       RestReasonFromError(dispatch.error()), extensions.value());
+  }
+  const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
+  if (payload == nullptr) {
+    return core::Error::Internal("GetExtendedAgentCard dispatch returned an unexpected payload");
+  }
+
+  const auto card = BuildNormalizedAgentCard(*payload, options_.include_legacy_transport_fields);
+  if (!card.ok()) {
+    return card.error();
+  }
+
+  const auto normalized = core::MessageToJson(card.value());
+  if (!normalized.ok()) {
+    return normalized.error();
+  }
+
+  HttpServerResponse response;
+  response.status_code = core::http::kStatusOk;
+  response.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
+  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  AddActivatedExtensionsHeader(extensions.value(), &response);
   response.body = normalized.value();
   return response;
 }

@@ -21,6 +21,8 @@
 
 #include "a2a/client/client.h"
 #include "a2a/client/grpc_transport.h"
+#include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/version.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
@@ -169,7 +171,20 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 struct GrpcServerHarness final {
   a2a::server::InMemoryTaskStore store;
   StreamingStoreExecutor executor{&store};
-  a2a::server::Dispatcher dispatcher{&executor};
+  lf::a2a::v1::AgentCard extended_card = [] {
+    lf::a2a::v1::AgentCard card;
+    card.set_name("A2A C++ SDK Agent");
+    card.set_description("Default agent card for compatibility checks");
+    card.set_version(std::string(a2a::core::Version::kAgentCardVersion));
+    card.add_default_input_modes("text/plain");
+    card.add_default_output_modes("text/plain");
+    card.mutable_capabilities()->set_push_notifications(false);
+    card.mutable_capabilities()->set_streaming(true);
+    return card;
+  }();
+  std::shared_ptr<a2a::core::AgentCardProvider> agent_card_provider =
+      std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher{&executor, agent_card_provider};
   a2a::server::GrpcServerTransport transport{&dispatcher};
   std::unique_ptr<grpc::Server> server;
   int port = 0;

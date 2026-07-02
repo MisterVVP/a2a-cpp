@@ -8,7 +8,7 @@
 
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/url_utils.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/dispatcher.h"

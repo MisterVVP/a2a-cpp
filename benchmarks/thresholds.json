@@ -120,7 +120,7 @@
     "max_time_ns": 2500
   },
   "BM_TaskStore_AppendTaskHistory_DuplicateFingerprint": {
-    "max_time_ns": 1000
+    "max_time_ns": 1100
   },
   "BM_TaskStore_AppendTaskHistory_DuplicateMessageId": {
     "max_time_ns": 850

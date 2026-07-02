@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "a2a/core/http_constants.h"
+#include "a2a/core/protocol_paths.h"
 #include "a2a/core/result.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
@@ -57,14 +58,14 @@ class TransportMux final {
   struct JsonRpcRouteOptions final {
     std::string route_name = "jsonrpc";
     std::string rpc_path = "/rpc";
-    std::string method = "POST";
+    std::string method = std::string(core::http::kMethodPost);
     int priority = 100;
   };
 
   struct RestRouteOptions final {
     std::string route_name = "rest";
     std::string rest_api_prefix = "/a2a";
-    std::string well_known_prefix = "/.well-known/";
+    std::string well_known_prefix = std::string(core::protocol_paths::kWellKnownPrefix);
     int priority = 10;
   };
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 
 #include <string>
 #include <string_view>
@@ -73,6 +73,11 @@ AgentCardBuilder& AgentCardBuilder::AddDefaultOutputMode(std::string_view mode) 
 
 AgentCardBuilder& AgentCardBuilder::WithPushNotifications(bool enabled) {
   card_.mutable_capabilities()->set_push_notifications(enabled);
+  return *this;
+}
+
+AgentCardBuilder& AgentCardBuilder::WithExtendedAgentCard(bool enabled) {
+  card_.mutable_capabilities()->set_extended_agent_card(enabled);
   return *this;
 }
 

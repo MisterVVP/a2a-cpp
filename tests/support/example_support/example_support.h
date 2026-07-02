@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"

@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/result.h"
 #include "a2a/core/task_states.h"
@@ -23,13 +24,9 @@
 
 namespace a2a::server {
 
-class TaskSubscriptionService final {
+class TaskSubscriptionService final : private core::NonCopyableOrMovable {
  public:
   TaskSubscriptionService() = default;
-  TaskSubscriptionService(const TaskSubscriptionService&) = delete;
-  TaskSubscriptionService& operator=(const TaskSubscriptionService&) = delete;
-  TaskSubscriptionService(TaskSubscriptionService&&) = delete;
-  TaskSubscriptionService& operator=(TaskSubscriptionService&&) = delete;
   ~TaskSubscriptionService();
 
   [[nodiscard]] core::Result<std::unique_ptr<ServerStreamSession>> Subscribe(const lf::a2a::v1::Task& task);

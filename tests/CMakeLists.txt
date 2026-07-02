@@ -50,6 +50,18 @@ target_link_libraries(core_helpers_test
 
 gtest_discover_tests(core_helpers_test)
 
+add_executable(non_copyable_test
+  unit/non_copyable_test.cpp
+)
+
+target_link_libraries(non_copyable_test
+  PRIVATE
+    a2a::core
+    GTest::gtest_main
+)
+
+gtest_discover_tests(non_copyable_test)
+
 add_executable(response_builders_test
   unit/response_builders_test.cpp
 )

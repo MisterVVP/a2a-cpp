@@ -10,7 +10,9 @@
 #include <variant>
 #include <vector>
 
+#include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/dispatcher.h"
@@ -172,6 +174,40 @@ TEST(ServerDispatcherTest, DispatchesAllSupportedOperations) {
   const auto cancel_result = dispatcher.Dispatch(cancel_dispatch, context);
   ASSERT_TRUE(cancel_result.ok());
   ASSERT_TRUE(std::holds_alternative<lf::a2a::v1::Task>(cancel_result.value().payload()));
+}
+
+TEST(ServerDispatcherTest, DispatchesGetExtendedAgentCardThroughProvider) {
+  constexpr std::string_view kExtendedName = "Extended Dispatcher Agent";
+  FakeExecutor executor;
+  lf::a2a::v1::AgentCard extended_card;
+  extended_card.set_name(std::string(kExtendedName));
+  auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
+  a2a::server::Dispatcher dispatcher(&executor, provider);
+  a2a::server::RequestContext context;
+  context.auth_metadata.emplace("bearer_token", "token");
+
+  const a2a::server::DispatchRequest dispatch{.operation = a2a::server::DispatcherOperation::kGetExtendedAgentCard,
+                                              .payload = lf::a2a::v1::GetExtendedAgentCardRequest{}};
+  const auto result = dispatcher.Dispatch(dispatch, context);
+
+  ASSERT_TRUE(result.ok());
+  const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&result.value().payload());
+  ASSERT_NE(payload, nullptr);
+  EXPECT_EQ(payload->name(), kExtendedName);
+}
+
+TEST(ServerDispatcherTest, GetExtendedAgentCardReturnsNotConfiguredWithoutProvider) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RequestContext context;
+
+  const a2a::server::DispatchRequest dispatch{.operation = a2a::server::DispatcherOperation::kGetExtendedAgentCard,
+                                              .payload = lf::a2a::v1::GetExtendedAgentCardRequest{}};
+  const auto result = dispatcher.Dispatch(dispatch, context);
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(),
+            std::optional<std::string>(std::string(a2a::core::protocol_codes::kExtendedAgentCardNotConfigured)));
 }
 
 TEST(ServerDispatcherTest, ReturnsValidationErrorForPayloadMismatch) {

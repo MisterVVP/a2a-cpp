@@ -17,6 +17,7 @@
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -219,7 +220,7 @@ core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& obser
 core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientResponse& response,
                                                               std::string_view endpoint) {
   if (response.status_code < kHttpOkMin || response.status_code > kHttpOkMax) {
-    return BuildHttpError("GET", endpoint, response);
+    return BuildHttpError(core::http::kMethodGet, endpoint, response);
   }
 
   google::protobuf::Struct payload;
@@ -396,12 +397,13 @@ core::Result<lf::a2a::v1::SendMessageResponse> HttpJsonTransport::SendMessage(
   }
 
   const std::string endpoint(EndpointMap::kSendMessage);
-  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
+  const auto response =
+      SendRequest({.method = std::string(core::http::kMethodPost), .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
   }
 
-  return ParseBodyOrMapError<lf::a2a::v1::SendMessageResponse>("POST", endpoint, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::SendMessageResponse>(core::http::kMethodPost, endpoint, response.value());
 }
 
 core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -415,11 +417,11 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(const lf::a2a::v1::Ge
     endpoint += "?historyLength=" + std::to_string(request.history_length());
   }
 
-  const auto response = SendRequest({.method = "GET", .endpoint = endpoint}, {}, options);
+  const auto response = SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = endpoint}, {}, options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::Task>("GET", endpoint, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::Task>(core::http::kMethodGet, endpoint, response.value());
 }
 
 core::Result<ListTasksResponse> HttpJsonTransport::ListTasks(const ListTasksRequest& request,
@@ -442,7 +444,8 @@ core::Result<ListTasksResponse> HttpJsonTransport::ListTasks(const ListTasksRequ
   }
 
   const std::string endpoint_path = endpoint.str();
-  const auto response = SendRequest({.method = "GET", .endpoint = endpoint_path}, {}, options);
+  const auto response =
+      SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = endpoint_path}, {}, options);
   if (!response.ok()) {
     return response.error();
   }
@@ -456,11 +459,12 @@ core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(const lf::a2a::v1:
   }
 
   const std::string endpoint = BuildTaskPath(request.id()) + ":cancel";
-  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, "{}", options);
+  const auto response =
+      SendRequest({.method = std::string(core::http::kMethodPost), .endpoint = endpoint}, "{}", options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::Task>("POST", endpoint, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::Task>(core::http::kMethodPost, endpoint, response.value());
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::CreateTaskPushNotificationConfig(
@@ -475,11 +479,13 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::CreateT
   }
 
   const std::string endpoint = BuildTaskPushConfigCollectionPath(request.task_id());
-  const auto response = SendRequest({.method = "POST", .endpoint = endpoint}, body.value(), options);
+  const auto response =
+      SendRequest({.method = std::string(core::http::kMethodPost), .endpoint = endpoint}, body.value(), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("POST", endpoint, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>(core::http::kMethodPost, endpoint,
+                                                                      response.value());
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTaskPushNotificationConfig(
@@ -492,11 +498,12 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTask
   }
 
   const std::string endpoint = BuildTaskPushConfigPath({.task_id = request.task_id(), .id = request.id()});
-  const auto response = SendRequest({.method = "GET", .endpoint = endpoint}, {}, options);
+  const auto response = SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = endpoint}, {}, options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>("GET", endpoint, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>(core::http::kMethodGet, endpoint,
+                                                                      response.value());
 }
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> HttpJsonTransport::ListTaskPushNotificationConfigs(
@@ -523,11 +530,12 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> HttpJsonTrans
   }
 
   const std::string path = endpoint.str();
-  const auto response = SendRequest({.method = "GET", .endpoint = path}, {}, options);
+  const auto response = SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = path}, {}, options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>("GET", path, response.value());
+  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(core::http::kMethodGet, path,
+                                                                                   response.value());
 }
 
 core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
@@ -540,13 +548,14 @@ core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
   }
 
   const std::string endpoint = BuildTaskPushConfigPath({.task_id = request.task_id(), .id = request.id()});
-  const auto response = SendRequest({.method = "DELETE", .endpoint = endpoint}, {}, options);
+  const auto response =
+      SendRequest({.method = std::string(core::http::kMethodDelete), .endpoint = endpoint}, {}, options);
   if (!response.ok()) {
     return response.error();
   }
 
   if (response.value().status_code < kHttpOkMin || response.value().status_code > kHttpOkMax) {
-    return BuildHttpError("DELETE", endpoint, response.value());
+    return BuildHttpError(core::http::kMethodDelete, endpoint, response.value());
   }
 
   if (response.value().status_code != kHttpNoContent && !response.value().body.empty() &&
@@ -568,8 +577,9 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SendStreamingMess
     return body.error();
   }
 
-  return StartSseStream({.method = "POST", .endpoint = EndpointMap::kSendStreamingMessage}, body.value(), observer,
-                        options);
+  return StartSseStream(
+      {.method = std::string(core::http::kMethodPost), .endpoint = EndpointMap::kSendStreamingMessage}, body.value(),
+      observer, options);
 }
 
 core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -584,7 +594,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
     endpoint += "?historyLength=" + std::to_string(request.history_length());
   }
 
-  return StartSseStream({.method = "GET", .endpoint = endpoint}, {}, observer, options);
+  return StartSseStream({.method = std::string(core::http::kMethodGet), .endpoint = endpoint}, {}, observer, options);
 }
 
 core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(HttpOperation operation, std::string body,

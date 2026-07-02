@@ -3,7 +3,8 @@
 
 #pragma once
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/protojson.h"

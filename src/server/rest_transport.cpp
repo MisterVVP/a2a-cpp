@@ -35,33 +35,36 @@ template <std::size_t MessageSize>
 }
 
 const std::array<RestRoute, 11> kRoutes = {
-    RestRoute{.method = "POST",
+    RestRoute{.method = core::http::kMethodPost,
               .path_pattern = RestEndpointPaths::kSendMessage,
               .operation = DispatcherOperation::kSendMessage},
-    RestRoute{.method = "POST",
+    RestRoute{.method = core::http::kMethodPost,
               .path_pattern = RestEndpointPaths::kSendStreamingMessage,
               .operation = DispatcherOperation::kSendStreamingMessage},
-    RestRoute{.method = "GET", .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
-    RestRoute{.method = "GET",
+    RestRoute{
+        .method = core::http::kMethodGet, .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = core::http::kMethodGet,
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
-    RestRoute{.method = "POST", .path_pattern = "/tasks/{id}:cancel", .operation = DispatcherOperation::kCancelTask},
+    RestRoute{.method = core::http::kMethodPost,
+              .path_pattern = "/tasks/{id}:cancel",
+              .operation = DispatcherOperation::kCancelTask},
     RestRoute{.method = core::http::kMethodGet,
               .path_pattern = RestEndpointPaths::kTaskSubscribePath,
               .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = core::http::kMethodPost,
               .path_pattern = RestEndpointPaths::kTaskSubscribePath,
               .operation = DispatcherOperation::kSubscribeTask},
-    RestRoute{.method = "POST",
+    RestRoute{.method = core::http::kMethodPost,
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
-    RestRoute{.method = "GET",
+    RestRoute{.method = core::http::kMethodGet,
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
               .operation = DispatcherOperation::kGetTaskPushNotificationConfig},
-    RestRoute{.method = "GET",
+    RestRoute{.method = core::http::kMethodGet,
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
               .operation = DispatcherOperation::kListTaskPushNotificationConfigs},
-    RestRoute{.method = "DELETE",
+    RestRoute{.method = core::http::kMethodDelete,
               .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
               .operation = DispatcherOperation::kDeleteTaskPushNotificationConfig},
 };
@@ -418,7 +421,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
 }
 
 std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& request) {
-  if (request.method != "POST" ||
+  if (request.method != core::http::kMethodPost ||
       (request.path != RestEndpointPaths::kSendMessage && request.path != RestEndpointPaths::kSendStreamingMessage)) {
     return std::nullopt;
   }
@@ -436,7 +439,7 @@ std::optional<DispatchRequest> BuildMessageDispatchRequest(const RestRequest& re
 }
 
 std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& request) {
-  if (request.method != "GET" || request.path != RestEndpointPaths::kTaskCollection) {
+  if (request.method != core::http::kMethodGet || request.path != RestEndpointPaths::kTaskCollection) {
     return std::nullopt;
   }
 
@@ -469,7 +472,7 @@ std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& 
 }
 
 std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& request) {
-  if (request.method != "GET") {
+  if (request.method != core::http::kMethodGet) {
     return std::nullopt;
   }
 
@@ -487,7 +490,7 @@ std::optional<DispatchRequest> BuildGetTaskDispatchRequest(const RestRequest& re
 }
 
 std::optional<DispatchRequest> BuildCancelTaskDispatchRequest(const RestRequest& request) {
-  if (request.method != "POST") {
+  if (request.method != core::http::kMethodPost) {
     return std::nullopt;
   }
 
@@ -506,7 +509,7 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
   if (!path.has_value()) {
     return std::nullopt;
   }
-  if (request.method == "POST" && path->collection) {
+  if (request.method == core::http::kMethodPost && path->collection) {
     lf::a2a::v1::TaskPushNotificationConfig payload;
     const auto parse = core::JsonToMessage(request.body, &payload, {.ignore_unknown_fields = true});
     if (!parse.ok()) {
@@ -515,7 +518,7 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
     payload.set_task_id(path->task_id);
     return DispatchRequest{.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = payload};
   }
-  if (request.method == "GET" && path->collection) {
+  if (request.method == core::http::kMethodGet && path->collection) {
     lf::a2a::v1::ListTaskPushNotificationConfigsRequest payload;
     payload.set_task_id(path->task_id);
     if (const auto page_size = LookupQuery(request, "pageSize"); page_size.has_value()) {
@@ -526,13 +529,13 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
     }
     return DispatchRequest{.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = payload};
   }
-  if (request.method == "GET" && !path->collection) {
+  if (request.method == core::http::kMethodGet && !path->collection) {
     lf::a2a::v1::GetTaskPushNotificationConfigRequest payload;
     payload.set_task_id(path->task_id);
     payload.set_id(path->config_id);
     return DispatchRequest{.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = payload};
   }
-  if (request.method == "DELETE" && !path->collection) {
+  if (request.method == core::http::kMethodDelete && !path->collection) {
     lf::a2a::v1::DeleteTaskPushNotificationConfigRequest payload;
     payload.set_task_id(path->task_id);
     payload.set_id(path->config_id);
@@ -620,6 +623,8 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       google::protobuf::Struct empty;
       return BuildJsonResponse(empty);
     }
+    case DispatcherOperation::kGetExtendedAgentCard:
+      return core::Error::Validation("Extended agent card is handled by the server transport");
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {

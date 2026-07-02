@@ -23,6 +23,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -33,7 +34,8 @@
 #include <utility>
 #include <vector>
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
@@ -57,6 +59,10 @@ constexpr std::string_view kInMemoryBackend = "inmemory";
 constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
 constexpr const char* kPostgresDsnEnv = "A2A_TCK_POSTGRES_DSN";
 constexpr const char* kPostgresSchemaEnv = "A2A_TCK_POSTGRES_SCHEMA";
+constexpr const char* kExtendedCardModeEnv = "A2A_TCK_EXTENDED_AGENT_CARD_MODE";
+constexpr std::string_view kExtendedCardModeConfigured = "configured";
+constexpr std::string_view kExtendedCardModeDeclaredOnly = "declared_only";
+constexpr std::string_view kExtendedCardModeDisabled = "disabled";
 constexpr std::string_view kDefaultPostgresSchema = "public";
 constexpr std::string_view kMissingPostgresDsnMessage =
     "A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres";
@@ -186,13 +192,31 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
 
+  const char* extended_card_mode_value = std::getenv(kExtendedCardModeEnv);
+  const std::string_view extended_card_mode =
+      extended_card_mode_value == nullptr ? kExtendedCardModeConfigured : std::string_view(extended_card_mode_value);
+  if (extended_card_mode != kExtendedCardModeConfigured && extended_card_mode != kExtendedCardModeDeclaredOnly &&
+      extended_card_mode != kExtendedCardModeDisabled) {
+    std::cerr << "Unsupported A2A_TCK_EXTENDED_AGENT_CARD_MODE: " << extended_card_mode << '\n';
+    return 1;
+  }
+  const bool declares_extended_card = extended_card_mode != kExtendedCardModeDisabled;
+  const bool configures_extended_card = extended_card_mode == kExtendedCardModeConfigured;
+
   auto agent_card = a2a::core::AgentCardBuilder::ConformancePreset(
                         {.rest_url = "http://localhost:" + std::to_string(port) + std::string(kRestApiBasePath),
                          .json_rpc_url = "http://localhost:" + std::to_string(port) + "/rpc",
                          .grpc_url = "localhost:" + std::to_string(grpc_port)},
                         "TCK HTTP SUT", "0.1.0", "Conformance-focused local SUT for A2A")
                         .WithPushNotifications(true)
+                        .WithExtendedAgentCard(declares_extended_card)
                         .Build();
+
+  std::optional<lf::a2a::v1::AgentCard> extended_agent_card;
+  if (configures_extended_card) {
+    extended_agent_card = agent_card;
+    extended_agent_card->set_description("Extended conformance-focused local SUT card for A2A");
+  }
 
   auto store_bundle = CreateStoreBundleFromEnvironment();
   if (!store_bundle.ok()) {
@@ -204,7 +228,8 @@ int main(int argc, char** argv) {
   executor_options.task_store = store_bundle.value().task_store.get();
   executor_options.push_store = store_bundle.value().push_store.get();
   a2a::examples::ExampleExecutor executor(std::move(executor_options));
-  a2a::server::Dispatcher dispatcher(&executor);
+  auto agent_card_provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_agent_card);
+  a2a::server::Dispatcher dispatcher(&executor, agent_card_provider);
   a2a::server::GrpcServerTransportOptions grpc_options;
   grpc_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
   a2a::server::GrpcServerTransport grpc(&dispatcher, std::move(grpc_options));

@@ -21,6 +21,7 @@ inline constexpr char kContentTypeParameterSeparator = ';';
 
 inline constexpr std::string_view kMethodGet = "GET";
 inline constexpr std::string_view kMethodPost = "POST";
+inline constexpr std::string_view kMethodDelete = "DELETE";
 
 inline constexpr std::string_view kHttpScheme = "http://";
 inline constexpr std::string_view kHttpsScheme = "https://";

@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/result.h"

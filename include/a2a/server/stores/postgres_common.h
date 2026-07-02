@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/server/stores/store_factory.h"
 
 typedef struct pg_conn PGconn;
@@ -55,11 +56,9 @@ class PostgresConnectionPool final {
  public:
   explicit PostgresConnectionPool(std::string connection_string, std::size_t size = kDefaultPostgresConnectionPoolSize);
 
-  class Lease final {
+  class Lease final : private core::NonCopyable {
    public:
     Lease(PostgresConnectionPool* pool, PgConnection connection);
-    Lease(const Lease&) = delete;
-    Lease& operator=(const Lease&) = delete;
     Lease(Lease&& other) noexcept;
     Lease& operator=(Lease&& other) noexcept = delete;
     ~Lease();

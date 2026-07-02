@@ -8,11 +8,12 @@
 #include <optional>
 #include <utility>
 
+#include "a2a/core/non_copyable.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
 
-class StreamResponseCoroutine final {
+class StreamResponseCoroutine final : private core::NonCopyable {
  public:
   struct promise_type final {
     [[nodiscard]] StreamResponseCoroutine get_return_object() {
@@ -32,9 +33,6 @@ class StreamResponseCoroutine final {
   };
 
   StreamResponseCoroutine() = default;
-  StreamResponseCoroutine(const StreamResponseCoroutine&) = delete;
-  StreamResponseCoroutine& operator=(const StreamResponseCoroutine&) = delete;
-
   StreamResponseCoroutine(StreamResponseCoroutine&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
   StreamResponseCoroutine& operator=(StreamResponseCoroutine&& other) noexcept {
     if (this != &other) {

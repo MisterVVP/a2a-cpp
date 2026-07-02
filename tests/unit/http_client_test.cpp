@@ -26,6 +26,7 @@
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/non_copyable.h"
 
 namespace {
 
@@ -80,7 +81,7 @@ std::string BuildLoopbackUrl(int port, std::string_view scheme = a2a::core::http
   return url;
 }
 
-class LoopbackHttpServer final {
+class LoopbackHttpServer final : private a2a::core::NonCopyable {
  public:
   explicit LoopbackHttpServer(std::string response) : response_(std::move(response)) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -102,9 +103,6 @@ class LoopbackHttpServer final {
 
     worker_ = std::thread([this] { AcceptOnce(); });
   }
-
-  LoopbackHttpServer(const LoopbackHttpServer&) = delete;
-  LoopbackHttpServer& operator=(const LoopbackHttpServer&) = delete;
 
   ~LoopbackHttpServer() {
     if (worker_.joinable()) {

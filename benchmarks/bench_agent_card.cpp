@@ -2,7 +2,7 @@
 
 #include <benchmark/benchmark.h>
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/protojson.h"
 #include "a2a/server/rest_server_transport.h"
 #include "bench_common.h"

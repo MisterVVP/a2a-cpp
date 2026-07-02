@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "a2a/core/agent_card_builder.h"
+#include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/error.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/request_context.h"

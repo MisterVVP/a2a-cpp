@@ -110,7 +110,7 @@ TEST(DiscoveryClientTest, UsesInMemoryCacheWithinTtl) {
   EXPECT_EQ(calls, 1U);
 }
 
-TEST(DiscoveryClientTest, FetchExtendedAgentCardUsesExtendedQueryPath) {
+TEST(DiscoveryClientTest, FetchExtendedAgentCardUsesSpecEndpoint) {
   std::string called_url;
   DiscoveryClient client([&called_url](std::string_view url) -> a2a::core::Result<HttpResponse> {
     called_url = std::string(url);
@@ -122,8 +122,9 @@ TEST(DiscoveryClientTest, FetchExtendedAgentCardUsesExtendedQueryPath) {
 
   const auto fetched = client.FetchExtendedAgentCard("https://agent.example.com/");
   ASSERT_TRUE(fetched.ok()) << fetched.error().message();
-  EXPECT_EQ(called_url, "https://agent.example.com/.well-known/agent-card.json?view=extended");
+  EXPECT_EQ(called_url, "https://agent.example.com/extendedAgentCard");
 }
+
 TEST(AgentCardResolverTest, SelectsPreferredThenFallsBack) {
   lf::a2a::v1::AgentCard card;
   auto* json_rpc = card.add_supported_interfaces();
