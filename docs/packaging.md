@@ -26,6 +26,12 @@ Optional (recommended for provenance/signing):
 - Changelog source: GitHub Releases notes
 - Support window: latest release line + `main`
 
+## Release notes
+
+### Unreleased
+
+- Removed the temporary `a2a/core/agent_card_builder.h` include path. Include `a2a/core/agent_card/agent_card_builder.h` directly.
+
 ## Conan publish flow
 
 1. Tag release (`vX.Y.Z`).
