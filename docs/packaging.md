@@ -2,21 +2,7 @@
 
 ## Targets
 
-- Conan registry: **GitHub Packages**
 - vcpkg: **public vcpkg registry** (via PR to `microsoft/vcpkg`)
-
-## Required repository secrets (placeholders)
-
-Set these in GitHub Actions secrets before publishing:
-
-- `CONAN_REMOTE_URL` = `https://npm.pkg.github.com/<owner>`
-- `CONAN_LOGIN_USERNAME` = `<github-username>`
-- `CONAN_PASSWORD` = `<token-with-packages-write>`
-
-Optional (recommended for provenance/signing):
-
-- `COSIGN_PRIVATE_KEY` = `<pem-content>`
-- `COSIGN_PASSWORD` = `<password>`
 
 ## Release metadata policy
 
@@ -25,18 +11,6 @@ Optional (recommended for provenance/signing):
 - License: Apache-2.0
 - Changelog source: GitHub Releases notes
 - Support window: latest release line + `main`
-
-## Release notes
-
-### Unreleased
-
-- Removed the temporary `a2a/core/agent_card_builder.h` include path. Include `a2a/core/agent_card/agent_card_builder.h` directly.
-
-## Conan publish flow
-
-1. Tag release (`vX.Y.Z`).
-2. GitHub Action `Release Packages` runs automatically.
-3. Workflow builds and uploads package to configured GitHub Packages Conan remote.
 
 ## vcpkg public registry flow
 
