@@ -586,6 +586,9 @@ std::string ErrorInfoReason(const core::Error& error) {
     if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) {
       return "INVALID_AGENT_RESPONSE";
     }
+    if (*protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
+      return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+    }
     if (*protocol_code == core::protocol_codes::kVersionNotSupported) {
       return "VERSION_NOT_SUPPORTED";
     }

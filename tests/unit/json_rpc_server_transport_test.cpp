@@ -812,6 +812,7 @@ TEST(JsonRpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredErrorWh
   constexpr std::string_view kRequestBody =
       R"({"jsonrpc":"2.0","id":"req-card","method":"GetExtendedAgentCard","params":{}})";
   constexpr std::string_view kExpectedCodeJson = R"("code":-32007)";
+  constexpr std::string_view kExpectedReasonJson = R"("reason":"EXTENDED_AGENT_CARD_NOT_CONFIGURED")";
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc"});
@@ -821,6 +822,7 @@ TEST(JsonRpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredErrorWh
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find(kExpectedCodeJson), std::string::npos);
+  EXPECT_NE(response.value().body.find(kExpectedReasonJson), std::string::npos);
 }
 
 }  // namespace
