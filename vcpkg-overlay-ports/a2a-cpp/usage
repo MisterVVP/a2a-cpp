@@ -9,5 +9,8 @@ Additional targets are available when needed:
 
 The PostgreSQL store target is available when the postgres-store feature is enabled:
 
-    vcpkg install a2a-cpp[postgres-store] --overlay-ports=./vcpkg-overlay-ports
     target_link_libraries(main PRIVATE a2a::store_postgres)
+
+In manifest mode, add the postgres-store feature to vcpkg.json and run vcpkg install without package arguments.
+
+In classic mode, run the install command from a directory that does not contain a vcpkg.json manifest.
