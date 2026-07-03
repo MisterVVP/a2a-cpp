@@ -9,7 +9,7 @@ vcpkg_check_features(
 vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH
     URL "https://github.com/MisterVVP/a2a-cpp.git"
-    REF b601e90f579b8136d3f32c7608dfd0b1f9a1dd88
+    REF v0.2.0
 )
 
 vcpkg_cmake_configure(
