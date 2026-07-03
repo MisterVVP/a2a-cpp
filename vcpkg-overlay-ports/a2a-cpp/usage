@@ -1,0 +1,16 @@
+a2a-cpp provides CMake targets:
+
+    find_package(a2a_cpp CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE a2a::client a2a::server a2a::core)
+
+Additional targets are available when needed:
+
+    target_link_libraries(main PRIVATE a2a::http a2a::proto_generated)
+
+The PostgreSQL store target is available when the postgres-store feature is enabled:
+
+    target_link_libraries(main PRIVATE a2a::store_postgres)
+
+In manifest mode, add the postgres-store feature to vcpkg.json and run vcpkg install without package arguments.
+
+In classic mode, run the install command from a directory that does not contain a vcpkg.json manifest.
