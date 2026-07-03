@@ -1,0 +1,37 @@
+{
+  "name": "a2a-cpp",
+  "version-semver": "0.2.0",
+  "description": "C++20 SDK for building Agent2Agent protocol clients and servers.",
+  "homepage": "https://mistervvp.github.io/a2a-cpp/",
+  "license": "Apache-2.0",
+  "supports": "!uwp",
+  "dependencies": [
+    "curl",
+    "grpc",
+    "protobuf",
+    {
+      "name": "grpc",
+      "host": true
+    },
+    {
+      "name": "protobuf",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ],
+  "features": {
+    "postgres-store": {
+      "description": "Build PostgreSQL-backed A2A task and push-notification stores.",
+      "dependencies": [
+        "libpq"
+      ]
+    }
+  }
+}
