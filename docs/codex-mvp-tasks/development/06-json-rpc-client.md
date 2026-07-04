@@ -1,5 +1,7 @@
 # Task 06 — JSON-RPC client transport
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Implement JSON-RPC support for the same high-level A2A client API already exposed by the REST transport.

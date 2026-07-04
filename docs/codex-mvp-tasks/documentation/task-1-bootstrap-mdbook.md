@@ -1,5 +1,7 @@
 # Task 1 — Bootstrap mdBook Structure
 
+> **Status:** Historical / completed. The mdBook skeleton exists; keep this file as setup history.
+
 ## Goal
 
 Create the mdBook skeleton and navigation so the docs site builds with placeholder content.

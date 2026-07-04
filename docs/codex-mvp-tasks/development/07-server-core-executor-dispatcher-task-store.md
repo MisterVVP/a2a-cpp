@@ -1,5 +1,7 @@
 # Task 07 — Server core: executor interface, dispatcher, and task store
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Create the transport-agnostic server core so users can implement an A2A agent once and expose it via multiple transports later.

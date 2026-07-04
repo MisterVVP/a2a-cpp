@@ -1,5 +1,7 @@
 # Task 12 — A2A Go/Python parity gap analysis and roadmap alignment
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Document feature gaps between the current C++ SDK MVP and the public `a2aproject/a2a-go` and `a2aproject/a2a-python` SDK surfaces, then convert those gaps into concrete, ordered implementation tasks.

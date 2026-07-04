@@ -1,5 +1,7 @@
 # Task 19 — Windows dependency-install acceleration and CI latency reduction
 
+> **Status:** Active follow-up. Use as readiness or operational planning context, but verify each evidence link against current repository state before claiming completion.
+
 ## Goal
 
 Reduce Windows CI build startup time (currently dominated by manifest dependency installation) to improve developer feedback loops and release velocity.

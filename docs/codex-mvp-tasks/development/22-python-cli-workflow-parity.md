@@ -1,5 +1,7 @@
 # Task 22 — Python CLI workflow parity decisions for C++
 
+> **Status:** Planned / decision needed. Treat as parity follow-up requiring fresh validation before implementation.
+
 ## Goal
 
 Close the documented CLI-workflow parity gap versus `a2a-python` by deciding and implementing the C++ equivalent strategy (native CLI, helper scripts, or explicit non-goal with rationale).

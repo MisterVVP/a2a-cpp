@@ -1,5 +1,7 @@
 # Task 03 — Agent Card discovery and interface resolution
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Implement A2A 1.0 discovery via `/.well-known/agent-card.json`, parse the returned Agent Card, validate required fields, and resolve the preferred interface for later client calls.

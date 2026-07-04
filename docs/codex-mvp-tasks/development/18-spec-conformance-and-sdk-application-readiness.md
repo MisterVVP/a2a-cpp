@@ -1,5 +1,7 @@
 # Task 18 — Spec conformance evidence and SDK application-readiness closure
 
+> **Status:** Active follow-up. Use as readiness or operational planning context, but verify each evidence link against current repository state before claiming completion.
+
 ## Goal
 
 Produce objective, auditable evidence that the C++ SDK satisfies community SDK requirements before submitting for official listing/review.

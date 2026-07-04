@@ -1,5 +1,7 @@
 # Task 14 — Extended RPC and interceptor parity with a2a-go
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Close major API-surface gaps with a2a-go by adding missing protocol methods and interceptor/lifecycle extension points.

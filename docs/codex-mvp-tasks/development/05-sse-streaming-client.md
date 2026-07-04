@@ -1,5 +1,7 @@
 # Task 05 — SSE streaming client for SendStreamingMessage and task subscription
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Add streaming support over SSE for A2A 1.0 so the SDK can consume incremental responses from agents.

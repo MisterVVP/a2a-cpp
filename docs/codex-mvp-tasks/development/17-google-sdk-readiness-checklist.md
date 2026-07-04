@@ -1,5 +1,7 @@
 # Task 17 — Google ecosystem SDK-readiness checklist closure
 
+> **Status:** Active follow-up. Use as readiness or operational planning context, but verify each evidence link against current repository state before claiming completion.
+
 ## Goal
 
 Close remaining gaps against community expectations for production-quality SDKs before requesting inclusion/endorsement.

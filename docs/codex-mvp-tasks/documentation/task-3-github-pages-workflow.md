@@ -1,5 +1,7 @@
 # Task 3 — Add GitHub Pages Workflow
 
+> **Status:** Active follow-up. Verify the current workflow state before using this task as implementation guidance.
+
 ## Goal
 
 Automate docs build and deployment to GitHub Pages using GitHub Actions.

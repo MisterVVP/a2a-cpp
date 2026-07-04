@@ -2,6 +2,10 @@
 
 This folder contains the documentation implementation plan for setting up and hardening docs with **mdBook + GitHub Pages**.
 
+## Current use
+
+This documentation track is retained as implementation history and follow-up planning for the mdBook site. Current reader-facing documentation lives under `book/src/**`; use these task files only to understand why the docs site was created and what follow-up hardening remains.
+
 ## Task order
 
 1. [Task 1: Bootstrap mdBook Structure](task-1-bootstrap-mdbook.md)
