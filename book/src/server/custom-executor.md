@@ -1,30 +1,27 @@
-# Custom Executor Design and Implementation
+# Custom Executors
 
-Implement `a2a::server::AgentExecutor` to provide server-side task and message behavior.
+Implement `a2a::server::AgentExecutor` to define application behavior.
 
-For a full user journey from build to request handling, see [Quickstart](../getting-started/quickstart.md) and [Send Messages with A2AClient](../client/sending-messages.md).
+## Required methods
+
+Executors implement task/message operations including:
+
+- `SendMessage`
+- `SendStreamingMessage`
+- `GetTask`
+- `ListTasks`
+- `CancelTask`
+
+Push-notification config methods have default `PushNotificationNotSupported` behavior and should be overridden only when the server actually supports them.
+
+## Request context
+
+Every executor method receives `RequestContext`. Use it for auth metadata, transport metadata, and request-scoped policy decisions. Treat metadata as untrusted until validated.
 
 ## Design guidance
 
-- Keep executor methods focused and deterministic.
-- Validate request inputs at API boundaries.
-- Return rich failures (structured status/errors according to project conventions).
-- Avoid shared mutable state unless synchronization and threading expectations are explicit.
-
-## Threading and lifecycle
-
-- Define whether your executor is single-threaded or concurrent.
-- Ensure referenced resources outlive in-flight requests.
-- Use RAII to manage external resources (files, sockets, handles).
-
-## Testing recommendations
-
-- Unit-test executor logic in isolation.
-- Add integration tests through REST/JSON-RPC transport paths.
-- Cover happy path, validation failures, and cancellation semantics.
-
-## Related pages
-
-- [REST Transport](../transports/rest.md)
-- [JSON-RPC Transport](../transports/json-rpc.md)
-- [Authentication Overview](../auth/overview.md)
+- Keep executor methods small and deterministic.
+- Validate inputs at the boundary.
+- Return `a2a::core::Result<T>` with structured errors.
+- Avoid shared mutable state unless synchronized and documented.
+- Unit-test executor behavior separately from transport mapping.

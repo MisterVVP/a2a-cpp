@@ -2,22 +2,17 @@
 
 `JsonRpcServerTransport` maps JSON-RPC 2.0 method calls to dispatcher operations.
 
+## Responsibilities
+
+- Validate the `jsonrpc`, `id`, `method`, and `params` envelope fields.
+- Route supported A2A methods to the dispatcher.
+- Return JSON-RPC error objects for invalid requests, unknown methods, and executor failures.
+- Preserve request metadata for auth and audit policy.
+
 ## Use cases
 
-- Interop with systems already standardized on JSON-RPC.
-- Environments where method-based routing is preferred to REST path routing.
+Use JSON-RPC when method-based routing is easier to integrate than resource-oriented REST paths or when another system already standardizes on JSON-RPC 2.0.
 
-## Operational guidance
+## Example
 
-- Validate `jsonrpc`, `id`, and `method` fields consistently.
-- Return spec-consistent error objects for invalid requests and method failures.
-- Preserve request metadata for auth/audit needs.
-
-## Authentication behavior
-
-Authentication metadata from inbound headers can be extracted and made available to server execution context.
-
-## Related chapters
-
-- [Server Overview](overview.md)
-- [Authentication Overview](../auth/overview.md)
+See `examples/apps/json_rpc_server/main.cpp`.

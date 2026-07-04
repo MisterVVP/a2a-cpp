@@ -24,7 +24,6 @@ Create the mdBook skeleton and navigation so the docs site builds with placehold
   - `auth/overview.md`
   - `build/cmake.md`
   - `build/vcpkg.md`
-  - `build/conan.md`
   - `api-reference.md`
 - Keep root `README.md` concise and SEO-oriented.
 

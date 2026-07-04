@@ -1,25 +1,35 @@
-# Discovery
+# Discovery and Agent Cards
 
-Discovery resolves where and how to call an A2A agent.
+Discovery resolves server capabilities before constructing a client transport.
 
-## Happy path
+## Public and extended cards
 
-1. Use `DiscoveryClient` to fetch an `AgentCard`.
-2. Use `AgentCardResolver` to select an endpoint and transport.
-3. Use resolved endpoint metadata to construct your client transport.
+`DiscoveryClient` supports:
 
-## Operational context
+- `Fetch(base_url)` for the standard Agent Card.
+- `FetchExtendedAgentCard(base_url)` for the extended Agent Card endpoint.
 
-- Cache discovery results where practical, with clear refresh strategy.
-- Handle missing/partial card metadata defensively.
-- Prefer explicit fallback order when multiple transports are available.
+Fetched cards are cached for `kDefaultDiscoveryCacheTtl` (300 seconds) unless a different TTL is supplied.
 
-## Failure scenarios
+## Interface resolution
 
-- Discovery endpoint unavailable.
-- Invalid or incomplete `AgentCard`.
-- Unsupported transport in discovered card.
+`AgentCardResolver::SelectPreferredInterface(card, preferred)` selects a `ResolvedInterface` for one of:
 
-## Example
+- `PreferredTransport::kRest`
+- `PreferredTransport::kJsonRpc`
+- `PreferredTransport::kGrpc`
 
-See `examples/apps/simple_client/main.cpp` for a minimal discovery flow.
+The result includes the transport, URL, security requirements, and security schemes needed to configure a client.
+
+## Operational guidance
+
+- Validate and log the selected endpoint during startup.
+- Prefer an explicit fallback order when cards advertise multiple transports.
+- Treat discovery metadata as untrusted input until validated.
+- Refresh cached cards after deployment or capability changes.
+
+## Related files
+
+- `include/a2a/client/discovery.h`
+- `include/a2a/core/agent_card/agent_card_provider.h`
+- `include/a2a/server/agent_card/agent_card_serializer.h`

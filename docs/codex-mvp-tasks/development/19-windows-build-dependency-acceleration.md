@@ -10,7 +10,7 @@ Reduce Windows CI build startup time (currently dominated by manifest dependency
   - Measure current Windows job timings broken down by checkout, tool bootstrap, dependency resolution, configure, build, and test stages.
   - Capture dependency graph and identify the highest-latency packages.
 - Caching and artifact reuse
-  - Add robust cache keys for package manager artifacts (vcpkg/Conan cache, build tree, compiler cache where applicable).
+  - Add robust cache keys for package manager artifacts (vcpkg cache, build tree, compiler cache where applicable).
   - Separate cache keys for lockfile/manifests vs source changes to maximize hit rate.
   - Add fallback behavior that avoids full cold reinstalls when partial cache is valid.
 - Build graph optimization

@@ -1,32 +1,28 @@
 # a2a-cpp C++20 Agent2Agent (A2A) SDK Documentation
 
-Welcome to the **a2a-cpp** documentation for the C++20 Agent2Agent (A2A) SDK.
+**a2a-cpp** is a C++20 SDK for building Agent2Agent (A2A) protocol clients and servers. The current documented release focuses on production-oriented protocol coverage: REST, JSON-RPC, and gRPC transports; Agent Card discovery; task lifecycle APIs; streaming; push notification configuration APIs; authentication metadata propagation; interceptors; CMake package exports; and vcpkg-oriented packaging.
 
-Use this guide to:
+## What is included
 
-- install and build the SDK,
-- build A2A clients and servers,
-- select a transport (REST, JSON-RPC, or gRPC), and
-- integrate streaming and authentication.
+- Client API: `SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, streaming send/subscribe, and task push-notification config lifecycle calls.
+- Server API: executor-driven dispatch for REST, JSON-RPC, and gRPC transports.
+- Discovery: public and extended Agent Card fetch plus preferred-interface resolution.
+- Streaming: client observers, cancellable stream handles, and server stream sessions.
+- Authentication hooks: client credential providers and server request metadata extraction.
+- Operational extensions: client/server interceptors, required-extension validation, task stores, task history ordering, UUIDv7 task IDs, and optional PostgreSQL stores.
+- Build integration: CMake 3.25+, C++20, installable CMake package exports, generated protobuf headers, and vcpkg overlay/public-registry preparation.
 
-## Start here
+## Recommended reading path
 
-- New to the SDK? Begin with the [Quickstart: Build and Run a REST Client](getting-started/quickstart.md).
-- Building a client workflow? Continue to [Send Messages with A2AClient](client/sending-messages.md).
-- Implementing server-side execution? Read [Custom Executor Design and Implementation](server/custom-executor.md).
-- Choosing a transport? Compare [REST Transport](transports/rest.md), [JSON-RPC Transport](transports/json-rpc.md), and [gRPC Transport](transports/grpc.md).
-- Securing requests? Review [Authentication Overview](auth/overview.md).
+1. [Installation and Build](getting-started/installation.md) for toolchain requirements and CMake options.
+2. [Quickstart](getting-started/quickstart.md) for a copy/paste example flow.
+3. [Client Overview](client/overview.md) or [Server Overview](server/overview.md), depending on your integration role.
+4. [Transports](transports/rest.md), [Streaming](streaming/overview.md), and [Authentication](auth/overview.md) for runtime design decisions.
+5. [API Reference](api-reference.md) when you need generated public-header details.
 
-## SDK scope and capabilities
+## Version and support notes
 
-The SDK supports production-focused A2A capabilities including:
-
-- Agent card discovery and task lifecycle APIs,
-- REST, JSON-RPC, and gRPC transport integrations,
-- Streaming event consumption,
-- Client credential providers and server auth metadata propagation,
-- Build integration with CMake and vcpkg.
-
-## Examples
-
-Curated CMake consumer examples live in the repository [`examples/`](../../examples/) directory and cover FetchContent plus installed-package usage.
+- See [Releases and Versions](releases.md) for current release details and versioning guidance.
+- The SDK is C++20-only and exports CMake targets under the `a2a::` namespace.
+- Package documentation describes vcpkg workflows only.
+- Examples are deterministic and are intended to run without external services unless the example README says otherwise.

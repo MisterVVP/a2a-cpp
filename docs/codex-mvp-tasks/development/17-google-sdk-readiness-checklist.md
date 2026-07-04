@@ -20,7 +20,7 @@ From A2A community guidance and common SDK expectations:
   - Add explicit protocol conformance matrix against current A2A specification sections.
   - Add automated conformance tests (golden request/response and negative protocol cases).
 - Published package on standard registry
-  - Define and implement package publication path (vcpkg + Conan recommended for C++).
+  - Define and implement package publication path (vcpkg recommended for C++).
   - Add versioning/release policy and signed release artifacts.
 - Documentation quality
   - Add API reference generation (Doxygen or Sphinx+Breathe) and publish to GitHub Pages.

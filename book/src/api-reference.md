@@ -1,26 +1,24 @@
 # API Reference
 
-The C++ API reference is generated from public headers under `include/a2a/**` using Doxygen and is published with this documentation site.
+The generated C++ API reference is built from public headers under `include/a2a/**`.
 
-## Open the generated reference
+## Generated reference
 
-- [C++ API Reference (generated)](api/cpp/index.html)
+When published with the documentation site, open:
 
-## Coverage
+- [C++ API Reference](api/cpp/index.html)
 
-The generated API includes the public interfaces for:
-
-- Core primitives (`a2a::core`)
-- Client APIs and transports (`a2a::client`)
-- Server APIs and transports (`a2a::server`)
-- Authentication-related client hooks (`a2a::client::auth`)
-
-## Local regeneration
-
-From the repository root:
+## Generate locally
 
 ```bash
 ./scripts/generate_api_reference.sh
 ```
 
-By default this writes generated pages to `book-build/api/cpp`.
+The script writes generated pages to `book-build/api/cpp`.
+
+## Public API areas
+
+- `a2a::core`: results, errors, protocol constants, JSON/protobuf helpers, Agent Card support, task state helpers, and versioning.
+- `a2a::client`: `A2AClient`, transports, discovery, auth hooks, call options, interceptors, and streaming observers.
+- `a2a::server`: executor, dispatcher, transports, interceptors, task stores, task lifecycle helpers, push notifications, and Agent Card serialization.
+- `a2a::http`: shared outbound HTTP client abstraction used by default REST/JSON-RPC/discovery/push paths when libcurl is enabled.

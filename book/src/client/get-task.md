@@ -1,26 +1,25 @@
-# Get Task
+# Get Task and List Tasks
 
-`GetTask` retrieves task state and associated outputs after a send operation.
+`GetTask` retrieves a single task by ID. `ListTasks` returns a paginated list of tasks through the client abstraction and supported transports.
 
-## When to use
+## GetTask flow
 
-- Polling task progress/state after `SendMessage`.
-- Fetching final task payloads when streaming is not enabled.
+1. Store the task ID from `SendMessage` or a stream event.
+2. Build `lf::a2a::v1::GetTaskRequest`.
+3. Call `A2AClient::GetTask`.
+4. Interpret task status, artifacts, and history according to your application policy.
 
-## Happy path
+## ListTasks flow
 
-1. Persist the returned task ID from `SendMessage`.
-2. Call `GetTask` with that task ID.
-3. Interpret status and outputs.
+`a2a::client::ListTasksRequest` contains:
 
-## Operational context
+- `page_size`
+- `page_token`
 
-- Retry transient failures with bounded backoff.
-- Enforce request deadlines to avoid hanging calls.
-- Record task IDs in logs/telemetry for traceability.
+The response includes task values plus `next_page_token`.
 
-## Failure scenarios
+## Operational guidance
 
-- Unknown task ID.
-- Task exists but has not produced outputs yet.
-- Authorization mismatch for task visibility.
+- Use bounded polling with backoff when not using streaming.
+- Enforce authorization checks on server-side task visibility.
+- Avoid exposing full task history to clients that do not need it.

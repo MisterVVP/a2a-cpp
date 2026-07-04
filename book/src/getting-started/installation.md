@@ -1,108 +1,73 @@
 # Installation and Build
 
-This page migrates and expands the previous `docs/build.md` guide into mdBook format.
+This page reflects the current build surface for the latest documented release.
 
 ## Prerequisites
 
-You need:
+Install these tools before configuring the repository:
 
-- **CMake 3.25+**
-- **C++20 compiler** (Clang or GCC)
-- **Protobuf** with `protoc`
-- **gRPC C++** with `grpc_cpp_plugin`
-- **clang-format**
-- **clang-tidy**
+- CMake 3.25 or newer.
+- A C++20 compiler, tested primarily with GCC and Clang.
+- Protobuf with `protoc`.
+- gRPC C++ with `grpc_cpp_plugin`.
+- `clang-format` and `clang-tidy` for contributor validation.
+- Optional: Doxygen for API reference generation.
+- Optional: libcurl for built-in outbound HTTP support.
+- Optional: PostgreSQL client libraries when building PostgreSQL-backed stores.
 
-## Configure
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-```
-
-## Build
+## Configure from source
 
 ```bash
-cmake --build build
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
 
-## Build examples
+Useful options:
+
+| Option | Default | Purpose |
+|---|---:|---|
+| `A2A_ENABLE_TESTING` | `ON` | Builds unit and integration tests. |
+| `A2A_BUILD_EXAMPLES` | `ON` | Keeps the root project compatible with example-related CI messaging; curated examples are built as standalone consumers. |
+| `A2A_BUILD_BENCHMARKS` | `OFF` | Builds the optional Google Benchmark suite. |
+| `A2A_ENABLE_LIBCURL` | `ON` | Enables default buffered outbound HTTP when `CURL::libcurl` is found. |
+| `A2A_ENABLE_POSTGRES_STORE` | `OFF` | Builds PostgreSQL task and push-notification stores. |
+
+## Build and test
 
 ```bash
-cmake -S examples/fetch_content_consumer -B build-example -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-example --parallel
-./build-example/a2a_example
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-## Generate protobuf code only
+Generate only protobuf outputs when needed:
 
 ```bash
 cmake --build build --target a2a_proto_codegen
 ```
 
-## Run tests
+Generated headers are written under `build/generated/a2a/v1/` and are installed with the SDK.
 
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-## Run formatting checks
-
-Use the CI-compatible formatting check command:
-
-```bash
-mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
-if [ "${#CPP_FILES[@]}" -gt 0 ]; then
-  clang-format --dry-run --Werror "${CPP_FILES[@]}"
-fi
-```
-
-## Run clang-tidy
-
-```bash
-./scripts/run_clang_tidy.sh build
-```
-
-## Canonical local validation
-
-Before opening or updating a PR, run:
-
-```bash
-./scripts/verify_changes.sh
-```
-
-This runs format, build, tests, and lint in sequence.
-
-## Install package artifacts
+## Install CMake package artifacts
 
 ```bash
 cmake --install build --prefix /tmp/a2a-cpp-install
 ```
 
-This installs headers, generated protobuf headers, static libraries, and exported CMake package files under `lib/cmake/a2a_cpp`.
+The install tree includes public headers, generated protobuf headers, libraries, and CMake package files under `lib/cmake/a2a_cpp`.
 
-## Coverage
+## Contributor validation
 
-```bash
-python3 -m pip install --upgrade gcovr
-./scripts/run_coverage.sh
-```
-
-Coverage thresholds:
-
-- `src/core` line coverage >= 85%
-- `src/client` line coverage >= 80%
-- `src/server` line coverage >= 80%
-
-## Run all examples
+For code changes, run the canonical validation script before opening or updating a PR:
 
 ```bash
-./scripts/run_examples.sh
+./scripts/verify_changes.sh
 ```
 
-## Notes on code generation and CI
+The script runs the same major local gates as CI: clang-format dry run, configure/build, tests, and clang-tidy.
 
-- Proto definitions are in `proto/a2a/v1/a2a.proto`.
-- Generated outputs are written to `build/generated/a2a/v1/`.
-- Code generation is wired through `a2a::proto_generated` and runs automatically when required.
-- `.github/workflows/ci.yml` validates formatting, configure/build, clang-tidy, and tests.
-- `.github/workflows/codeql.yml` runs CodeQL analysis for C/C++ on push, pull requests, and a weekly schedule.
+For documentation-only mdBook changes, build the book:
+
+```bash
+mdbook build book
+```

@@ -1,56 +1,50 @@
-# Quickstart: Build and Run an A2A REST Client End-to-End
+# Quickstart: Build and Run Examples
 
-This quickstart gives a practical, copy/paste flow that goes from build to a runnable client example.
+The fastest way to exercise the SDK is through the curated consumer examples. They build the example app sources the same way downstream applications consume the SDK.
 
-Looking for the full docs map first? Start at the [Documentation Home](../README.md).
-
-## 1) Configure and build with examples
+## 1. Run the smallest end-to-end example
 
 ```bash
-cmake -S . -B build -DA2A_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build
-```
-
-## 2) Run a minimal example
-
-```bash
+cmake -S examples/fetch_content_consumer -B build-example \
+  -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-example --parallel
 ./build-example/a2a_example
 ```
 
-Expected behavior: the client performs a minimal REST workflow and exits successfully.
+`hello_agent` creates a minimal in-process client/server flow and exits deterministically.
 
-## 3) Try additional examples
+## 2. Try transport-specific examples
 
 ```bash
-./build-example/a2a_example
-./build-example/a2a_example
-./build-example/a2a_example
-./build-example/a2a_example
+./scripts/run_examples.sh rest_server json_rpc_server grpc_server
 ```
 
-## 4) Run quality gates locally
+These examples cover server transport setup and deterministic request handling across REST, JSON-RPC, and gRPC.
+
+## 3. Try streaming, push, and auth examples
+
+```bash
+./scripts/run_examples.sh streaming_client streaming_server push_notifications auth_policy_server
+```
+
+Use these when validating event streams, webhook configuration flows, or server-side auth metadata policy shapes.
+
+## 4. Consume an installed SDK package
+
+After installing the SDK into a prefix, build the same app source with `find_package(a2a_cpp CONFIG REQUIRED)`:
+
+```bash
+cmake -S examples/installed_package_consumer -B build-installed-example \
+  -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-install \
+  -DA2A_EXAMPLE_APP=hello_agent
+cmake --build build-installed-example --parallel
+./build-installed-example/a2a_example
+```
+
+## 5. Validate your local checkout
 
 ```bash
 ./scripts/verify_changes.sh
 ```
 
-This command is the canonical contributor validation entrypoint and should pass before PR updates.
-
-## 5) Optional: run focused checks during iteration
-
-```bash
-ctest --test-dir build --output-on-failure
-./scripts/run_clang_tidy.sh build
-```
-
-## Troubleshooting
-
-- If configure fails, confirm the required tools from [Installation](installation.md) are installed.
-- If example binaries are missing, re-run CMake with `-DA2A_BUILD_EXAMPLES=ON`.
-- If `clang-tidy` reports issues, fix touched code and re-run `./scripts/verify_changes.sh`.
-
-## Next steps
-
-- Continue with [Send Messages with A2AClient](../client/sending-messages.md).
-- Review [REST Transport](../transports/rest.md) for endpoint and runtime guidance.
-- Add auth headers safely using [Authentication Overview](../auth/overview.md).
+For documentation-only edits, use `mdbook build book` instead of the full code validation flow.
