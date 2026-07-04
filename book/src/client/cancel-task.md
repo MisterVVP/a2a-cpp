@@ -1,27 +1,19 @@
 # Cancel Task
 
-`CancelTask` requests cancellation of in-flight work.
+`A2AClient::CancelTask` asks the server to cancel in-flight work.
 
-## When to use
+## When to use cancellation
 
-- User explicitly aborts an operation.
-- Upstream deadline expires and work should stop.
-- Supervising process needs to reclaim resources.
+- A user aborts an operation.
+- A deadline expires upstream.
+- Supervising logic needs to reclaim compute or queue capacity.
 
-## Happy path
+## Semantics
 
-1. Keep the task ID returned by `SendMessage`.
-2. Issue `CancelTask` for that task ID.
-3. Confirm task moves to a terminal canceled state via `GetTask` or stream events.
+Cancellation is best-effort. A task can complete before the cancellation request is processed, and servers can reject cancellation for completed, unknown, or policy-protected tasks.
 
-## Operational context
+## Recommended behavior
 
-- Cancellation is best-effort; completion may race with cancellation.
-- Make cancellation idempotent in higher-level workflows.
-- Document user-visible semantics (for example, whether partial outputs are retained).
-
-## Failure scenarios
-
-- Unknown task ID.
-- Task already completed.
-- Task cannot be canceled due to policy/executor constraints.
+- Make higher-level cancellation idempotent.
+- Return or display the latest task state after cancellation attempts.
+- Preserve enough audit data to explain whether the task was canceled, completed, or rejected.

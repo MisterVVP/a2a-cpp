@@ -1,5 +1,7 @@
 # Task 15 — Test coverage baselines and quality gate hardening
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Establish measurable coverage baselines and enforce them in CI so regressions are blocked before release.

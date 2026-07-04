@@ -1,5 +1,7 @@
 # Task 01 — Repository bootstrap, build system, and proto codegen
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Create the initial repository skeleton for the A2A C++ SDK and establish a repeatable code-generation pipeline using the official A2A 1.0 protobuf definitions.

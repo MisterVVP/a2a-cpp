@@ -1,5 +1,7 @@
 # Task 13 — gRPC transport parity (client + server)
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Add first-class gRPC transport support so the C++ SDK reaches transport-level parity with a2a-go's gRPC path.

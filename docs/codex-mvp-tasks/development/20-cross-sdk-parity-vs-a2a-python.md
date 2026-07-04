@@ -1,5 +1,7 @@
 # Task 20 — Cross-SDK parity expansion vs a2a-python
 
+> **Status:** Planned / decision needed. Treat as parity follow-up requiring fresh validation before implementation.
+
 ## Goal
 
 Close remaining capability and ecosystem parity gaps between `a2a-cpp` and the public `a2aproject/a2a-python` SDK, while preserving C++-idiomatic APIs.

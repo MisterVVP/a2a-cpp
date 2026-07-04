@@ -1,5 +1,7 @@
 # Task 16 — Examples expansion and local runnable scenarios
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Expand SDK examples from minimal snippets into a practical runnable matrix that users can execute locally to validate end-to-end behavior.

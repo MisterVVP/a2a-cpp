@@ -1,5 +1,7 @@
 # Task 11 — Examples, interoperability tests, packaging, and CI
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Finish the first usable release by adding examples, end-to-end tests, packaging polish, and CI automation.

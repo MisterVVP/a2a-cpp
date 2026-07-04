@@ -1,5 +1,7 @@
 # Task 04 — HTTP+JSON client for core A2A RPCs
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Implement the first production-usable client transport: HTTP+JSON/REST for the core non-streaming A2A 1.0 operations.

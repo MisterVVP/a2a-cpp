@@ -1,32 +1,31 @@
-# Authentication Overview for A2A Client and Server Flows
+# Authentication and Authorization Hooks
 
-Client-side authentication hooks are provided in `include/a2a/client/auth.h`.
+The SDK provides hooks for carrying credentials and auth metadata. Your application remains responsible for credential storage, verification, authorization decisions, and audit policy.
 
-For end-to-end request flow context, pair this guide with [Send Messages with A2AClient](../client/sending-messages.md), [Custom Executor Design and Implementation](../server/custom-executor.md), and transport docs for [REST](../transports/rest.md) or [JSON-RPC](../transports/json-rpc.md).
+## Client credential providers
 
-## Supported client auth patterns
+`include/a2a/client/auth.h` includes providers for:
 
-- **API key auth** via `ApiKeyCredentialProvider`
-- **Bearer token auth** via `BearerTokenCredentialProvider`
-- **Custom header auth** via `CustomHeaderCredentialProvider`
-- **OAuth2 extension point** via `OAuth2BearerCredentialProvider`
+- API key headers.
+- Bearer token headers.
+- Custom header credentials.
+- OAuth2 bearer token extension points.
 
-## Server-side metadata extraction
+Use these with transport call options or request construction paths that support metadata injection.
 
-Server request context metadata (`RequestContext::auth_metadata`) is populated from inbound auth headers in REST and JSON-RPC transports. Executor logic can use this metadata for authorization and auditing.
+## Server metadata
 
-## mTLS notes
+REST, JSON-RPC, and gRPC server paths populate `RequestContext` with transport metadata. Executor or interceptor code can read this metadata to make authorization decisions.
 
-mTLS is transport/runtime-termination dependent. If your deployment terminates TLS before the SDK boundary, propagate verified client identity metadata safely into request headers/context. If transport-native mTLS is enabled in your stack, ensure certificate validation, trust store rotation, and least-privilege identity mapping are documented and tested.
+## Policy guidance
 
-## Operational guidance
+- Never hardcode secrets in source, examples, or tests.
+- Validate credentials before trusting request metadata.
+- Normalize auth failures so callers receive consistent protocol errors.
+- Avoid logging raw credentials.
+- Prefer short-lived tokens and managed secret storage.
+- Document how TLS or mTLS identity is terminated and propagated into the SDK boundary.
 
-- Do not hardcode secrets in source or test fixtures.
-- Rotate keys/tokens and keep credential lifetimes bounded.
-- Treat all inbound metadata as untrusted until validated against policy.
-- Test auth success and failure paths end-to-end through transport integration tests.
+## Example
 
-## References
-
-- `tests/integration/rest_server_transport_integration_test.cpp`
-- `README.md`
+See `examples/apps/auth_policy_server/main.cpp` for an auth-policy shape.

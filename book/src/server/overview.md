@@ -1,35 +1,27 @@
 # Server Overview
 
-Server integration starts by implementing executor logic and attaching it to a transport.
+Server integrations implement `a2a::server::AgentExecutor` and route protocol requests through `Dispatcher` plus one or more transports.
 
-## Core components
+## Server capabilities
 
-- `a2a::server::AgentExecutor`: your business logic entrypoint.
-- `a2a::server::Dispatcher`: routes protocol operations to executor methods.
-- Transport adapter:
-  - `RestServerTransport` for HTTP+JSON REST paths.
-  - `JsonRpcServerTransport` for JSON-RPC 2.0 method dispatch.
+- REST server transport.
+- JSON-RPC server transport.
+- gRPC service transport.
+- Public and extended Agent Card dispatch when a provider is installed.
+- Required extension validation.
+- Server interceptors.
+- Streaming through `ServerStreamSession`.
+- Task lifecycle helpers, in-memory task store, and optional PostgreSQL stores.
+- Push-notification config CRUD and delivery service abstractions.
 
-## Happy path
+## Core flow
 
-1. Implement a custom executor.
-2. Build a `Dispatcher` with that executor.
-3. Create REST or JSON-RPC transport.
-4. Forward inbound requests to transport `Handle(...)`.
+1. Implement an executor for task and message behavior.
+2. Create a `Dispatcher` with the executor and optional Agent Card provider/interceptors.
+3. Attach REST, JSON-RPC, or gRPC transport adapters.
+4. Convert inbound framework requests into transport calls.
+5. Return structured protocol errors instead of transport-specific ad hoc errors.
 
-## Task ID generation
+## Task IDs
 
-- For new incoming messages where `message.taskId` is absent, the SDK service layer generates a server-side task id.
-- The default generator is UUIDv7-based and emits ids like `task-0198f2d4-7c4a-7b21-9c02-dc6e7f2b8e91`.
-- `message.messageId` is client-provided and is **not** used as a production task identifier.
-- You can inject a custom task id strategy via `TaskLifecycleService` constructor if you require opaque/random ids or stricter privacy (UUIDv7 leaks approximate creation time).
-
-## Example
-
-See `examples/apps/rest_server/main.cpp` for a minimal in-process setup.
-
-## Push notifications
-
-Servers that advertise push support should compose `PushNotificationService` from a task store, a push-config store, and a delivery client. The executor should register inline configs from send-message requests, expose push-config CRUD methods, and call `NotifyTaskUpdated(task)` after task status changes. Propagate that `Result<void>` back to the caller so failed webhook delivery is visible instead of silently ignored.
-
-`NotifyTaskUpdated` sends a `StreamResponse` status-update payload to each stored config. A delivery-client error, a populated `PushDeliveryResult::error_message`, or a non-2xx delivery status makes the service return an error. For production, prefer a custom delivery client that queues and retries notifications while preserving observability and webhook security controls. The focused sample is `examples/apps/push_notifications/main.cpp`; the reusable executor wiring is in `tests/support/example_support/example_support.h`.
+When an incoming message does not carry `message.task_id`, the SDK service layer can generate server-side task IDs using UUIDv7. UUIDv7 is sortable and operationally useful, but it leaks approximate creation time. Inject a custom task ID generator if your deployment needs opaque identifiers.

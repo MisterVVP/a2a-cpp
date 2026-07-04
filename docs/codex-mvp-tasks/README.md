@@ -2,6 +2,26 @@
 
 This folder contains an ordered set of implementation tasks for building an **A2A SDK in C++** targeting **A2A protocol 1.0 only**.
 
+## Current use and authority
+
+This folder is an internal planning/archive task pack for agents and maintainers. It is useful for understanding implementation intent, task sequencing, and historical acceptance criteria, but it is **not** the canonical source for current user-facing behavior.
+
+When a task file conflicts with current repository state, prefer these sources in order:
+
+1. Source code, tests, and CI workflows.
+2. Current mdBook content under `book/src/**`.
+3. Focused current docs under `docs/**` outside this task-pack folder.
+4. These task files as historical planning context.
+
+Each task now carries status metadata near the title. Status values mean:
+
+- **Historical / completed**: the task described earlier implementation work and may be superseded by current source or docs.
+- **Active follow-up**: the task still describes useful follow-up work or evidence collection.
+- **Planned / decision needed**: the task is a future decision or parity item that should be revalidated before implementation.
+- **Superseded**: the task contains assumptions known to be obsolete; keep it only for project history unless it is rewritten.
+
+Before using any task as implementation guidance, verify current state with source, tests, workflows, and mdBook docs.
+
 ## Ground rules
 
 - Protocol target: **A2A 1.0**

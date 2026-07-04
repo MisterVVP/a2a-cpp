@@ -1,5 +1,7 @@
 # Task 4 — SEO and Release Hardening
 
+> **Status:** Active follow-up. Keep release and SEO guidance aligned with current mdBook and release process.
+
 ## Goal
 
 Improve discoverability, navigation quality, and release-readiness for the first public docs release.

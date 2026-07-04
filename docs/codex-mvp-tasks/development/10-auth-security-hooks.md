@@ -1,5 +1,7 @@
 # Task 10 — Auth and security hooks
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Add the auth abstraction layer and metadata handling needed for real-world SDK use without overbuilding every provider-specific flow.

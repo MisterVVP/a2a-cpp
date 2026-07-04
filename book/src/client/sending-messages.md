@@ -1,38 +1,29 @@
-# Send Messages with A2AClient
+# Sending Messages
 
-This chapter covers the common happy path for sending a message request with `A2AClient`.
+`A2AClient::SendMessage` starts or continues a task by sending a protobuf `lf::a2a::v1::SendMessageRequest` through the configured transport.
 
-If you have not built and run examples yet, start with the [Quickstart](../getting-started/quickstart.md).
+## Request construction guidance
 
-## Happy path
+- Set a stable `message.message_id` for idempotency and diagnostics.
+- Let the server generate a task ID for new work unless you are intentionally continuing an existing task.
+- Attach push-notification config only when the target Agent Card advertises support and your server policy allows it.
+- Use `CallOptions` for per-call deadlines, metadata, or auth settings where supported by the transport.
 
-1. Build or resolve the server endpoint.
-2. Initialize a transport (REST or JSON-RPC).
-3. Create an `A2AClient`.
-4. Build the outgoing message payload.
-5. Call `SendMessage`.
-6. Inspect task/message response data.
+## Response handling
 
-## Operational guidance
+The response can contain immediate task state and output data. Persist task identifiers in logs/telemetry so later `GetTask`, `CancelTask`, streaming subscription, or push-notification calls can be correlated.
 
-- Validate endpoint configuration and protocol choice at startup.
-- Prefer explicit timeouts at transport boundaries.
-- Log request IDs/task IDs for diagnostics.
-- Keep request construction deterministic in tests.
+## Failure paths to test
 
-## Failure paths to handle
+- Network or HTTP/gRPC transport failure.
+- Serialization or protocol validation failure.
+- Auth policy rejection.
+- Unsupported operation or required extension mismatch.
+- Duplicate/retry behavior for repeated message IDs.
 
-- Network transport errors.
-- Protocol/serialization errors.
-- Server-side execution errors.
-- Auth failures (401/403 equivalents depending on transport mapping).
+## Related pages
 
-## See also
-
-- [Client Overview](overview.md)
+- [Discovery](discovery.md)
 - [Get Task](get-task.md)
 - [Cancel Task](cancel-task.md)
-- [Authentication Overview](../auth/overview.md)
-- [Custom Executor Design and Implementation](../server/custom-executor.md)
-- [REST Transport](../transports/rest.md)
-- [JSON-RPC Transport](../transports/json-rpc.md)
+- [Authentication](../auth/overview.md)

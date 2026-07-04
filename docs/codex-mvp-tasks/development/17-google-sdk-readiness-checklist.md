@@ -1,5 +1,7 @@
 # Task 17 — Google ecosystem SDK-readiness checklist closure
 
+> **Status:** Active follow-up. Use as readiness or operational planning context, but verify each evidence link against current repository state before claiming completion.
+
 ## Goal
 
 Close remaining gaps against community expectations for production-quality SDKs before requesting inclusion/endorsement.
@@ -20,7 +22,7 @@ From A2A community guidance and common SDK expectations:
   - Add explicit protocol conformance matrix against current A2A specification sections.
   - Add automated conformance tests (golden request/response and negative protocol cases).
 - Published package on standard registry
-  - Define and implement package publication path (vcpkg + Conan recommended for C++).
+  - Define and implement package publication path (vcpkg recommended for C++).
   - Add versioning/release policy and signed release artifacts.
 - Documentation quality
   - Add API reference generation (Doxygen or Sphinx+Breathe) and publish to GitHub Pages.

@@ -1,5 +1,7 @@
 # A2A C++ SDK 1.0 — Backlog overview
 
+> **Status:** Superseded historical overview. Several scope assumptions predate later gRPC, packaging, and readiness work; use it only for original backlog context.
+
 ## Objective
 
 Build a production-usable **A2A 1.0** SDK in **C++20** with:

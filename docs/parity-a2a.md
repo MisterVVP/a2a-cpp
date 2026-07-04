@@ -18,7 +18,7 @@ This matrix compares public `a2a-go` v2 and `a2a-python` SDK surfaces against cu
 | `GetExtendedAgentCard` API | Present | Present | Present as first-class API | ✅ parity |
 | Push-config lifecycle APIs (`ListTaskPushConfigs`, etc.) | Present | Present | Present across client transports | ✅ parity |
 | CLI workflow utility | Present (`cmd/a2a`) | Present (CLI package in repo) | Missing | ❌ gap |
-| Standard package registry signal | Present (`go get`, pkg.go.dev indexed) | Present (`pip install a2a-sdk`, PyPI) | Partial (Conan + vcpkg workflow exists; public-registry proof still incomplete) | ⚠️ partial |
+| Standard package registry signal | Present (`go get`, pkg.go.dev indexed) | Present (`pip install a2a-sdk`, PyPI) | Partial (vcpkg workflow exists; public-registry proof still incomplete) | ⚠️ partial |
 | Maintainer readiness signals (templates, governance cadence, support policy) | Present | Present | Partial | ⚠️ partial |
 
 ## Gap-to-task mitigation map

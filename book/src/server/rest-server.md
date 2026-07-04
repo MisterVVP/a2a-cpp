@@ -1,24 +1,22 @@
 # REST Server Transport
 
-`RestServerTransport` adapts inbound HTTP+JSON requests into server dispatcher calls.
+`RestServerTransport` maps HTTP+JSON requests onto dispatcher operations.
 
-## Use cases
+## Responsibilities
 
-- Service deployments standardized on REST.
-- Environments requiring straightforward HTTP middleware integration.
+- Validate HTTP method, path, and content type.
+- Parse JSON request bodies into protobuf messages.
+- Populate `RequestContext`, including auth metadata.
+- Serialize protocol responses and errors back to HTTP responses.
 
-## Operational guidance
+## Supported operation shape
 
-- Validate method/path/content-type boundaries strictly.
-- Propagate request metadata needed by executors (including auth headers).
-- Define timeout and payload size policies explicitly.
-- Log stable identifiers for correlation.
+REST transport covers core task lifecycle operations, streaming-compatible endpoints where wired by the hosting environment, Agent Card routes, and push-notification config APIs exposed by the dispatcher/executor.
 
-## Authentication behavior
+## Hosting guidance
 
-Inbound auth headers can be mapped into request context metadata and consumed by executor logic.
+The SDK provides protocol mapping, not a full production web server framework. In production, place it behind an HTTP runtime that owns TLS, connection limits, request-size limits, access logs, and graceful shutdown.
 
-## Related files
+## Example
 
-- `tests/integration/rest_server_transport_integration_test.cpp`
-- `examples/apps/rest_server/main.cpp`
+See `examples/apps/rest_server/main.cpp`.

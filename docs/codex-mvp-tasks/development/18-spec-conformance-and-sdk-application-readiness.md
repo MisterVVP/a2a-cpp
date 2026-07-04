@@ -1,5 +1,7 @@
 # Task 18 — Spec conformance evidence and SDK application-readiness closure
 
+> **Status:** Active follow-up. Use as readiness or operational planning context, but verify each evidence link against current repository state before claiming completion.
+
 ## Goal
 
 Produce objective, auditable evidence that the C++ SDK satisfies community SDK requirements before submitting for official listing/review.
@@ -22,7 +24,7 @@ Based on `https://a2a-protocol.org/latest/community/#the-future-is-interoperable
   - Add/maintain negative protocol tests (unsupported method, malformed params, version mismatch, auth requirement mismatch).
   - Add golden cross-SDK interop fixtures (a2a-go ↔ a2a-cpp and a2a-python ↔ a2a-cpp) for core RPCs and streaming events.
 - Standard registry publishing readiness
-  - Finalize package metadata and publication automation for at least one mainstream C++ registry (vcpkg and/or ConanCenter).
+  - Finalize package metadata and publication automation for at least one mainstream C++ registry (vcpkg).
   - Add reproducible source archive + signature/provenance generation in release workflow.
   - Validate install + smoke-test flow from published artifacts in CI.
 - Documentation completeness

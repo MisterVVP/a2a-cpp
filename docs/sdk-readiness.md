@@ -3,7 +3,7 @@
 ## Current status
 
 - ✅ Spec compliance: parity matrix + conformance tests tracked and partially implemented.
-- ⚠️ Standard registry packaging: Conan (GitHub Packages) workflow and vcpkg public-registry submission workflow are added; repository secrets and port PR still required.
+- ⚠️ Standard registry packaging: vcpkg public-registry submission workflow is added; repository secrets and port PR still required.
 - ✅ Documentation: build, quickstart, usage guides exist; API doc generation workflow added.
 - ✅ Tests with CI: Linux CI plus sanitizer/valgrind/coverage and examples smoke.
 - ✅ Apache 2.0 license: repository carries Apache-2.0 license.
@@ -14,7 +14,7 @@
 - Conformance tests: `tests/integration/*` and `tests/fixtures/*`.
 - Coverage gate: `.github/workflows/ci.yml` + `scripts/run_coverage.sh`.
 - Examples runnable matrix: `examples/README.md` + `scripts/run_examples.sh`.
-- Packaging manifests: `conanfile.py`, `vcpkg.json`.
+- Packaging manifest: `vcpkg.json`.
 - Packaging workflow docs: `docs/packaging.md`, `.github/workflows/release-packages.yml`.
 - Governance docs: `SECURITY.md`, `SUPPORT.md`, `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`, `.github/CODEOWNERS`.
 

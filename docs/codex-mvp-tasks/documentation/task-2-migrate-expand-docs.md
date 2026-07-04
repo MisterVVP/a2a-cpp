@@ -1,5 +1,7 @@
 # Task 2 — Migrate and Expand Existing Docs
 
+> **Status:** Historical / partially completed. Current mdBook pages have been expanded, but future doc work should use current `book/src/**` content as source of truth.
+
 ## Goal
 
 Move and expand current documentation from `docs/` into `book/src/`, preserving useful content and improving depth.

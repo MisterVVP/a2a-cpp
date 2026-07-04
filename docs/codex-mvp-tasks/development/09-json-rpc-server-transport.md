@@ -1,5 +1,7 @@
 # Task 09 — JSON-RPC server transport
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Expose the same server core over JSON-RPC so a single executor implementation can serve both REST and JSON-RPC clients.

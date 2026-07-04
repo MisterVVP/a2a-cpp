@@ -1,5 +1,7 @@
 # Task 08 — REST server transport and Agent Card publishing
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Expose the server core over HTTP+JSON/REST, including discovery via the A2A 1.0 Agent Card.

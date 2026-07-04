@@ -1,5 +1,7 @@
 # Task 21 — Deterministic C++ ↔ Python interop CI scenario
 
+> **Status:** Planned / decision needed. Treat as parity follow-up requiring fresh validation before implementation.
+
 ## Goal
 
 Add an automated, deterministic CI scenario that validates A2A protocol interoperability between `a2a-cpp` and public `a2aproject/a2a-python` sample agent flows.

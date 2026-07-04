@@ -1,5 +1,7 @@
 # Task 02 — Core utilities: versioning, error model, and ProtoJSON helpers
 
+> **Status:** Historical / completed or superseded. Revalidate details against current source, tests, CI, and mdBook docs before using as implementation guidance.
+
 ## Goal
 
 Build the core shared layer used by both client and server:

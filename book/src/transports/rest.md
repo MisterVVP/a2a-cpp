@@ -1,27 +1,19 @@
-# REST Transport for A2A Clients and Servers
+# REST Transport
 
-The REST transport uses HTTP+JSON endpoints for A2A operations.
-
-Need a runnable baseline first? Start with the [Quickstart](../getting-started/quickstart.md).
+REST is the HTTP+JSON transport path for clients and servers.
 
 ## Client side
 
-Use `HttpJsonTransport` with `A2AClient` when your deployment or gateway standardizes on REST.
+Use `HttpJsonTransport` with `A2AClient`. When libcurl is enabled and found, default outbound buffered HTTP can be used. Otherwise inject an `HttpRequester` implementation.
 
 ## Server side
 
-Use `RestServerTransport` to map inbound HTTP requests to dispatcher/executor operations.
+Use `RestServerTransport` to translate inbound framework requests into dispatcher calls.
 
 ## Operational considerations
 
-- Ensure content-type and method validation is strict.
-- Configure request deadlines/timeouts.
-- Propagate auth metadata safely for policy checks.
-- Log stable request/task identifiers.
-
-## See also
-
-- [Send Messages with A2AClient](../client/sending-messages.md)
-- [Custom Executor Design and Implementation](../server/custom-executor.md)
-- [JSON-RPC Transport](json-rpc.md)
-- [Authentication Overview](../auth/overview.md)
+- Enforce TLS and auth policy at your edge or hosting layer.
+- Set explicit request deadlines and payload limits.
+- Log stable task IDs and request IDs.
+- Validate protocol version headers where required.
+- Prefer injected requesters for custom retry, proxy, mTLS, or observability policy.
