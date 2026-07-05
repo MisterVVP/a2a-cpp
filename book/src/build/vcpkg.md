@@ -40,6 +40,7 @@ From the repository root, let vcpkg install the manifest dependencies and then c
 ```bash
 "$VCPKG_ROOT/vcpkg" install
 cmake -S . -B build-vcpkg \
+  -DVCPKG_MANIFEST_MODE=ON \
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DA2A_ENABLE_TESTING=ON
@@ -52,6 +53,7 @@ On multi-config generators such as Visual Studio, pass the configuration during 
 ```powershell
 & "$env:VCPKG_ROOT\vcpkg.exe" install
 cmake -S . -B build-vcpkg -G "Visual Studio 17 2022" -A x64 `
+  -DVCPKG_MANIFEST_MODE=ON `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 cmake --build build-vcpkg --config RelWithDebInfo --parallel
 ctest --test-dir build-vcpkg -C RelWithDebInfo --output-on-failure
@@ -59,13 +61,14 @@ ctest --test-dir build-vcpkg -C RelWithDebInfo --output-on-failure
 
 ## Use a specific triplet
 
-Pass the same triplet to vcpkg and CMake:
+Pass the same target triplet to vcpkg and CMake. For native builds, use the same value for the host triplet so host tools such as `protoc` and `grpc_cpp_plugin` are resolved consistently:
 
 ```bash
-"$VCPKG_ROOT/vcpkg" install --triplet x64-linux
+"$VCPKG_ROOT/vcpkg" install --triplet x64-linux --host-triplet x64-linux
 cmake -S . -B build-vcpkg \
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-  -DVCPKG_TARGET_TRIPLET=x64-linux
+  -DVCPKG_TARGET_TRIPLET=x64-linux \
+  -DVCPKG_HOST_TRIPLET=x64-linux
 ```
 
 Windows CI uses the repository triplet `triplets/ci-x64-windows-release.cmake` to build release-only dependencies and reduce dependency build time:
@@ -88,7 +91,7 @@ The repository includes an overlay port at `vcpkg-overlay-ports/a2a-cpp`. A down
 ```json
 {
   "name": "my-a2a-app",
-  "version-string": "0.1.0",
+  "version-string": "0.2.0",
   "dependencies": [
     "a2a-cpp"
   ]
@@ -109,7 +112,7 @@ The repository includes an overlay port at `vcpkg-overlay-ports/a2a-cpp`. A down
 }
 ```
 
-Then configure the application with the vcpkg toolchain file and use the installed CMake package:
+Then configure the application with the vcpkg toolchain file on the first CMake configure and use the installed CMake package:
 
 ```cmake
 find_package(a2a_cpp CONFIG REQUIRED)
@@ -125,7 +128,7 @@ The overlay port exposes a `postgres-store` feature. Enable it in manifest mode 
 ```json
 {
   "name": "my-a2a-app",
-  "version-string": "0.1.0",
+  "version-string": "0.2.0",
   "dependencies": [
     {
       "name": "a2a-cpp",

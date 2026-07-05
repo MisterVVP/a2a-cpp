@@ -7,7 +7,7 @@
 - CMake 3.25 or newer.
 - A C++20 compiler.
 - Protobuf and gRPC development packages.
-- libcurl for the default buffered outbound HTTP implementation.
+- Optional: libcurl for the default buffered outbound HTTP implementation.
 - Optional: PostgreSQL client libraries when `A2A_ENABLE_POSTGRES_STORE=ON`.
 
 On Ubuntu-like systems, the repository helper installs the dependencies used by CI:
@@ -61,20 +61,16 @@ That script runs the same main gates expected before a code PR: formatting, conf
 | Option | Default | Description |
 | --- | --- | --- |
 | `A2A_ENABLE_TESTING` | `ON` | Builds unit and integration tests and enables CTest. |
-| `A2A_BUILD_EXAMPLES` | `ON` | Prints guidance for the curated consumer examples. The examples are built from `examples/fetch_content_consumer` or `examples/installed_package_consumer`. |
+| `A2A_BUILD_EXAMPLES` | `ON` | Compatibility/message-only option for the root build today; curated examples are built as standalone consumers from `examples/fetch_content_consumer` or `examples/installed_package_consumer`. |
 | `A2A_BUILD_BENCHMARKS` | `OFF` | Builds benchmark targets under `benchmarks/`. |
 | `A2A_ENABLE_LIBCURL` | `ON` | Enables the default libcurl-backed outbound HTTP implementation when libcurl is found. Disable it to require injected requesters/fetchers. |
 | `A2A_ENABLE_POSTGRES_STORE` | `OFF` | Builds PostgreSQL-backed store targets when PostgreSQL dependencies are available. |
 
 ## Generated protobuf headers
 
-The SDK generates A2A protocol C++ sources during the build. Generated headers are written under:
+The SDK generates A2A protocol C++ sources during the build. Primary generated A2A headers are written under `build/generated/a2a/v1/`, and generated Google API annotation headers are written under `build/generated/google/api/`.
 
-```text
-build/generated/a2a/v1/
-```
-
-They are installed with the SDK, so downstream projects should include headers from the installed package rather than copying build-tree generated files.
+Those generated headers are installed with the SDK, so downstream projects should include headers from the installed package rather than copying build-tree generated files.
 
 ## Install as a CMake package
 
