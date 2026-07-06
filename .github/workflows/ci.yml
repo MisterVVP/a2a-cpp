@@ -193,7 +193,7 @@ jobs:
   python-cross-sdk-interop:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           ./scripts/install_build_deps.sh
@@ -207,7 +207,7 @@ jobs:
   python-server-cpp-client-interop:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           ./scripts/install_build_deps.sh
@@ -220,7 +220,7 @@ jobs:
   cpp-server-python-client-interop:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install deps
         run: |
           ./scripts/install_build_deps.sh
