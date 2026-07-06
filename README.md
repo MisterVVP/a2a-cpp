@@ -39,10 +39,6 @@ find_package(a2a_cpp CONFIG REQUIRED)
 target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-## TCK Compliance Level
-
-[MUST](https://github.com/a2aproject/a2a-tck/blob/main/README.md#compatibility-levels) (validated in CI via `--level must --transport grpc,jsonrpc,http_json` in `.github/workflows/tck.yml`).
-
 ## Documentation
 
 - Documentation website (GitHub Pages): `https://mistervvp.github.io/a2a-cpp/`
