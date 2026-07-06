@@ -6,6 +6,7 @@
 #include <libpq-fe.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <stdexcept>
 #include <string>
@@ -105,14 +106,17 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
                           " (task_id, config_id, url, config_proto, updated_at) VALUES ($1, $2, $3, $4, now()) "
                           "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
                           "config_proto = EXCLUDED.config_proto, updated_at = now()";
-  const char* values[] = {config.task_id().c_str(), config.id().c_str(), config.url().c_str(), payload.data()};
-  const int lengths[] = {0, 0, 0, static_cast<int>(payload.size())};
-  const int formats[] = {0, 0, 0, 1};
+  constexpr int kPushUpsertParameterCount = 4;
+  const std::array<const char*, kPushUpsertParameterCount> values = {config.task_id().c_str(), config.id().c_str(),
+                                                                     config.url().c_str(), payload.data()};
+  const std::array<int, kPushUpsertParameterCount> lengths = {0, 0, 0, static_cast<int>(payload.size())};
+  const std::array<int, kPushUpsertParameterCount> formats = {0, 0, 0, 1};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values, lengths, formats, 0));
+  PgResult result(
+      PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
   const auto checked = CheckCommand(lease.value().get(), result.get(), "upsert postgres push notification config");
   if (!checked.ok()) {
     return checked.error();
@@ -130,19 +134,20 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   const std::string config_id_value(config_id);
   const std::string sql =
       "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
-  const char* values[] = {task_id_value.c_str(), config_id_value.c_str()};
+  const std::array<const char*, 2> values = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values, nullptr, nullptr, 1));
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 1));
   const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres push notification config");
   if (!checked.ok()) {
     return checked.error();
   }
   if (PQntuples(result.get()) == 0) {
     const std::string exists_sql = "SELECT 1 FROM " + PushTable(options_.schema) + " WHERE task_id = $1 LIMIT 1";
-    PgResult exists(PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, &values[0], nullptr, nullptr, 0));
+    PgResult exists(
+        PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 0));
     const auto exists_checked =
         CheckTuples(lease.value().get(), exists.get(), "check postgres push notification task configs");
     if (!exists_checked.ok()) {
@@ -173,7 +178,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     return offset.error();
   }
   const std::string task_id_value(task_id);
-  const char* count_values[] = {task_id_value.c_str()};
+  const std::array<const char*, 1> count_values = {task_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
@@ -181,7 +186,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
 
   const std::string count_sql = "SELECT count(*) FROM " + PushTable(options_.schema) + " WHERE task_id = $1";
   PgResult count_result(
-      PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values, nullptr, nullptr, 0));
+      PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values.data(), nullptr, nullptr, 0));
   const auto count_checked =
       CheckTuples(lease.value().get(), count_result.get(), "count postgres push notification configs");
   if (!count_checked.ok()) {
@@ -245,12 +250,12 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   const std::string task_id_value(task_id);
   const std::string config_id_value(config_id);
   const std::string sql = "DELETE FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
-  const char* values[] = {task_id_value.c_str(), config_id_value.c_str()};
+  const std::array<const char*, 2> values = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values, nullptr, nullptr, 0));
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 0));
   return CheckCommand(lease.value().get(), result.get(), "delete postgres push notification config");
 }
 
