@@ -6,6 +6,7 @@
 #include <libpq-fe.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <mutex>
 #include <stdexcept>
@@ -38,14 +39,15 @@ namespace {
       "ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDED.state, "
       "has_status_timestamp = EXCLUDED.has_status_timestamp, status_seconds = EXCLUDED.status_seconds, "
       "status_nanos = EXCLUDED.status_nanos, task_proto = EXCLUDED.task_proto, updated_at = now()";
-  const char* values[] = {task.id().c_str(),     task.context_id().c_str(), state.c_str(),
-                          has_timestamp.c_str(), seconds.c_str(),           nanos.c_str(),
-                          payload.data()};
-  const int lengths[] = {0, 0, 0, 0, 0, 0, static_cast<int>(payload.size())};
-  const int formats[] = {0, 0, 0, 0, 0, 0, 1};
   constexpr int kTaskUpsertParameterCount = 7;
-  PgResult result(
-      PQexecParams(connection, sql.c_str(), kTaskUpsertParameterCount, nullptr, values, lengths, formats, 0));
+  const std::array<const char*, kTaskUpsertParameterCount> values = {task.id().c_str(), task.context_id().c_str(),
+                                                                     state.c_str(),     has_timestamp.c_str(),
+                                                                     seconds.c_str(),   nanos.c_str(),
+                                                                     payload.data()};
+  const std::array<int, kTaskUpsertParameterCount> lengths = {0, 0, 0, 0, 0, 0, static_cast<int>(payload.size())};
+  const std::array<int, kTaskUpsertParameterCount> formats = {0, 0, 0, 0, 0, 0, 1};
+  PgResult result(PQexecParams(connection, sql.c_str(), kTaskUpsertParameterCount, nullptr, values.data(),
+                               lengths.data(), formats.data(), 0));
   return CheckCommand(connection, result.get(), "upsert postgres task");
 }
 
@@ -64,8 +66,8 @@ namespace {
                                                                   std::string_view id) {
   const std::string id_value(id);
   const std::string sql = "SELECT task_proto FROM " + TaskTable(options.schema) + " WHERE id = $1 FOR UPDATE";
-  const char* values[] = {id_value.c_str()};
-  PgResult result(PQexecParams(connection, sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
+  const std::array<const char*, 1> values = {id_value.c_str()};
+  PgResult result(PQexecParams(connection, sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
   const auto checked = CheckTuples(connection, result.get(), "select postgres task for update");
   if (!checked.ok()) {
     return checked.error();
@@ -179,12 +181,12 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Get(std::string_view id) cons
   }
   const std::string id_value(id);
   const std::string sql = "SELECT task_proto FROM " + TaskTable(options_.schema) + " WHERE id = $1";
-  const char* values[] = {id_value.c_str()};
+  const std::array<const char*, 1> values = {id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values, nullptr, nullptr, 1));
+  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
   const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres task");
   if (!checked.ok()) {
     return checked.error();
