@@ -769,3 +769,11 @@ if(A2A_ENABLE_POSTGRES_STORE)
 endif()
 
 gtest_discover_tests(store_conformance_test)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME performance_runner_script_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
+  )
+endif()

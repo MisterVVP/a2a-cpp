@@ -103,6 +103,36 @@ jobs:
           if-no-files-found: warn
 
 
+  performance-tests:
+    name: performance tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run report-only performance smoke suite
+        env:
+          A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
+          A2A_PERF_STORE_BACKENDS: inmemory,postgres
+          A2A_PERF_REQUESTS: 25
+          A2A_PERF_CONCURRENCY: 1,4
+          A2A_PERF_WARMUP_SECONDS: 0
+          A2A_PERF_REPORT_DIR: perf-artifacts
+        run: ./scripts/run_performance_tests.sh
+      - name: Validate performance reports
+        run: |
+          test -s perf-artifacts/results.json
+          test -s perf-artifacts/results.csv
+          test -s perf-artifacts/summary.md
+          python3 -m json.tool perf-artifacts/results.json >/dev/null
+          cat perf-artifacts/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: perf-artifacts
+          path: perf-artifacts
+          if-no-files-found: error
+
+
   benchmarks:
     name: benchmarks
     runs-on: ubuntu-24.04
