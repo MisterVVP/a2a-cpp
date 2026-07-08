@@ -59,7 +59,7 @@ and concurrency combination. Scenarios are aligned with TCK-relevant behavior:
 
 ## Report-only CI behavior
 
-The CI performance job runs a larger report-only matrix with 2,500 operations per
+The CI performance job runs a larger report-only matrix with 100 000 operations per
 result row, appends `summary.md` to the GitHub Actions step summary, and uploads
 the `perf-artifacts` directory. The summary starts with a scenario rollup table
 so reviewers can quickly compare

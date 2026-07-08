@@ -112,7 +112,7 @@ jobs:
         env:
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory,postgres
-          A2A_PERF_REQUESTS: 2500
+          A2A_PERF_REQUESTS: 100000
           A2A_PERF_CONCURRENCY: 1,4
           A2A_PERF_WARMUP_SECONDS: 0
           A2A_PERF_REPORT_DIR: perf-artifacts
