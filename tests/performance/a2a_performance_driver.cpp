@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include <google/protobuf/struct.pb.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <future>
-#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "a2a/core/protojson.h"
 #include "a2a/server/push_notification_delivery.h"
 #include "a2a/server/request_context.h"
 #include "a2a/server/tasks/list_tasks.h"
@@ -41,8 +42,13 @@ constexpr int kDisconnectSubscriberCount = 2;
 constexpr int kHttpStatusOk = 200;
 constexpr int kUsageExitCode = 2;
 constexpr int kUnavailableExitCode = 3;
-constexpr int kOutputPrecision = 6;
+constexpr double kP50 = 50.0;
+constexpr double kP90 = 90.0;
+constexpr double kP95 = 95.0;
+constexpr double kP99 = 99.0;
 constexpr std::size_t kIdReserveSlack = 16U;
+constexpr std::string_view kSdkTransportPathPrefix = "sdk_";
+constexpr std::string_view kServerDispatchSuffix = "_server_dispatch";
 
 const std::vector<std::string>& Scenarios() {
   static const std::vector<std::string> scenarios = {"SendMessage_CreateTask",
@@ -97,27 +103,6 @@ struct ScenarioResult final {
   double throughput = 0.0;
   std::vector<double> latencies;
 };
-
-std::string JsonEscape(std::string_view value) {
-  std::ostringstream escaped;
-  for (const char character : value) {
-    switch (character) {
-      case '"':
-        escaped << "\\\"";
-        break;
-      case '\\':
-        escaped << "\\\\";
-        break;
-      case '\n':
-        escaped << "\\n";
-        break;
-      default:
-        escaped << character;
-        break;
-    }
-  }
-  return escaped.str();
-}
 
 double Percentile(const std::vector<double>& sorted_values, double percentile) {
   if (sorted_values.empty()) {
@@ -414,24 +399,59 @@ bool ParseArgs(int argc, char** argv, Options* options) {
   return options->requests > 0 && options->concurrency > 0;
 }
 
+void SetStringField(google::protobuf::Struct* object, std::string_view key, std::string_view value) {
+  (*object->mutable_fields())[std::string(key)].set_string_value(std::string(value));
+}
+
+void SetNumberField(google::protobuf::Struct* object, std::string_view key, double value) {
+  (*object->mutable_fields())[std::string(key)].set_number_value(value);
+}
+
+void SetIntegerField(google::protobuf::Struct* object, std::string_view key, int value) {
+  SetNumberField(object, key, static_cast<double>(value));
+}
+
+google::protobuf::Struct BuildResultObject(const Options& options, const ScenarioResult& result) {
+  google::protobuf::Struct object;
+  SetStringField(&object, "scenario", result.scenario);
+  SetStringField(&object, "transport", options.transport);
+  SetStringField(&object, "store_backend", options.store_backend);
+  SetIntegerField(&object, "concurrency", options.concurrency);
+  SetIntegerField(&object, "operations", result.operations);
+  SetIntegerField(&object, "success", result.success);
+  SetIntegerField(&object, "errors", result.errors);
+  SetNumberField(&object, "throughput_ops_per_sec", result.throughput);
+  SetNumberField(&object, "warmup_seconds", options.warmup_seconds);
+  SetNumberField(&object, "duration_seconds", options.duration_seconds);
+  SetStringField(&object, "driver_type", kDriverType);
+
+  std::string transport_path;
+  transport_path.reserve(kSdkTransportPathPrefix.size() + options.transport.size() + kServerDispatchSuffix.size());
+  transport_path.append(kSdkTransportPathPrefix);
+  transport_path.append(options.transport);
+  transport_path.append(kServerDispatchSuffix);
+  SetStringField(&object, "transport_path", transport_path);
+
+  google::protobuf::Struct latency;
+  SetNumberField(&latency, "p50", Percentile(result.latencies, kP50));
+  SetNumberField(&latency, "p90", Percentile(result.latencies, kP90));
+  SetNumberField(&latency, "p95", Percentile(result.latencies, kP95));
+  SetNumberField(&latency, "p99", Percentile(result.latencies, kP99));
+  SetNumberField(&latency, "max", result.latencies.empty() ? 0.0 : result.latencies.back());
+  (*object.mutable_fields())["latency_ms"].mutable_struct_value()->Swap(&latency);
+  return object;
+}
+
 void WriteResultJson(const Options& options, const ScenarioResult& result, bool first) {
-  const double p50 = Percentile(result.latencies, 50.0);
-  const double p90 = Percentile(result.latencies, 90.0);
-  const double p95 = Percentile(result.latencies, 95.0);
-  const double p99 = Percentile(result.latencies, 99.0);
-  const double max = result.latencies.empty() ? 0.0 : result.latencies.back();
   if (!first) {
     std::cout << ",\n";
   }
-  std::cout << R"(  {"scenario":")" << JsonEscape(result.scenario) << R"(","transport":")"
-            << JsonEscape(options.transport) << R"(","store_backend":")" << JsonEscape(options.store_backend)
-            << R"(","concurrency":)" << options.concurrency << R"(,"operations":)" << result.operations
-            << R"(,"success":)" << result.success << R"(,"errors":)" << result.errors << R"(,"throughput_ops_per_sec":)"
-            << std::fixed << std::setprecision(kOutputPrecision) << result.throughput << R"(,"warmup_seconds":)"
-            << options.warmup_seconds << R"(,"duration_seconds":)" << options.duration_seconds << R"(,"driver_type":")"
-            << kDriverType << R"(","transport_path":"sdk_)" << JsonEscape(options.transport)
-            << R"(_server_dispatch","latency_ms":{"p50":)" << p50 << R"(,"p90":)" << p90 << R"(,"p95":)" << p95
-            << R"(,"p99":)" << p99 << R"(,"max":)" << max << "}}";
+  const auto json = a2a::core::MessageToJson(BuildResultObject(options, result));
+  if (!json.ok()) {
+    std::cout << "{}";
+    return;
+  }
+  std::cout << "  " << json.value();
 }
 }  // namespace
 
