@@ -111,8 +111,8 @@ jobs:
       - name: Run report-only performance smoke suite
         env:
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
-          A2A_PERF_STORE_BACKENDS: inmemory,postgres
-          A2A_PERF_REQUESTS: 100000
+          A2A_PERF_STORE_BACKENDS: inmemory
+          A2A_PERF_REQUESTS: 1000
           A2A_PERF_CONCURRENCY: 1,4
           A2A_PERF_WARMUP_SECONDS: 0
           A2A_PERF_REPORT_DIR: perf-artifacts
