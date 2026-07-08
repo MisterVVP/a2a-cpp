@@ -793,3 +793,14 @@ target_link_libraries(a2a_performance_driver
     a2a::core
     a2a::proto_generated
 )
+
+if(A2A_ENABLE_POSTGRES_STORE)
+  target_link_libraries(a2a_performance_driver
+    PRIVATE
+      a2a::store_postgres
+  )
+  target_compile_definitions(a2a_performance_driver
+    PRIVATE
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+endif()

@@ -40,7 +40,7 @@ SCENARIOS = (
     "PushNotify_ManyConfigsOneTaskUpdate",
     "PushDelivery_CallbackLatency",
 )
-DEFAULT_REQUESTS = 1_000
+DEFAULT_REQUESTS = 10_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_BUILD_DIR = "build/performance"
 DRIVER_NAME = "a2a_performance_driver"
@@ -69,7 +69,7 @@ def driver_path_from_build(build_dir: Path) -> Path:
     return candidates[0]
 
 
-def ensure_driver() -> Path:
+def ensure_driver(config: RunnerConfig) -> Path:
     explicit = os.environ.get("A2A_PERF_DRIVER")
     if explicit:
         driver = Path(explicit)
@@ -81,6 +81,8 @@ def ensure_driver() -> Path:
     if driver.exists():
         return driver
     configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
+    if "postgres" in config.store_backends:
+        configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)
     subprocess.run(["cmake", "--build", str(build_dir), "--target", DRIVER_NAME, "-j", str(os.cpu_count() or 2)], check=True)
     if not driver.exists():
@@ -89,7 +91,7 @@ def ensure_driver() -> Path:
 
 
 def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int) -> list[dict[str, object]]:
-    driver = ensure_driver()
+    driver = ensure_driver(config)
     completed = subprocess.run([
         str(driver),
         "--transport", transport,
@@ -275,6 +277,7 @@ def main(argv: list[str]) -> int:
     try:
         config = parse_args(argv)
         results = [result for transport in config.transports for store_backend in config.store_backends for concurrency in config.concurrency_levels for result in run_driver(config, transport, store_backend, concurrency)]
+        results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["transport"]), int(result["concurrency"])))
         write_reports(results, config)
         if any(result["errors"] for result in results):
             return 2

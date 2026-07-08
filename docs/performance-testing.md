@@ -29,7 +29,7 @@ matching environment variables.
 | --- | --- | --- |
 | Transports (`grpc`, `jsonrpc`, `http_json`, or `all`) | `A2A_PERF_TRANSPORTS` | `grpc,jsonrpc,http_json` |
 | Store backends (`inmemory`, `postgres`, or `all`) | `A2A_PERF_STORE_BACKENDS` | `inmemory,postgres` |
-| Operations per result row | `A2A_PERF_REQUESTS` | `1000` |
+| Operations per result row | `A2A_PERF_REQUESTS` | `10000` |
 | Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4` |
 | Warmup seconds | `A2A_PERF_WARMUP_SECONDS` | `1` |
 | Duration seconds metadata | `A2A_PERF_DURATION_SECONDS` | `0` |
@@ -67,13 +67,14 @@ changing the report format.
 
 ## Store backend coverage
 
-`inmemory` uses the real in-memory task and push notification stores. The runner
-and report schema keep the `postgres` selection, but the checked-in driver fails
-explicitly if PostgreSQL is requested from a build that does not provide a
-PostgreSQL-backed performance driver. It must not be interpreted as silently
-using in-memory storage for PostgreSQL rows. PostgreSQL benchmark runs should be
-executed from a PostgreSQL-enabled build and configured with the same local DSN
-style used by the repository store tests (`A2A_TEST_POSTGRES_DSN`).
+`inmemory` uses the real in-memory task and push notification stores. `postgres`
+uses the repository `PostgresStoreFactory` to create real PostgreSQL-backed task
+and push notification stores when the driver is built with
+`A2A_ENABLE_POSTGRES_STORE=ON`. The Python runner automatically adds that CMake
+option when `postgres` is selected and it needs to auto-build the driver.
+PostgreSQL runs must provide the same local DSN style used by the repository
+store tests (`A2A_TEST_POSTGRES_DSN`); CI starts a local PostgreSQL service for
+the performance job.
 
 ## CI behavior
 
@@ -86,7 +87,7 @@ enforce latency or throughput thresholds.
 
 ```bash
 A2A_PERF_TRANSPORTS=grpc,jsonrpc,http_json \
-A2A_PERF_STORE_BACKENDS=inmemory \
+A2A_PERF_STORE_BACKENDS=inmemory,postgres \
 A2A_PERF_REQUESTS=10000 \
 A2A_PERF_CONCURRENCY=1,4,16,64 \
 A2A_PERF_WARMUP_SECONDS=5 \

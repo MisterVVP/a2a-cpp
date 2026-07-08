@@ -20,6 +20,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/server/push_notification_delivery.h"
 #include "a2a/server/request_context.h"
+#include "a2a/server/stores/store_factory.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_support/example_support.h"
@@ -41,7 +42,6 @@ constexpr int kMultiSubscriberCount = 3;
 constexpr int kDisconnectSubscriberCount = 2;
 constexpr int kHttpStatusOk = 200;
 constexpr int kUsageExitCode = 2;
-constexpr int kUnavailableExitCode = 3;
 constexpr double kP50 = 50.0;
 constexpr double kP90 = 90.0;
 constexpr double kP95 = 95.0;
@@ -49,6 +49,8 @@ constexpr double kP99 = 99.0;
 constexpr std::size_t kIdReserveSlack = 16U;
 constexpr std::string_view kSdkTransportPathPrefix = "sdk_";
 constexpr std::string_view kServerDispatchSuffix = "_server_dispatch";
+constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
+constexpr std::string_view kPerfSchemaPrefix = "a2a_perf_";
 
 const std::vector<std::string>& Scenarios() {
   static const std::vector<std::string> scenarios = {"SendMessage_CreateTask",
@@ -133,12 +135,17 @@ lf::a2a::v1::TaskPushNotificationConfig MakePushConfig(std::string_view task_id,
 
 class ScenarioHarness final {
  public:
-  ScenarioHarness() {
+  explicit ScenarioHarness(std::string_view store_backend) {
+    if (!ConfigureStores(store_backend)) {
+      return;
+    }
     options_.push_delivery = &delivery_;
     executor_ = std::make_unique<a2a::examples::ExampleExecutor>(std::move(options_));
     existing_task_id_ = SeedTask("existing-seed");
     subscribe_task_id_ = SeedTask("subscribe-seed");
   }
+
+  [[nodiscard]] bool ok() const noexcept { return executor_ != nullptr; }
 
   bool Execute(std::string_view scenario, int index) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -156,6 +163,31 @@ class ScenarioHarness final {
   }
 
  private:
+  bool ConfigureStores(std::string_view store_backend) {
+    if (store_backend == kInMemoryStore) {
+      return true;
+    }
+    if (store_backend != kPostgresStore) {
+      std::cerr << "unsupported store backend: " << store_backend << '\n';
+      return false;
+    }
+    const char* dsn = std::getenv(kPostgresDsnEnv);
+    if (dsn == nullptr || std::string_view(dsn).empty()) {
+      std::cerr << kPostgresDsnEnv << " must be set for postgres performance scenarios\n";
+      return false;
+    }
+    a2a::server::stores::PostgresStoreFactory factory({.connection_string = dsn, .schema = MakePostgresSchema()});
+    auto bundle = factory.CreateStoreBundle();
+    if (!bundle.ok()) {
+      std::cerr << "failed to create postgres performance stores: " << bundle.error().message() << '\n';
+      return false;
+    }
+    store_bundle_ = std::move(bundle.value());
+    options_.task_store = store_bundle_.task_store.get();
+    options_.push_store = store_bundle_.push_store.get();
+    return true;
+  }
+
   std::optional<bool> ExecuteTaskScenario(std::string_view scenario, int index, a2a::server::RequestContext& context) {
     if (scenario == "SendMessage_CreateTask") {
       return executor_->SendMessage(MakeSendRequest(BuildId("create", index)), context).ok();
@@ -284,6 +316,15 @@ class ScenarioHarness final {
     return executor_->SendMessage(MakeSendRequest(BuildId("notify", index), existing_task_id_), context).ok();
   }
 
+  static std::string MakePostgresSchema() {
+    const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::string schema;
+    schema.reserve(kPerfSchemaPrefix.size() + kIdReserveSlack);
+    schema.append(kPerfSchemaPrefix);
+    schema.append(std::to_string(ticks));
+    return schema;
+  }
+
   static std::string BuildId(std::string_view prefix, int index) {
     std::string value;
     value.reserve(prefix.size() + kIdReserveSlack);
@@ -323,6 +364,7 @@ class ScenarioHarness final {
   }
 
   RecordingPushDelivery delivery_;
+  a2a::server::stores::StoreBundle store_bundle_;
   a2a::examples::ExampleExecutorOptions options_;
   std::unique_ptr<a2a::examples::ExampleExecutor> executor_;
   std::string existing_task_id_;
@@ -331,7 +373,14 @@ class ScenarioHarness final {
 };
 
 ScenarioResult RunScenario(const Options& options, const std::string& scenario) {
-  ScenarioHarness harness;
+  ScenarioHarness harness(options.store_backend);
+  if (!harness.ok()) {
+    ScenarioResult failed;
+    failed.scenario = scenario;
+    failed.operations = options.requests;
+    failed.errors = options.requests;
+    return failed;
+  }
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
   int warmup_index = 0;
   while (std::chrono::steady_clock::now() < warmup_end) {
@@ -460,12 +509,7 @@ int main(int argc, char** argv) {
   if (!ParseArgs(argc, argv, &options)) {
     return kUsageExitCode;
   }
-  if (options.store_backend == kPostgresStore) {
-    std::cerr << "postgres performance backend requires a PostgreSQL-enabled driver build and A2A_TEST_POSTGRES_DSN; "
-                 "this binary was built without that backend\n";
-    return kUnavailableExitCode;
-  }
-  if (options.store_backend != kInMemoryStore ||
+  if ((options.store_backend != kInMemoryStore && options.store_backend != kPostgresStore) ||
       (options.transport != kGrpcTransport && options.transport != kJsonRpcTransport &&
        options.transport != kHttpJsonTransport)) {
     std::cerr << "unsupported transport or store backend\n";

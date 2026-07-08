@@ -25,6 +25,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
             self.assertEqual(18, len(payload["results"]))
             self.assertEqual("cpp_sdk_in_process", payload["results"][0]["driver_type"])
+            ordered = sorted(payload["results"], key=lambda result: (result["scenario"], result["store_backend"], result["transport"], result["concurrency"]))
+            self.assertEqual(ordered, payload["results"])
             self.assertTrue((report_dir / "results.csv").exists())
             summary = (report_dir / "summary.md").read_text(encoding="utf-8")
             self.assertIn("A2A performance test summary", summary)
