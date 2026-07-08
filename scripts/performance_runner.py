@@ -227,8 +227,13 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig) -> Non
     config.report_dir.mkdir(parents=True, exist_ok=True)
     metadata = {"sdk_commit_sha": commit_sha(), "host": host_metadata()}
     (config.report_dir / "results.json").write_text(json.dumps({"metadata": metadata, "results": results}, indent=2) + "\n", encoding="utf-8")
+    write_csv(results, config.report_dir / "results.csv")
+    (config.report_dir / "summary.md").write_text(render_markdown_summary(results, metadata) + "\n", encoding="utf-8")
+
+
+def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
     fieldnames = ["scenario", "transport", "store_backend", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
-    with (config.report_dir / "results.csv").open("w", encoding="utf-8", newline="") as csv_file:
+    with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
@@ -237,12 +242,88 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig) -> Non
             row = {key: result[key] for key in fieldnames[:8]}
             row.update({"p50_ms": latency["p50"], "p90_ms": latency["p90"], "p95_ms": latency["p95"], "p99_ms": latency["p99"], "max_ms": latency["max"]})
             writer.writerow(row)
-    lines = ["# A2A performance test summary", "", f"* SDK commit: `{metadata['sdk_commit_sha']}`", f"* Host: {metadata['host']['os']} ({metadata['host']['cpu']})", f"* Result rows: {len(results)}", "", "| Scenario | Transport | Store | Concurrency | Success | Errors | Ops/sec | p95 ms |", "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+
+
+def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str, object]) -> str:
+    host = metadata["host"]
+    assert isinstance(host, dict)
+    lines = [
+        "# A2A performance test summary",
+        "",
+        f"* SDK commit: `{metadata['sdk_commit_sha']}`",
+        f"* Host: {host['os']} ({host['cpu']})",
+        f"* Result rows: {len(results)}",
+        "* Mode: report-only; no performance thresholds are enforced.",
+        "",
+        "## Scenario rollup",
+        "",
+        "| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in scenario_rollups(results):
+        lines.append(
+            f"| {row['scenario']} | {row['rows']} | {row['operations']} | {row['success']} | {row['errors']} | "
+            f"{row['avg_throughput_ops_per_sec']:.2f} | {row['worst_p95_ms']:.4f} | {row['worst_max_ms']:.4f} |"
+        )
+    lines.extend([
+        "",
+        "## Detailed matrix results",
+        "",
+        "| Scenario | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
     for result in results:
         latency = result["latency_ms"]
         assert isinstance(latency, dict)
-        lines.append(f"| {result['scenario']} | {result['transport']} | {result['store_backend']} | {result['concurrency']} | {result['success']} | {result['errors']} | {float(result['throughput_ops_per_sec']):.2f} | {float(latency['p95']):.4f} |")
-    (config.report_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines.append(
+            f"| {result['scenario']} | {result['transport']} | {result['store_backend']} | {result['concurrency']} | "
+            f"{result['success']} | {result['errors']} | {float(result['throughput_ops_per_sec']):.2f} | "
+            f"{float(latency['p50']):.4f} | {float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} |"
+        )
+    return "\n".join(lines)
+
+
+def scenario_rollups(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    rollups: dict[str, dict[str, float | int | str]] = {}
+    for result in results:
+        scenario = str(result["scenario"])
+        latency = result["latency_ms"]
+        assert isinstance(latency, dict)
+        rollup = rollups.setdefault(
+            scenario,
+            {
+                "scenario": scenario,
+                "rows": 0,
+                "operations": 0,
+                "success": 0,
+                "errors": 0,
+                "throughput_total": 0.0,
+                "worst_p95_ms": 0.0,
+                "worst_max_ms": 0.0,
+            },
+        )
+        rollup["rows"] = int(rollup["rows"]) + 1
+        rollup["operations"] = int(rollup["operations"]) + int(result["operations"])
+        rollup["success"] = int(rollup["success"]) + int(result["success"])
+        rollup["errors"] = int(rollup["errors"]) + int(result["errors"])
+        rollup["throughput_total"] = float(rollup["throughput_total"]) + float(result["throughput_ops_per_sec"])
+        rollup["worst_p95_ms"] = max(float(rollup["worst_p95_ms"]), float(latency["p95"]))
+        rollup["worst_max_ms"] = max(float(rollup["worst_max_ms"]), float(latency["max"]))
+    rows = []
+    for rollup in rollups.values():
+        rows.append(
+            {
+                "scenario": str(rollup["scenario"]),
+                "rows": int(rollup["rows"]),
+                "operations": int(rollup["operations"]),
+                "success": int(rollup["success"]),
+                "errors": int(rollup["errors"]),
+                "avg_throughput_ops_per_sec": float(rollup["throughput_total"]) / max(int(rollup["rows"]), 1),
+                "worst_p95_ms": float(rollup["worst_p95_ms"]),
+                "worst_max_ms": float(rollup["worst_max_ms"]),
+            }
+        )
+    return sorted(rows, key=lambda row: str(row["scenario"]))
 
 
 def main(argv: list[str]) -> int:

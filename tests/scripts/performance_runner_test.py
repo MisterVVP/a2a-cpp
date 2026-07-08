@@ -25,7 +25,10 @@ class PerformanceRunnerTest(unittest.TestCase):
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
             self.assertEqual(18, len(payload["results"]))
             self.assertTrue((report_dir / "results.csv").exists())
-            self.assertIn("A2A performance test summary", (report_dir / "summary.md").read_text(encoding="utf-8"))
+            summary = (report_dir / "summary.md").read_text(encoding="utf-8")
+            self.assertIn("A2A performance test summary", summary)
+            self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
+            self.assertIn("| Scenario | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -59,10 +59,24 @@ and concurrency combination. Scenarios are aligned with TCK-relevant behavior:
 
 ## Report-only CI behavior
 
-The CI performance job runs a short smoke-sized matrix and uploads the
-`perf-artifacts` directory. It fails only if the runner crashes, reports operation
-errors, or fails to produce valid report files. It does not compare against
-latency or throughput thresholds yet.
+The CI performance job runs a short smoke-sized matrix, appends `summary.md` to
+the GitHub Actions step summary, and uploads the `perf-artifacts` directory. The
+summary starts with a scenario rollup table so reviewers can quickly compare
+operations, success/error counts, throughput, and worst observed latency before
+opening the full detailed matrix results. It fails only if the runner crashes,
+reports operation errors, or fails to produce valid report files. It does not
+compare against latency or throughput thresholds yet.
+
+## k6 consideration
+
+k6 is a strong candidate for future wire-level HTTP+JSON and JSON-RPC load
+testing because it has mature virtual-user orchestration and CI-friendly
+summaries. The first version intentionally keeps the runner in Python so it has
+no new runtime dependency, can cover non-HTTP transport/store labels in one
+matrix, and remains deterministic in local and CI smoke runs. When we add real
+network probes, k6 can be introduced alongside this runner for HTTP-based
+scenarios while gRPC and store-specific scenarios continue to use SDK-native
+drivers.
 
 ## JSON shape
 
