@@ -438,12 +438,7 @@ google::protobuf::Struct BuildResultObject(const Options& options, const Scenari
   SetNumberField(&object, "duration_seconds", options.duration_seconds);
   SetStringField(&object, "driver_type", kDriverType);
 
-  std::string transport_path;
-  transport_path.reserve(kSdkTransportPathPrefix.size() + options.transport.size() + kServerDispatchSuffix.size());
-  transport_path.append(kSdkTransportPathPrefix);
-  transport_path.append(options.transport);
-  transport_path.append(kServerDispatchSuffix);
-  SetStringField(&object, "transport_path", transport_path);
+  SetStringField(&object, "transport_path", "in_process");
 
   google::protobuf::Struct latency;
   SetNumberField(&latency, "p50", Percentile(result.latencies, kP50));
