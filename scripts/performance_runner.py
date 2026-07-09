@@ -40,7 +40,7 @@ SCENARIOS = (
     "PushNotify_ManyConfigsOneTaskUpdate",
     "PushDelivery_CallbackLatency",
 )
-DEFAULT_REQUESTS = 10_000
+DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_BUILD_DIR = "build/performance"
 DRIVER_NAME = "a2a_performance_driver"
