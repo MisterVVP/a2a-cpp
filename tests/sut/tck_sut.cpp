@@ -15,7 +15,6 @@
 #include <unistd.h>
 #endif
 
-#include <array>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -26,7 +25,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -40,30 +38,22 @@
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/json_rpc_server_transport.h"
+#include "a2a/server/network_utils.h"
 #include "a2a/server/rest_server_transport.h"
-#include "a2a/server/socket_utils.h"
 #include "a2a/server/stores/store_factory.h"
 #include "a2a/server/transport_mux.h"
 #include "example_support.h"
+#include "sut/tck_sut.h"
 
 namespace {
+
+using namespace a2a::tests::sut;
+
 constexpr int kListenBacklog = 128;
-constexpr int kDefaultPort = 50061;
-constexpr int kGrpcPortOffset = 1;
 constexpr int kReuseAddress = 1;
+constexpr int kMaxHttpPort = 65534;
+constexpr int kAcceptRetryDelayMillis = 25;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
-constexpr std::string_view kRestApiBasePath = "/a2a";
-constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
-constexpr std::string_view kPostgresBackend = "postgres";
-constexpr std::string_view kInMemoryBackend = "inmemory";
-constexpr const char* kStoreBackendEnv = "A2A_TCK_STORE_BACKEND";
-constexpr const char* kPostgresDsnEnv = "A2A_TCK_POSTGRES_DSN";
-constexpr const char* kPostgresSchemaEnv = "A2A_TCK_POSTGRES_SCHEMA";
-constexpr const char* kExtendedCardModeEnv = "A2A_TCK_EXTENDED_AGENT_CARD_MODE";
-constexpr std::string_view kExtendedCardModeConfigured = "configured";
-constexpr std::string_view kExtendedCardModeDeclaredOnly = "declared_only";
-constexpr std::string_view kExtendedCardModeDisabled = "disabled";
-constexpr std::string_view kDefaultPostgresSchema = "public";
 constexpr std::string_view kMissingPostgresDsnMessage =
     "A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres";
 constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TCK_STORE_BACKEND: ";
@@ -177,17 +167,19 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   a2a::server::CloseSocketCrossPlatform(fd);
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-  const std::string endpoint = (argc > 1) ? argv[1] : "127.0.0.1:" + std::to_string(kDefaultPort);
-  const auto pos = endpoint.find(':');
-  if (pos == std::string::npos) {
+int RunTckSut(int argc, char** argv) {
+  const std::string endpoint = (argc > 1) ? argv[1] : std::string(kDefaultHost) + ":" + std::to_string(kDefaultPort);
+  auto parsed_endpoint = a2a::server::ParseHostPortEndpoint(endpoint, kMaxHttpPort);
+  if (!parsed_endpoint.ok()) {
+    std::cerr << parsed_endpoint.error().message() << '\n';
     return 1;
   }
-  const std::string host = endpoint.substr(0, pos);
-  const int port = std::stoi(endpoint.substr(pos + 1));
+  const std::string& host = parsed_endpoint.value().host;
+  const int port = parsed_endpoint.value().port;
   const int grpc_port = port + kGrpcPortOffset;
+  const SutEndpoints endpoints{.rest_url = a2a::server::BuildHttpUrl(host, port, kRestApiBasePath),
+                               .json_rpc_url = a2a::server::BuildHttpUrl(host, port, kJsonRpcPath),
+                               .grpc_url = host + ":" + std::to_string(grpc_port)};
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
@@ -203,14 +195,13 @@ int main(int argc, char** argv) {
   const bool declares_extended_card = extended_card_mode != kExtendedCardModeDisabled;
   const bool configures_extended_card = extended_card_mode == kExtendedCardModeConfigured;
 
-  auto agent_card = a2a::core::AgentCardBuilder::ConformancePreset(
-                        {.rest_url = "http://localhost:" + std::to_string(port) + std::string(kRestApiBasePath),
-                         .json_rpc_url = "http://localhost:" + std::to_string(port) + "/rpc",
-                         .grpc_url = "localhost:" + std::to_string(grpc_port)},
-                        "TCK HTTP SUT", "0.1.0", "Conformance-focused local SUT for A2A")
-                        .WithPushNotifications(true)
-                        .WithExtendedAgentCard(declares_extended_card)
-                        .Build();
+  auto agent_card =
+      a2a::core::AgentCardBuilder::ConformancePreset(
+          {.rest_url = endpoints.rest_url, .json_rpc_url = endpoints.json_rpc_url, .grpc_url = endpoints.grpc_url},
+          "TCK SUT", "0.1.0", "Conformance-focused local SUT for A2A")
+          .WithPushNotifications(true)
+          .WithExtendedAgentCard(declares_extended_card)
+          .Build();
 
   std::optional<lf::a2a::v1::AgentCard> extended_agent_card;
   if (configures_extended_card) {
@@ -220,7 +211,7 @@ int main(int argc, char** argv) {
 
   auto store_bundle = CreateStoreBundleFromEnvironment();
   if (!store_bundle.ok()) {
-    std::cerr << store_bundle.error().message() << '\n';
+    std::cerr << "Failed to create TCK SUT store bundle: " << store_bundle.error().message() << '\n';
     return 1;
   }
 
@@ -231,22 +222,22 @@ int main(int argc, char** argv) {
   auto agent_card_provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_agent_card);
   a2a::server::Dispatcher dispatcher(&executor, agent_card_provider);
   a2a::server::GrpcServerTransportOptions grpc_options;
-  grpc_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  grpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::GrpcServerTransport grpc(&dispatcher, std::move(grpc_options));
 
   a2a::server::RestServerTransportOptions rest_options;
   rest_options.rest_api_base_path = std::string(kRestApiBasePath);
   rest_options.include_legacy_transport_fields = false;
-  rest_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  rest_options.required_extensions = {std::string(kRequiredExtensionUri)};
   rest_options.agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
       .cache_control = "public, max-age=300",
       .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
   a2a::server::RestServerTransport rest(&dispatcher, agent_card, std::move(rest_options));
 
   a2a::server::JsonRpcServerTransportOptions jsonrpc_options;
-  jsonrpc_options.rpc_path = "/rpc";
+  jsonrpc_options.rpc_path = std::string(kJsonRpcPath);
   jsonrpc_options.require_version_header = false;
-  jsonrpc_options.required_extensions = {std::string(kTckRequiredExtensionUri)};
+  jsonrpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, std::move(jsonrpc_options));
 
 #ifdef _WIN32
@@ -257,16 +248,39 @@ int main(int argc, char** argv) {
 #endif
 
   int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd < 0) {
+    std::cerr << "Failed to create HTTP listening socket: " << std::strerror(errno) << '\n';
+    return 1;
+  }
   int opt = kReuseAddress;
-  setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
+  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt)) != 0) {
+    std::cerr << "Failed to configure HTTP listening socket reuse: " << std::strerror(errno) << '\n';
+    a2a::server::CloseSocketCrossPlatform(server_fd);
+    return 1;
+  }
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port));
-  inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+    std::cerr << "Invalid IPv4 host for TCK SUT HTTP listener: " << host << '\n';
+    a2a::server::CloseSocketCrossPlatform(server_fd);
+    return 1;
+  }
   if (bind(server_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    std::cerr << "Failed to bind TCK SUT HTTP listener on " << host << ':' << port << ": " << std::strerror(errno)
+              << '\n';
+    a2a::server::CloseSocketCrossPlatform(server_fd);
     return 1;
   }
   if (listen(server_fd, kListenBacklog) != 0) {
+    std::cerr << "Failed to listen on TCK SUT HTTP endpoint " << host << ':' << port << ": " << std::strerror(errno)
+              << '\n';
+    a2a::server::CloseSocketCrossPlatform(server_fd);
+    return 1;
+  }
+  if (!a2a::server::SetSocketNonBlocking(server_fd)) {
+    std::cerr << "Failed to configure non-blocking TCK SUT HTTP listener: " << std::strerror(errno) << '\n';
+    a2a::server::CloseSocketCrossPlatform(server_fd);
     return 1;
   }
 
@@ -275,12 +289,14 @@ int main(int argc, char** argv) {
   grpc_builder.RegisterService(&grpc);
   std::unique_ptr<grpc::Server> grpc_server = grpc_builder.BuildAndStart();
   if (!grpc_server) {
+    std::cerr << "Failed to start TCK SUT gRPC server on " << host << ':' << grpc_port << '\n';
+    a2a::server::CloseSocketCrossPlatform(server_fd);
     return 1;
   }
 
   a2a::server::TransportMux mux(
       {.normalization_policy = a2a::server::TransportMux::PathNormalizationPolicy::kRootToDefaultPath,
-       .default_path = "/rpc"});
+       .default_path = std::string(kJsonRpcPath)});
   mux.RegisterJsonRpcRoute(jsonrpc);
   mux.RegisterRestRoute(rest);
 
@@ -291,7 +307,12 @@ int main(int argc, char** argv) {
     socklen_t len = sizeof(client);
     const int fd = accept(server_fd, reinterpret_cast<sockaddr*>(&client), &len);
     if (fd < 0) {
-      continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kAcceptRetryDelayMillis));
+        continue;
+      }
+      std::cerr << "TCK SUT HTTP accept failed: " << std::strerror(errno) << '\n';
+      break;
     }
     connection_registry.Add(fd);
     connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::ref(connection_registry));
@@ -309,4 +330,15 @@ int main(int argc, char** argv) {
   WSACleanup();
 #endif
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) noexcept {
+  try {
+    return RunTckSut(argc, argv);
+  } catch (const std::exception& ex) {
+    std::cerr << "Unhandled TCK SUT exception: " << ex.what() << '\n';
+    return 1;
+  }
 }

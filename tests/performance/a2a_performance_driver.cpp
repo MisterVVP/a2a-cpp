@@ -389,21 +389,81 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
   return result;
 }
 
+std::vector<std::string> SplitCsv(std::string_view value) {
+  std::vector<std::string> items;
+  std::size_t start = 0;
+  while (start <= value.size()) {
+    const std::size_t comma = value.find(',', start);
+    const std::size_t end = comma == std::string_view::npos ? value.size() : comma;
+    if (end > start) {
+      items.emplace_back(value.substr(start, end - start));
+    }
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    start = comma + 1U;
+  }
+  return items;
+}
+
+bool IsSupportedScenario(std::string_view scenario) {
+  return std::ranges::find(kScenarios, scenario) != kScenarios.end();
+}
+
+std::vector<std::string> SelectedScenarios(const Options& options) {
+  if (!options.scenarios.empty()) {
+    return options.scenarios;
+  }
+  std::vector<std::string> scenarios;
+  scenarios.reserve(kScenarios.size());
+  for (const std::string_view scenario : kScenarios) {
+    scenarios.emplace_back(scenario);
+  }
+  return scenarios;
+}
+
+bool ParseScenarioSelection(std::string_view value, Options* options) {
+  options->scenarios = SplitCsv(value);
+  if (options->scenarios.empty()) {
+    std::cerr << "scenario selection must not be empty\n";
+    return false;
+  }
+  for (const std::string& scenario : options->scenarios) {
+    if (!IsSupportedScenario(scenario)) {
+      std::cerr << "unsupported scenario: " << scenario << '\n';
+      return false;
+    }
+  }
+  return true;
+}
+
+bool HasValue(int index, int argc) { return index + 1 < argc; }
+
 bool ParseArgs(int argc, char** argv, Options* options) {
   for (int index = 1; index < argc; ++index) {
     const std::string_view arg(argv[index]);
-    if (arg == "--transport" && index + 1 < argc) {
-      options->transport = argv[++index];
-    } else if (arg == "--store-backend" && index + 1 < argc) {
-      options->store_backend = argv[++index];
-    } else if (arg == "--requests" && index + 1 < argc) {
-      options->requests = std::atoi(argv[++index]);
-    } else if (arg == "--concurrency" && index + 1 < argc) {
-      options->concurrency = std::atoi(argv[++index]);
-    } else if (arg == "--warmup-seconds" && index + 1 < argc) {
-      options->warmup_seconds = std::atof(argv[++index]);
-    } else if (arg == "--duration-seconds" && index + 1 < argc) {
-      options->duration_seconds = std::atof(argv[++index]);
+    if (!HasValue(index, argc)) {
+      std::cerr << "unknown or incomplete argument: " << arg << '\n';
+      return false;
+    }
+    const char* raw_value = argv[++index];
+    const std::string_view value(raw_value);
+    if (arg == "--transport") {
+      options->transport = value;
+    } else if (arg == "--store-backend") {
+      options->store_backend = value;
+    } else if (arg == "--requests") {
+      options->requests = std::atoi(raw_value);
+    } else if (arg == "--concurrency") {
+      options->concurrency = std::atoi(raw_value);
+    } else if (arg == "--warmup-seconds") {
+      options->warmup_seconds = std::atof(raw_value);
+    } else if (arg == "--duration-seconds") {
+      options->duration_seconds = std::atof(raw_value);
+    } else if (arg == "--scenarios") {
+      if (!ParseScenarioSelection(value, options)) {
+        return false;
+      }
     } else {
       std::cerr << "unknown or incomplete argument: " << arg << '\n';
       return false;
@@ -438,12 +498,7 @@ google::protobuf::Struct BuildResultObject(const Options& options, const Scenari
   SetNumberField(&object, "duration_seconds", options.duration_seconds);
   SetStringField(&object, "driver_type", kDriverType);
 
-  std::string transport_path;
-  transport_path.reserve(kSdkTransportPathPrefix.size() + options.transport.size() + kServerDispatchSuffix.size());
-  transport_path.append(kSdkTransportPathPrefix);
-  transport_path.append(options.transport);
-  transport_path.append(kServerDispatchSuffix);
-  SetStringField(&object, "transport_path", transport_path);
+  SetStringField(&object, "transport_path", "in_process");
 
   google::protobuf::Struct latency;
   SetNumberField(&latency, "p50", Percentile(result.latencies, kP50));
@@ -481,8 +536,8 @@ int main(int argc, char** argv) {
   }
   std::cout << "[\n";
   bool first = true;
-  for (const std::string_view scenario : kScenarios) {
-    WriteResultJson(options, RunScenario(options, std::string(scenario)), first);
+  for (const std::string& scenario : SelectedScenarios(options)) {
+    WriteResultJson(options, RunScenario(options, scenario), first);
     first = false;
   }
   std::cout << "\n]\n";

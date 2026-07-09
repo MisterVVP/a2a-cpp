@@ -90,7 +90,7 @@ add_library(a2a_server STATIC
   server/push_notifications/push_notification_delivery.cpp
   server/push_notifications/push_notification_service.cpp
   server/push_notifications/push_notification_store.cpp
-  server/socket_utils.cpp
+  server/network_utils.cpp
   server/stores/sql_identifier.cpp
   server/task_id_generator.cpp
   server/task_subscription_service.cpp

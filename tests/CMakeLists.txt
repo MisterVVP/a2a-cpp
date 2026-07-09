@@ -450,6 +450,19 @@ target_link_libraries(server_utils_test
 
 gtest_discover_tests(server_utils_test)
 
+add_executable(network_utils_test
+  unit/network_utils_test.cpp
+)
+
+target_link_libraries(network_utils_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    GTest::gtest_main
+)
+
+gtest_discover_tests(network_utils_test)
+
 add_executable(grpc_server_transport_test
   unit/grpc_server_transport_test.cpp
 )
@@ -725,16 +738,16 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::proto_generated
 )
 
-add_executable(tck_http_sut interop/tck_http_sut.cpp)
-target_include_directories(tck_http_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support)
-target_link_libraries(tck_http_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
+add_executable(tck_sut sut/tck_sut.cpp)
+target_include_directories(tck_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/tests/support/example_support)
+target_link_libraries(tck_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
 
 if(A2A_ENABLE_POSTGRES_STORE)
-  target_link_libraries(tck_http_sut
+  target_link_libraries(tck_sut
     PRIVATE
       a2a::store_postgres
   )
-  target_compile_definitions(tck_http_sut
+  target_compile_definitions(tck_sut
     PRIVATE
       A2A_ENABLE_POSTGRES_STORE=1
   )

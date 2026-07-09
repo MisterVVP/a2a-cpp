@@ -101,3 +101,35 @@ A2A_PERF_REPORT_DIR=perf-artifacts \
 scenario name, transport, store backend, concurrency, operation counts, success
 and error counts, throughput, latency percentiles, max latency, SDK commit SHA in
 metadata, and host OS/CPU metadata.
+
+## Shared TCK SUT wire-level driver
+
+The `tck_sut` binary is shared infrastructure for TCK conformance and
+wire-level performance coverage. It is built by the performance runner when
+needed, started on a local test port, checked for HTTP and gRPC readiness, and
+stopped cleanly after each wire-level matrix entry. Startup logs are captured in
+the report directory as `tck_sut_<store>_<port>.log` for CI diagnosis.
+
+Endpoint layout is the same as the TCK flow:
+
+* REST/HTTP+JSON: `http://<host>:<port>/a2a`
+* JSON-RPC: `http://<host>:<port>/rpc`
+* gRPC: `<host>:<port + 1>`
+
+The SUT supports `A2A_TCK_STORE_BACKEND=inmemory|postgres`,
+`A2A_TCK_POSTGRES_DSN`, `A2A_TCK_POSTGRES_SCHEMA`, and the existing extended
+agent-card mode environment variable. Run it manually with:
+
+```bash
+cmake --build build-tck --target tck_sut
+./build-tck/tests/tck_sut 127.0.0.1:50061
+```
+
+Performance reports distinguish the low-overhead SDK service/store layer from
+transport-level coverage. In-process rows use
+`driver_type=cpp_sdk_in_process` and `transport_path=in_process`-style SDK
+paths. Wire rows use `driver_type=wire_tck_sut` and one of
+`wire_http_json`, `wire_jsonrpc`, or `wire_grpc`. Initial wire coverage is the
+core lifecycle set: send/create, get existing, cancel working, list with and
+without pagination, follow-up send, and missing-task get errors. Streaming and
+push-notification rows remain in-process until dedicated wire clients are added.
