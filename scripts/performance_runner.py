@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Report-only A2A SDK performance test kit runner.
 
-The first kit version executes deterministic in-process scenarios that mirror the
-TCK operation matrix and records machine-readable smoke/performance reports. The
-scenario bodies intentionally avoid external services so local and CI runs are
-repeatable; transport/store labels define the matrix under test while later
-iterations can swap individual scenario drivers for full wire-level clients.
+The runner orchestrates the matrix and report generation while delegating measured
+operations to the C++ SDK-backed performance driver.
 """
 
 from __future__ import annotations
@@ -17,8 +14,6 @@ import os
 import platform
 import subprocess
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -45,12 +40,13 @@ SCENARIOS = (
     "PushNotify_ManyConfigsOneTaskUpdate",
     "PushDelivery_CallbackLatency",
 )
-DEFAULT_REQUESTS = 1_000
+DEFAULT_REQUESTS = 10_000
 DEFAULT_CONCURRENCY = (1, 4)
+DEFAULT_BUILD_DIR = "build/performance"
+DRIVER_NAME = "a2a_performance_driver"
 DEFAULT_WARMUP_SECONDS = 1.0
 DEFAULT_DURATION_SECONDS = 0.0
 DEFAULT_REPORT_DIR = "perf-artifacts"
-NANOSECONDS_PER_MILLISECOND = 1_000_000.0
 
 
 @dataclass(frozen=True)
@@ -64,46 +60,53 @@ class RunnerConfig:
     report_dir: Path
 
 
-class ScenarioState:
-    def __init__(self) -> None:
-        self.tasks: dict[str, str] = {}
-        self.push_configs: dict[str, str] = {}
 
-    def execute(self, scenario: str, operation_index: int) -> bool:
-        task_id = f"task-{operation_index % 257}"
-        config_id = f"config-{operation_index % 31}"
-        if scenario == "SendMessage_CreateTask":
-            self.tasks[task_id] = "working"
-        elif scenario == "GetTask_ExistingTask":
-            self.tasks.setdefault(task_id, "working")
-            _ = self.tasks[task_id]
-        elif scenario == "CancelTask_WorkingTask":
-            self.tasks[task_id] = "canceled"
-        elif scenario.startswith("ListTasks_"):
-            _ = list(self.tasks.items())[:25]
-        elif scenario == "SendMessage_FollowUpExistingTask":
-            self.tasks[task_id] = "updated"
-        elif scenario == "GetTask_MissingTaskError":
-            return f"missing-{operation_index}" not in self.tasks
-        elif scenario.startswith("SubscribeToTask_") or scenario == "SendStreamingMessage_FiniteStream":
-            self.tasks.setdefault(task_id, "working")
-            _ = (self.tasks[task_id], operation_index % 8)
-        elif scenario == "PushConfig_Create":
-            self.push_configs[config_id] = "http://127.0.0.1/callback"
-        elif scenario == "PushConfig_Get":
-            self.push_configs.setdefault(config_id, "http://127.0.0.1/callback")
-            _ = self.push_configs[config_id]
-        elif scenario == "PushConfig_List":
-            _ = list(self.push_configs.values())
-        elif scenario == "PushConfig_Delete":
-            self.push_configs.pop(config_id, None)
-        elif scenario.startswith("Push"):
-            self.push_configs.setdefault(config_id, "http://127.0.0.1/callback")
-            _ = sum(len(value) for value in self.push_configs.values())
-        else:
-            raise ValueError(f"unknown scenario: {scenario}")
-        return True
+def driver_path_from_build(build_dir: Path) -> Path:
+    candidates = [build_dir / "tests" / DRIVER_NAME, build_dir / DRIVER_NAME]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
+
+def ensure_driver(config: RunnerConfig) -> Path:
+    explicit = os.environ.get("A2A_PERF_DRIVER")
+    if explicit:
+        driver = Path(explicit)
+        if not driver.exists():
+            raise ValueError(f"A2A_PERF_DRIVER does not exist: {driver}")
+        return driver
+    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    driver = driver_path_from_build(build_dir)
+    if driver.exists():
+        return driver
+    configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
+    if "postgres" in config.store_backends:
+        configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
+    subprocess.run(configure, check=True)
+    subprocess.run(["cmake", "--build", str(build_dir), "--target", DRIVER_NAME, "-j", str(os.cpu_count() or 2)], check=True)
+    if not driver.exists():
+        raise ValueError(f"performance driver was not produced at {driver}")
+    return driver
+
+
+def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int) -> list[dict[str, object]]:
+    driver = ensure_driver(config)
+    completed = subprocess.run([
+        str(driver),
+        "--transport", transport,
+        "--store-backend", store_backend,
+        "--requests", str(config.requests),
+        "--concurrency", str(concurrency),
+        "--warmup-seconds", str(config.warmup_seconds),
+        "--duration-seconds", str(config.duration_seconds),
+    ], cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise ValueError(f"performance driver failed for {transport}/{store_backend}/c{concurrency}: {completed.stderr.strip()}")
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, list):
+        raise ValueError("performance driver returned malformed output")
+    return payload
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
     items = tuple(item.strip() for item in value.split(",") if item.strip())
@@ -154,62 +157,6 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         duration_seconds=args.duration_seconds,
         report_dir=Path(args.report_dir),
     )
-
-
-def percentile(sorted_values: list[float], percentile_rank: float) -> float:
-    if not sorted_values:
-        return 0.0
-    index = min(len(sorted_values) - 1, round((percentile_rank / 100.0) * (len(sorted_values) - 1)))
-    return sorted_values[index]
-
-
-def run_one(config: RunnerConfig, scenario: str, transport: str, store_backend: str, concurrency: int) -> dict[str, object]:
-    state = ScenarioState()
-    end_warmup = time.perf_counter() + config.warmup_seconds
-    warmup_index = 0
-    while time.perf_counter() < end_warmup:
-        state.execute(scenario, warmup_index)
-        warmup_index += 1
-
-    latencies: list[float] = []
-    errors = 0
-    started = time.perf_counter()
-
-    def operation(index: int) -> float:
-        op_started = time.perf_counter_ns()
-        if not state.execute(scenario, index):
-            raise RuntimeError("operation reported failure")
-        return (time.perf_counter_ns() - op_started) / NANOSECONDS_PER_MILLISECOND
-
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [executor.submit(operation, index) for index in range(config.requests)]
-        for future in as_completed(futures):
-            try:
-                latencies.append(future.result())
-            except Exception:
-                errors += 1
-    elapsed = max(time.perf_counter() - started, sys.float_info.epsilon)
-    sorted_latencies = sorted(latencies)
-    success = len(latencies)
-    return {
-        "scenario": scenario,
-        "transport": transport,
-        "store_backend": store_backend,
-        "concurrency": concurrency,
-        "operations": config.requests,
-        "success": success,
-        "errors": errors,
-        "throughput_ops_per_sec": success / elapsed,
-        "warmup_seconds": config.warmup_seconds,
-        "duration_seconds": config.duration_seconds,
-        "latency_ms": {
-            "p50": percentile(sorted_latencies, 50.0),
-            "p90": percentile(sorted_latencies, 90.0),
-            "p95": percentile(sorted_latencies, 95.0),
-            "p99": percentile(sorted_latencies, 99.0),
-            "max": max(sorted_latencies) if sorted_latencies else 0.0,
-        },
-    }
 
 
 def commit_sha() -> str:
@@ -329,7 +276,8 @@ def scenario_rollups(results: list[dict[str, object]]) -> list[dict[str, object]
 def main(argv: list[str]) -> int:
     try:
         config = parse_args(argv)
-        results = [run_one(config, scenario, transport, store_backend, concurrency) for scenario in SCENARIOS for transport in config.transports for store_backend in config.store_backends for concurrency in config.concurrency_levels]
+        results = [result for transport in config.transports for store_backend in config.store_backends for concurrency in config.concurrency_levels for result in run_driver(config, transport, store_backend, concurrency)]
+        results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["transport"]), int(result["concurrency"])))
         write_reports(results, config)
         if any(result["errors"] for result in results):
             return 2

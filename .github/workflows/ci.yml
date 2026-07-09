@@ -106,13 +106,31 @@ jobs:
   performance-tests:
     name: performance tests
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: a2a
+          POSTGRES_PASSWORD: a2a
+          POSTGRES_DB: a2a
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2a -d a2a"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      A2A_TEST_POSTGRES_DSN: postgresql://a2a:a2a@127.0.0.1:5432/a2a
     steps:
       - uses: actions/checkout@v6
-      - name: Run report-only performance smoke suite
+      - name: Install deps
+        run: ./scripts/install_build_deps.sh
+      - name: Run report-only performance suite
         env:
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory,postgres
-          A2A_PERF_REQUESTS: 100000
+          A2A_PERF_REQUESTS: 1000
           A2A_PERF_CONCURRENCY: 1,4
           A2A_PERF_WARMUP_SECONDS: 0
           A2A_PERF_REPORT_DIR: perf-artifacts

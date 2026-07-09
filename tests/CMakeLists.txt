@@ -777,3 +777,30 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
   )
 endif()
+
+add_executable(a2a_performance_driver
+  performance/a2a_performance_driver.cpp
+)
+
+target_include_directories(a2a_performance_driver
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/support
+)
+
+target_link_libraries(a2a_performance_driver
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+)
+
+if(A2A_ENABLE_POSTGRES_STORE)
+  target_link_libraries(a2a_performance_driver
+    PRIVATE
+      a2a::store_postgres
+  )
+  target_compile_definitions(a2a_performance_driver
+    PRIVATE
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+endif()
