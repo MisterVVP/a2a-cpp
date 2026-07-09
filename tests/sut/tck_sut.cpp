@@ -10,7 +10,6 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -26,7 +25,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -64,53 +62,6 @@ volatile std::sig_atomic_t kKeepRunning = 1;
 void SignalHandler(int signal_number) {
   (void)signal_number;
   kKeepRunning = 0;
-}
-
-[[nodiscard]] std::string BuildUrl(std::string_view scheme, std::string_view host, int port, std::string_view path) {
-  std::ostringstream stream;
-  stream << scheme << "://" << host << ':' << port << path;
-  return stream.str();
-}
-
-[[nodiscard]] std::optional<a2a::tests::sut::SutConfig> ParseEndpoint(std::string_view endpoint) {
-  const auto pos = endpoint.rfind(':');
-  if (pos == std::string_view::npos || pos == 0 || pos + 1 >= endpoint.size()) {
-    std::cerr << "Invalid endpoint format: '" << endpoint << "'. Expected <host>:<port>.\n";
-    return std::nullopt;
-  }
-  SutConfig config;
-  config.host = std::string(endpoint.substr(0, pos));
-  const std::string port_text(endpoint.substr(pos + 1));
-  try {
-    std::size_t parsed_chars = 0;
-    const int parsed_port = std::stoi(port_text, &parsed_chars);
-    if (parsed_chars != port_text.size() || parsed_port <= 0 || parsed_port > kMaxHttpPort) {
-      std::cerr << "Invalid port in endpoint '" << endpoint << "': port must be between 1 and 65534.\n";
-      return std::nullopt;
-    }
-    config.port = parsed_port;
-    config.grpc_port = parsed_port + kGrpcPortOffset;
-    return config;
-  } catch (const std::exception& ex) {
-    std::cerr << "Invalid port in endpoint '" << endpoint << "': " << ex.what() << "\n";
-    return std::nullopt;
-  }
-}
-
-[[nodiscard]] SutEndpoints BuildEndpoints(const SutConfig& config) {
-  return {.rest_url = BuildUrl("http", config.host, config.port, kRestApiBasePath),
-          .json_rpc_url = BuildUrl("http", config.host, config.port, kJsonRpcPath),
-          .grpc_url = config.host + ":" + std::to_string(config.grpc_port)};
-}
-
-[[nodiscard]] bool SetNonBlocking(int fd) {
-#ifdef _WIN32
-  (void)fd;
-  return true;
-#else
-  const int flags = fcntl(fd, F_GETFL, 0);
-  return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
-#endif
 }
 
 [[nodiscard]] std::string_view GetEnvironmentValue(const char* name) {
@@ -216,18 +167,19 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   a2a::server::CloseSocketCrossPlatform(fd);
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
+int RunTckSut(int argc, char** argv) {
   const std::string endpoint = (argc > 1) ? argv[1] : std::string(kDefaultHost) + ":" + std::to_string(kDefaultPort);
-  const std::optional<SutConfig> config = ParseEndpoint(endpoint);
-  if (!config.has_value()) {
+  auto parsed_endpoint = a2a::server::ParseHostPortEndpoint(endpoint, kMaxHttpPort);
+  if (!parsed_endpoint.ok()) {
+    std::cerr << parsed_endpoint.error().message() << '\n';
     return 1;
   }
-  const SutEndpoints endpoints = BuildEndpoints(*config);
-  const std::string& host = config->host;
-  const int port = config->port;
-  const int grpc_port = config->grpc_port;
+  const std::string& host = parsed_endpoint.value().host;
+  const int port = parsed_endpoint.value().port;
+  const int grpc_port = port + kGrpcPortOffset;
+  const SutEndpoints endpoints{.rest_url = a2a::server::BuildHttpUrl(host, port, kRestApiBasePath),
+                               .json_rpc_url = a2a::server::BuildHttpUrl(host, port, kJsonRpcPath),
+                               .grpc_url = host + ":" + std::to_string(grpc_port)};
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
@@ -326,7 +278,7 @@ int main(int argc, char** argv) {
     a2a::server::CloseSocketCrossPlatform(server_fd);
     return 1;
   }
-  if (!SetNonBlocking(server_fd)) {
+  if (!a2a::server::SetSocketNonBlocking(server_fd)) {
     std::cerr << "Failed to configure non-blocking TCK SUT HTTP listener: " << std::strerror(errno) << '\n';
     a2a::server::CloseSocketCrossPlatform(server_fd);
     return 1;
@@ -378,4 +330,15 @@ int main(int argc, char** argv) {
   WSACleanup();
 #endif
   return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) noexcept {
+  try {
+    return RunTckSut(argc, argv);
+  } catch (const std::exception& ex) {
+    std::cerr << "Unhandled TCK SUT exception: " << ex.what() << '\n';
+    return 1;
+  }
 }
