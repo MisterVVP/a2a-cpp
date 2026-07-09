@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/socket_utils.h"
+#include "a2a/server/network_utils.h"
 
 #include <gtest/gtest.h>
 
@@ -24,36 +24,36 @@ constexpr std::string_view kExpectedEndpointFormatText = "Expected <host>:<port>
 constexpr std::string_view kExpectedTestPortRangeText = "port must be between 1 and 65534";
 constexpr std::string_view kExpectedMaxPortRangeText = "max_port must be between 1 and 65535";
 
-TEST(SocketUtilsTest, BuildHttpUrlUsesHostPortAndPath) {
+TEST(NetworkUtilsTest, BuildHttpUrlUsesHostPortAndPath) {
   EXPECT_EQ(a2a::server::BuildHttpUrl(kLocalhost, kDefaultTestPort, kRestPath), kExpectedRestUrl);
 }
 
-TEST(SocketUtilsTest, ParseHostPortEndpointAcceptsValidEndpoint) {
+TEST(NetworkUtilsTest, ParseHostPortEndpointAcceptsValidEndpoint) {
   auto parsed = a2a::server::ParseHostPortEndpoint(kValidEndpoint, kMaxTestPort);
   ASSERT_TRUE(parsed.ok()) << parsed.error().message();
   EXPECT_EQ(parsed.value().host, kLocalhost);
   EXPECT_EQ(parsed.value().port, kDefaultTestPort);
 }
 
-TEST(SocketUtilsTest, ParseHostPortEndpointRejectsMissingPort) {
+TEST(NetworkUtilsTest, ParseHostPortEndpointRejectsMissingPort) {
   auto parsed = a2a::server::ParseHostPortEndpoint(kMissingPortEndpoint, kMaxTestPort);
   ASSERT_FALSE(parsed.ok());
   EXPECT_NE(parsed.error().message().find(kExpectedEndpointFormatText), std::string::npos);
 }
 
-TEST(SocketUtilsTest, ParseHostPortEndpointRejectsInvalidPort) {
+TEST(NetworkUtilsTest, ParseHostPortEndpointRejectsInvalidPort) {
   auto parsed = a2a::server::ParseHostPortEndpoint(kInvalidPortEndpoint, kMaxTestPort);
   ASSERT_FALSE(parsed.ok());
   EXPECT_NE(parsed.error().message().find(kExpectedTestPortRangeText), std::string::npos);
 }
 
-TEST(SocketUtilsTest, ParseHostPortEndpointRejectsPortAboveConfiguredMaximum) {
+TEST(NetworkUtilsTest, ParseHostPortEndpointRejectsPortAboveConfiguredMaximum) {
   auto parsed = a2a::server::ParseHostPortEndpoint(kTooLargePortEndpoint, kMaxTestPort);
   ASSERT_FALSE(parsed.ok());
   EXPECT_NE(parsed.error().message().find(kExpectedTestPortRangeText), std::string::npos);
 }
 
-TEST(SocketUtilsTest, ParseHostPortEndpointRejectsInvalidConfiguredMaximum) {
+TEST(NetworkUtilsTest, ParseHostPortEndpointRejectsInvalidConfiguredMaximum) {
   auto parsed = a2a::server::ParseHostPortEndpoint(kValidEndpoint, kInvalidMaxPort);
   ASSERT_FALSE(parsed.ok());
   EXPECT_NE(parsed.error().message().find(kExpectedMaxPortRangeText), std::string::npos);
