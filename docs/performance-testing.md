@@ -29,7 +29,7 @@ matching environment variables.
 | --- | --- | --- |
 | Transports (`grpc`, `jsonrpc`, `http_json`, or `all`) | `A2A_PERF_TRANSPORTS` | `grpc,jsonrpc,http_json` |
 | Store backends (`inmemory`, `postgres`, or `all`) | `A2A_PERF_STORE_BACKENDS` | `inmemory,postgres` |
-| Operations per result row | `A2A_PERF_REQUESTS` | `10000` |
+| Operations per result row | `A2A_PERF_REQUESTS` | `1000` |
 | Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4` |
 | Warmup seconds | `A2A_PERF_WARMUP_SECONDS` | `1` |
 | Duration seconds metadata | `A2A_PERF_DURATION_SECONDS` | `0` |
@@ -88,7 +88,7 @@ enforce latency or throughput thresholds.
 ```bash
 A2A_PERF_TRANSPORTS=grpc,jsonrpc,http_json \
 A2A_PERF_STORE_BACKENDS=inmemory,postgres \
-A2A_PERF_REQUESTS=10000 \
+A2A_PERF_REQUESTS=1000 \
 A2A_PERF_CONCURRENCY=1,4,16,64 \
 A2A_PERF_WARMUP_SECONDS=5 \
 A2A_PERF_REPORT_DIR=perf-artifacts \
