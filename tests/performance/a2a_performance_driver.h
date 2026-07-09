@@ -86,6 +86,7 @@ struct Options final {
   int concurrency = kDefaultConcurrency;
   double warmup_seconds = 0.0;
   double duration_seconds = 0.0;
+  std::vector<std::string> scenarios;
 };
 
 struct ScenarioResult final {

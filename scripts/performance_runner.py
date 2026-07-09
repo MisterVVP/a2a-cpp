@@ -190,9 +190,9 @@ class SutProcess:
                 self.process.wait(timeout=10)
 
 
-def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int) -> list[dict[str, object]]:
+def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int, scenarios: tuple[str, ...] | None = None) -> list[dict[str, object]]:
     driver = ensure_driver(config)
-    completed = subprocess.run([
+    command = [
         str(driver),
         "--transport", transport,
         "--store-backend", store_backend,
@@ -200,7 +200,10 @@ def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurr
         "--concurrency", str(concurrency),
         "--warmup-seconds", str(config.warmup_seconds),
         "--duration-seconds", str(config.duration_seconds),
-    ], cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=False)
+    ]
+    if scenarios is not None:
+        command.extend(["--scenarios", ",".join(scenarios)])
+    completed = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=False)
     if completed.returncode != 0:
         raise ValueError(f"performance driver failed for {transport}/{store_backend}/c{concurrency}: {completed.stderr.strip()}")
     payload = json.loads(completed.stdout)
@@ -227,7 +230,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         # Reuse the measured operation harness while the shared SUT is online. The
         # row metadata marks only the implemented core lifecycle coverage as wire
         # through tck_sut; streaming and push scenarios remain in-process only.
-        return annotate_wire_results(run_driver(config, transport, store_backend, concurrency), transport)
+        return annotate_wire_results(run_driver(config, transport, store_backend, concurrency, WIRE_SCENARIOS), transport)
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
