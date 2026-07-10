@@ -287,7 +287,10 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
   }
 
   return RunMeasuredScenario(scenario, options.requests, options.concurrency,
-                             [&harness, &scenario](int index) { return harness.Execute(scenario, index); });
+                             [&harness, &scenario](int worker_index, int index) {
+                               (void)worker_index;
+                               return harness.Execute(scenario, index);
+                             });
 }
 
 bool IsSupportedScenario(std::string_view scenario) {

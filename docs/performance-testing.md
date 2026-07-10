@@ -36,6 +36,8 @@ matching environment variables.
 | Existing in-process driver binary | `A2A_PERF_DRIVER` | unset |
 | Existing wire driver binary | `A2A_PERF_WIRE_DRIVER` | unset |
 | Existing TCK SUT binary | `A2A_TCK_SUT` | unset |
+| In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `300` |
+| Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `300` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
 
 ## Scenario coverage
@@ -70,12 +72,16 @@ Reports contain two clearly separated measurement paths:
   `wire_jsonrpc`, or `wire_grpc`.
 
 The current real wire-level scenario set covers core lifecycle operations for
-HTTP+JSON, JSON-RPC, and gRPC: `SendMessage_CreateTask`,
-`GetTask_ExistingTask`, `CancelTask_WorkingTask`, `ListTasks_NoPagination`,
-`ListTasks_WithPagination`, `SendMessage_FollowUpExistingTask`, and
-`GetTask_MissingTaskError`. Streaming/subscription and push notification
-scenarios remain in-process-only until dedicated wire clients are added for those
-flows; they must not be interpreted as `wire_tck_sut` coverage.
+HTTP+JSON, JSON-RPC, and gRPC: `ListTasks_NoPagination`,
+`ListTasks_WithPagination`, `SendMessage_CreateTask`, `GetTask_ExistingTask`,
+`CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`, and
+`GetTask_MissingTaskError`. The wire driver reuses one client/transport per
+worker thread so measured operations do not recreate gRPC channels or HTTP
+transport objects. List scenarios run before mutating lifecycle scenarios and
+seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
+the listed task set bounded in CI. Streaming/subscription and push notification
+scenarios remain in-process-only until dedicated wire clients are added for
+those flows; they must not be interpreted as `wire_tck_sut` coverage.
 
 ## Store backend coverage
 
@@ -86,14 +92,26 @@ and push notification stores when the driver is built with
 option when `postgres` is selected and it needs to auto-build the driver.
 PostgreSQL runs must provide the same local DSN style used by the repository
 store tests (`A2A_TEST_POSTGRES_DSN`); CI starts a local PostgreSQL service for
-the performance job.
+the performance job. For wire-level PostgreSQL rows, the runner maps
+`A2A_TEST_POSTGRES_DSN` to `A2A_TCK_POSTGRES_DSN` for `tck_sut` and assigns a
+matrix-scoped schema named `a2a_perf_<transport>_<concurrency>_<port>` so rows
+do not share the default `public` schema or accumulate data across matrix
+entries.
 
 ## CI behavior
 
-The performance job remains report-only: it uploads `perf-artifacts`, appends
-`summary.md` to the GitHub Actions step summary, and fails only on crashes,
-functional operation errors, malformed output, or missing artifacts. It does not
-enforce latency or throughput thresholds.
+The performance job remains report-only and keeps the current CI matrix of
+three transports, two stores, 2,000 operations, and concurrency levels 1 and 4.
+It uploads `perf-artifacts`, appends `summary.md` to the GitHub Actions step
+summary, and fails only on crashes, functional operation errors, malformed
+output, missing artifacts, or driver timeouts. It does not enforce latency or
+throughput thresholds. The runner prints a workload estimate at startup and
+flushes `[perf] start ...` / `[perf] done ...` progress lines for every
+in-process and wire matrix row so GitHub Actions logs show forward progress.
+Both driver subprocesses have explicit timeouts controlled by
+`A2A_PERF_DRIVER_TIMEOUT_SECONDS` and
+`A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS`; on a wire timeout, recent `tck_sut` logs
+are included in the failure message when available.
 
 ## Larger local benchmark
 
@@ -139,8 +157,9 @@ cmake --build build-tck --target tck_sut
 
 Performance reports distinguish the low-overhead SDK service/store layer from
 transport-level coverage. In-process rows use
-`driver_type=cpp_sdk_in_process` and `transport_path=in_process`. Wire rows use `driver_type=wire_tck_sut` and one of
-`wire_http_json`, `wire_jsonrpc`, or `wire_grpc`. Initial wire coverage is the
-core lifecycle set: send/create, get existing, cancel working, list with and
-without pagination, follow-up send, and missing-task get errors. Streaming and
-push-notification rows remain in-process until dedicated wire clients are added.
+`driver_type=cpp_sdk_in_process` and `transport_path=in_process`. Wire rows use
+`driver_type=wire_tck_sut` and one of `wire_http_json`, `wire_jsonrpc`, or
+`wire_grpc`. Initial wire coverage is the core lifecycle set: bounded list with
+and without pagination, send/create, get existing, cancel working, follow-up
+send, and missing-task get errors. Streaming and push-notification rows remain
+in-process until dedicated wire clients are added.

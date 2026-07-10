@@ -4,6 +4,7 @@
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -28,6 +29,7 @@ using namespace a2a::tests::performance;
 constexpr std::string_view kWireDriverType = "wire_tck_sut";
 constexpr std::string_view kHostDefault = "127.0.0.1";
 constexpr int kEndpointReserveSlack = 32;
+constexpr int kListFixtureTaskCount = 20;
 constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
 
 struct WireOptions final {
@@ -109,6 +111,19 @@ std::string SeedTask(a2a::client::A2AClient* client, std::string_view message_id
   return {};
 }
 
+bool IsListScenario(std::string_view scenario) {
+  return scenario == kScenarioListTasksNoPagination || scenario == kScenarioListTasksWithPagination;
+}
+
+bool SeedListFixture(a2a::client::A2AClient* client, const a2a::client::CallOptions& call_options) {
+  for (int task_index = 0; task_index < kListFixtureTaskCount; ++task_index) {
+    if (SeedTask(client, BuildId("wire-list-fixture", task_index), call_options).empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index) {
   const a2a::client::CallOptions call_options = MakeCallOptions();
   if (scenario == kScenarioSendMessageCreateTask) {
@@ -132,10 +147,8 @@ bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, 
     request.set_id(task_id);
     return client->CancelTask(request, call_options).ok();
   }
-  if (scenario == kScenarioListTasksNoPagination || scenario == kScenarioListTasksWithPagination) {
-    if (!client->SendMessage(MakeSendRequest(BuildId("wire-list-seed", index)), call_options).ok()) {
-      return false;
-    }
+  if (IsListScenario(scenario)) {
+    (void)index;
     a2a::client::ListTasksRequest request;
     if (scenario == kScenarioListTasksWithPagination) {
       request.page_size = kListPageSize;
@@ -165,10 +178,27 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index++);
   }
 
-  return RunMeasuredScenario(scenario, options.requests, options.concurrency, [&options, &scenario](int index) {
-    auto client = MakeClient(options);
-    return ExecuteScenario(client.get(), scenario, index);
-  });
+  const int worker_count = std::min(options.concurrency, options.requests);
+  std::vector<std::unique_ptr<a2a::client::A2AClient>> clients;
+  clients.reserve(static_cast<std::size_t>(worker_count));
+  for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
+    clients.push_back(MakeClient(options));
+  }
+  if (IsListScenario(scenario)) {
+    const a2a::client::CallOptions call_options = MakeCallOptions();
+    if (!SeedListFixture(clients.front().get(), call_options)) {
+      ScenarioResult failed;
+      failed.scenario = scenario;
+      failed.operations = options.requests;
+      failed.errors = options.requests;
+      return failed;
+    }
+  }
+
+  return RunMeasuredScenario(
+      scenario, options.requests, options.concurrency, [&clients, &scenario](int worker_index, int index) {
+        return ExecuteScenario(clients[static_cast<std::size_t>(worker_index)].get(), scenario, index);
+      });
 }
 
 bool IsWireScenario(std::string_view scenario) {
@@ -234,9 +264,9 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
   if (!options.scenarios.empty()) {
     return options.scenarios;
   }
-  return {std::string(kScenarioSendMessageCreateTask),   std::string(kScenarioGetTaskExistingTask),
-          std::string(kScenarioCancelTaskWorkingTask),   std::string(kScenarioListTasksNoPagination),
-          std::string(kScenarioListTasksWithPagination), std::string(kScenarioSendMessageFollowUpExistingTask),
+  return {std::string(kScenarioListTasksNoPagination),  std::string(kScenarioListTasksWithPagination),
+          std::string(kScenarioSendMessageCreateTask),  std::string(kScenarioGetTaskExistingTask),
+          std::string(kScenarioCancelTaskWorkingTask),  std::string(kScenarioSendMessageFollowUpExistingTask),
           std::string(kScenarioGetTaskMissingTaskError)};
 }
 

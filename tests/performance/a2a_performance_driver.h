@@ -160,7 +160,7 @@ template <typename ExecuteOperation>
             return;
           }
           const auto op_started = std::chrono::steady_clock::now();
-          const bool ok = execute_operation(operation_index);
+          const bool ok = execute_operation(worker_index, operation_index);
           const auto op_finished = std::chrono::steady_clock::now();
           const double latency =
               static_cast<double>(

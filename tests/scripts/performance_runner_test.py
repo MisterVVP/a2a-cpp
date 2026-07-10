@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
+import importlib.util
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "run_performance_tests.sh"
+RUNNER_MODULE = ROOT / "scripts" / "performance_runner.py"
+
+
+def load_runner_module():
+    spec = importlib.util.spec_from_file_location("performance_runner", RUNNER_MODULE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class PerformanceRunnerTest(unittest.TestCase):
     def test_writes_reports_for_selected_matrix(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            subprocess.run([
+            completed = subprocess.run([
                 str(RUNNER),
                 "--transports", "grpc",
                 "--store-backends", "inmemory",
@@ -20,7 +33,7 @@ class PerformanceRunnerTest(unittest.TestCase):
                 "--concurrency", "1",
                 "--warmup-seconds", "0",
                 "--report-dir", temp_dir,
-            ], cwd=ROOT, check=True)
+            ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
             self.assertEqual(25, len(payload["results"]))
@@ -33,6 +46,9 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertEqual(ordered, payload["results"])
             self.assertTrue((report_dir / "results.csv").exists())
             self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
+            self.assertIn("[perf] estimated_rows=", completed.stdout)
+            self.assertIn("[perf] start in-process transport=grpc store=inmemory concurrency=1 requests=3", completed.stdout)
+            self.assertIn("[perf] done  wire transport=grpc store=inmemory concurrency=1", completed.stdout)
             summary = (report_dir / "summary.md").read_text(encoding="utf-8")
             self.assertIn("A2A performance test summary", summary)
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
@@ -47,6 +63,30 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=False)
             self.assertNotEqual(0, completed.returncode)
             self.assertIn("unsupported selection", completed.stderr)
+
+    def test_rejects_driver_timeout_clearly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sleeper = Path(temp_dir) / "sleepy_driver.py"
+            sleeper.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(10)\n", encoding="utf-8")
+            sleeper.chmod(0o755)
+            env = os.environ.copy()
+            env["A2A_PERF_DRIVER"] = str(sleeper)
+            completed = subprocess.run([
+                str(RUNNER),
+                "--transports", "grpc",
+                "--store-backends", "inmemory",
+                "--requests", "1",
+                "--concurrency", "1",
+                "--warmup-seconds", "0",
+                "--driver-timeout-seconds", "0.1",
+                "--report-dir", temp_dir,
+            ], cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+            self.assertNotEqual(0, completed.returncode)
+            self.assertIn("timed out", completed.stderr)
+
+    def test_postgres_schema_name_is_matrix_scoped(self):
+        runner = load_runner_module()
+        self.assertEqual("a2a_perf_http_json_4_51081", runner.postgres_schema_name("http_json", 4, 51081))
 
 
 if __name__ == "__main__":
