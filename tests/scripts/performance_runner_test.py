@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,15 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("scenario=SendMessage_CreateTask", summary)
         self.assertIn("transport_path=wire_jsonrpc", summary)
         self.assertIn("concurrency=4", summary)
+
+    def test_find_available_sut_port_returns_adjacent_bindable_ports(self):
+        runner = load_runner_module()
+        port = runner.find_available_sut_port()
+        self.assertGreater(port, 0)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as http_probe:
+            http_probe.bind(("127.0.0.1", port))
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as grpc_probe:
+            grpc_probe.bind(("127.0.0.1", port + 1))
 
     def test_postgres_schema_name_is_matrix_scoped(self):
         runner = load_runner_module()

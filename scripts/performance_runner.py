@@ -143,6 +143,21 @@ def wait_for_port(host: str, port: int, process: subprocess.Popen[str], log_path
     raise ValueError(f"timed out waiting for tck_sut port {port}; logs:\n{read_tail(log_path)}")
 
 
+def find_available_sut_port(host: str = "127.0.0.1") -> int:
+    for _ in range(100):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as http_probe:
+            http_probe.bind((host, 0))
+            port = int(http_probe.getsockname()[1])
+            if port >= 65534:
+                continue
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as grpc_probe:
+                try:
+                    grpc_probe.bind((host, port + 1))
+                except OSError:
+                    continue
+            return port
+    raise ValueError("could not find adjacent free ports for tck_sut")
+
 def read_tail(path: Path) -> str:
     if not path.exists():
         return "<no log file>"
@@ -502,7 +517,6 @@ def main(argv: list[str]) -> int:
         config = parse_args(argv)
         results = []
         log_workload_estimate(config)
-        wire_port = 51061
         in_process_transport = config.transports[0]
         for store_backend in config.store_backends:
             for concurrency in config.concurrency_levels:
@@ -519,11 +533,12 @@ def main(argv: list[str]) -> int:
                     results.extend(
                         run_with_progress(
                             "wire",
-                            lambda: run_wire_driver(config, transport, store_backend, concurrency, wire_port),
+                            lambda: run_wire_driver(
+                                config, transport, store_backend, concurrency, find_available_sut_port()
+                            ),
                             transport, store_backend, concurrency, config.requests,
                         )
                     )
-                    wire_port += 10
         results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"])))
         write_reports(results, config)
         if any(result_error_count(result) > 0 for result in results):

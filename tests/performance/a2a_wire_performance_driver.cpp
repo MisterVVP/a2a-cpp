@@ -172,10 +172,10 @@ bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, 
 
 ScenarioResult RunWireScenario(const WireOptions& options, const std::string& scenario) {
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
-  int warmup_index = 0;
+  int warmup_index = -1;
   auto warmup_client = MakeClient(options);
   while (std::chrono::steady_clock::now() < warmup_end) {
-    (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index++);
+    (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index--);
   }
 
   const int worker_count = std::min(options.concurrency, options.requests);
