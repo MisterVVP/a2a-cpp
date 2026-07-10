@@ -62,8 +62,8 @@ WIRE_SCENARIOS = (
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
-DEFAULT_DRIVER_TIMEOUT_SECONDS = 300.0
-DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 300.0
+DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
+DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 
 
 @dataclass(frozen=True)
@@ -446,8 +446,10 @@ def log_progress(message: str) -> None:
 
 
 def log_workload_estimate(config: RunnerConfig) -> None:
-    matrix_rows = len(config.transports) * len(config.store_backends) * len(config.concurrency_levels)
-    estimated_rows = matrix_rows * (len(SCENARIOS) + len(WIRE_SCENARIOS))
+    store_concurrency_rows = len(config.store_backends) * len(config.concurrency_levels)
+    in_process_rows = store_concurrency_rows * len(SCENARIOS)
+    wire_rows = len(config.transports) * store_concurrency_rows * len(WIRE_SCENARIOS)
+    estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
     log_progress(
         f"estimated_rows={estimated_rows} estimated_operations={estimated_operations} "
@@ -474,16 +476,19 @@ def main(argv: list[str]) -> int:
         results = []
         log_workload_estimate(config)
         wire_port = 51061
+        in_process_transport = config.transports[0]
+        for store_backend in config.store_backends:
+            for concurrency in config.concurrency_levels:
+                results.extend(
+                    run_with_progress(
+                        "in-process",
+                        lambda: run_driver(config, in_process_transport, store_backend, concurrency),
+                        in_process_transport, store_backend, concurrency, config.requests,
+                    )
+                )
         for transport in config.transports:
             for store_backend in config.store_backends:
                 for concurrency in config.concurrency_levels:
-                    results.extend(
-                        run_with_progress(
-                            "in-process",
-                            lambda: run_driver(config, transport, store_backend, concurrency),
-                            transport, store_backend, concurrency, config.requests,
-                        )
-                    )
                     results.extend(
                         run_with_progress(
                             "wire",

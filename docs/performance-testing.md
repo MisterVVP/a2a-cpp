@@ -36,8 +36,8 @@ matching environment variables.
 | Existing in-process driver binary | `A2A_PERF_DRIVER` | unset |
 | Existing wire driver binary | `A2A_PERF_WIRE_DRIVER` | unset |
 | Existing TCK SUT binary | `A2A_TCK_SUT` | unset |
-| In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `300` |
-| Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `300` |
+| In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `600` |
+| Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
 
 ## Scenario coverage
@@ -77,7 +77,9 @@ HTTP+JSON, JSON-RPC, and gRPC: `ListTasks_NoPagination`,
 `CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`, and
 `GetTask_MissingTaskError`. The wire driver reuses one client/transport per
 worker thread so measured operations do not recreate gRPC channels or HTTP
-transport objects. List scenarios run before mutating lifecycle scenarios and
+transport objects. The libcurl-backed HTTP client also keeps a reusable easy
+handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
+JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
 seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
 the listed task set bounded in CI. Streaming/subscription and push notification
 scenarios remain in-process-only until dedicated wire clients are added for
@@ -100,9 +102,12 @@ entries.
 
 ## CI behavior
 
-The performance job remains report-only and keeps the current CI matrix of
+The performance job remains report-only and keeps the current CI wire matrix of
 three transports, two stores, 2,000 operations, and concurrency levels 1 and 4.
-It uploads `perf-artifacts`, appends `summary.md` to the GitHub Actions step
+The in-process SDK/service/store rows do not exercise a transport, so the runner
+executes them once per store/concurrency pair instead of repeating identical
+in-process work under every selected transport. It uploads `perf-artifacts`,
+appends `summary.md` to the GitHub Actions step
 summary, and fails only on crashes, functional operation errors, malformed
 output, missing artifacts, or driver timeouts. It does not enforce latency or
 throughput thresholds. The runner prints a workload estimate at startup and

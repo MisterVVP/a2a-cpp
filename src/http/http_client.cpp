@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <utility>
@@ -28,6 +29,18 @@ struct ClientGlobalState final {
   ClientGlobalState() : code(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
 
   CURLcode code = CURLE_OK;
+};
+
+struct ClientState final {
+  ~ClientState() {
+    if (handle != nullptr) {
+      curl_easy_cleanup(handle);
+    }
+  }
+
+  std::shared_ptr<const ClientGlobalState> global_state;
+  CURL* handle = nullptr;
+  std::mutex mutex;
 };
 }  // namespace detail
 
@@ -50,14 +63,6 @@ std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   return init;
 }
 
-struct CurlEasyDeleter final {
-  void operator()(CURL* handle) const noexcept {
-    if (handle != nullptr) {
-      curl_easy_cleanup(handle);
-    }
-  }
-};
-
 struct CurlSlistDeleter final {
   void operator()(curl_slist* list) const noexcept {
     if (list != nullptr) {
@@ -66,7 +71,6 @@ struct CurlSlistDeleter final {
   }
 };
 
-using CurlEasyHandle = std::unique_ptr<CURL, CurlEasyDeleter>;
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
@@ -215,16 +219,14 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
          http_version == core::http::kHttpVersion30;
 }
 
-Client::Client() : global_state_(EnsureCurlGlobalInit()) {}
+Client::Client() : state_(std::make_shared<detail::ClientState>()) {
+  state_->global_state = EnsureCurlGlobalInit();
+  state_->handle = curl_easy_init();
+}
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
-  if (global_state_->code != CURLE_OK) {
-    return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, global_state_->code, {}));
-  }
-
-  CurlEasyHandle handle(curl_easy_init());
-  if (handle == nullptr) {
-    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  if (state_->global_state->code != CURLE_OK) {
+    return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, state_->global_state->code, {}));
   }
 
   auto headers = BuildHeaders(request.headers);
@@ -232,26 +234,33 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
     return headers.error();
   }
 
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  if (state_->handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  }
+  CURL* const handle = state_->handle;
+  curl_easy_reset(handle);
+
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
-  const auto set_error_buffer = curl_easy_setopt(handle.get(), CURLOPT_ERRORBUFFER, error_buffer.data());
+  const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
   if (set_error_buffer != CURLE_OK) {
     return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
   }
 
   std::string response_body;
   std::vector<Header> response_headers;
-  const auto configured = ConfigureCurl(handle.get(), request, headers.value(), &response_body, &response_headers);
+  const auto configured = ConfigureCurl(handle, request, headers.value(), &response_body, &response_headers);
   if (!configured.ok()) {
     return configured.error();
   }
 
-  const CURLcode code = curl_easy_perform(handle.get());
+  const CURLcode code = curl_easy_perform(handle);
   if (code != CURLE_OK) {
     return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
   }
 
   long response_code = kHttpResponseCodeUnset;
-  const CURLcode info_code = curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &response_code);
+  const CURLcode info_code = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
   if (info_code != CURLE_OK) {
     return core::Error::RemoteProtocol(BuildCurlErrorMessage(kReadStatusFailureMessage, info_code, {}));
   }
