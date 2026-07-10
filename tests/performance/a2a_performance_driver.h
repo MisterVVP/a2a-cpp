@@ -2,10 +2,18 @@
 
 #pragma once
 
+#include <google/protobuf/struct.pb.h>
+
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "a2a/v1/a2a.pb.h"
@@ -104,5 +112,74 @@ struct ScenarioResult final {
                                                                      std::string_view config_id);
 [[nodiscard]] std::string BuildId(std::string_view prefix, int index);
 [[nodiscard]] double Percentile(const std::vector<double>& sorted_values, double percentile);
+[[nodiscard]] std::vector<std::string> SplitCsv(std::string_view value);
+[[nodiscard]] bool HasArgumentValue(int index, int argc);
+void SetStringField(google::protobuf::Struct* object, std::string_view key, std::string_view value);
+void SetNumberField(google::protobuf::Struct* object, std::string_view key, double value);
+void SetIntegerField(google::protobuf::Struct* object, std::string_view key, int value);
+void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_view scenario, std::string_view transport,
+                                std::string_view store_backend, int concurrency, const ScenarioResult& result);
+void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& result);
+
+template <typename ExecuteOperation>
+[[nodiscard]] ScenarioResult RunMeasuredScenario(std::string scenario, int requests, int concurrency,
+                                                 ExecuteOperation execute_operation) {
+  struct ThreadResult final {
+    int success = 0;
+    int errors = 0;
+    std::vector<double> latencies;
+  };
+
+  const int worker_count = std::min(concurrency, requests);
+  std::atomic<int> next_index{0};
+  std::vector<ThreadResult> thread_results(static_cast<std::size_t>(worker_count));
+  const auto started = std::chrono::steady_clock::now();
+
+  {
+    std::vector<std::jthread> workers;
+    workers.reserve(static_cast<std::size_t>(worker_count));
+    for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
+      workers.emplace_back([&execute_operation, &next_index, &thread_results, worker_index, requests, concurrency]() {
+        auto& thread_result = thread_results[static_cast<std::size_t>(worker_index)];
+        const int reserve_count = (requests + concurrency - 1) / concurrency;
+        thread_result.latencies.reserve(static_cast<std::size_t>(reserve_count));
+        for (;;) {
+          const int operation_index = next_index.fetch_add(1, std::memory_order_relaxed);
+          if (operation_index >= requests) {
+            return;
+          }
+          const auto op_started = std::chrono::steady_clock::now();
+          const bool ok = execute_operation(operation_index);
+          const auto op_finished = std::chrono::steady_clock::now();
+          const double latency =
+              static_cast<double>(
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(op_finished - op_started).count()) /
+              kNanosecondsPerMillisecond;
+          if (ok) {
+            ++thread_result.success;
+            thread_result.latencies.push_back(latency);
+          } else {
+            ++thread_result.errors;
+          }
+        }
+      });
+    }
+  }
+
+  ScenarioResult result;
+  result.scenario = std::move(scenario);
+  result.operations = requests;
+  result.latencies.reserve(static_cast<std::size_t>(requests));
+  for (auto& thread_result : thread_results) {
+    result.success += thread_result.success;
+    result.errors += thread_result.errors;
+    result.latencies.insert(result.latencies.end(), std::make_move_iterator(thread_result.latencies.begin()),
+                            std::make_move_iterator(thread_result.latencies.end()));
+  }
+  const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  result.throughput = static_cast<double>(result.success) / std::max(elapsed, kMinElapsedSeconds);
+  std::ranges::sort(result.latencies);
+  return result;
+}
 
 }  // namespace a2a::tests::performance

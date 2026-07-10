@@ -53,6 +53,11 @@ class StubRpcClient final : public GrpcTransport::RpcClient {
     return stub_->GetTask(context, request, response);
   }
 
+  [[nodiscard]] ::grpc::Status ListTasks(::grpc::ClientContext* context, const lf::a2a::v1::ListTasksRequest& request,
+                                         lf::a2a::v1::ListTasksResponse* response) override {
+    return stub_->ListTasks(context, request, response);
+  }
+
   [[nodiscard]] std::unique_ptr<GrpcTransport::StreamReader> SubscribeToTask(
       ::grpc::ClientContext* context, const lf::a2a::v1::SubscribeToTaskRequest& request) override {
     return std::make_unique<StubStreamReader>(stub_->SubscribeToTask(context, request));
@@ -186,9 +191,31 @@ core::Result<lf::a2a::v1::Task> GrpcTransport::GetTask(const lf::a2a::v1::GetTas
 }
 
 core::Result<ListTasksResponse> GrpcTransport::ListTasks(const ListTasksRequest& request, const CallOptions& options) {
-  (void)request;
-  (void)options;
-  return core::Error::Validation("gRPC transport does not support ListTasks in the current protocol");
+  auto context_result = BuildContext(options);
+  if (!context_result.ok()) {
+    return context_result.error();
+  }
+
+  lf::a2a::v1::ListTasksRequest grpc_request;
+  if (request.page_size > 0) {
+    grpc_request.set_page_size(static_cast<int32_t>(request.page_size));
+  }
+  grpc_request.set_page_token(request.page_token);
+
+  auto context = std::move(context_result.value());
+  lf::a2a::v1::ListTasksResponse response;
+  const auto status = rpc_client_->ListTasks(context.get(), grpc_request, &response);
+  if (!status.ok()) {
+    return BuildGrpcError(status);
+  }
+
+  ListTasksResponse result;
+  result.tasks.reserve(static_cast<std::size_t>(response.tasks_size()));
+  for (const auto& task : response.tasks()) {
+    result.tasks.push_back(task);
+  }
+  result.next_page_token = response.next_page_token();
+  return result;
 }
 
 core::Result<lf::a2a::v1::Task> GrpcTransport::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,

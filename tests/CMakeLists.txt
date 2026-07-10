@@ -792,7 +792,13 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 add_executable(a2a_performance_driver
+  performance/a2a_performance_common.cpp
   performance/a2a_performance_driver.cpp
+)
+
+add_executable(a2a_wire_performance_driver
+  performance/a2a_performance_common.cpp
+  performance/a2a_wire_performance_driver.cpp
 )
 
 target_include_directories(a2a_performance_driver
@@ -800,9 +806,21 @@ target_include_directories(a2a_performance_driver
     ${CMAKE_CURRENT_SOURCE_DIR}/support
 )
 
+target_include_directories(a2a_wire_performance_driver
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/support
+)
+
 target_link_libraries(a2a_performance_driver
   PRIVATE
     a2a::server
+    a2a::core
+    a2a::proto_generated
+)
+
+target_link_libraries(a2a_wire_performance_driver
+  PRIVATE
+    a2a::client
     a2a::core
     a2a::proto_generated
 )

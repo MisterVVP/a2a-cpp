@@ -46,6 +46,7 @@ DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_BUILD_DIR = "build/performance"
 DRIVER_NAME = "a2a_performance_driver"
+WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
 SUT_NAME = "tck_sut"
 DEFAULT_WARMUP_SECONDS = 1.0
 DEFAULT_DURATION_SECONDS = 0.0
@@ -83,57 +84,46 @@ def driver_path_from_build(build_dir: Path) -> Path:
     return candidates[0]
 
 
-def ensure_driver(config: RunnerConfig) -> Path:
-    explicit = os.environ.get("A2A_PERF_DRIVER")
-    if explicit:
-        driver = Path(explicit)
-        if not driver.exists():
-            raise ValueError(f"A2A_PERF_DRIVER does not exist: {driver}")
-        return driver
-    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
-    driver = driver_path_from_build(build_dir)
-    if driver.exists():
-        return driver
-    configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
-    if "postgres" in config.store_backends:
-        configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
-    subprocess.run(configure, check=True)
-    subprocess.run(["cmake", "--build", str(build_dir), "--target", DRIVER_NAME, "-j", str(os.cpu_count() or 2)], check=True)
-    if not driver.exists():
-        raise ValueError(f"performance driver was not produced at {driver}")
-    return driver
-
-
-
-
-def sut_path_from_build(build_dir: Path) -> Path:
-    candidates = [build_dir / "tests" / SUT_NAME, build_dir / SUT_NAME]
+def executable_path_from_build(build_dir: Path, name: str) -> Path:
+    candidates = [build_dir / "tests" / name, build_dir / name]
     for candidate in candidates:
         if candidate.exists():
             return candidate
     return candidates[0]
 
 
-def ensure_sut(config: RunnerConfig) -> Path:
-    explicit = os.environ.get("A2A_TCK_SUT")
+def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str) -> Path:
+    explicit = os.environ.get(env_name)
     if explicit:
-        sut = Path(explicit)
-        if not sut.exists():
-            raise ValueError(f"A2A_TCK_SUT does not exist: {sut}")
-        return sut
+        executable = Path(explicit)
+        if not executable.exists():
+            raise ValueError(f"{env_name} does not exist: {executable}")
+        return executable
     build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
-    sut = sut_path_from_build(build_dir)
-    if sut.exists():
-        return sut
+    executable = executable_path_from_build(build_dir, target_name)
+    if executable.exists():
+        return executable
     configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)
-    subprocess.run(["cmake", "--build", str(build_dir), "--target", SUT_NAME, "-j", str(os.cpu_count() or 2)], check=True)
-    if not sut.exists():
-        raise ValueError(f"TCK SUT was not produced at {sut}")
-    return sut
+    subprocess.run(["cmake", "--build", str(build_dir), "--target", target_name, "-j", str(os.cpu_count() or 2)], check=True)
+    if not executable.exists():
+        raise ValueError(f"{description} was not produced at {executable}")
+    return executable
 
+
+def ensure_driver(config: RunnerConfig) -> Path:
+    return ensure_executable(config, "A2A_PERF_DRIVER", DRIVER_NAME, "performance driver")
+
+
+def ensure_wire_driver(config: RunnerConfig) -> Path:
+    return ensure_executable(config, "A2A_PERF_WIRE_DRIVER", WIRE_DRIVER_NAME, "wire performance driver")
+
+
+
+def ensure_sut(config: RunnerConfig) -> Path:
+    return ensure_executable(config, "A2A_TCK_SUT", SUT_NAME, "TCK SUT")
 
 def wait_for_port(host: str, port: int, process: subprocess.Popen[str], log_path: Path) -> None:
     deadline = time.monotonic() + SUT_READY_TIMEOUT_SECONDS
@@ -213,24 +203,33 @@ def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurr
 
 
 
-def annotate_wire_results(results: list[dict[str, object]], transport: str) -> list[dict[str, object]]:
-    wire_results: list[dict[str, object]] = []
-    for result in results:
-        if result.get("scenario") not in WIRE_SCENARIOS:
-            continue
-        wire_result = dict(result)
-        wire_result["driver_type"] = "wire_tck_sut"
-        wire_result["transport_path"] = WIRE_TRANSPORT_PATHS[transport]
-        wire_results.append(wire_result)
-    return wire_results
-
-
 def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int, port: int) -> list[dict[str, object]]:
-    with SutProcess(config, store_backend, port):
-        # Reuse the measured operation harness while the shared SUT is online. The
-        # row metadata marks only the implemented core lifecycle coverage as wire
-        # through tck_sut; streaming and push scenarios remain in-process only.
-        return annotate_wire_results(run_driver(config, transport, store_backend, concurrency, WIRE_SCENARIOS), transport)
+    if transport not in WIRE_TRANSPORT_PATHS:
+        raise ValueError(f"unsupported wire transport: {transport}")
+    wire_driver = ensure_wire_driver(config)
+    with SutProcess(config, store_backend, port) as sut:
+        command = [
+            str(wire_driver),
+            "--transport", transport,
+            "--store-backend", store_backend,
+            "--host", sut.host,
+            "--port", str(sut.port),
+            "--requests", str(config.requests),
+            "--concurrency", str(concurrency),
+            "--warmup-seconds", str(config.warmup_seconds),
+            "--duration-seconds", str(config.duration_seconds),
+            "--scenarios", ",".join(WIRE_SCENARIOS),
+        ]
+        completed = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise ValueError(f"wire performance driver failed for {transport}/{store_backend}/c{concurrency}: {completed.stderr.strip()}")
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, list):
+        raise ValueError("wire performance driver returned malformed output")
+    for result in payload:
+        if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
+            raise ValueError("wire performance driver returned misleading metadata")
+    return payload
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:

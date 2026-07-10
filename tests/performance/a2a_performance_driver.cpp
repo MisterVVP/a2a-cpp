@@ -4,10 +4,8 @@
 
 #include <google/protobuf/struct.pb.h>
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
@@ -16,8 +14,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
-#include <utility>
 #include <vector>
 
 #include "a2a/core/protojson.h"
@@ -27,46 +23,6 @@
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_support/example_support.h"
-
-namespace a2a::tests::performance {
-
-double Percentile(const std::vector<double>& sorted_values, double percentile) {
-  if (sorted_values.empty()) {
-    return 0.0;
-  }
-  const auto last = static_cast<double>(sorted_values.size() - 1U);
-  const auto index = static_cast<std::size_t>(std::llround((percentile / 100.0) * last));
-  return sorted_values[std::min(index, sorted_values.size() - 1U)];
-}
-
-lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id, std::string_view task_id) {
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_message_id(std::string(message_id));
-  if (!task_id.empty()) {
-    request.mutable_message()->set_task_id(std::string(task_id));
-  }
-  request.mutable_message()->add_parts()->set_text(std::string(kMessageText));
-  return request;
-}
-
-lf::a2a::v1::TaskPushNotificationConfig MakePushConfig(std::string_view task_id, std::string_view config_id) {
-  lf::a2a::v1::TaskPushNotificationConfig config;
-  config.set_task_id(std::string(task_id));
-  config.set_id(std::string(config_id));
-  config.set_url(std::string(kPushCallbackUrl));
-  return config;
-}
-
-std::string BuildId(std::string_view prefix, int index) {
-  std::string value;
-  value.reserve(prefix.size() + kIdReserveSlack);
-  value.append(prefix);
-  value.push_back('-');
-  value.append(std::to_string(index));
-  return value;
-}
-
-}  // namespace a2a::tests::performance
 
 namespace {
 
@@ -330,80 +286,8 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
     (void)harness.Execute(scenario, warmup_index++);
   }
 
-  struct ThreadResult final {
-    int success = 0;
-    int errors = 0;
-    std::vector<double> latencies;
-  };
-
-  const int worker_count = std::min(options.concurrency, options.requests);
-  std::atomic<int> next_index{0};
-  std::vector<ThreadResult> thread_results(static_cast<std::size_t>(worker_count));
-  std::vector<std::thread> workers;
-  workers.reserve(static_cast<std::size_t>(worker_count));
-
-  const auto started = std::chrono::steady_clock::now();
-  for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
-    workers.emplace_back([&harness, &next_index, &options, &scenario, &thread_results, worker_index]() {
-      auto& thread_result = thread_results[static_cast<std::size_t>(worker_index)];
-      const int reserve_count = (options.requests + options.concurrency - 1) / options.concurrency;
-      thread_result.latencies.reserve(static_cast<std::size_t>(reserve_count));
-      for (;;) {
-        const int operation_index = next_index.fetch_add(1, std::memory_order_relaxed);
-        if (operation_index >= options.requests) {
-          return;
-        }
-        const auto op_started = std::chrono::steady_clock::now();
-        const bool ok = harness.Execute(scenario, operation_index);
-        const auto op_finished = std::chrono::steady_clock::now();
-        const double latency =
-            static_cast<double>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(op_finished - op_started).count()) /
-            kNanosecondsPerMillisecond;
-        if (ok) {
-          ++thread_result.success;
-          thread_result.latencies.push_back(latency);
-        } else {
-          ++thread_result.errors;
-        }
-      }
-    });
-  }
-  for (auto& worker : workers) {
-    worker.join();
-  }
-
-  ScenarioResult result;
-  result.scenario = scenario;
-  result.operations = options.requests;
-  result.latencies.reserve(static_cast<std::size_t>(options.requests));
-  for (auto& thread_result : thread_results) {
-    result.success += thread_result.success;
-    result.errors += thread_result.errors;
-    result.latencies.insert(result.latencies.end(), std::make_move_iterator(thread_result.latencies.begin()),
-                            std::make_move_iterator(thread_result.latencies.end()));
-  }
-  const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-  result.throughput = static_cast<double>(result.success) / std::max(elapsed, kMinElapsedSeconds);
-  std::ranges::sort(result.latencies);
-  return result;
-}
-
-std::vector<std::string> SplitCsv(std::string_view value) {
-  std::vector<std::string> items;
-  std::size_t start = 0;
-  while (start <= value.size()) {
-    const std::size_t comma = value.find(',', start);
-    const std::size_t end = comma == std::string_view::npos ? value.size() : comma;
-    if (end > start) {
-      items.emplace_back(value.substr(start, end - start));
-    }
-    if (comma == std::string_view::npos) {
-      break;
-    }
-    start = comma + 1U;
-  }
-  return items;
+  return RunMeasuredScenario(scenario, options.requests, options.concurrency,
+                             [&harness, &scenario](int index) { return harness.Execute(scenario, index); });
 }
 
 bool IsSupportedScenario(std::string_view scenario) {
@@ -437,12 +321,10 @@ bool ParseScenarioSelection(std::string_view value, Options* options) {
   return true;
 }
 
-bool HasValue(int index, int argc) { return index + 1 < argc; }
-
 bool ParseArgs(int argc, char** argv, Options* options) {
   for (int index = 1; index < argc; ++index) {
     const std::string_view arg(argv[index]);
-    if (!HasValue(index, argc)) {
+    if (!HasArgumentValue(index, argc)) {
       std::cerr << "unknown or incomplete argument: " << arg << '\n';
       return false;
     }
@@ -472,41 +354,17 @@ bool ParseArgs(int argc, char** argv, Options* options) {
   return options->requests > 0 && options->concurrency > 0;
 }
 
-void SetStringField(google::protobuf::Struct* object, std::string_view key, std::string_view value) {
-  (*object->mutable_fields())[std::string(key)].set_string_value(std::string(value));
-}
-
-void SetNumberField(google::protobuf::Struct* object, std::string_view key, double value) {
-  (*object->mutable_fields())[std::string(key)].set_number_value(value);
-}
-
-void SetIntegerField(google::protobuf::Struct* object, std::string_view key, int value) {
-  SetNumberField(object, key, static_cast<double>(value));
-}
-
 google::protobuf::Struct BuildResultObject(const Options& options, const ScenarioResult& result) {
   google::protobuf::Struct object;
-  SetStringField(&object, "scenario", result.scenario);
-  SetStringField(&object, "transport", options.transport);
-  SetStringField(&object, "store_backend", options.store_backend);
-  SetIntegerField(&object, "concurrency", options.concurrency);
-  SetIntegerField(&object, "operations", result.operations);
-  SetIntegerField(&object, "success", result.success);
-  SetIntegerField(&object, "errors", result.errors);
-  SetNumberField(&object, "throughput_ops_per_sec", result.throughput);
+  PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
+                             result);
   SetNumberField(&object, "warmup_seconds", options.warmup_seconds);
   SetNumberField(&object, "duration_seconds", options.duration_seconds);
   SetStringField(&object, "driver_type", kDriverType);
 
   SetStringField(&object, "transport_path", "in_process");
 
-  google::protobuf::Struct latency;
-  SetNumberField(&latency, "p50", Percentile(result.latencies, kP50));
-  SetNumberField(&latency, "p90", Percentile(result.latencies, kP90));
-  SetNumberField(&latency, "p95", Percentile(result.latencies, kP95));
-  SetNumberField(&latency, "p99", Percentile(result.latencies, kP99));
-  SetNumberField(&latency, "max", result.latencies.empty() ? 0.0 : result.latencies.back());
-  (*object.mutable_fields())["latency_ms"].mutable_struct_value()->Swap(&latency);
+  AddLatencyField(&object, result);
   return object;
 }
 
