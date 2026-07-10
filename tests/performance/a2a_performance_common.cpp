@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "a2a_performance_driver.h"
-
 #include <algorithm>
 #include <cmath>
 #include <string>
 #include <utility>
+
+#include "a2a_performance_driver.h"
 
 namespace a2a::tests::performance {
 
@@ -76,9 +76,8 @@ void SetIntegerField(google::protobuf::Struct* object, std::string_view key, int
   SetNumberField(object, key, static_cast<double>(value));
 }
 
-void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_view scenario,
-                                std::string_view transport, std::string_view store_backend, int concurrency,
-                                const ScenarioResult& result) {
+void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_view scenario, std::string_view transport,
+                                std::string_view store_backend, int concurrency, const ScenarioResult& result) {
   SetStringField(object, "scenario", scenario);
   SetStringField(object, "transport", transport);
   SetStringField(object, "store_backend", store_backend);

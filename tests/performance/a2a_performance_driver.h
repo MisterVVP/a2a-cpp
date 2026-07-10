@@ -16,6 +16,12 @@
 #include <utility>
 #include <vector>
 
+#if defined(__cpp_lib_jthread) && (__cpp_lib_jthread >= 201911L)
+#define A2A_PERF_HAS_JTHREAD 1
+#else
+#define A2A_PERF_HAS_JTHREAD 0
+#endif
+
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::tests::performance {
@@ -136,7 +142,12 @@ template <typename ExecuteOperation>
   const auto started = std::chrono::steady_clock::now();
 
   {
-    std::vector<std::jthread> workers;
+#if A2A_PERF_HAS_JTHREAD
+    using WorkerThread = std::jthread;
+#else
+    using WorkerThread = std::thread;
+#endif
+    std::vector<WorkerThread> workers;
     workers.reserve(static_cast<std::size_t>(worker_count));
     for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
       workers.emplace_back([&execute_operation, &next_index, &thread_results, worker_index, requests, concurrency]() {
@@ -164,6 +175,13 @@ template <typename ExecuteOperation>
         }
       });
     }
+#if !A2A_PERF_HAS_JTHREAD
+    for (auto& worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+#endif
   }
 
   ScenarioResult result;
