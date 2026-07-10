@@ -120,6 +120,14 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     return task_status;
   }
 
+  grpc::Status ListTasks(grpc::ClientContext* context, const lf::a2a::v1::ListTasksRequest& request,
+                         lf::a2a::v1::ListTasksResponse* response) override {
+    (void)context;
+    response->set_next_page_token(request.page_token());
+    response->add_tasks()->set_id("grpc-list-task");
+    return list_tasks_status;
+  }
+
   grpc::Status CancelTask(grpc::ClientContext* context, const lf::a2a::v1::CancelTaskRequest& request,
                           lf::a2a::v1::Task* response) override {
     (void)context;
@@ -166,6 +174,7 @@ class FakeRpcClient final : public a2a::client::GrpcTransport::RpcClient {
   grpc::Status cancel_status = grpc::Status::OK;
   grpc::Status create_config_status = grpc::Status::OK;
   grpc::Status get_config_status = grpc::Status::OK;
+  grpc::Status list_tasks_status = grpc::Status::OK;
   grpc::Status list_configs_status = grpc::Status::OK;
   grpc::Status delete_config_status = grpc::Status::OK;
   std::unique_ptr<a2a::client::GrpcTransport::StreamReader> stream_reader;

@@ -18,7 +18,7 @@ import time
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 TRANSPORTS = ("grpc", "jsonrpc", "http_json")
 STORE_BACKENDS = ("inmemory", "postgres")
@@ -46,21 +46,25 @@ DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_BUILD_DIR = "build/performance"
 DRIVER_NAME = "a2a_performance_driver"
+WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
 SUT_NAME = "tck_sut"
 DEFAULT_WARMUP_SECONDS = 1.0
 DEFAULT_DURATION_SECONDS = 0.0
 DEFAULT_REPORT_DIR = "perf-artifacts"
 WIRE_SCENARIOS = (
+    "ListTasks_NoPagination",
+    "ListTasks_WithPagination",
     "SendMessage_CreateTask",
     "GetTask_ExistingTask",
     "CancelTask_WorkingTask",
-    "ListTasks_NoPagination",
-    "ListTasks_WithPagination",
     "SendMessage_FollowUpExistingTask",
     "GetTask_MissingTaskError",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
+DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
+DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
+MAX_ERROR_ROWS_TO_PRINT = 20
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,8 @@ class RunnerConfig:
     warmup_seconds: float
     duration_seconds: float
     report_dir: Path
+    driver_timeout_seconds: float
+    wire_driver_timeout_seconds: float
 
 
 
@@ -83,57 +89,46 @@ def driver_path_from_build(build_dir: Path) -> Path:
     return candidates[0]
 
 
-def ensure_driver(config: RunnerConfig) -> Path:
-    explicit = os.environ.get("A2A_PERF_DRIVER")
-    if explicit:
-        driver = Path(explicit)
-        if not driver.exists():
-            raise ValueError(f"A2A_PERF_DRIVER does not exist: {driver}")
-        return driver
-    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
-    driver = driver_path_from_build(build_dir)
-    if driver.exists():
-        return driver
-    configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
-    if "postgres" in config.store_backends:
-        configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
-    subprocess.run(configure, check=True)
-    subprocess.run(["cmake", "--build", str(build_dir), "--target", DRIVER_NAME, "-j", str(os.cpu_count() or 2)], check=True)
-    if not driver.exists():
-        raise ValueError(f"performance driver was not produced at {driver}")
-    return driver
-
-
-
-
-def sut_path_from_build(build_dir: Path) -> Path:
-    candidates = [build_dir / "tests" / SUT_NAME, build_dir / SUT_NAME]
+def executable_path_from_build(build_dir: Path, name: str) -> Path:
+    candidates = [build_dir / "tests" / name, build_dir / name]
     for candidate in candidates:
         if candidate.exists():
             return candidate
     return candidates[0]
 
 
-def ensure_sut(config: RunnerConfig) -> Path:
-    explicit = os.environ.get("A2A_TCK_SUT")
+def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str) -> Path:
+    explicit = os.environ.get(env_name)
     if explicit:
-        sut = Path(explicit)
-        if not sut.exists():
-            raise ValueError(f"A2A_TCK_SUT does not exist: {sut}")
-        return sut
+        executable = Path(explicit)
+        if not executable.exists():
+            raise ValueError(f"{env_name} does not exist: {executable}")
+        return executable
     build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
-    sut = sut_path_from_build(build_dir)
-    if sut.exists():
-        return sut
+    executable = executable_path_from_build(build_dir, target_name)
+    if executable.exists():
+        return executable
     configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)
-    subprocess.run(["cmake", "--build", str(build_dir), "--target", SUT_NAME, "-j", str(os.cpu_count() or 2)], check=True)
-    if not sut.exists():
-        raise ValueError(f"TCK SUT was not produced at {sut}")
-    return sut
+    subprocess.run(["cmake", "--build", str(build_dir), "--target", target_name, "-j", str(os.cpu_count() or 2)], check=True)
+    if not executable.exists():
+        raise ValueError(f"{description} was not produced at {executable}")
+    return executable
 
+
+def ensure_driver(config: RunnerConfig) -> Path:
+    return ensure_executable(config, "A2A_PERF_DRIVER", DRIVER_NAME, "performance driver")
+
+
+def ensure_wire_driver(config: RunnerConfig) -> Path:
+    return ensure_executable(config, "A2A_PERF_WIRE_DRIVER", WIRE_DRIVER_NAME, "wire performance driver")
+
+
+
+def ensure_sut(config: RunnerConfig) -> Path:
+    return ensure_executable(config, "A2A_TCK_SUT", SUT_NAME, "TCK SUT")
 
 def wait_for_port(host: str, port: int, process: subprocess.Popen[str], log_path: Path) -> None:
     deadline = time.monotonic() + SUT_READY_TIMEOUT_SECONDS
@@ -148,6 +143,21 @@ def wait_for_port(host: str, port: int, process: subprocess.Popen[str], log_path
     raise ValueError(f"timed out waiting for tck_sut port {port}; logs:\n{read_tail(log_path)}")
 
 
+def find_available_sut_port(host: str = "127.0.0.1") -> int:
+    for _ in range(100):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as http_probe:
+            http_probe.bind((host, 0))
+            port = int(http_probe.getsockname()[1])
+            if port >= 65534:
+                continue
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as grpc_probe:
+                try:
+                    grpc_probe.bind((host, port + 1))
+                except OSError:
+                    continue
+            return port
+    raise ValueError("could not find adjacent free ports for tck_sut")
+
 def read_tail(path: Path) -> str:
     if not path.exists():
         return "<no log file>"
@@ -155,8 +165,13 @@ def read_tail(path: Path) -> str:
     return "\n".join(lines[-80:])
 
 
+def postgres_schema_name(transport: str, concurrency: int, port: int) -> str:
+    safe_transport = "".join(ch if ch.isalnum() else "_" for ch in transport.lower())
+    return f"a2a_perf_{safe_transport}_{concurrency}_{port}"
+
+
 class SutProcess:
-    def __init__(self, config: RunnerConfig, store_backend: str, port: int) -> None:
+    def __init__(self, config: RunnerConfig, store_backend: str, port: int, transport: str, concurrency: int) -> None:
         self.host = "127.0.0.1"
         self.port = port
         self.grpc_port = port + 1
@@ -164,13 +179,17 @@ class SutProcess:
         self.process: subprocess.Popen[str] | None = None
         self.sut = ensure_sut(config)
         self.store_backend = store_backend
+        self.transport = transport
+        self.concurrency = concurrency
 
     def __enter__(self) -> "SutProcess":
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["A2A_TCK_STORE_BACKEND"] = self.store_backend
-        if self.store_backend == "postgres" and "A2A_TCK_POSTGRES_DSN" not in env and "A2A_TEST_POSTGRES_DSN" in env:
-            env["A2A_TCK_POSTGRES_DSN"] = env["A2A_TEST_POSTGRES_DSN"]
+        if self.store_backend == "postgres":
+            if "A2A_TCK_POSTGRES_DSN" not in env and "A2A_TEST_POSTGRES_DSN" in env:
+                env["A2A_TCK_POSTGRES_DSN"] = env["A2A_TEST_POSTGRES_DSN"]
+            env["A2A_TCK_POSTGRES_SCHEMA"] = postgres_schema_name(self.transport, self.concurrency, self.port)
         log_file = self.log_path.open("w", encoding="utf-8")
         self.process = subprocess.Popen([str(self.sut), f"{self.host}:{self.port}"], cwd=Path(__file__).resolve().parents[1], env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True)
         log_file.close()
@@ -190,6 +209,37 @@ class SutProcess:
                 self.process.wait(timeout=10)
 
 
+def run_command_json(command: list[str], timeout_seconds: float, error_context: str, log_path: Path | None = None) -> list[dict[str, object]]:
+    process = subprocess.Popen(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+        message = f"{error_context} timed out after {timeout_seconds:.0f}s"
+        if stderr.strip():
+            message += f"; stderr: {stderr.strip()}"
+        if log_path is not None:
+            message += f"; tck_sut logs:\n{read_tail(log_path)}"
+        raise ValueError(message) from exc
+    if process.returncode != 0:
+        raise ValueError(f"{error_context} failed: {stderr.strip()}")
+    payload = json.loads(stdout)
+    if not isinstance(payload, list):
+        raise ValueError(f"{error_context} returned malformed output")
+    return payload
+
+
 def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int, scenarios: tuple[str, ...] | None = None) -> list[dict[str, object]]:
     driver = ensure_driver(config)
     command = [
@@ -203,34 +253,37 @@ def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurr
     ]
     if scenarios is not None:
         command.extend(["--scenarios", ",".join(scenarios)])
-    completed = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=False)
-    if completed.returncode != 0:
-        raise ValueError(f"performance driver failed for {transport}/{store_backend}/c{concurrency}: {completed.stderr.strip()}")
-    payload = json.loads(completed.stdout)
-    if not isinstance(payload, list):
-        raise ValueError("performance driver returned malformed output")
-    return payload
+    return run_command_json(
+        command, config.driver_timeout_seconds, f"performance driver for {transport}/{store_backend}/c{concurrency}"
+    )
 
-
-
-def annotate_wire_results(results: list[dict[str, object]], transport: str) -> list[dict[str, object]]:
-    wire_results: list[dict[str, object]] = []
-    for result in results:
-        if result.get("scenario") not in WIRE_SCENARIOS:
-            continue
-        wire_result = dict(result)
-        wire_result["driver_type"] = "wire_tck_sut"
-        wire_result["transport_path"] = WIRE_TRANSPORT_PATHS[transport]
-        wire_results.append(wire_result)
-    return wire_results
 
 
 def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int, port: int) -> list[dict[str, object]]:
-    with SutProcess(config, store_backend, port):
-        # Reuse the measured operation harness while the shared SUT is online. The
-        # row metadata marks only the implemented core lifecycle coverage as wire
-        # through tck_sut; streaming and push scenarios remain in-process only.
-        return annotate_wire_results(run_driver(config, transport, store_backend, concurrency, WIRE_SCENARIOS), transport)
+    if transport not in WIRE_TRANSPORT_PATHS:
+        raise ValueError(f"unsupported wire transport: {transport}")
+    wire_driver = ensure_wire_driver(config)
+    with SutProcess(config, store_backend, port, transport, concurrency) as sut:
+        command = [
+            str(wire_driver),
+            "--transport", transport,
+            "--store-backend", store_backend,
+            "--host", sut.host,
+            "--port", str(sut.port),
+            "--requests", str(config.requests),
+            "--concurrency", str(concurrency),
+            "--warmup-seconds", str(config.warmup_seconds),
+            "--duration-seconds", str(config.duration_seconds),
+            "--scenarios", ",".join(WIRE_SCENARIOS),
+        ]
+        payload = run_command_json(
+            command, config.wire_driver_timeout_seconds,
+            f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
+        )
+    for result in payload:
+        if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
+            raise ValueError("wire performance driver returned misleading metadata")
+    return payload
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -268,11 +321,15 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--warmup-seconds", type=float, default=float(env_or_default("A2A_PERF_WARMUP_SECONDS", str(DEFAULT_WARMUP_SECONDS))))
     parser.add_argument("--duration-seconds", type=float, default=float(env_or_default("A2A_PERF_DURATION_SECONDS", str(DEFAULT_DURATION_SECONDS))))
     parser.add_argument("--report-dir", default=env_or_default("A2A_PERF_REPORT_DIR", DEFAULT_REPORT_DIR))
+    parser.add_argument("--driver-timeout-seconds", type=float, default=float(env_or_default("A2A_PERF_DRIVER_TIMEOUT_SECONDS", str(DEFAULT_DRIVER_TIMEOUT_SECONDS))))
+    parser.add_argument("--wire-driver-timeout-seconds", type=float, default=float(env_or_default("A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS", str(DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS))))
     args = parser.parse_args(argv)
     if args.requests <= 0:
         raise ValueError("requests must be positive")
     if args.warmup_seconds < 0 or args.duration_seconds < 0:
         raise ValueError("durations must be non-negative")
+    if args.driver_timeout_seconds <= 0 or args.wire_driver_timeout_seconds <= 0:
+        raise ValueError("driver timeouts must be positive")
     return RunnerConfig(
         transports=split_csv(args.transports, TRANSPORTS),
         store_backends=split_csv(args.store_backends, STORE_BACKENDS),
@@ -281,6 +338,8 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         warmup_seconds=args.warmup_seconds,
         duration_seconds=args.duration_seconds,
         report_dir=Path(args.report_dir),
+        driver_timeout_seconds=args.driver_timeout_seconds,
+        wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
     )
 
 
@@ -398,20 +457,92 @@ def scenario_rollups(results: list[dict[str, object]]) -> list[dict[str, object]
     return sorted(rows, key=lambda row: str(row["scenario"]))
 
 
+def log_progress(message: str) -> None:
+    print(f"[perf] {message}", flush=True)
+
+
+def log_workload_estimate(config: RunnerConfig) -> None:
+    store_concurrency_rows = len(config.store_backends) * len(config.concurrency_levels)
+    in_process_rows = store_concurrency_rows * len(SCENARIOS)
+    wire_rows = len(config.transports) * store_concurrency_rows * len(WIRE_SCENARIOS)
+    estimated_rows = in_process_rows + wire_rows
+    estimated_operations = estimated_rows * config.requests
+    log_progress(
+        f"estimated_rows={estimated_rows} estimated_operations={estimated_operations} "
+        f"transports={len(config.transports)} stores={len(config.store_backends)} "
+        f"concurrency_levels={len(config.concurrency_levels)} requests={config.requests}"
+    )
+
+
+def result_error_count(result: dict[str, object]) -> int:
+    return int(result.get("errors", 0))
+
+
+def format_error_summary(results: list[dict[str, object]]) -> str:
+    error_rows = [result for result in results if result_error_count(result) > 0]
+    total_errors = sum(result_error_count(result) for result in error_rows)
+    lines = [f"performance scenarios reported {total_errors} operation errors across {len(error_rows)} rows"]
+    for result in error_rows[:MAX_ERROR_ROWS_TO_PRINT]:
+        lines.append(
+            "- "
+            f"scenario={result.get('scenario')} "
+            f"driver_type={result.get('driver_type')} "
+            f"transport_path={result.get('transport_path')} "
+            f"transport={result.get('transport')} "
+            f"store={result.get('store_backend')} "
+            f"concurrency={result.get('concurrency')} "
+            f"success={result.get('success')} "
+            f"errors={result.get('errors')}"
+        )
+    if len(error_rows) > MAX_ERROR_ROWS_TO_PRINT:
+        lines.append(f"- ... {len(error_rows) - MAX_ERROR_ROWS_TO_PRINT} additional error rows omitted")
+    return "\n".join(lines)
+
+
+def run_with_progress(label: str, runner: Callable[[], list[dict[str, object]]], transport: str, store_backend: str, concurrency: int, requests: int) -> list[dict[str, object]]:
+    log_progress(f"start {label} transport={transport} store={store_backend} concurrency={concurrency} requests={requests}")
+    started = time.monotonic()
+    results = runner()
+    elapsed = time.monotonic() - started
+    errors = sum(result_error_count(result) for result in results)
+    log_progress(
+        f"done  {label} transport={transport} store={store_backend} concurrency={concurrency} "
+        f"rows={len(results)} errors={errors} elapsed={elapsed:.2f}s"
+    )
+    return results
+
+
 def main(argv: list[str]) -> int:
     try:
         config = parse_args(argv)
         results = []
-        wire_port = 51061
+        log_workload_estimate(config)
+        in_process_transport = config.transports[0]
+        for store_backend in config.store_backends:
+            for concurrency in config.concurrency_levels:
+                results.extend(
+                    run_with_progress(
+                        "in-process",
+                        lambda: run_driver(config, in_process_transport, store_backend, concurrency),
+                        in_process_transport, store_backend, concurrency, config.requests,
+                    )
+                )
         for transport in config.transports:
             for store_backend in config.store_backends:
                 for concurrency in config.concurrency_levels:
-                    results.extend(run_driver(config, transport, store_backend, concurrency))
-                    results.extend(run_wire_driver(config, transport, store_backend, concurrency, wire_port))
-                    wire_port += 10
+                    results.extend(
+                        run_with_progress(
+                            "wire",
+                            lambda: run_wire_driver(
+                                config, transport, store_backend, concurrency, find_available_sut_port()
+                            ),
+                            transport, store_backend, concurrency, config.requests,
+                        )
+                    )
         results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"])))
         write_reports(results, config)
-        if any(result["errors"] for result in results):
+        if any(result_error_count(result) > 0 for result in results):
+            print(f"error: {format_error_summary(results)}", file=sys.stderr)
             return 2
         return 0
     except ValueError as exc:

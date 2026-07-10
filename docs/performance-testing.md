@@ -3,7 +3,7 @@
 The A2A C++ SDK includes a report-only performance test kit for repeatable local
 and CI measurements. The Python runner still owns matrix orchestration and writes
 `results.json`, `results.csv`, and `summary.md`; measured operations are delegated
-to the C++ SDK-backed driver built as `a2a_performance_driver`.
+to the in-process C++ SDK-backed driver (`a2a_performance_driver`) and, for real transport rows, the wire-level client driver (`a2a_wire_performance_driver`).
 
 ## Run locally
 
@@ -17,8 +17,7 @@ The runner writes:
 - `perf-artifacts/results.csv`
 - `perf-artifacts/summary.md`
 
-If `A2A_PERF_DRIVER` is not set, the runner configures and builds the driver in
-`build/performance`. Set `A2A_PERF_BUILD_DIR` to reuse another CMake build tree.
+If `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_TCK_SUT` are not set, the runner configures and builds the needed binaries in `build/performance`. Set `A2A_PERF_BUILD_DIR` to reuse another CMake build tree.
 
 ## Configuration
 
@@ -34,7 +33,11 @@ matching environment variables.
 | Warmup seconds | `A2A_PERF_WARMUP_SECONDS` | `1` |
 | Duration seconds metadata | `A2A_PERF_DURATION_SECONDS` | `0` |
 | Report directory | `A2A_PERF_REPORT_DIR` | `perf-artifacts` |
-| Existing driver binary | `A2A_PERF_DRIVER` | unset |
+| Existing in-process driver binary | `A2A_PERF_DRIVER` | unset |
+| Existing wire driver binary | `A2A_PERF_WIRE_DRIVER` | unset |
+| Existing TCK SUT binary | `A2A_TCK_SUT` | unset |
+| In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `600` |
+| Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
 
 ## Scenario coverage
@@ -57,13 +60,30 @@ Each row includes the required stable fields plus `driver_type` and
 
 ## Transport coverage
 
-The current C++ driver is SDK-backed and in-process. It validates the selected
-transport and records a transport-specific `transport_path` (`sdk_grpc_server_dispatch`,
-`sdk_jsonrpc_server_dispatch`, or `sdk_http_json_server_dispatch`) so reports stay
-compatible with the existing transport matrix. It does not yet open sockets or
-run external clients; k6 is not required. Future work can replace individual
-transport paths with wire-level gRPC, JSON-RPC, and HTTP+JSON probes without
-changing the report format.
+Reports contain two clearly separated measurement paths:
+
+- In-process rows come from `a2a_performance_driver`. They exercise SDK service,
+  executor, store, streaming, and push-notification code without sockets and are
+  reported as `driver_type=cpp_sdk_in_process` with `transport_path=in_process`.
+- Wire rows come from `a2a_wire_performance_driver`. The runner starts the shared
+  `tck_sut` fixture, waits for HTTP and gRPC ports, and then the wire driver sends
+  real client calls to the selected endpoint. These rows are reported as
+  `driver_type=wire_tck_sut` with `transport_path=wire_http_json`,
+  `wire_jsonrpc`, or `wire_grpc`.
+
+The current real wire-level scenario set covers core lifecycle operations for
+HTTP+JSON, JSON-RPC, and gRPC: `ListTasks_NoPagination`,
+`ListTasks_WithPagination`, `SendMessage_CreateTask`, `GetTask_ExistingTask`,
+`CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`, and
+`GetTask_MissingTaskError`. The wire driver reuses one client/transport per
+worker thread so measured operations do not recreate gRPC channels or HTTP
+transport objects. The libcurl-backed HTTP client also keeps a reusable easy
+handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
+JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
+seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
+the listed task set bounded in CI. Streaming/subscription and push notification
+scenarios remain in-process-only until dedicated wire clients are added for
+those flows; they must not be interpreted as `wire_tck_sut` coverage.
 
 ## Store backend coverage
 
@@ -74,14 +94,29 @@ and push notification stores when the driver is built with
 option when `postgres` is selected and it needs to auto-build the driver.
 PostgreSQL runs must provide the same local DSN style used by the repository
 store tests (`A2A_TEST_POSTGRES_DSN`); CI starts a local PostgreSQL service for
-the performance job.
+the performance job. For wire-level PostgreSQL rows, the runner maps
+`A2A_TEST_POSTGRES_DSN` to `A2A_TCK_POSTGRES_DSN` for `tck_sut` and assigns a
+matrix-scoped schema named `a2a_perf_<transport>_<concurrency>_<port>` so rows
+do not share the default `public` schema or accumulate data across matrix
+entries.
 
 ## CI behavior
 
-The performance job remains report-only: it uploads `perf-artifacts`, appends
-`summary.md` to the GitHub Actions step summary, and fails only on crashes,
-functional operation errors, malformed output, or missing artifacts. It does not
-enforce latency or throughput thresholds.
+The performance job remains report-only and keeps the current CI wire matrix of
+three transports, two stores, 2,000 operations, and concurrency levels 1 and 4.
+The in-process SDK/service/store rows do not exercise a transport, so the runner
+executes them once per store/concurrency pair instead of repeating identical
+in-process work under every selected transport. It uploads `perf-artifacts`,
+appends `summary.md` to the GitHub Actions step
+summary, and fails only on crashes, functional operation errors, malformed
+output, missing artifacts, or driver timeouts. It does not enforce latency or
+throughput thresholds. The runner prints a workload estimate at startup and
+flushes `[perf] start ...` / `[perf] done ...` progress lines for every
+in-process and wire matrix row so GitHub Actions logs show forward progress.
+Both driver subprocesses have explicit timeouts controlled by
+`A2A_PERF_DRIVER_TIMEOUT_SECONDS` and
+`A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS`; on a wire timeout, recent `tck_sut` logs
+are included in the failure message when available.
 
 ## Larger local benchmark
 
@@ -127,9 +162,9 @@ cmake --build build-tck --target tck_sut
 
 Performance reports distinguish the low-overhead SDK service/store layer from
 transport-level coverage. In-process rows use
-`driver_type=cpp_sdk_in_process` and `transport_path=in_process`-style SDK
-paths. Wire rows use `driver_type=wire_tck_sut` and one of
-`wire_http_json`, `wire_jsonrpc`, or `wire_grpc`. Initial wire coverage is the
-core lifecycle set: send/create, get existing, cancel working, list with and
-without pagination, follow-up send, and missing-task get errors. Streaming and
-push-notification rows remain in-process until dedicated wire clients are added.
+`driver_type=cpp_sdk_in_process` and `transport_path=in_process`. Wire rows use
+`driver_type=wire_tck_sut` and one of `wire_http_json`, `wire_jsonrpc`, or
+`wire_grpc`. Initial wire coverage is the core lifecycle set: bounded list with
+and without pagination, send/create, get existing, cancel working, follow-up
+send, and missing-task get errors. Streaming and push-notification rows remain
+in-process until dedicated wire clients are added.

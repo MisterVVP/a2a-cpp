@@ -52,7 +52,8 @@ using namespace a2a::tests::sut;
 constexpr int kListenBacklog = 128;
 constexpr int kReuseAddress = 1;
 constexpr int kMaxHttpPort = 65534;
-constexpr int kAcceptRetryDelayMillis = 25;
+// Keep the non-blocking accept loop responsive for HTTP wire-performance clients.
+constexpr int kAcceptRetryDelayMillis = 1;
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 constexpr std::string_view kMissingPostgresDsnMessage =
     "A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres";
