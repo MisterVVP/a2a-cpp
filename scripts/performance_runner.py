@@ -64,6 +64,7 @@ WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc"
 SUT_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
+MAX_ERROR_ROWS_TO_PRINT = 20
 
 
 @dataclass(frozen=True)
@@ -458,14 +459,40 @@ def log_workload_estimate(config: RunnerConfig) -> None:
     )
 
 
+def result_error_count(result: dict[str, object]) -> int:
+    return int(result.get("errors", 0))
+
+
+def format_error_summary(results: list[dict[str, object]]) -> str:
+    error_rows = [result for result in results if result_error_count(result) > 0]
+    total_errors = sum(result_error_count(result) for result in error_rows)
+    lines = [f"performance scenarios reported {total_errors} operation errors across {len(error_rows)} rows"]
+    for result in error_rows[:MAX_ERROR_ROWS_TO_PRINT]:
+        lines.append(
+            "- "
+            f"scenario={result.get('scenario')} "
+            f"driver_type={result.get('driver_type')} "
+            f"transport_path={result.get('transport_path')} "
+            f"transport={result.get('transport')} "
+            f"store={result.get('store_backend')} "
+            f"concurrency={result.get('concurrency')} "
+            f"success={result.get('success')} "
+            f"errors={result.get('errors')}"
+        )
+    if len(error_rows) > MAX_ERROR_ROWS_TO_PRINT:
+        lines.append(f"- ... {len(error_rows) - MAX_ERROR_ROWS_TO_PRINT} additional error rows omitted")
+    return "\n".join(lines)
+
+
 def run_with_progress(label: str, runner: Callable[[], list[dict[str, object]]], transport: str, store_backend: str, concurrency: int, requests: int) -> list[dict[str, object]]:
     log_progress(f"start {label} transport={transport} store={store_backend} concurrency={concurrency} requests={requests}")
     started = time.monotonic()
     results = runner()
     elapsed = time.monotonic() - started
+    errors = sum(result_error_count(result) for result in results)
     log_progress(
         f"done  {label} transport={transport} store={store_backend} concurrency={concurrency} "
-        f"rows={len(results)} elapsed={elapsed:.2f}s"
+        f"rows={len(results)} errors={errors} elapsed={elapsed:.2f}s"
     )
     return results
 
@@ -499,7 +526,8 @@ def main(argv: list[str]) -> int:
                     wire_port += 10
         results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"])))
         write_reports(results, config)
-        if any(result["errors"] for result in results):
+        if any(result_error_count(result) > 0 for result in results):
+            print(f"error: {format_error_summary(results)}", file=sys.stderr)
             return 2
         return 0
     except ValueError as exc:

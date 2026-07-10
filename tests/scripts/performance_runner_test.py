@@ -84,6 +84,25 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertNotEqual(0, completed.returncode)
             self.assertIn("timed out", completed.stderr)
 
+    def test_formats_operation_error_summary(self):
+        runner = load_runner_module()
+        summary = runner.format_error_summary([
+            {
+                "scenario": "SendMessage_CreateTask",
+                "driver_type": "wire_tck_sut",
+                "transport_path": "wire_jsonrpc",
+                "transport": "jsonrpc",
+                "store_backend": "inmemory",
+                "concurrency": 4,
+                "success": 3,
+                "errors": 2,
+            }
+        ])
+        self.assertIn("2 operation errors", summary)
+        self.assertIn("scenario=SendMessage_CreateTask", summary)
+        self.assertIn("transport_path=wire_jsonrpc", summary)
+        self.assertIn("concurrency=4", summary)
+
     def test_postgres_schema_name_is_matrix_scoped(self):
         runner = load_runner_module()
         self.assertEqual("a2a_perf_http_json_4_51081", runner.postgres_schema_name("http_json", 4, 51081))
