@@ -343,22 +343,27 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
                              });
 }
 
+bool IsPushConfigWireScenario(std::string_view scenario) {
+  return scenario == kScenarioPushConfigCreate || scenario == kScenarioPushConfigGet ||
+         scenario == kScenarioPushConfigList || scenario == kScenarioPushConfigDelete;
+}
+
 bool IsStreamingWireScenario(std::string_view scenario) {
   return scenario == kScenarioSendStreamingMessageFiniteStream || scenario == kScenarioSubscribeToTaskFirstEventLatency;
 }
 
 bool IsWireScenario(std::string_view scenario, std::string_view transport) {
+  if (IsPushConfigWireScenario(scenario)) {
+    return transport == kGrpcTransport;
+  }
   const bool supported_core =
       scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
       scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
       scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
-      scenario == kScenarioGetTaskMissingTaskError || scenario == kScenarioPushConfigCreate ||
-      scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList ||
-      scenario == kScenarioPushConfigDelete;
+      scenario == kScenarioGetTaskMissingTaskError;
   if (supported_core) {
     return true;
   }
-  (void)transport;
   return IsStreamingWireScenario(scenario);
 }
 
@@ -419,14 +424,17 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
     return options.scenarios;
   }
   std::vector<std::string> scenarios = {
-      std::string(kScenarioListTasksNoPagination),   std::string(kScenarioListTasksWithPagination),
-      std::string(kScenarioSendMessageCreateTask),   std::string(kScenarioGetTaskExistingTask),
-      std::string(kScenarioCancelTaskWorkingTask),   std::string(kScenarioSendMessageFollowUpExistingTask),
-      std::string(kScenarioGetTaskMissingTaskError), std::string(kScenarioPushConfigCreate),
-      std::string(kScenarioPushConfigGet),           std::string(kScenarioPushConfigList),
-      std::string(kScenarioPushConfigDelete)};
-  scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStream);
-  scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatency);
+      std::string(kScenarioListTasksNoPagination),           std::string(kScenarioListTasksWithPagination),
+      std::string(kScenarioSendMessageCreateTask),           std::string(kScenarioGetTaskExistingTask),
+      std::string(kScenarioCancelTaskWorkingTask),           std::string(kScenarioSendMessageFollowUpExistingTask),
+      std::string(kScenarioGetTaskMissingTaskError),         std::string(kScenarioSendStreamingMessageFiniteStream),
+      std::string(kScenarioSubscribeToTaskFirstEventLatency)};
+  if (options.transport == kGrpcTransport) {
+    scenarios.emplace_back(kScenarioPushConfigCreate);
+    scenarios.emplace_back(kScenarioPushConfigGet);
+    scenarios.emplace_back(kScenarioPushConfigList);
+    scenarios.emplace_back(kScenarioPushConfigDelete);
+  }
   return scenarios;
 }
 

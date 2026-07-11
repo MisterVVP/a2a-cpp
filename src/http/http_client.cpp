@@ -167,14 +167,8 @@ size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_d
   return byte_count;
 }
 
-struct StreamCallbackContext final {
-  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
-  const std::function<bool()>* is_cancelled = nullptr;
-  std::optional<core::Error> error;
-};
-
 size_t WriteStreamBody(char* contents, size_t size, size_t nmemb, void* user_data) {
-  auto* context = static_cast<StreamCallbackContext*>(user_data);
+  auto* context = static_cast<detail::StreamCallbackContext*>(user_data);
   const std::size_t byte_count = size * nmemb;
   if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
     return 0;
@@ -193,7 +187,7 @@ int CheckStreamProgress(void* clientp, curl_off_t download_total, curl_off_t dow
   (void)downloaded;
   (void)upload_total;
   (void)uploaded;
-  auto* context = static_cast<StreamCallbackContext*>(clientp);
+  auto* context = static_cast<detail::StreamCallbackContext*>(clientp);
   if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
     return 1;
   }
@@ -246,7 +240,8 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
 }
 
 core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, const CurlHeaderList& headers,
-                                       StreamCallbackContext* stream_context, std::vector<Header>* response_headers) {
+                                       detail::StreamCallbackContext* stream_context,
+                                       std::vector<Header>* response_headers) {
   std::string unused_body;
   const auto configured = ConfigureCurl(handle, request, headers, &unused_body, response_headers);
   if (!configured.ok()) {
@@ -346,7 +341,8 @@ core::Result<Response> Client::StreamRequest(const Request& request,
     return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
   }
   std::vector<Header> response_headers;
-  StreamCallbackContext stream_context{.on_chunk = &on_chunk, .is_cancelled = &is_cancelled, .error = std::nullopt};
+  detail::StreamCallbackContext stream_context{
+      .on_chunk = &on_chunk, .is_cancelled = &is_cancelled, .error = std::nullopt};
   const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &response_headers);
   if (!configured.ok()) {
     return configured.error();

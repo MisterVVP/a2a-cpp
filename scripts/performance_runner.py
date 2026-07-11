@@ -67,6 +67,7 @@ WIRE_SCENARIOS = (
     "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
+WIRE_PUSH_CONFIG_SCENARIOS = {"PushConfig_Create", "PushConfig_Get", "PushConfig_List", "PushConfig_Delete"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
@@ -293,7 +294,9 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
 
 
 def wire_scenarios_for_transport(transport: str) -> tuple[str, ...]:
-    return WIRE_SCENARIOS
+    if transport == "grpc":
+        return WIRE_SCENARIOS
+    return tuple(scenario for scenario in WIRE_SCENARIOS if scenario not in WIRE_PUSH_CONFIG_SCENARIOS)
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:

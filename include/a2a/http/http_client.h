@@ -6,10 +6,12 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/error.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/result.h"
 
@@ -17,7 +19,13 @@ namespace a2a::http {
 
 namespace detail {
 struct ClientState;
-}
+
+struct StreamCallbackContext final {
+  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
+  const std::function<bool()>* is_cancelled = nullptr;
+  std::optional<core::Error> error;
+};
+}  // namespace detail
 
 struct Header final {
   std::string name;
