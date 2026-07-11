@@ -57,11 +57,11 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
             self.assertIn("| Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
 
-    def test_wire_scenarios_filter_streaming_to_grpc(self):
+    def test_wire_scenarios_include_streaming_for_http_transports(self):
         runner = load_runner_module()
         self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("grpc"))
-        self.assertNotIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertNotIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:

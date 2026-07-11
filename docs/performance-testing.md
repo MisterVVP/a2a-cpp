@@ -75,11 +75,11 @@ Reports contain two clearly separated measurement paths:
   `driver_type=wire_tck_sut` with `transport_path=wire_http_json`,
   `wire_jsonrpc`, or `wire_grpc`.
 
-The current real wire-level scenario set covers core lifecycle operations and push notification config CRUD for HTTP+JSON, JSON-RPC, and gRPC. Finite streaming and first-event task subscription currently run as wire rows only for gRPC, because the JSON-RPC client intentionally does not expose streaming and the default HTTP+JSON client does not yet provide a production streaming requester. The common wire scenarios are `ListTasks_NoPagination`,
+The current real wire-level scenario set covers core lifecycle operations, push notification config CRUD, finite streaming, and first-event task subscription for HTTP+JSON, JSON-RPC, and gRPC. The common wire scenarios are `ListTasks_NoPagination`,
 `ListTasks_WithPagination`, `SendMessage_CreateTask`, `GetTask_ExistingTask`,
 `CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`,
 `GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
-`PushConfig_List`, and `PushConfig_Delete`; gRPC additionally runs `SendStreamingMessage_FiniteStream` and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
+`PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`, and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
 worker thread so measured operations do not recreate gRPC channels or HTTP
 transport objects. The libcurl-backed HTTP client also keeps a reusable easy
 handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and

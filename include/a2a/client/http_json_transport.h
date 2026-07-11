@@ -38,6 +38,7 @@ using HttpStreamRequester = std::function<core::Result<HttpClientResponse>(
     const HttpRequest& request, const HttpStreamChunkHandler& on_chunk, const StreamCancelled& is_cancelled)>;
 
 [[nodiscard]] HttpRequester MakeDefaultHttpRequester();
+[[nodiscard]] HttpStreamRequester MakeDefaultHttpStreamRequester();
 
 struct HttpOperation final {
   std::string_view method;

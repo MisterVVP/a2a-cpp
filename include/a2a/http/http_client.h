@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -43,6 +44,9 @@ class Client final {
   Client();
 
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
+  [[nodiscard]] core::Result<Response> StreamRequest(
+      const Request& request, const std::function<core::Result<void>(std::string_view)>& on_chunk,
+      const std::function<bool()>& is_cancelled) const;
 
  private:
   std::shared_ptr<detail::ClientState> state_;

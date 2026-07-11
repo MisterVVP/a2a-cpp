@@ -167,6 +167,39 @@ size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_d
   return byte_count;
 }
 
+struct StreamCallbackContext final {
+  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
+  const std::function<bool()>* is_cancelled = nullptr;
+  std::optional<core::Error> error;
+};
+
+size_t WriteStreamBody(char* contents, size_t size, size_t nmemb, void* user_data) {
+  auto* context = static_cast<StreamCallbackContext*>(user_data);
+  const std::size_t byte_count = size * nmemb;
+  if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
+    return 0;
+  }
+  const auto result = (*context->on_chunk)(std::string_view(contents, byte_count));
+  if (!result.ok()) {
+    context->error = result.error();
+    return 0;
+  }
+  return byte_count;
+}
+
+int CheckStreamProgress(void* clientp, curl_off_t download_total, curl_off_t downloaded, curl_off_t upload_total,
+                        curl_off_t uploaded) {
+  (void)download_total;
+  (void)downloaded;
+  (void)upload_total;
+  (void)uploaded;
+  auto* context = static_cast<StreamCallbackContext*>(clientp);
+  if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
+    return 1;
+  }
+  return 0;
+}
+
 core::Result<long> MapHttpVersion(std::string_view http_version) {
   if (http_version == core::http::kHttpVersion11) {
     return CURL_HTTP_VERSION_1_1;
@@ -207,6 +240,25 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
       set_body_size != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
       set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK || set_header != CURLE_OK ||
       set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK) {
+    return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+  }
+  return {};
+}
+
+core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, const CurlHeaderList& headers,
+                                       StreamCallbackContext* stream_context, std::vector<Header>* response_headers) {
+  std::string unused_body;
+  const auto configured = ConfigureCurl(handle, request, headers, &unused_body, response_headers);
+  if (!configured.ok()) {
+    return configured.error();
+  }
+  const auto set_write = curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, WriteStreamBody);
+  const auto set_write_data = curl_easy_setopt(handle, CURLOPT_WRITEDATA, stream_context);
+  const auto set_progress_data = curl_easy_setopt(handle, CURLOPT_XFERINFODATA, stream_context);
+  const auto set_progress = curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, CheckStreamProgress);
+  const auto set_no_progress = curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+  if (set_write != CURLE_OK || set_write_data != CURLE_OK || set_progress_data != CURLE_OK ||
+      set_progress != CURLE_OK || set_no_progress != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   return {};
@@ -272,6 +324,54 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
                   .body = std::move(response_body)};
 }
 
+core::Result<Response> Client::StreamRequest(const Request& request,
+                                             const std::function<core::Result<void>(std::string_view)>& on_chunk,
+                                             const std::function<bool()>& is_cancelled) const {
+  if (state_->global_state->code != CURLE_OK) {
+    return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, state_->global_state->code, {}));
+  }
+  auto headers = BuildHeaders(request.headers);
+  if (!headers.ok()) {
+    return headers.error();
+  }
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  if (state_->handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  }
+  CURL* const handle = state_->handle;
+  curl_easy_reset(handle);
+  std::array<char, CURL_ERROR_SIZE> error_buffer{};
+  const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
+  if (set_error_buffer != CURLE_OK) {
+    return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
+  }
+  std::vector<Header> response_headers;
+  StreamCallbackContext stream_context{.on_chunk = &on_chunk, .is_cancelled = &is_cancelled, .error = std::nullopt};
+  const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &response_headers);
+  if (!configured.ok()) {
+    return configured.error();
+  }
+  const CURLcode code = curl_easy_perform(handle);
+  if (code != CURLE_OK) {
+    if (stream_context.error.has_value()) {
+      return stream_context.error.value();
+    }
+    if (is_cancelled()) {
+      return core::Error::Network("HTTP stream was cancelled").WithTransport("http");
+    }
+    return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
+  }
+  long response_code = kHttpResponseCodeUnset;
+  const CURLcode info_code = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
+  if (info_code != CURLE_OK) {
+    return core::Error::RemoteProtocol(BuildCurlErrorMessage(kReadStatusFailureMessage, info_code, {}));
+  }
+  if (response_code == kHttpResponseCodeUnset) {
+    return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
+  }
+  return Response{.status_code = static_cast<int>(response_code), .headers = std::move(response_headers), .body = {}};
+}
+
 #else
 
 namespace {
@@ -286,6 +386,15 @@ Client::Client() = default;
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
   (void)request;
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+}
+
+core::Result<Response> Client::StreamRequest(const Request& request,
+                                             const std::function<core::Result<void>(std::string_view)>& on_chunk,
+                                             const std::function<bool()>& is_cancelled) const {
+  (void)request;
+  (void)on_chunk;
+  (void)is_cancelled;
   return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
 }
 
