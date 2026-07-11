@@ -8,9 +8,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +19,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/server/push_notification_delivery.h"
 #include "a2a/server/request_context.h"
+#include "a2a/server/server_stream_session.h"
 #include "a2a/server/stores/store_factory.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
@@ -27,6 +28,8 @@
 namespace {
 
 using namespace a2a::tests::performance;
+
+constexpr std::chrono::milliseconds kStreamWaitTimeout{5000};
 
 class RecordingPushDelivery final : public a2a::server::PushNotificationDeliveryClient {
  public:
@@ -54,9 +57,9 @@ class ScenarioHarness final {
 
   [[nodiscard]] bool ok() const noexcept { return executor_ != nullptr; }
 
-  bool Execute(std::string_view scenario, int index) {
-    std::lock_guard<std::mutex> lock(mutex_);
+  bool Execute(std::string_view scenario, int worker_index, int index) {
     a2a::server::RequestContext context;
+    context.client_headers.emplace("perf.worker", BuildId("worker", worker_index));
     if (auto result = ExecuteTaskScenario(scenario, index, context); result.has_value()) {
       return *result;
     }
@@ -133,16 +136,16 @@ class ScenarioHarness final {
       return SendAndDrainStream(BuildId("stream", index), context);
     }
     if (scenario == kScenarioSubscribeToTaskFirstEventLatency) {
-      return SubscribeOnce(context);
+      return SubscribeOnce(BuildId("subscribe-first", index), context);
     }
     if (scenario == kScenarioSubscribeToTaskMultiSubscriber) {
-      return SubscribeMany(kMultiSubscriberCount, context);
+      return SubscribeMany(kMultiSubscriberCount, BuildId("subscribe-many", index), context);
     }
     if (scenario == kScenarioSubscribeToTaskTerminalCompletionLatency) {
-      return SendAndDrainStream(BuildId("terminal", index), context);
+      return SubscribeTerminalCompletion(BuildId("subscribe-terminal", index), context);
     }
     if (scenario == kScenarioSubscribeToTaskDisconnectOneSubscriber) {
-      return SubscribeMany(kDisconnectSubscriberCount, context);
+      return SubscribeDisconnectOne(BuildId("subscribe-disconnect", index), context);
     }
     return std::nullopt;
   }
@@ -184,13 +187,63 @@ class ScenarioHarness final {
     return stream.ok() && DrainStream(stream.value().get());
   }
 
-  bool SubscribeMany(int subscriber_count, a2a::server::RequestContext& context) {
-    for (int subscriber = 0; subscriber < subscriber_count; ++subscriber) {
-      if (!SubscribeOnce(context)) {
-        return false;
-      }
+  bool SubscribeMany(int subscriber_count, std::string_view message_id, a2a::server::RequestContext& context) {
+    const std::string task_id = SeedTask(message_id);
+    if (task_id.empty()) {
+      return false;
     }
-    return true;
+    std::vector<std::unique_ptr<a2a::server::ServerStreamSession>> streams;
+    if (!OpenSubscriptions(task_id, subscriber_count, context, &streams)) {
+      return false;
+    }
+    auto waiters = WaitForNextEvents(&streams);
+    const bool published =
+        executor_->SendMessage(MakeSendRequest(BuildId("subscribe-update", subscriber_count), task_id), context).ok();
+    return published && AllWaitersDelivered(&waiters);
+  }
+
+  bool SubscribeDisconnectOne(std::string_view message_id, a2a::server::RequestContext& context) {
+    const std::string task_id = SeedTask(message_id);
+    if (task_id.empty()) {
+      return false;
+    }
+    std::vector<std::unique_ptr<a2a::server::ServerStreamSession>> streams;
+    if (!OpenSubscriptions(task_id, kDisconnectSubscriberCount, context, &streams)) {
+      return false;
+    }
+    streams.front()->Cancel();
+    streams.erase(streams.begin());
+    auto waiters = WaitForNextEvents(&streams);
+    const bool published = executor_->SendMessage(MakeSendRequest("disconnect-update", task_id), context).ok();
+    return published && AllWaitersDelivered(&waiters);
+  }
+
+  bool SubscribeTerminalCompletion(std::string_view message_id, a2a::server::RequestContext& context) {
+    const std::string task_id = SeedTask(message_id);
+    if (task_id.empty()) {
+      return false;
+    }
+    lf::a2a::v1::GetTaskRequest request;
+    request.set_id(task_id);
+    auto stream = executor_->SubscribeTask(request, context);
+    if (!stream.ok() || !ExpectNextEvent(stream.value().get())) {
+      return false;
+    }
+    lf::a2a::v1::CancelTaskRequest cancel_request;
+    cancel_request.set_id(task_id);
+    if (!executor_->CancelTask(cancel_request, context).ok()) {
+      return false;
+    }
+    auto terminal = stream.value()->NextFor(kStreamWaitTimeout);
+    if (!terminal.ok()) {
+      return false;
+    }
+    const auto& terminal_event = terminal.value();
+    if (!terminal_event.has_value() || !terminal_event->has_status_update()) {
+      return false;
+    }
+    auto completion = stream.value()->NextFor(kStreamWaitTimeout);
+    return completion.ok() && !completion.value().has_value();
   }
 
   bool GetPushConfig(a2a::server::RequestContext& context) {
@@ -217,10 +270,14 @@ class ScenarioHarness final {
   }
 
   bool NotifyPushConfigs(int index, a2a::server::RequestContext& context) {
-    for (int config = 0; config < kPushConfigFanout; ++config) {
-      SeedPushConfig(existing_task_id_, BuildId("fanout", config));
+    const std::string task_id = SeedTask(BuildId("notify-task", index));
+    if (task_id.empty()) {
+      return false;
     }
-    return executor_->SendMessage(MakeSendRequest(BuildId("notify", index), existing_task_id_), context).ok();
+    for (int config = 0; config < kPushConfigFanout; ++config) {
+      SeedPushConfig(task_id, BuildId(BuildId("fanout", index), config));
+    }
+    return executor_->SendMessage(MakeSendRequest(BuildId("notify", index), task_id), context).ok();
   }
 
   static std::string MakePostgresSchema() {
@@ -244,11 +301,49 @@ class ScenarioHarness final {
     a2a::server::RequestContext context;
     (void)executor_->CreateTaskPushNotificationConfig(MakePushConfig(task_id, config_id), context);
   }
-  bool SubscribeOnce(a2a::server::RequestContext& context) {
+  bool SubscribeOnce(std::string_view message_id, a2a::server::RequestContext& context) {
+    const std::string task_id = SeedTask(message_id);
+    if (task_id.empty()) {
+      return false;
+    }
     lf::a2a::v1::GetTaskRequest request;
-    request.set_id(subscribe_task_id_);
+    request.set_id(task_id);
     auto stream = executor_->SubscribeTask(request, context);
-    return stream.ok() && stream.value()->Next().ok();
+    return stream.ok() && ExpectNextEvent(stream.value().get());
+  }
+
+  static bool ExpectNextEvent(a2a::server::ServerStreamSession* stream) {
+    auto event = stream->NextFor(kStreamWaitTimeout);
+    return event.ok() && event.value().has_value();
+  }
+
+  bool OpenSubscriptions(std::string_view task_id, int subscriber_count, a2a::server::RequestContext& context,
+                         std::vector<std::unique_ptr<a2a::server::ServerStreamSession>>* streams) {
+    streams->reserve(static_cast<std::size_t>(subscriber_count));
+    for (int subscriber = 0; subscriber < subscriber_count; ++subscriber) {
+      lf::a2a::v1::GetTaskRequest request;
+      request.set_id(std::string(task_id));
+      auto stream = executor_->SubscribeTask(request, context);
+      if (!stream.ok() || !ExpectNextEvent(stream.value().get())) {
+        return false;
+      }
+      streams->push_back(std::move(stream.value()));
+    }
+    return true;
+  }
+
+  static std::vector<std::future<bool>> WaitForNextEvents(
+      std::vector<std::unique_ptr<a2a::server::ServerStreamSession>>* streams) {
+    std::vector<std::future<bool>> waiters;
+    waiters.reserve(streams->size());
+    for (auto& stream : *streams) {
+      waiters.push_back(std::async(std::launch::async, [&stream]() { return ExpectNextEvent(stream.get()); }));
+    }
+    return waiters;
+  }
+
+  static bool AllWaitersDelivered(std::vector<std::future<bool>>* waiters) {
+    return std::ranges::all_of(*waiters, [](std::future<bool>& waiter) { return waiter.get(); });
   }
   static bool DrainStream(a2a::server::ServerStreamSession* stream) {
     for (;;) {
@@ -268,7 +363,6 @@ class ScenarioHarness final {
   std::unique_ptr<a2a::examples::ExampleExecutor> executor_;
   std::string existing_task_id_;
   std::string subscribe_task_id_;
-  std::mutex mutex_;
 };
 
 ScenarioResult RunScenario(const Options& options, const std::string& scenario) {
@@ -283,14 +377,12 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
   int warmup_index = 0;
   while (std::chrono::steady_clock::now() < warmup_end) {
-    (void)harness.Execute(scenario, warmup_index++);
+    (void)harness.Execute(scenario, 0, warmup_index++);
   }
 
-  return RunMeasuredScenario(scenario, options.requests, options.concurrency,
-                             [&harness, &scenario](int worker_index, int index) {
-                               (void)worker_index;
-                               return harness.Execute(scenario, index);
-                             });
+  return RunMeasuredScenario(
+      scenario, options.requests, options.concurrency, options.duration_seconds,
+      [&harness, &scenario](int worker_index, int index) { return harness.Execute(scenario, worker_index, index); });
 }
 
 bool IsSupportedScenario(std::string_view scenario) {
@@ -362,6 +454,9 @@ google::protobuf::Struct BuildResultObject(const Options& options, const Scenari
   PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
                              result);
   SetNumberField(&object, "warmup_seconds", options.warmup_seconds);
+  SetIntegerField(&object, "configured_requests", options.requests);
+  SetNumberField(&object, "configured_duration_seconds", options.duration_seconds);
+  SetNumberField(&object, "measured_duration_seconds", result.measured_duration_seconds);
   SetNumberField(&object, "duration_seconds", options.duration_seconds);
   SetStringField(&object, "driver_type", kDriverType);
 

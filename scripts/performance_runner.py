@@ -59,6 +59,12 @@ WIRE_SCENARIOS = (
     "CancelTask_WorkingTask",
     "SendMessage_FollowUpExistingTask",
     "GetTask_MissingTaskError",
+    "SendStreamingMessage_FiniteStream",
+    "SubscribeToTask_FirstEventLatency",
+    "PushConfig_Create",
+    "PushConfig_Get",
+    "PushConfig_List",
+    "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
@@ -363,14 +369,14 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig) -> Non
 
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
             latency = result["latency_ms"]
             assert isinstance(latency, dict)
-            row = {key: result[key] for key in fieldnames[:10]}
+            row = {key: result.get(key, 0) for key in fieldnames[:17]}
             row.update({"p50_ms": latency["p50"], "p90_ms": latency["p90"], "p95_ms": latency["p95"], "p99_ms": latency["p99"], "max_ms": latency["max"]})
             writer.writerow(row)
 

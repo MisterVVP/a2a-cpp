@@ -106,6 +106,7 @@ struct Options final {
 struct ScenarioResult final {
   std::string scenario;
   int operations = 0;
+  double measured_duration_seconds = 0.0;
   int success = 0;
   int errors = 0;
   double throughput = 0.0;
@@ -129,7 +130,7 @@ void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& res
 
 template <typename ExecuteOperation>
 [[nodiscard]] ScenarioResult RunMeasuredScenario(std::string scenario, int requests, int concurrency,
-                                                 ExecuteOperation execute_operation) {
+                                                 double duration_seconds, ExecuteOperation execute_operation) {
   struct ThreadResult final {
     int success = 0;
     int errors = 0;
@@ -138,6 +139,8 @@ template <typename ExecuteOperation>
 
   const int worker_count = std::min(concurrency, requests);
   std::atomic<int> next_index{0};
+  const bool use_duration_limit = duration_seconds > 0.0;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(duration_seconds);
   std::vector<ThreadResult> thread_results(static_cast<std::size_t>(worker_count));
   const auto started = std::chrono::steady_clock::now();
 
@@ -150,11 +153,15 @@ template <typename ExecuteOperation>
     std::vector<WorkerThread> workers;
     workers.reserve(static_cast<std::size_t>(worker_count));
     for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
-      workers.emplace_back([&execute_operation, &next_index, &thread_results, worker_index, requests, concurrency]() {
+      workers.emplace_back([&execute_operation, &next_index, &thread_results, worker_index, requests, concurrency,
+                            use_duration_limit, deadline]() {
         auto& thread_result = thread_results[static_cast<std::size_t>(worker_index)];
         const int reserve_count = (requests + concurrency - 1) / concurrency;
         thread_result.latencies.reserve(static_cast<std::size_t>(reserve_count));
         for (;;) {
+          if (use_duration_limit && std::chrono::steady_clock::now() >= deadline) {
+            return;
+          }
           const int operation_index = next_index.fetch_add(1, std::memory_order_relaxed);
           if (operation_index >= requests) {
             return;
@@ -186,7 +193,6 @@ template <typename ExecuteOperation>
 
   ScenarioResult result;
   result.scenario = std::move(scenario);
-  result.operations = requests;
   result.latencies.reserve(static_cast<std::size_t>(requests));
   for (auto& thread_result : thread_results) {
     result.success += thread_result.success;
@@ -194,7 +200,9 @@ template <typename ExecuteOperation>
     result.latencies.insert(result.latencies.end(), std::make_move_iterator(thread_result.latencies.begin()),
                             std::make_move_iterator(thread_result.latencies.end()));
   }
+  result.operations = result.success + result.errors;
   const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  result.measured_duration_seconds = elapsed;
   result.throughput = static_cast<double>(result.success) / std::max(elapsed, kMinElapsedSeconds);
   std::ranges::sort(result.latencies);
   return result;
