@@ -67,6 +67,7 @@ WIRE_SCENARIOS = (
     "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
+STREAMING_UNSUPPORTED_WIRE_SCENARIOS = {"SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
@@ -280,7 +281,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             "--concurrency", str(concurrency),
             "--warmup-seconds", str(config.warmup_seconds),
             "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(WIRE_SCENARIOS),
+            "--scenarios", ",".join(wire_scenarios_for_transport(transport)),
         ]
         payload = run_command_json(
             command, config.wire_driver_timeout_seconds,
@@ -290,6 +291,12 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
     return payload
+
+
+def wire_scenarios_for_transport(transport: str) -> tuple[str, ...]:
+    if transport in {"jsonrpc", "http_json"}:
+        return tuple(scenario for scenario in WIRE_SCENARIOS if scenario not in STREAMING_UNSUPPORTED_WIRE_SCENARIOS)
+    return WIRE_SCENARIOS
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -470,7 +477,7 @@ def log_progress(message: str) -> None:
 def log_workload_estimate(config: RunnerConfig) -> None:
     store_concurrency_rows = len(config.store_backends) * len(config.concurrency_levels)
     in_process_rows = store_concurrency_rows * len(SCENARIOS)
-    wire_rows = len(config.transports) * store_concurrency_rows * len(WIRE_SCENARIOS)
+    wire_rows = sum(len(wire_scenarios_for_transport(transport)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
     log_progress(

@@ -21,6 +21,7 @@ double Percentile(const std::vector<double>& sorted_values, double percentile) {
 lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id, std::string_view task_id) {
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_message_id(std::string(message_id));
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   if (!task_id.empty()) {
     request.mutable_message()->set_task_id(std::string(task_id));
   }

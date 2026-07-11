@@ -33,6 +33,8 @@ constexpr std::string_view kHostDefault = "127.0.0.1";
 constexpr int kEndpointReserveSlack = 32;
 constexpr int kListFixtureTaskCount = 20;
 constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
+constexpr std::string_view kA2aVersionHeader = "A2A-Version";
+constexpr std::string_view kA2aVersion = "1.0";
 constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
 
 class CountingObserver final : public a2a::client::StreamObserver {
@@ -132,6 +134,7 @@ a2a::client::ResolvedInterface MakeResolvedInterface(const WireOptions& options)
 
 a2a::client::CallOptions MakeCallOptions() {
   a2a::client::CallOptions options;
+  options.headers.emplace(std::string(kA2aVersionHeader), std::string(kA2aVersion));
   options.extensions.emplace_back(kTckRequiredExtensionUri);
   return options;
 }
@@ -340,14 +343,22 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
                              });
 }
 
-bool IsWireScenario(std::string_view scenario) {
-  return scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
-         scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
-         scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
-         scenario == kScenarioGetTaskMissingTaskError || scenario == kScenarioSendStreamingMessageFiniteStream ||
-         scenario == kScenarioSubscribeToTaskFirstEventLatency || scenario == kScenarioPushConfigCreate ||
-         scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList ||
-         scenario == kScenarioPushConfigDelete;
+bool IsStreamingWireScenario(std::string_view scenario) {
+  return scenario == kScenarioSendStreamingMessageFiniteStream || scenario == kScenarioSubscribeToTaskFirstEventLatency;
+}
+
+bool IsWireScenario(std::string_view scenario, std::string_view transport) {
+  const bool supported_core =
+      scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
+      scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
+      scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
+      scenario == kScenarioGetTaskMissingTaskError || scenario == kScenarioPushConfigCreate ||
+      scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList ||
+      scenario == kScenarioPushConfigDelete;
+  if (supported_core) {
+    return true;
+  }
+  return transport == kGrpcTransport && IsStreamingWireScenario(scenario);
 }
 
 bool ParseScenarios(std::string_view value, WireOptions* options) {
@@ -357,7 +368,7 @@ bool ParseScenarios(std::string_view value, WireOptions* options) {
     return false;
   }
   for (const std::string& scenario : options->scenarios) {
-    if (!IsWireScenario(scenario)) {
+    if (!IsWireScenario(scenario, options->transport)) {
       std::cerr << "unsupported wire scenario: " << scenario << '\n';
       return false;
     }
@@ -406,19 +417,18 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
   if (!options.scenarios.empty()) {
     return options.scenarios;
   }
-  return {std::string(kScenarioListTasksNoPagination),
-          std::string(kScenarioListTasksWithPagination),
-          std::string(kScenarioSendMessageCreateTask),
-          std::string(kScenarioGetTaskExistingTask),
-          std::string(kScenarioCancelTaskWorkingTask),
-          std::string(kScenarioSendMessageFollowUpExistingTask),
-          std::string(kScenarioGetTaskMissingTaskError),
-          std::string(kScenarioSendStreamingMessageFiniteStream),
-          std::string(kScenarioSubscribeToTaskFirstEventLatency),
-          std::string(kScenarioPushConfigCreate),
-          std::string(kScenarioPushConfigGet),
-          std::string(kScenarioPushConfigList),
-          std::string(kScenarioPushConfigDelete)};
+  std::vector<std::string> scenarios = {
+      std::string(kScenarioListTasksNoPagination),   std::string(kScenarioListTasksWithPagination),
+      std::string(kScenarioSendMessageCreateTask),   std::string(kScenarioGetTaskExistingTask),
+      std::string(kScenarioCancelTaskWorkingTask),   std::string(kScenarioSendMessageFollowUpExistingTask),
+      std::string(kScenarioGetTaskMissingTaskError), std::string(kScenarioPushConfigCreate),
+      std::string(kScenarioPushConfigGet),           std::string(kScenarioPushConfigList),
+      std::string(kScenarioPushConfigDelete)};
+  if (options.transport == kGrpcTransport) {
+    scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStream);
+    scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatency);
+  }
+  return scenarios;
 }
 
 std::string TransportPath(std::string_view transport) {
