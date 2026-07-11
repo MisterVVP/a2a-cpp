@@ -67,7 +67,6 @@ WIRE_SCENARIOS = (
     "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
-STREAMING_UNSUPPORTED_WIRE_SCENARIOS = {"SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
@@ -294,8 +293,6 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
 
 
 def wire_scenarios_for_transport(transport: str) -> tuple[str, ...]:
-    if transport in {"jsonrpc", "http_json"}:
-        return tuple(scenario for scenario in WIRE_SCENARIOS if scenario not in STREAMING_UNSUPPORTED_WIRE_SCENARIOS)
     return WIRE_SCENARIOS
 
 

@@ -95,6 +95,11 @@ std::string FindHeaderValue(const HeaderMap& headers, std::string_view name) {
   return {};
 }
 
+bool HasSseContentType(const HeaderMap& headers) {
+  const std::string content_type = ToLower(FindHeaderValue(headers, "Content-Type"));
+  return content_type.starts_with("text/event-stream");
+}
+
 core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
   const std::string version = FindHeaderValue(response.headers, core::Version::kHeaderName);
   if (version.empty()) {
@@ -201,7 +206,6 @@ core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
 core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& observer) {
   if (event.event == "error") {
     auto error = BuildRemoteStreamEventError(event.data);
-    observer.OnError(error);
     return error;
   }
 
@@ -209,7 +213,6 @@ core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& obser
   const auto parsed = core::JsonToMessage(event.data, &response);
   if (!parsed.ok()) {
     auto error = parsed.error().WithTransport("http");
-    observer.OnError(error);
     return error;
   }
 
@@ -322,6 +325,20 @@ HttpRequester MakeDefaultHttpRequester() {
   };
 }
 
+HttpStreamRequester MakeDefaultHttpStreamRequester() {
+  return [client = a2a::http::Client{}](const HttpRequest& request, const HttpStreamChunkHandler& on_chunk,
+                                        const StreamCancelled& is_cancelled) -> core::Result<HttpClientResponse> {
+    if (request.mtls.has_value()) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
+    auto response = client.StreamRequest(ToSharedHttpRequest(request), on_chunk, is_cancelled);
+    if (!response.ok()) {
+      return response.error();
+    }
+    return ToClientHttpResponse(std::move(response.value()));
+  };
+}
+
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
@@ -336,7 +353,7 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
 std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                     std::chrono::milliseconds default_timeout) {
   return std::make_unique<HttpJsonTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
-                                             default_timeout);
+                                             MakeDefaultHttpStreamRequester(), default_timeout);
 }
 
 core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation, std::string body,
@@ -643,6 +660,14 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
 
     if (stream_response.value().status_code < kHttpOkMin || stream_response.value().status_code > kHttpOkMax) {
       NotifyErrorAndStop(*state, observer, BuildHttpError(method, endpoint, stream_response.value()));
+      return;
+    }
+
+    if (!HasSseContentType(stream_response.value().headers)) {
+      NotifyErrorAndStop(*state, observer,
+                         core::Error::RemoteProtocol("HTTP stream response must use text/event-stream")
+                             .WithTransport("http")
+                             .WithHttpStatus(stream_response.value().status_code));
       return;
     }
 

@@ -26,6 +26,11 @@ class JsonRpcTransport final : public ClientTransport {
                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
                             RequestIdGenerator id_generator = {});
 
+  explicit JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                            HttpStreamRequester stream_requester,
+                            std::chrono::milliseconds default_timeout = kDefaultTimeout,
+                            RequestIdGenerator id_generator = {});
+
   [[nodiscard]] static std::unique_ptr<JsonRpcTransport> CreateDefault(
       ResolvedInterface resolved_interface, std::chrono::milliseconds default_timeout = kDefaultTimeout,
       RequestIdGenerator id_generator = {});
@@ -62,12 +67,18 @@ class JsonRpcTransport final : public ClientTransport {
   [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(std::string request_body,
                                                                     const CallOptions& options) const;
 
+  [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> StartSseStream(std::string_view method_name,
+                                                                           const google::protobuf::Message& request,
+                                                                           StreamObserver& observer,
+                                                                           const CallOptions& options) const;
+
   [[nodiscard]] core::Result<google::protobuf::Value> InvokeForResultValue(std::string_view method_name,
                                                                            const google::protobuf::Message& request,
                                                                            const CallOptions& options) const;
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
+  HttpStreamRequester stream_requester_;
   std::chrono::milliseconds default_timeout_;
   RequestIdGenerator id_generator_;
 };

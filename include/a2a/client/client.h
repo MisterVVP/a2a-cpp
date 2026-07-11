@@ -92,6 +92,7 @@ class StreamHandle final : private core::NonCopyable {
 
  private:
   friend class HttpJsonTransport;
+  friend class JsonRpcTransport;
   friend class GrpcTransport;
 
 #if A2A_HAS_JTHREAD

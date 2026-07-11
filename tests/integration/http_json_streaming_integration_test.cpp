@@ -48,7 +48,8 @@ a2a::core::Result<HttpClientResponse> EmitSseChunks(const std::vector<std::strin
       return status.error();
     }
   }
-  return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+  return HttpClientResponse{
+      .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}}, .body = ""};
 }
 
 std::unique_ptr<HttpJsonTransport> MakeStreamingTransport(
@@ -179,7 +180,9 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
       });
 
   A2AClient client(std::move(transport));
@@ -256,7 +259,7 @@ TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) 
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
         return HttpClientResponse{.status_code = kHttpBadGateway,
-                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
                                   .body = R"({"code":"UPSTREAM_FAILURE"})"};
       });
 
@@ -281,7 +284,9 @@ TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskWithoutIdReturnsValidationEr
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
       });
 
   A2AClient client(std::move(transport));

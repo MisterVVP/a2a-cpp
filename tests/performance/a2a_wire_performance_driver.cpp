@@ -358,7 +358,8 @@ bool IsWireScenario(std::string_view scenario, std::string_view transport) {
   if (supported_core) {
     return true;
   }
-  return transport == kGrpcTransport && IsStreamingWireScenario(scenario);
+  (void)transport;
+  return IsStreamingWireScenario(scenario);
 }
 
 bool ParseScenarios(std::string_view value, WireOptions* options) {
@@ -424,10 +425,8 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
       std::string(kScenarioGetTaskMissingTaskError), std::string(kScenarioPushConfigCreate),
       std::string(kScenarioPushConfigGet),           std::string(kScenarioPushConfigList),
       std::string(kScenarioPushConfigDelete)};
-  if (options.transport == kGrpcTransport) {
-    scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStream);
-    scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatency);
-  }
+  scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStream);
+  scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatency);
   return scenarios;
 }
 

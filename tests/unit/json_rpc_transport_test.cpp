@@ -7,7 +7,10 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "a2a/client/auth.h"
 #include "a2a/client/client.h"
@@ -347,7 +350,7 @@ TEST(JsonRpcTransportUnitTest, ValidatesRequiredIdsForTaskAndPushConfigOperation
   expect_validation(client.DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest{}));
 }
 
-TEST(JsonRpcTransportUnitTest, ReturnsValidationForUnsupportedStreamingOperations) {
+TEST(JsonRpcTransportUnitTest, ReturnsInternalErrorWhenStreamingRequesterMissing) {
   A2AClient client(std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
         return a2a::core::Error::Internal("requester should not be called");
@@ -363,7 +366,7 @@ TEST(JsonRpcTransportUnitTest, ReturnsValidationForUnsupportedStreamingOperation
   lf::a2a::v1::SendMessageRequest send_request;
   const auto stream_response = client.SendStreamingMessage(send_request, observer);
   ASSERT_FALSE(stream_response.ok());
-  EXPECT_EQ(stream_response.error().code(), ErrorCode::kValidation);
+  EXPECT_EQ(stream_response.error().code(), ErrorCode::kInternal);
 
   lf::a2a::v1::GetTaskRequest subscribe_request;
   const auto subscribe_response = client.SubscribeTask(subscribe_request, observer);
@@ -394,6 +397,120 @@ TEST(JsonRpcTransportUnitTest, PropagatesConfiguredRequestHeadersAndExtensions) 
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(captured.headers.at("X-Trace-Id"), "trace-1");
   EXPECT_TRUE(captured.headers.contains("A2A-Extensions"));
+}
+
+}  // namespace
+
+namespace {
+
+constexpr std::chrono::milliseconds kStreamWaitTimeout{1000};
+
+class JsonRpcRecordingObserver final : public a2a::client::StreamObserver {
+ public:
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    std::lock_guard<std::mutex> lock(mu_);
+    events.push_back(response);
+  }
+
+  void OnError(const a2a::core::Error& error) override {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      errors.push_back(error);
+    }
+    cv_.notify_all();
+  }
+
+  void OnCompleted() override {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      completed = true;
+    }
+    cv_.notify_all();
+  }
+
+  bool Wait() {
+    std::unique_lock<std::mutex> lock(mu_);
+    return cv_.wait_for(lock, kStreamWaitTimeout, [this] { return completed || !errors.empty(); });
+  }
+
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::vector<lf::a2a::v1::StreamResponse> events;
+  std::vector<a2a::core::Error> errors;
+  bool completed = false;
+};
+
+void ExpectSuccessfulStream(const HttpRequest& captured, JsonRpcRecordingObserver& observer) {
+  EXPECT_EQ(captured.headers.at("Accept"), "text/event-stream");
+  EXPECT_EQ(captured.headers.at("Content-Type"), "application/json");
+  ASSERT_TRUE(observer.errors.empty()) << observer.errors.front().message();
+  EXPECT_TRUE(observer.completed);
+  ASSERT_EQ(observer.events.size(), 1U);
+  EXPECT_EQ(observer.events.front().task().id(), "task-1");
+}
+
+TEST(JsonRpcTransportUnitTest, SendStreamingMessageParsesJsonRpcSseEnvelope) {
+  HttpRequest captured;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [&captured](const HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
+                  const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        captured = request;
+        const auto chunk = on_chunk(
+            R"(data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-1"}}}
+
+)");
+        if (!chunk.ok()) {
+          return chunk.error();
+        }
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  ExpectSuccessfulStream(captured, observer);
+}
+
+TEST(JsonRpcTransportUnitTest, StreamingMismatchedResponseIdReportsErrorOnce) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        const auto chunk = on_chunk(
+            R"(data: {"jsonrpc":"2.0","id":"wrong-id","result":{"task":{"id":"task-1"}}}
+
+)");
+        if (!chunk.ok()) {
+          return chunk.error();
+        }
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "expected-id"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  EXPECT_EQ(observer.errors.size(), 1U);
 }
 
 }  // namespace
