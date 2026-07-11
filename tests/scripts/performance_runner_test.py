@@ -37,14 +37,16 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
-            self.assertEqual(25, len(payload["results"]))
+            self.assertEqual(31, len(payload["results"]))
             self.assertEqual({"cpp_sdk_in_process", "wire_tck_sut"}, {result["driver_type"] for result in payload["results"]})
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
-            self.assertEqual(7, len(wire_rows))
+            self.assertEqual(13, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
             self.assertEqual({"in_process"}, {result["transport_path"] for result in payload["results"] if result["driver_type"] == "cpp_sdk_in_process"})
             ordered = sorted(payload["results"], key=lambda result: (result["scenario"], result["store_backend"], result["driver_type"], result["transport_path"], result["transport"], result["concurrency"]))
             self.assertEqual(ordered, payload["results"])
+            self.assertIn("configured_duration_seconds", payload["results"][0])
+            self.assertIn("measured_duration_seconds", payload["results"][0])
             self.assertTrue((report_dir / "results.csv").exists())
             self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
             self.assertIn("[perf] estimated_rows=", completed.stdout)
@@ -54,6 +56,12 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertIn("A2A performance test summary", summary)
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
             self.assertIn("| Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
+
+    def test_wire_scenarios_filter_streaming_to_grpc(self):
+        runner = load_runner_module()
+        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("grpc"))
+        self.assertNotIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertNotIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +33,53 @@ constexpr std::string_view kHostDefault = "127.0.0.1";
 constexpr int kEndpointReserveSlack = 32;
 constexpr int kListFixtureTaskCount = 20;
 constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
+constexpr std::string_view kA2aVersionHeader = "A2A-Version";
+constexpr std::string_view kA2aVersion = "1.0";
+constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
+
+class CountingObserver final : public a2a::client::StreamObserver {
+ public:
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    (void)response;
+    std::lock_guard lock(mutex_);
+    ++events_;
+    ready_.notify_all();
+  }
+
+  void OnError(const a2a::core::Error& error) override {
+    (void)error;
+    std::lock_guard lock(mutex_);
+    ++errors_;
+    completed_ = true;
+    ready_.notify_all();
+  }
+
+  void OnCompleted() override {
+    std::lock_guard lock(mutex_);
+    completed_ = true;
+    ready_.notify_all();
+  }
+
+  [[nodiscard]] bool WaitForEventCount(int expected_events) {
+    std::unique_lock lock(mutex_);
+    return ready_.wait_for(lock, kWireStreamWaitTimeout,
+                           [this, expected_events]() { return events_ >= expected_events || completed_; }) &&
+           errors_ == 0 && events_ >= expected_events;
+  }
+
+  [[nodiscard]] bool WaitForCompletion() {
+    std::unique_lock lock(mutex_);
+    return ready_.wait_for(lock, kWireStreamWaitTimeout, [this]() { return completed_; }) && errors_ == 0 &&
+           events_ > 0;
+  }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  int events_ = 0;
+  int errors_ = 0;
+  bool completed_ = false;
+};
 
 struct WireOptions final {
   std::string transport = std::string(kGrpcTransport);
@@ -85,6 +134,7 @@ a2a::client::ResolvedInterface MakeResolvedInterface(const WireOptions& options)
 
 a2a::client::CallOptions MakeCallOptions() {
   a2a::client::CallOptions options;
+  options.headers.emplace(std::string(kA2aVersionHeader), std::string(kA2aVersion));
   options.extensions.emplace_back(kTckRequiredExtensionUri);
   return options;
 }
@@ -122,6 +172,79 @@ bool SeedListFixture(a2a::client::A2AClient* client, const a2a::client::CallOpti
     }
   }
   return true;
+}
+
+bool ExecuteWireStreaming(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
+  CountingObserver observer;
+  auto stream = client->SendStreamingMessage(MakeSendRequest(BuildId("wire-stream", index)), observer, call_options);
+  return stream.ok() && observer.WaitForCompletion();
+}
+
+bool ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, int index,
+                                    const a2a::client::CallOptions& call_options) {
+  const std::string task_id = SeedTask(client, BuildId("wire-subscribe-seed", index), call_options);
+  if (task_id.empty()) {
+    return false;
+  }
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(task_id);
+  CountingObserver observer;
+  auto stream = client->SubscribeTask(request, observer, call_options);
+  const bool ok = stream.ok() && observer.WaitForEventCount(1);
+  if (stream.ok()) {
+    stream.value()->Cancel();
+  }
+  return ok;
+}
+
+bool ExecuteWirePushCreate(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
+  const std::string task_id = SeedTask(client, BuildId("wire-push-create-task", index), call_options);
+  if (task_id.empty()) {
+    return false;
+  }
+  auto config =
+      client->CreateTaskPushNotificationConfig(MakePushConfig(task_id, BuildId("wire-cfg", index)), call_options);
+  return config.ok() && config.value().task_id() == task_id;
+}
+
+bool SeedWirePushConfig(a2a::client::A2AClient* client, std::string_view task_id, std::string_view config_id,
+                        const a2a::client::CallOptions& call_options) {
+  return client->CreateTaskPushNotificationConfig(MakePushConfig(task_id, config_id), call_options).ok();
+}
+
+bool ExecuteWirePushGet(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
+  const std::string task_id = SeedTask(client, BuildId("wire-push-get-task", index), call_options);
+  const std::string config_id = BuildId("wire-cfg-get", index);
+  if (task_id.empty() || !SeedWirePushConfig(client, task_id, config_id, call_options)) {
+    return false;
+  }
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest request;
+  request.set_task_id(task_id);
+  request.set_id(config_id);
+  auto config = client->GetTaskPushNotificationConfig(request, call_options);
+  return config.ok() && config.value().id() == config_id;
+}
+
+bool ExecuteWirePushList(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
+  const std::string task_id = SeedTask(client, BuildId("wire-push-list-task", index), call_options);
+  if (task_id.empty() || !SeedWirePushConfig(client, task_id, BuildId("wire-cfg-list", index), call_options)) {
+    return false;
+  }
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
+  request.set_task_id(task_id);
+  return client->ListTaskPushNotificationConfigs(request, call_options).ok();
+}
+
+bool ExecuteWirePushDelete(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
+  const std::string task_id = SeedTask(client, BuildId("wire-push-delete-task", index), call_options);
+  const std::string config_id = BuildId("wire-cfg-delete", index);
+  if (task_id.empty() || !SeedWirePushConfig(client, task_id, config_id, call_options)) {
+    return false;
+  }
+  lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request;
+  request.set_task_id(task_id);
+  request.set_id(config_id);
+  return client->DeleteTaskPushNotificationConfig(request, call_options).ok();
 }
 
 bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index) {
@@ -167,6 +290,24 @@ bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, 
     request.set_id(BuildId("wire-missing", index));
     return !client->GetTask(request, call_options).ok();
   }
+  if (scenario == kScenarioSendStreamingMessageFiniteStream) {
+    return ExecuteWireStreaming(client, index, call_options);
+  }
+  if (scenario == kScenarioSubscribeToTaskFirstEventLatency) {
+    return ExecuteWireSubscribeFirstEvent(client, index, call_options);
+  }
+  if (scenario == kScenarioPushConfigCreate) {
+    return ExecuteWirePushCreate(client, index, call_options);
+  }
+  if (scenario == kScenarioPushConfigGet) {
+    return ExecuteWirePushGet(client, index, call_options);
+  }
+  if (scenario == kScenarioPushConfigList) {
+    return ExecuteWirePushList(client, index, call_options);
+  }
+  if (scenario == kScenarioPushConfigDelete) {
+    return ExecuteWirePushDelete(client, index, call_options);
+  }
   return false;
 }
 
@@ -195,17 +336,29 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  return RunMeasuredScenario(
-      scenario, options.requests, options.concurrency, [&clients, &scenario](int worker_index, int index) {
-        return ExecuteScenario(clients[static_cast<std::size_t>(worker_index)].get(), scenario, index);
-      });
+  return RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
+                             [&clients, &scenario](int worker_index, int index) {
+                               return ExecuteScenario(clients[static_cast<std::size_t>(worker_index)].get(), scenario,
+                                                      index);
+                             });
 }
 
-bool IsWireScenario(std::string_view scenario) {
-  return scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
-         scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
-         scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
-         scenario == kScenarioGetTaskMissingTaskError;
+bool IsStreamingWireScenario(std::string_view scenario) {
+  return scenario == kScenarioSendStreamingMessageFiniteStream || scenario == kScenarioSubscribeToTaskFirstEventLatency;
+}
+
+bool IsWireScenario(std::string_view scenario, std::string_view transport) {
+  const bool supported_core =
+      scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
+      scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
+      scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
+      scenario == kScenarioGetTaskMissingTaskError || scenario == kScenarioPushConfigCreate ||
+      scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList ||
+      scenario == kScenarioPushConfigDelete;
+  if (supported_core) {
+    return true;
+  }
+  return transport == kGrpcTransport && IsStreamingWireScenario(scenario);
 }
 
 bool ParseScenarios(std::string_view value, WireOptions* options) {
@@ -215,7 +368,7 @@ bool ParseScenarios(std::string_view value, WireOptions* options) {
     return false;
   }
   for (const std::string& scenario : options->scenarios) {
-    if (!IsWireScenario(scenario)) {
+    if (!IsWireScenario(scenario, options->transport)) {
       std::cerr << "unsupported wire scenario: " << scenario << '\n';
       return false;
     }
@@ -264,10 +417,18 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
   if (!options.scenarios.empty()) {
     return options.scenarios;
   }
-  return {std::string(kScenarioListTasksNoPagination),  std::string(kScenarioListTasksWithPagination),
-          std::string(kScenarioSendMessageCreateTask),  std::string(kScenarioGetTaskExistingTask),
-          std::string(kScenarioCancelTaskWorkingTask),  std::string(kScenarioSendMessageFollowUpExistingTask),
-          std::string(kScenarioGetTaskMissingTaskError)};
+  std::vector<std::string> scenarios = {
+      std::string(kScenarioListTasksNoPagination),   std::string(kScenarioListTasksWithPagination),
+      std::string(kScenarioSendMessageCreateTask),   std::string(kScenarioGetTaskExistingTask),
+      std::string(kScenarioCancelTaskWorkingTask),   std::string(kScenarioSendMessageFollowUpExistingTask),
+      std::string(kScenarioGetTaskMissingTaskError), std::string(kScenarioPushConfigCreate),
+      std::string(kScenarioPushConfigGet),           std::string(kScenarioPushConfigList),
+      std::string(kScenarioPushConfigDelete)};
+  if (options.transport == kGrpcTransport) {
+    scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStream);
+    scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatency);
+  }
+  return scenarios;
 }
 
 std::string TransportPath(std::string_view transport) {
@@ -284,6 +445,9 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   google::protobuf::Struct object;
   PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
                              result);
+  SetIntegerField(&object, "configured_requests", options.requests);
+  SetNumberField(&object, "configured_duration_seconds", options.duration_seconds);
+  SetNumberField(&object, "measured_duration_seconds", result.measured_duration_seconds);
   SetStringField(&object, "driver_type", kWireDriverType);
   SetStringField(&object, "transport_path", TransportPath(options.transport));
   AddLatencyField(&object, result);

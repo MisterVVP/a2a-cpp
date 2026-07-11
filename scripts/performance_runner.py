@@ -59,8 +59,15 @@ WIRE_SCENARIOS = (
     "CancelTask_WorkingTask",
     "SendMessage_FollowUpExistingTask",
     "GetTask_MissingTaskError",
+    "SendStreamingMessage_FiniteStream",
+    "SubscribeToTask_FirstEventLatency",
+    "PushConfig_Create",
+    "PushConfig_Get",
+    "PushConfig_List",
+    "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
+STREAMING_UNSUPPORTED_WIRE_SCENARIOS = {"SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"}
 SUT_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
@@ -274,7 +281,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             "--concurrency", str(concurrency),
             "--warmup-seconds", str(config.warmup_seconds),
             "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(WIRE_SCENARIOS),
+            "--scenarios", ",".join(wire_scenarios_for_transport(transport)),
         ]
         payload = run_command_json(
             command, config.wire_driver_timeout_seconds,
@@ -284,6 +291,12 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
     return payload
+
+
+def wire_scenarios_for_transport(transport: str) -> tuple[str, ...]:
+    if transport in {"jsonrpc", "http_json"}:
+        return tuple(scenario for scenario in WIRE_SCENARIOS if scenario not in STREAMING_UNSUPPORTED_WIRE_SCENARIOS)
+    return WIRE_SCENARIOS
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -363,14 +376,14 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig) -> Non
 
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
             latency = result["latency_ms"]
             assert isinstance(latency, dict)
-            row = {key: result[key] for key in fieldnames[:10]}
+            row = {key: result.get(key, 0) for key in fieldnames[:17]}
             row.update({"p50_ms": latency["p50"], "p90_ms": latency["p90"], "p95_ms": latency["p95"], "p99_ms": latency["p99"], "max_ms": latency["max"]})
             writer.writerow(row)
 
@@ -464,7 +477,7 @@ def log_progress(message: str) -> None:
 def log_workload_estimate(config: RunnerConfig) -> None:
     store_concurrency_rows = len(config.store_backends) * len(config.concurrency_levels)
     in_process_rows = store_concurrency_rows * len(SCENARIOS)
-    wire_rows = len(config.transports) * store_concurrency_rows * len(WIRE_SCENARIOS)
+    wire_rows = sum(len(wire_scenarios_for_transport(transport)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
     log_progress(

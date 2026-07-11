@@ -31,7 +31,7 @@ matching environment variables.
 | Operations per result row | `A2A_PERF_REQUESTS` | `2000` |
 | Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4` |
 | Warmup seconds | `A2A_PERF_WARMUP_SECONDS` | `1` |
-| Duration seconds metadata | `A2A_PERF_DURATION_SECONDS` | `0` |
+| Duration seconds limit | `A2A_PERF_DURATION_SECONDS` | `0` |
 | Report directory | `A2A_PERF_REPORT_DIR` | `perf-artifacts` |
 | Existing in-process driver binary | `A2A_PERF_DRIVER` | unset |
 | Existing wire driver binary | `A2A_PERF_WIRE_DRIVER` | unset |
@@ -39,6 +39,10 @@ matching environment variables.
 | In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
+
+## Workload modes
+
+When `A2A_PERF_DURATION_SECONDS=0`, each row runs request-count mode and stops after `A2A_PERF_REQUESTS` operations. When `A2A_PERF_DURATION_SECONDS` is greater than zero, each row stops when either the configured request count or the duration limit is reached, whichever happens first. Warmup runs before the measured window, so warmup operations are excluded from latency, throughput, `operations`, and `measured_duration_seconds`. Reports include both `configured_requests` / `configured_duration_seconds` and the actual `operations` / `measured_duration_seconds`.
 
 ## Scenario coverage
 
@@ -49,11 +53,11 @@ task store, in-memory push notification store, and push notification service:
 - task lifecycle: `SendMessage` create, `GetTask`, `CancelTask`, list with and
   without pagination, follow-up `SendMessage`, and missing-task lookup;
 - streaming and subscriptions: finite `SendStreamingMessage`, existing-task
-  subscription first event, multi-subscriber reads, terminal stream completion,
-  and a disconnect-style subscriber read where other subscriptions still run;
+  subscription first event, simultaneous multi-subscriber delivery to the same task, terminal update delivery followed by stream completion,
+  and disconnect isolation where one cancelled subscription does not prevent remaining subscribers from receiving a later update;
 - push notifications: create/get/list/delete config, notify many configs for one
-  task update, and delivery callback latency through a local recording delivery
-  client implementation of the SDK delivery interface.
+  task update, and in-process delivery callback latency through a local recording delivery
+  client implementation of the SDK delivery interface. Rows expose scenario-specific counters such as `successful_deliveries`, `failed_deliveries`, `event_count`, and `callback_count`.
 
 Each row includes the required stable fields plus `driver_type` and
 `transport_path`. The current driver type is `cpp_sdk_in_process`.
@@ -71,19 +75,17 @@ Reports contain two clearly separated measurement paths:
   `driver_type=wire_tck_sut` with `transport_path=wire_http_json`,
   `wire_jsonrpc`, or `wire_grpc`.
 
-The current real wire-level scenario set covers core lifecycle operations for
-HTTP+JSON, JSON-RPC, and gRPC: `ListTasks_NoPagination`,
+The current real wire-level scenario set covers core lifecycle operations and push notification config CRUD for HTTP+JSON, JSON-RPC, and gRPC. Finite streaming and first-event task subscription currently run as wire rows only for gRPC, because the JSON-RPC client intentionally does not expose streaming and the default HTTP+JSON client does not yet provide a production streaming requester. The common wire scenarios are `ListTasks_NoPagination`,
 `ListTasks_WithPagination`, `SendMessage_CreateTask`, `GetTask_ExistingTask`,
-`CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`, and
-`GetTask_MissingTaskError`. The wire driver reuses one client/transport per
+`CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`,
+`GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
+`PushConfig_List`, and `PushConfig_Delete`; gRPC additionally runs `SendStreamingMessage_FiniteStream` and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
 worker thread so measured operations do not recreate gRPC channels or HTTP
 transport objects. The libcurl-backed HTTP client also keeps a reusable easy
 handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
 JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
 seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
-the listed task set bounded in CI. Streaming/subscription and push notification
-scenarios remain in-process-only until dedicated wire clients are added for
-those flows; they must not be interpreted as `wire_tck_sut` coverage.
+the listed task set bounded in CI. Multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and callback fan-out remain SDK in-process rows in this implementation; they are not duplicated as transport rows and must not be interpreted as full `wire_tck_sut` coverage.
 
 ## Store backend coverage
 
@@ -102,8 +104,7 @@ entries.
 
 ## CI behavior
 
-The performance job remains report-only and keeps the current CI wire matrix of
-three transports, two stores, 2,000 operations, and concurrency levels 1 and 4.
+The performance job remains report-only and uses a smoke-sized CI matrix covering three transports, two stores, streaming, subscription, push CRUD, and callback delivery with concurrency levels 1 and 4.
 The in-process SDK/service/store rows do not exercise a transport, so the runner
 executes them once per store/concurrency pair instead of repeating identical
 in-process work under every selected transport. It uploads `perf-artifacts`,
@@ -133,9 +134,7 @@ A2A_PERF_REPORT_DIR=perf-artifacts \
 ## JSON shape
 
 `results.json` contains host metadata and a `results` array. Each result includes
-scenario name, transport, store backend, concurrency, operation counts, success
-and error counts, throughput, latency percentiles, max latency, SDK commit SHA in
-metadata, and host OS/CPU metadata.
+scenario name, transport, store backend, driver type, transport path, concurrency, configured request and duration limits, measured duration, operation counts, success and error counts, throughput, latency percentiles, max latency, scenario-specific delivery/event/callback counters, SDK commit SHA in metadata, and host OS/CPU metadata.
 
 ## Shared TCK SUT wire-level driver
 
@@ -164,7 +163,4 @@ Performance reports distinguish the low-overhead SDK service/store layer from
 transport-level coverage. In-process rows use
 `driver_type=cpp_sdk_in_process` and `transport_path=in_process`. Wire rows use
 `driver_type=wire_tck_sut` and one of `wire_http_json`, `wire_jsonrpc`, or
-`wire_grpc`. Initial wire coverage is the core lifecycle set: bounded list with
-and without pagination, send/create, get existing, cancel working, follow-up
-send, and missing-task get errors. Streaming and push-notification rows remain
-in-process until dedicated wire clients are added.
+`wire_grpc`. Wire coverage includes bounded list with and without pagination, send/create, get existing, cancel working, follow-up send, missing-task get errors, and push config create/get/list/delete across gRPC, JSON-RPC, and HTTP+JSON. gRPC also covers finite streaming and first-event subscription. Known limitation: JSON-RPC streaming, default HTTP+JSON streaming, multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and local HTTP callback fan-out are currently not full wire rows.

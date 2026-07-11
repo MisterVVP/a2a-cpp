@@ -21,6 +21,7 @@ double Percentile(const std::vector<double>& sorted_values, double percentile) {
 lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id, std::string_view task_id) {
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_message_id(std::string(message_id));
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
   if (!task_id.empty()) {
     request.mutable_message()->set_task_id(std::string(task_id));
   }
@@ -86,6 +87,10 @@ void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_vi
   SetIntegerField(object, "success", result.success);
   SetIntegerField(object, "errors", result.errors);
   SetNumberField(object, "throughput_ops_per_sec", result.throughput);
+  SetIntegerField(object, "successful_deliveries", result.success);
+  SetIntegerField(object, "failed_deliveries", result.errors);
+  SetIntegerField(object, "event_count", result.success);
+  SetIntegerField(object, "callback_count", result.success);
 }
 
 void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& result) {

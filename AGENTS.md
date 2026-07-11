@@ -109,6 +109,27 @@ For these documentation-only/README-only changes, AI agents must validate only:
 - 7. Documentation is updated when behavior or interfaces change.
 - 8. Documentation changes that affect mdBook content or structure verify `mdbook build book` succeeds locally.
 
+## Mandatory performance smoke validation
+Run a smoke-sized performance check before opening or updating a PR that touches performance drivers, runner scripts, CI performance workflows, transport clients, streaming/subscription code, or push-notification paths:
+
+```bash
+A2A_PERF_TRANSPORTS=grpc,http_json \
+A2A_PERF_STORE_BACKENDS=inmemory \
+A2A_PERF_REQUESTS=2 \
+A2A_PERF_CONCURRENCY=1 \
+A2A_PERF_WARMUP_SECONDS=0 \
+A2A_PERF_DURATION_SECONDS=0 \
+A2A_PERF_REPORT_DIR=perf-artifacts-smoke \
+./scripts/run_performance_tests.sh
+python3 - <<'PY'
+import json
+with open('perf-artifacts-smoke/results.json', encoding='utf-8') as results_file:
+    errors = sum(int(row.get('errors', 0)) for row in json.load(results_file)['results'])
+if errors:
+    raise SystemExit(f'performance smoke reported {errors} errors')
+PY
+```
+
 ## Mandatory contributor validation command
 Run this command before opening or updating a PR:
 
