@@ -30,7 +30,6 @@ namespace {
 
 constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
-constexpr std::string_view kStreamContentType = "text/event-stream";
 std::string JoinUrl(std::string_view interface_base_url) {
   std::string base(interface_base_url);
   while (!base.empty() && base.back() == '/') {
@@ -182,7 +181,7 @@ bool HasSseContentType(const HeaderMap& headers) {
     std::string lower_value(value);
     std::ranges::transform(lower_value, lower_value.begin(),
                            [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return lower_value.starts_with(kStreamContentType);
+    return lower_value.starts_with(core::http::kContentTypeTextEventStream);
   }
   return false;
 }
@@ -194,6 +193,7 @@ void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer, co
   MarkInactive(state);
 }
 
+// Shared by unary and SSE JSON-RPC calls so request envelope fields stay consistent.
 core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, const google::protobuf::Message& request,
                                                std::string_view request_id) {
   const auto request_json = core::MessageToJson(request);

@@ -97,7 +97,7 @@ std::string FindHeaderValue(const HeaderMap& headers, std::string_view name) {
 
 bool HasSseContentType(const HeaderMap& headers) {
   const std::string content_type = ToLower(FindHeaderValue(headers, "Content-Type"));
-  return content_type.starts_with("text/event-stream");
+  return content_type.starts_with(core::http::kContentTypeTextEventStream);
 }
 
 core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
@@ -203,6 +203,7 @@ core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
   return error;
 }
 
+// Decode returns errors to the stream lifecycle code, which is responsible for invoking OnError exactly once.
 core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& observer) {
   if (event.event == "error") {
     auto error = BuildRemoteStreamEventError(event.data);
