@@ -15,7 +15,7 @@
 namespace a2a::http {
 
 namespace detail {
-struct ClientGlobalState;
+struct ClientState;
 }
 
 struct Header final {
@@ -45,7 +45,7 @@ class Client final {
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
 
  private:
-  std::shared_ptr<const detail::ClientGlobalState> global_state_;
+  std::shared_ptr<detail::ClientState> state_;
 };
 
 [[nodiscard]] bool IsSupportedHttpVersion(std::string_view http_version) noexcept;

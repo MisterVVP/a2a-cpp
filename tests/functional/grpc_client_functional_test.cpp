@@ -35,6 +35,13 @@ class ContractRpcClient final : public a2a::client::GrpcTransport::RpcClient {
     return grpc::Status::OK;
   }
 
+  grpc::Status ListTasks(grpc::ClientContext* context, const lf::a2a::v1::ListTasksRequest& request,
+                         lf::a2a::v1::ListTasksResponse* response) override {
+    (void)context;
+    response->set_next_page_token(request.page_token());
+    return grpc::Status::OK;
+  }
+
   grpc::Status CancelTask(grpc::ClientContext* context, const lf::a2a::v1::CancelTaskRequest& request,
                           lf::a2a::v1::Task* response) override {
     (void)context;

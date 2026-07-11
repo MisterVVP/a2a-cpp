@@ -66,3 +66,13 @@ Expected artifacts:
 - `build-tck/tck-sut.log`
 - `tck-artifacts/reports/*`
 - `tck-artifacts/logs/tck-run.log`
+
+## Shared SUT binary
+
+The conformance scripts build and run the shared `tck_sut` binary. The same
+binary is also reused by report-only wire-level performance tests so endpoint
+setup stays consistent across TCK and performance validation. The exposed
+endpoints are REST at `/a2a`, JSON-RPC at `/rpc`, and gRPC on the configured
+port plus one. Store selection continues to use
+`A2A_TCK_STORE_BACKEND=inmemory|postgres`, `A2A_TCK_POSTGRES_DSN`, and
+`A2A_TCK_POSTGRES_SCHEMA`.

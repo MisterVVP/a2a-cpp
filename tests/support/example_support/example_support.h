@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -102,6 +103,7 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                              server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
@@ -221,6 +223,7 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     std::string task_id = request.has_message() ? request.message().task_id() : "";
     if (task_id.empty()) {
@@ -285,7 +288,9 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                            server::RequestContext& context) override {
-    auto task = GetTask(request, context);
+    std::lock_guard<std::mutex> lock(mutex_);
+    (void)context;
+    auto task = task_store_->Get(request.id());
     if (!task.ok()) {
       return task.error();
     }
@@ -300,6 +305,7 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                              server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     auto task = lifecycle_.TransitionTaskStatus(request.id(), lf::a2a::v1::TASK_STATE_CANCELED);
     if (!task.ok()) {
@@ -315,31 +321,39 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.CreateConfig(request);
   }
 
   core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
       const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.GetConfig(request);
   }
 
   core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
       const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.ListConfigs(request);
   }
 
   core::Result<void> DeleteTaskPushNotificationConfig(
       const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, server::RequestContext& context) override {
+    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.DeleteConfig(request);
   }
 
-  void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
+  void ShutdownSubscriptions() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    subscriptions_.Shutdown();
+  }
 
  private:
+  mutable std::mutex mutex_;
   std::vector<std::string> ordered_ids_;
   std::unique_ptr<server::InMemoryTaskStore> owned_task_store_;
   std::unique_ptr<server::InMemoryPushNotificationStore> owned_push_store_;
