@@ -190,11 +190,24 @@ bool ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, int index,
   request.set_id(task_id);
   CountingObserver observer;
   auto stream = client->SubscribeTask(request, observer, call_options);
-  const bool ok = stream.ok() && observer.WaitForEventCount(1);
-  if (stream.ok()) {
+  if (!stream.ok() || !observer.WaitForEventCount(1)) {
+    if (stream.ok()) {
+      stream.value()->Cancel();
+    }
+    return false;
+  }
+
+  // Close HTTP SSE subscriptions through the protocol instead of client-side cancellation.
+  // Cancelling thousands of active HTTP streams leaves server streaming handlers waiting
+  // for disconnect/heartbeat cleanup and exhausts the local SUT worker capacity.
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(task_id);
+  const bool cancelled = client->CancelTask(cancel_request, call_options).ok();
+  const bool completed = observer.WaitForCompletion();
+  if (!completed) {
     stream.value()->Cancel();
   }
-  return ok;
+  return cancelled && completed;
 }
 
 bool ExecuteWirePushCreate(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
