@@ -417,12 +417,11 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   }
   std::vector<Header> response_headers;
   detail::HeaderCapture header_capture{.response_headers = &response_headers};
-  detail::StreamCallbackContext stream_context{
-      .on_chunk = &on_chunk,
-      .is_cancelled = &is_cancelled,
-      .header_capture = &header_capture,
-      .error = std::nullopt,
-      .metadata_checked = false};
+  detail::StreamCallbackContext stream_context{.on_chunk = &on_chunk,
+                                               .is_cancelled = &is_cancelled,
+                                               .header_capture = &header_capture,
+                                               .error = std::nullopt,
+                                               .metadata_checked = false};
   const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &header_capture);
   if (!configured.ok()) {
     return configured.error();
