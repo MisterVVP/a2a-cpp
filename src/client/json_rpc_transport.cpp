@@ -38,6 +38,14 @@ std::string JoinUrl(std::string_view interface_base_url) {
   return base;
 }
 
+std::string ToLower(std::string_view value) {
+  std::string lowered(value);
+  for (char& ch : lowered) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return lowered;
+}
+
 std::string BuildDefaultRequestId() {
   static std::atomic<std::uint64_t> sequence{0};
   const auto current = sequence.fetch_add(1, std::memory_order_relaxed);
@@ -170,18 +178,32 @@ core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, 
   return message;
 }
 
+std::string_view TrimHttpHeaderValue(std::string_view value) {
+  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
+    value.remove_suffix(1);
+  }
+  return value;
+}
+
+std::string NormalizeHttpMediaType(std::string_view value) {
+  value = TrimHttpHeaderValue(value);
+  const auto parameter_separator = value.find(core::http::kContentTypeParameterSeparator);
+  if (parameter_separator != std::string_view::npos) {
+    value = TrimHttpHeaderValue(value.substr(0, parameter_separator));
+  }
+  return ToLower(value);
+}
+
 bool HasSseContentType(const HeaderMap& headers) {
   for (const auto& [name, value] : headers) {
-    std::string lower_name(name);
-    std::ranges::transform(lower_name, lower_name.begin(),
-                           [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (lower_name != "content-type") {
+    if (ToLower(name) != ToLower(core::http::kContentTypeHeaderName)) {
       continue;
     }
-    std::string lower_value(value);
-    std::ranges::transform(lower_value, lower_value.begin(),
-                           [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return lower_value.starts_with(core::http::kContentTypeTextEventStream);
+    return NormalizeHttpMediaType(value) == core::http::kContentTypeTextEventStream;
   }
   return false;
 }

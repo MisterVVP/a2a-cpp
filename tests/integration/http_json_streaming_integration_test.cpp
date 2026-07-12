@@ -280,6 +280,32 @@ TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) 
   EXPECT_FALSE(observer.completed);
 }
 
+TEST(HttpJsonStreamingIntegrationTest, RejectsContentTypePrefixLookalike) {
+  auto transport =
+      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
+                                const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-streaming"}},
+                                  .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_FALSE(observer.errors.empty());
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_FALSE(observer.completed);
+}
+
 TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskWithoutIdReturnsValidationError) {
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
