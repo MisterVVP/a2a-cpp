@@ -95,9 +95,29 @@ std::string FindHeaderValue(const HeaderMap& headers, std::string_view name) {
   return {};
 }
 
+std::string_view TrimHttpHeaderValue(std::string_view value) {
+  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() &&
+         (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
+    value.remove_suffix(1);
+  }
+  return value;
+}
+
+std::string NormalizeHttpMediaType(std::string_view value) {
+  value = TrimHttpHeaderValue(value);
+  const auto parameter_separator = value.find(core::http::kContentTypeParameterSeparator);
+  if (parameter_separator != std::string_view::npos) {
+    value = TrimHttpHeaderValue(value.substr(0, parameter_separator));
+  }
+  return ToLower(value);
+}
+
 bool HasSseContentType(const HeaderMap& headers) {
-  const std::string content_type = ToLower(FindHeaderValue(headers, "Content-Type"));
-  return content_type.starts_with(core::http::kContentTypeTextEventStream);
+  const std::string content_type = NormalizeHttpMediaType(FindHeaderValue(headers, core::http::kContentTypeHeaderName));
+  return content_type == core::http::kContentTypeTextEventStream;
 }
 
 core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
