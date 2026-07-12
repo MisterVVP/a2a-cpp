@@ -203,7 +203,6 @@ core::Error BuildRemoteStreamEventError(std::string_view payload_json) {
   return error;
 }
 
-// Decode returns errors to the stream lifecycle code, which is responsible for invoking OnError exactly once.
 core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& observer) {
   if (event.event == "error") {
     auto error = BuildRemoteStreamEventError(event.data);

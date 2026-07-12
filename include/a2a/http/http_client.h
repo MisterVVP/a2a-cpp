@@ -19,12 +19,6 @@ namespace a2a::http {
 
 namespace detail {
 struct ClientState;
-
-struct StreamCallbackContext final {
-  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
-  const std::function<bool()>* is_cancelled = nullptr;
-  std::optional<core::Error> error;
-};
 }  // namespace detail
 
 struct Header final {

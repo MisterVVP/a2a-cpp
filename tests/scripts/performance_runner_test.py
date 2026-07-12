@@ -62,8 +62,8 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("grpc"))
         self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
         self.assertIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
-        self.assertNotIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertNotIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
