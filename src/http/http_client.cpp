@@ -78,19 +78,6 @@ struct CurlSlistDeleter final {
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
-struct HeaderCapture final {
-  std::vector<Header>* headers = nullptr;
-  long response_code = kHttpResponseCodeUnset;
-};
-
-struct StreamCallbackContext final {
-  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
-  const std::function<bool()>* is_cancelled = nullptr;
-  HeaderCapture* headers = nullptr;
-  std::optional<core::Error> error;
-  bool metadata_checked = false;
-};
-
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
   message << prefix << ": " << curl_easy_strerror(code);
@@ -206,11 +193,11 @@ std::optional<Header> ParseHeaderLine(std::string_view line) {
 }
 
 size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
-  auto* capture = static_cast<HeaderCapture*>(user_data);
+  auto* capture = static_cast<detail::HeaderCapture*>(user_data);
   const std::size_t byte_count = size * nmemb;
   const std::string_view line(contents, byte_count);
   if (line.starts_with(kHttpStatusLinePrefix)) {
-    capture->headers->clear();
+    capture->response_headers->clear();
     capture->response_code = ParseHttpStatusCode(line).value_or(kHttpResponseCodeUnset);
     return byte_count;
   }
@@ -218,23 +205,23 @@ size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user
   if (!header.has_value()) {
     return byte_count;
   }
-  capture->headers->push_back(header.value());
+  capture->response_headers->push_back(header.value());
   return byte_count;
 }
 
-core::Result<void> ValidateStreamMetadata(const HeaderCapture& headers) {
-  if (headers.response_code == kHttpResponseCodeUnset) {
+core::Result<void> ValidateStreamMetadata(const detail::HeaderCapture& capture) {
+  if (capture.response_code == kHttpResponseCodeUnset) {
     return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
   }
-  if (headers.response_code < core::http::kSuccessStatusMin || headers.response_code > core::http::kSuccessStatusMax) {
+  if (capture.response_code < core::http::kSuccessStatusMin || capture.response_code > core::http::kSuccessStatusMax) {
     return core::Error::RemoteProtocol(std::string(kStreamStatusFailureMessage))
         .WithTransport("http")
-        .WithHttpStatus(static_cast<int>(headers.response_code));
+        .WithHttpStatus(static_cast<int>(capture.response_code));
   }
-  if (headers.headers == nullptr || !HasSseContentType(*headers.headers)) {
+  if (capture.response_headers == nullptr || !HasSseContentType(*capture.response_headers)) {
     return core::Error::RemoteProtocol(std::string(kStreamContentTypeFailureMessage))
         .WithTransport("http")
-        .WithHttpStatus(static_cast<int>(headers.response_code));
+        .WithHttpStatus(static_cast<int>(capture.response_code));
   }
   return {};
 }
@@ -247,13 +234,13 @@ size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_d
 }
 
 size_t WriteStreamBody(char* contents, size_t size, size_t nmemb, void* user_data) {
-  auto* context = static_cast<StreamCallbackContext*>(user_data);
+  auto* context = static_cast<detail::StreamCallbackContext*>(user_data);
   const std::size_t byte_count = size * nmemb;
   if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
     return 0;
   }
   if (!context->metadata_checked) {
-    const auto metadata = ValidateStreamMetadata(*context->headers);
+    const auto metadata = ValidateStreamMetadata(*context->header_capture);
     if (!metadata.ok()) {
       context->error = metadata.error();
       return 0;
@@ -274,7 +261,7 @@ int CheckStreamProgress(void* clientp, curl_off_t download_total, curl_off_t dow
   (void)downloaded;
   (void)upload_total;
   (void)uploaded;
-  auto* context = static_cast<StreamCallbackContext*>(clientp);
+  auto* context = static_cast<detail::StreamCallbackContext*>(clientp);
   if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
     return 1;
   }
@@ -295,7 +282,7 @@ core::Result<long> MapHttpVersion(std::string_view http_version) {
 }
 
 core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
-                                 std::string* response_body, HeaderCapture* response_headers) {
+                                 std::string* response_body, detail::HeaderCapture* response_headers) {
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();
@@ -327,7 +314,8 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
 }
 
 core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, const CurlHeaderList& headers,
-                                       StreamCallbackContext* stream_context, HeaderCapture* response_headers) {
+                                       detail::StreamCallbackContext* stream_context,
+                                       detail::HeaderCapture* response_headers) {
   std::string unused_body;
   const auto configured = ConfigureCurl(handle, request, headers, &unused_body, response_headers);
   if (!configured.ok()) {
@@ -382,7 +370,7 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
 
   std::string response_body;
   std::vector<Header> response_headers;
-  HeaderCapture header_capture{.headers = &response_headers};
+  detail::HeaderCapture header_capture{.response_headers = &response_headers};
   const auto configured = ConfigureCurl(handle, request, headers.value(), &response_body, &header_capture);
   if (!configured.ok()) {
     return configured.error();
@@ -428,9 +416,13 @@ core::Result<Response> Client::StreamRequest(const Request& request,
     return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
   }
   std::vector<Header> response_headers;
-  HeaderCapture header_capture{.headers = &response_headers};
-  StreamCallbackContext stream_context{
-      .on_chunk = &on_chunk, .is_cancelled = &is_cancelled, .headers = &header_capture, .error = std::nullopt};
+  detail::HeaderCapture header_capture{.response_headers = &response_headers};
+  detail::StreamCallbackContext stream_context{
+      .on_chunk = &on_chunk,
+      .is_cancelled = &is_cancelled,
+      .header_capture = &header_capture,
+      .error = std::nullopt,
+      .metadata_checked = false};
   const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &header_capture);
   if (!configured.ok()) {
     return configured.error();
