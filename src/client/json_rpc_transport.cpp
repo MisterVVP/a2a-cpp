@@ -8,7 +8,6 @@
 
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <sstream>
@@ -21,6 +20,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -38,14 +38,6 @@ std::string JoinUrl(std::string_view interface_base_url) {
   return base;
 }
 
-std::string ToLower(std::string_view value) {
-  std::string lowered(value);
-  for (char& ch : lowered) {
-    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  }
-  return lowered;
-}
-
 std::string BuildDefaultRequestId() {
   static std::atomic<std::uint64_t> sequence{0};
   const auto current = sequence.fetch_add(1, std::memory_order_relaxed);
@@ -53,26 +45,15 @@ std::string BuildDefaultRequestId() {
 }
 
 core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
-  const auto header_it = std::ranges::find_if(response.headers, [](const auto& pair) {
-    if (pair.first.size() != std::string_view(core::Version::kHeaderName).size()) {
-      return false;
-    }
-    for (std::size_t index = 0; index < pair.first.size(); ++index) {
-      if (std::tolower(static_cast<unsigned char>(pair.first[index])) !=
-          std::tolower(static_cast<unsigned char>(core::Version::kHeaderName[index]))) {
-        return false;
-      }
-    }
-    return true;
-  });
-  if (header_it == response.headers.end()) {
+  const auto version = core::http::FindHeaderValue(response.headers, core::Version::kHeaderName);
+  if (!version.has_value()) {
     return {};
   }
 
-  if (!core::Version::IsSupported(header_it->second)) {
+  if (!core::Version::IsSupported(version.value())) {
     return core::Error::UnsupportedVersion("Server returned unsupported A2A-Version header")
         .WithTransport("jsonrpc")
-        .WithProtocolCode(header_it->second);
+        .WithProtocolCode(std::string(version.value()));
   }
 
   return {};
@@ -178,34 +159,9 @@ core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, 
   return message;
 }
 
-std::string_view TrimHttpHeaderValue(std::string_view value) {
-  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-    value.remove_prefix(1);
-  }
-  while (!value.empty() &&
-         (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
-    value.remove_suffix(1);
-  }
-  return value;
-}
-
-std::string NormalizeHttpMediaType(std::string_view value) {
-  value = TrimHttpHeaderValue(value);
-  const auto parameter_separator = value.find(core::http::kContentTypeParameterSeparator);
-  if (parameter_separator != std::string_view::npos) {
-    value = TrimHttpHeaderValue(value.substr(0, parameter_separator));
-  }
-  return ToLower(value);
-}
-
 bool HasSseContentType(const HeaderMap& headers) {
-  for (const auto& [name, value] : headers) {
-    if (ToLower(name) != ToLower(core::http::kContentTypeHeaderName)) {
-      continue;
-    }
-    return NormalizeHttpMediaType(value) == core::http::kContentTypeTextEventStream;
-  }
-  return false;
+  const auto content_type = core::http::FindHeaderValue(headers, core::http::kContentTypeHeaderName);
+  return content_type.has_value() && core::http::IsSseContentType(content_type.value());
 }
 
 void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
