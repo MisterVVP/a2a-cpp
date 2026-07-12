@@ -196,10 +196,6 @@ bool ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, int index,
     }
     return false;
   }
-
-  // Close HTTP SSE subscriptions through the protocol instead of client-side cancellation.
-  // Cancelling thousands of active HTTP streams leaves server streaming handlers waiting
-  // for disconnect/heartbeat cleanup and exhausts the local SUT worker capacity.
   lf::a2a::v1::CancelTaskRequest cancel_request;
   cancel_request.set_id(task_id);
   const bool cancelled = client->CancelTask(cancel_request, call_options).ok();
@@ -366,9 +362,7 @@ bool IsStreamingWireScenario(std::string_view scenario) {
 }
 
 bool IsWireScenario(std::string_view scenario, std::string_view transport) {
-  if (IsPushConfigWireScenario(scenario)) {
-    return transport == kGrpcTransport;
-  }
+  (void)transport;
   const bool supported_core =
       scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
       scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
@@ -377,7 +371,7 @@ bool IsWireScenario(std::string_view scenario, std::string_view transport) {
   if (supported_core) {
     return true;
   }
-  return IsStreamingWireScenario(scenario);
+  return IsStreamingWireScenario(scenario) || IsPushConfigWireScenario(scenario);
 }
 
 bool ParseScenarios(std::string_view value, WireOptions* options) {
@@ -436,18 +430,19 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
   if (!options.scenarios.empty()) {
     return options.scenarios;
   }
-  std::vector<std::string> scenarios = {
-      std::string(kScenarioListTasksNoPagination),           std::string(kScenarioListTasksWithPagination),
-      std::string(kScenarioSendMessageCreateTask),           std::string(kScenarioGetTaskExistingTask),
-      std::string(kScenarioCancelTaskWorkingTask),           std::string(kScenarioSendMessageFollowUpExistingTask),
-      std::string(kScenarioGetTaskMissingTaskError),         std::string(kScenarioSendStreamingMessageFiniteStream),
-      std::string(kScenarioSubscribeToTaskFirstEventLatency)};
-  if (options.transport == kGrpcTransport) {
-    scenarios.emplace_back(kScenarioPushConfigCreate);
-    scenarios.emplace_back(kScenarioPushConfigGet);
-    scenarios.emplace_back(kScenarioPushConfigList);
-    scenarios.emplace_back(kScenarioPushConfigDelete);
-  }
+  std::vector<std::string> scenarios = {std::string(kScenarioListTasksNoPagination),
+                                        std::string(kScenarioListTasksWithPagination),
+                                        std::string(kScenarioSendMessageCreateTask),
+                                        std::string(kScenarioGetTaskExistingTask),
+                                        std::string(kScenarioCancelTaskWorkingTask),
+                                        std::string(kScenarioSendMessageFollowUpExistingTask),
+                                        std::string(kScenarioGetTaskMissingTaskError),
+                                        std::string(kScenarioSendStreamingMessageFiniteStream),
+                                        std::string(kScenarioSubscribeToTaskFirstEventLatency),
+                                        std::string(kScenarioPushConfigCreate),
+                                        std::string(kScenarioPushConfigGet),
+                                        std::string(kScenarioPushConfigList),
+                                        std::string(kScenarioPushConfigDelete)};
   return scenarios;
 }
 

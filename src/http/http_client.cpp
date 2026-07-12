@@ -12,11 +12,14 @@
 #include <curl/curl.h>
 
 #include <array>
+#include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <system_error>
 #include <utility>
 #endif
 
@@ -55,6 +58,8 @@ constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP resp
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
 constexpr std::string_view kHttpStatusLinePrefix = "HTTP/";
+constexpr std::string_view kStreamStatusFailureMessage = "HTTP stream response received with non-success status";
+constexpr std::string_view kStreamContentTypeFailureMessage = "HTTP stream response must use text/event-stream";
 constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 
@@ -72,6 +77,19 @@ struct CurlSlistDeleter final {
 };
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
+
+struct HeaderCapture final {
+  std::vector<Header>* headers = nullptr;
+  long response_code = kHttpResponseCodeUnset;
+};
+
+struct StreamCallbackContext final {
+  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
+  const std::function<bool()>* is_cancelled = nullptr;
+  HeaderCapture* headers = nullptr;
+  std::optional<core::Error> error;
+  bool metadata_checked = false;
+};
 
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
@@ -129,11 +147,54 @@ std::string_view TrimHeaderValue(std::string_view value) {
   return value;
 }
 
-std::optional<Header> ParseHeaderLine(std::string_view line) {
-  if (line.starts_with(kHttpStatusLinePrefix)) {
-    return Header{};
+std::optional<long> ParseHttpStatusCode(std::string_view line) {
+  if (!line.starts_with(kHttpStatusLinePrefix)) {
+    return std::nullopt;
   }
+  const auto status_start = line.find(' ');
+  if (status_start == std::string_view::npos || status_start + 1 >= line.size()) {
+    return std::nullopt;
+  }
+  long status = kHttpResponseCodeUnset;
+  const char* const first = line.data() + status_start + 1;
+  const char* const last = line.data() + line.size();
+  const auto parsed = std::from_chars(first, last, status);
+  if (parsed.ec != std::errc{}) {
+    return std::nullopt;
+  }
+  return status;
+}
 
+bool EqualsIgnoreCase(std::string_view lhs, std::string_view rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < lhs.size(); ++index) {
+    const auto left = static_cast<unsigned char>(lhs[index]);
+    const auto right = static_cast<unsigned char>(rhs[index]);
+    if (std::tolower(left) != std::tolower(right)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool HasSseContentType(const std::vector<Header>& headers) {
+  for (const auto& header : headers) {
+    if (!EqualsIgnoreCase(header.name, core::http::kContentTypeHeaderName)) {
+      continue;
+    }
+    std::string_view value = TrimHeaderValue(header.value);
+    const auto parameter_separator = value.find(core::http::kContentTypeParameterSeparator);
+    if (parameter_separator != std::string_view::npos) {
+      value = TrimHeaderValue(value.substr(0, parameter_separator));
+    }
+    return EqualsIgnoreCase(value, core::http::kContentTypeTextEventStream);
+  }
+  return false;
+}
+
+std::optional<Header> ParseHeaderLine(std::string_view line) {
   const auto separator = line.find(kHeaderSeparator);
   if (separator == std::string_view::npos) {
     return std::nullopt;
@@ -145,19 +206,37 @@ std::optional<Header> ParseHeaderLine(std::string_view line) {
 }
 
 size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
-  auto* headers = static_cast<std::vector<Header>*>(user_data);
+  auto* capture = static_cast<HeaderCapture*>(user_data);
   const std::size_t byte_count = size * nmemb;
   const std::string_view line(contents, byte_count);
+  if (line.starts_with(kHttpStatusLinePrefix)) {
+    capture->headers->clear();
+    capture->response_code = ParseHttpStatusCode(line).value_or(kHttpResponseCodeUnset);
+    return byte_count;
+  }
   const auto header = ParseHeaderLine(line);
   if (!header.has_value()) {
     return byte_count;
   }
-  if (header->name.empty() && header->value.empty()) {
-    headers->clear();
-    return byte_count;
-  }
-  headers->push_back(header.value());
+  capture->headers->push_back(header.value());
   return byte_count;
+}
+
+core::Result<void> ValidateStreamMetadata(const HeaderCapture& headers) {
+  if (headers.response_code == kHttpResponseCodeUnset) {
+    return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
+  }
+  if (headers.response_code < core::http::kSuccessStatusMin || headers.response_code > core::http::kSuccessStatusMax) {
+    return core::Error::RemoteProtocol(std::string(kStreamStatusFailureMessage))
+        .WithTransport("http")
+        .WithHttpStatus(static_cast<int>(headers.response_code));
+  }
+  if (headers.headers == nullptr || !HasSseContentType(*headers.headers)) {
+    return core::Error::RemoteProtocol(std::string(kStreamContentTypeFailureMessage))
+        .WithTransport("http")
+        .WithHttpStatus(static_cast<int>(headers.response_code));
+  }
+  return {};
 }
 
 size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_data) {
@@ -168,10 +247,18 @@ size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_d
 }
 
 size_t WriteStreamBody(char* contents, size_t size, size_t nmemb, void* user_data) {
-  auto* context = static_cast<detail::StreamCallbackContext*>(user_data);
+  auto* context = static_cast<StreamCallbackContext*>(user_data);
   const std::size_t byte_count = size * nmemb;
   if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
     return 0;
+  }
+  if (!context->metadata_checked) {
+    const auto metadata = ValidateStreamMetadata(*context->headers);
+    if (!metadata.ok()) {
+      context->error = metadata.error();
+      return 0;
+    }
+    context->metadata_checked = true;
   }
   const auto result = (*context->on_chunk)(std::string_view(contents, byte_count));
   if (!result.ok()) {
@@ -187,7 +274,7 @@ int CheckStreamProgress(void* clientp, curl_off_t download_total, curl_off_t dow
   (void)downloaded;
   (void)upload_total;
   (void)uploaded;
-  auto* context = static_cast<detail::StreamCallbackContext*>(clientp);
+  auto* context = static_cast<StreamCallbackContext*>(clientp);
   if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
     return 1;
   }
@@ -208,7 +295,7 @@ core::Result<long> MapHttpVersion(std::string_view http_version) {
 }
 
 core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
-                                 std::string* response_body, std::vector<Header>* response_headers) {
+                                 std::string* response_body, HeaderCapture* response_headers) {
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();
@@ -240,8 +327,7 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
 }
 
 core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, const CurlHeaderList& headers,
-                                       detail::StreamCallbackContext* stream_context,
-                                       std::vector<Header>* response_headers) {
+                                       StreamCallbackContext* stream_context, HeaderCapture* response_headers) {
   std::string unused_body;
   const auto configured = ConfigureCurl(handle, request, headers, &unused_body, response_headers);
   if (!configured.ok()) {
@@ -296,7 +382,8 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
 
   std::string response_body;
   std::vector<Header> response_headers;
-  const auto configured = ConfigureCurl(handle, request, headers.value(), &response_body, &response_headers);
+  HeaderCapture header_capture{.headers = &response_headers};
+  const auto configured = ConfigureCurl(handle, request, headers.value(), &response_body, &header_capture);
   if (!configured.ok()) {
     return configured.error();
   }
@@ -341,9 +428,10 @@ core::Result<Response> Client::StreamRequest(const Request& request,
     return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
   }
   std::vector<Header> response_headers;
-  detail::StreamCallbackContext stream_context{
-      .on_chunk = &on_chunk, .is_cancelled = &is_cancelled, .error = std::nullopt};
-  const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &response_headers);
+  HeaderCapture header_capture{.headers = &response_headers};
+  StreamCallbackContext stream_context{
+      .on_chunk = &on_chunk, .is_cancelled = &is_cancelled, .headers = &header_capture, .error = std::nullopt};
+  const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &header_capture);
   if (!configured.ok()) {
     return configured.error();
   }
