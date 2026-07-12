@@ -3,12 +3,9 @@
 
 #include "a2a/client/http_json_transport.h"
 
-#include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <memory>
-#include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -18,6 +15,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -63,13 +61,6 @@ struct EndpointMap final {
   static constexpr std::string_view kPushConfigCollection = core::protocol_methods::kPushNotificationConfigsSegment;
 };
 
-std::string ToLower(std::string_view value) {
-  std::string lowered(value);
-  std::ranges::transform(lowered, lowered.begin(),
-                         [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return lowered;
-}
-
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::string JoinUrl(std::string_view interface_base_url, std::string_view rpc_endpoint) {
   std::string base(interface_base_url);
@@ -85,50 +76,20 @@ std::string JoinUrl(std::string_view interface_base_url, std::string_view rpc_en
   return base + std::string(rpc_endpoint);
 }
 
-std::string FindHeaderValue(const HeaderMap& headers, std::string_view name) {
-  const std::string lowered_name = ToLower(name);
-  for (const auto& [header_name, value] : headers) {
-    if (ToLower(header_name) == lowered_name) {
-      return value;
-    }
-  }
-  return {};
-}
-
-std::string_view TrimHttpHeaderValue(std::string_view value) {
-  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-    value.remove_prefix(1);
-  }
-  while (!value.empty() &&
-         (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) {
-    value.remove_suffix(1);
-  }
-  return value;
-}
-
-std::string NormalizeHttpMediaType(std::string_view value) {
-  value = TrimHttpHeaderValue(value);
-  const auto parameter_separator = value.find(core::http::kContentTypeParameterSeparator);
-  if (parameter_separator != std::string_view::npos) {
-    value = TrimHttpHeaderValue(value.substr(0, parameter_separator));
-  }
-  return ToLower(value);
-}
-
 bool HasSseContentType(const HeaderMap& headers) {
-  const std::string content_type = NormalizeHttpMediaType(FindHeaderValue(headers, core::http::kContentTypeHeaderName));
-  return content_type == core::http::kContentTypeTextEventStream;
+  const auto content_type = core::http::FindHeaderValue(headers, core::http::kContentTypeHeaderName);
+  return content_type.has_value() && core::http::IsSseContentType(content_type.value());
 }
 
 core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
-  const std::string version = FindHeaderValue(response.headers, core::Version::kHeaderName);
-  if (version.empty()) {
+  const auto version = core::http::FindHeaderValue(response.headers, core::Version::kHeaderName);
+  if (!version.has_value()) {
     return {};
   }
-  if (!core::Version::IsSupported(version)) {
+  if (!core::Version::IsSupported(version.value())) {
     return core::Error::UnsupportedVersion("Server returned unsupported A2A-Version header")
         .WithTransport("http")
-        .WithProtocolCode(version);
+        .WithProtocolCode(std::string(version.value()));
   }
   return {};
 }

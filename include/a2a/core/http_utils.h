@@ -12,6 +12,8 @@ namespace a2a::core::http {
 
 [[nodiscard]] std::optional<std::string_view> FindHeaderValue(
     const std::unordered_map<std::string, std::string>& headers, std::string_view name);
+[[nodiscard]] bool IsMediaType(std::string_view content_type, std::string_view expected_media_type);
 [[nodiscard]] bool IsJsonContentType(std::string_view content_type);
+[[nodiscard]] bool IsSseContentType(std::string_view content_type);
 
 }  // namespace a2a::core::http

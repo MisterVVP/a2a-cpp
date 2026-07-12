@@ -38,6 +38,9 @@ These instructions apply to the entire repository. Follow them for all changes u
   - Avoid surprising side effects.
   - Leave code cleaner than found.
 
+## General coding guidelines
+- Reuse shared protocol helpers across transports when behavior overlaps, for example HTTP header lookup, media-type parsing, version handling, and protocol envelope validation.
+
 ## File naming and extensions
 - Use `.cpp` for C++ implementation files.
 - Use `.h` for headers unless a nested scope explicitly defines `.hpp`.
