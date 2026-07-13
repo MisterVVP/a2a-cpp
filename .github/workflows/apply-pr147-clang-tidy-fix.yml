@@ -1,0 +1,32 @@
+name: Apply PR 147 clang-tidy fix
+
+on:
+  push:
+    branches:
+      - dev-fix-unresolved-review-threads-in-pr-#145
+    paths:
+      - scripts/apply_pr147_clang_tidy_fix.py
+      - .github/workflows/apply-pr147-clang-tidy-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply refactor
+        run: python3 scripts/apply_pr147_clang_tidy_fix.py
+      - name: Format touched file
+        run: clang-format -i src/client/http_json_transport.cpp
+      - name: Commit changes
+        run: |
+          rm scripts/apply_pr147_clang_tidy_fix.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/client/http_json_transport.cpp scripts/apply_pr147_clang_tidy_fix.py
+          git commit -m "Refactor HTTP SSE worker to satisfy clang-tidy"
+          git push
