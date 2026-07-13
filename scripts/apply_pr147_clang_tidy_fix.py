@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# One-shot refactor for PR #147.
 from pathlib import Path
 
 path = Path("src/client/http_json_transport.cpp")
