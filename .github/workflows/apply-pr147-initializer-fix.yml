@@ -22,23 +22,13 @@ jobs:
           from pathlib import Path
           path = Path('src/client/http_json_transport.cpp')
           text = path.read_text(encoding='utf-8')
-          old = '''  auto session = std::make_shared<HttpSseSession>(HttpSseSession{.requester = stream_requester_,
-                                                                 .request = std::move(request.value()),
-                                                                 .state = state,
-                                                                 .observer = &observer,
-                                                                 .method = std::string(operation.method),
-                                                                 .endpoint = std::string(operation.endpoint)});'''
-          new = '''  auto session = std::make_shared<HttpSseSession>(HttpSseSession{.requester = stream_requester_,
-                                                                 .request = std::move(request.value()),
-                                                                 .state = state,
-                                                                 .observer = &observer,
-                                                                 .method = std::string(operation.method),
-                                                                 .endpoint = std::string(operation.endpoint),
+          old = '.endpoint = std::string(operation.endpoint)});'
+          new = '''.endpoint = std::string(operation.endpoint),
                                                                  .parser = {},
                                                                  .response_metadata = {},
                                                                  .metadata_validated = false});'''
           if old not in text:
-              raise SystemExit('expected HttpSseSession initializer not found')
+              raise SystemExit('expected endpoint initializer not found')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Format touched file
