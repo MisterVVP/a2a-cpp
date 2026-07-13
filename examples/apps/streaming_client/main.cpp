@@ -66,11 +66,18 @@ int main() {
         (void)request;
         return a2a::core::Error::Validation("non-streaming calls are not used");
       },
-      [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
+      [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+         const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         (void)request;
         if (is_cancelled()) {
           return a2a::client::HttpClientResponse{.status_code = 499, .headers = {}, .body = {}};
+        }
+        a2a::client::HttpClientResponse response{
+            .status_code = 200, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
         }
         lf::a2a::v1::StreamResponse event;
         event.mutable_status_update()->set_task_id(kTaskId);
@@ -88,8 +95,7 @@ int main() {
         if (!status.ok()) {
           return status.error();
         }
-        return a2a::client::HttpClientResponse{
-            .status_code = 200, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
+        return response;
       });
 
   a2a::client::A2AClient client(std::move(transport));
