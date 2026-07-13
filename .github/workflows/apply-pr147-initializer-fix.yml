@@ -17,3 +17,37 @@ jobs:
           ref: "dev-fix-unresolved-review-threads-in-pr-#145"
           fetch-depth: 0
       - name: Fix aggregate initializer
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/client/http_json_transport.cpp')
+          text = path.read_text(encoding='utf-8')
+          old = '''  auto session = std::make_shared<HttpSseSession>(HttpSseSession{.requester = stream_requester_,
+                                                                 .request = std::move(request.value()),
+                                                                 .state = state,
+                                                                 .observer = &observer,
+                                                                 .method = std::string(operation.method),
+                                                                 .endpoint = std::string(operation.endpoint)});'''
+          new = '''  auto session = std::make_shared<HttpSseSession>(HttpSseSession{.requester = stream_requester_,
+                                                                 .request = std::move(request.value()),
+                                                                 .state = state,
+                                                                 .observer = &observer,
+                                                                 .method = std::string(operation.method),
+                                                                 .endpoint = std::string(operation.endpoint),
+                                                                 .parser = {},
+                                                                 .response_metadata = {},
+                                                                 .metadata_validated = false});'''
+          if old not in text:
+              raise SystemExit('expected HttpSseSession initializer not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Format touched file
+        run: clang-format -i src/client/http_json_transport.cpp
+      - name: Commit fix and remove helper workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-pr147-initializer-fix.yml
+          git add src/client/http_json_transport.cpp
+          git commit -m "Fix HTTP SSE session aggregate initialization"
+          git push
