@@ -13,9 +13,12 @@
 #endif
 
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -33,6 +36,7 @@ namespace {
 constexpr int kSocketError = -1;
 constexpr int kHttpOk = 200;
 constexpr int kLoopbackTimeoutMs = 1000;
+constexpr int kStreamTimeoutMs = 5000;
 constexpr std::string_view kHttpVersion11 = "HTTP/1.1";
 constexpr std::string_view kTaskId = "task-1";
 constexpr std::string_view kResponseHeaderName = "X-Test-Header";
@@ -41,6 +45,10 @@ constexpr std::string_view kA2aVersionHeader = "A2A-Version";
 constexpr std::string_view kA2aVersionValue = "1.0";
 constexpr std::string_view kRestTaskBody = R"({"id":"task-1"})";
 constexpr std::string_view kJsonRpcTaskBody = R"({"jsonrpc":"2.0","id":"req-1","result":{"id":"task-1"}})";
+constexpr std::string_view kSseHeaders =
+    "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kFirstSseChunk = "data: first\n\n";
+constexpr std::string_view kSecondSseChunk = "data: second\n\n";
 constexpr std::string_view kAgentCardBody =
     R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}]})";
 
@@ -137,6 +145,125 @@ class LoopbackHttpServer final : private a2a::core::NonCopyable {
   std::string request_;
   std::thread worker_;
 };
+
+class ConcurrentSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  ConcurrentSseLoopbackServer() {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = 1;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, 2), 0);
+
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+
+    worker_ = std::thread([this] { AcceptTwoStreams(); });
+  }
+
+  ~ConcurrentSseLoopbackServer() {
+    ReleaseFirstStream();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    if (fd_ != kSocketError) {
+      ::close(fd_);
+    }
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+
+  bool WaitForFirstStream(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mu_);
+    return cv_.wait_for(lock, timeout, [this] { return first_stream_open_; });
+  }
+
+  bool WaitForSecondStream(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mu_);
+    return cv_.wait_for(lock, timeout, [this] { return second_stream_open_; });
+  }
+
+  void ReleaseFirstStream() {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      release_first_stream_ = true;
+    }
+    cv_.notify_all();
+  }
+
+  [[nodiscard]] bool first_stream_closed() const noexcept { return first_stream_closed_.load(); }
+
+ private:
+  static void ReadRequest(int client) {
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    (void)::recv(client, buffer.data(), buffer.size(), 0);
+  }
+
+  void AcceptTwoStreams() {
+    const int first = ::accept(fd_, nullptr, nullptr);
+    if (first == kSocketError) {
+      return;
+    }
+    first_worker_ = std::thread([this, first] { HandleFirstStream(first); });
+
+    const int second = ::accept(fd_, nullptr, nullptr);
+    if (second != kSocketError) {
+      HandleSecondStream(second);
+    }
+    if (first_worker_.joinable()) {
+      first_worker_.join();
+    }
+  }
+
+  void HandleFirstStream(int client) {
+    ReadRequest(client);
+    (void)::send(client, kSseHeaders.data(), kSseHeaders.size(), 0);
+    (void)::send(client, kFirstSseChunk.data(), kFirstSseChunk.size(), 0);
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      first_stream_open_ = true;
+    }
+    cv_.notify_all();
+    {
+      std::unique_lock<std::mutex> lock(mu_);
+      cv_.wait(lock, [this] { return release_first_stream_; });
+    }
+    first_stream_closed_.store(true);
+    ::close(client);
+  }
+
+  void HandleSecondStream(int client) {
+    ReadRequest(client);
+    (void)::send(client, kSseHeaders.data(), kSseHeaders.size(), 0);
+    (void)::send(client, kSecondSseChunk.data(), kSecondSseChunk.size(), 0);
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      second_stream_open_ = true;
+    }
+    cv_.notify_all();
+    ::close(client);
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  mutable std::mutex mu_;
+  std::condition_variable cv_;
+  bool first_stream_open_ = false;
+  bool second_stream_open_ = false;
+  bool release_first_stream_ = false;
+  std::atomic_bool first_stream_closed_{false};
+  std::thread worker_;
+  std::thread first_worker_;
+};
+
 #endif
 
 }  // namespace
@@ -221,6 +348,60 @@ TEST(DefaultHttpFetcherTest, DiscoveryUsesSharedLibcurlFetcher) {
   ASSERT_EQ(response.value().supported_interfaces().size(), 1);
   EXPECT_NE(server.request().find("GET /.well-known/agent-card.json HTTP/1.1"), std::string::npos);
 }
+
+TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {
+  ConcurrentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = "GET";
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  std::atomic_bool first_cancelled{false};
+  bool second_received_chunk = false;
+  std::mutex second_mu;
+  std::condition_variable second_cv;
+  auto metadata = [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; };
+  auto first_worker = std::thread([&] {
+    (void)client.StreamRequest(
+        request, metadata, [](std::string_view) -> a2a::core::Result<void> { return {}; },
+        [&first_cancelled] { return first_cancelled.load(); });
+  });
+
+  ASSERT_TRUE(server.WaitForFirstStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  ASSERT_FALSE(server.first_stream_closed());
+
+  auto second_worker = std::thread([&] {
+    (void)client.StreamRequest(
+        request, metadata,
+        [&second_received_chunk, &second_mu, &second_cv](std::string_view chunk) -> a2a::core::Result<void> {
+          if (chunk.find(kSecondSseChunk) != std::string_view::npos) {
+            {
+              std::lock_guard<std::mutex> lock(second_mu);
+              second_received_chunk = true;
+            }
+            second_cv.notify_all();
+          }
+          return {};
+        },
+        [] { return false; });
+  });
+
+  EXPECT_TRUE(server.WaitForSecondStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  {
+    std::unique_lock<std::mutex> lock(second_mu);
+    EXPECT_TRUE(second_cv.wait_for(lock, std::chrono::milliseconds(kStreamTimeoutMs),
+                                   [&second_received_chunk] { return second_received_chunk; }));
+  }
+  EXPECT_FALSE(server.first_stream_closed());
+
+  server.ReleaseFirstStream();
+  first_cancelled.store(true);
+  second_worker.join();
+  first_worker.join();
+}
+
 #else
 TEST(SharedHttpClientTest, SendRequestReportsDisabledLibcurlSupport) {
   a2a::http::Client client;

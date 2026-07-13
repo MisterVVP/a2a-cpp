@@ -307,12 +307,19 @@ HttpRequester MakeDefaultHttpRequester() {
 }
 
 HttpStreamRequester MakeDefaultHttpStreamRequester() {
-  return [client = a2a::http::Client{}](const HttpRequest& request, const HttpStreamChunkHandler& on_chunk,
+  return [client = a2a::http::Client{}](const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata,
+                                        const HttpStreamChunkHandler& on_chunk,
                                         const StreamCancelled& is_cancelled) -> core::Result<HttpClientResponse> {
     if (request.mtls.has_value()) {
       return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
     }
-    auto response = client.StreamRequest(ToSharedHttpRequest(request), on_chunk, is_cancelled);
+    auto response = client.StreamRequest(
+        ToSharedHttpRequest(request),
+        [&on_metadata](const a2a::http::Response& metadata) {
+          return on_metadata(ToClientHttpResponse(a2a::http::Response{
+              .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
+        },
+        on_chunk, is_cancelled);
     if (!response.ok()) {
       return response.error();
     }
@@ -613,11 +620,36 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                             endpoint = std::string(operation.endpoint)]() mutable {
     SseParser parser;
 
+    HttpClientResponse response_metadata;
+    bool metadata_validated = false;
+    const auto validate_metadata = [&response_metadata, &metadata_validated, &method,
+                                    &endpoint](const HttpClientResponse& response) -> core::Result<void> {
+      response_metadata = response;
+      const auto version_check = ValidateResponseVersion(response_metadata);
+      if (!version_check.ok()) {
+        return version_check.error();
+      }
+      if (response_metadata.status_code < kHttpOkMin || response_metadata.status_code > kHttpOkMax) {
+        return BuildHttpError(method, endpoint, response_metadata);
+      }
+      if (!HasSseContentType(response_metadata.headers)) {
+        return core::Error::RemoteProtocol("HTTP stream response must use text/event-stream")
+            .WithTransport("http")
+            .WithHttpStatus(response_metadata.status_code);
+      }
+      metadata_validated = true;
+      return {};
+    };
+
     const auto stream_response = stream_requester_(
-        request,
-        [&parser, &observer, state](std::string_view chunk) -> core::Result<void> {
+        request, validate_metadata,
+        [&parser, &observer, state, &metadata_validated](std::string_view chunk) -> core::Result<void> {
           if (state->cancel_requested.load()) {
             return {};
+          }
+          if (!metadata_validated) {
+            return core::Error::RemoteProtocol("HTTP stream metadata must be validated before body chunks")
+                .WithTransport("http");
           }
           return parser.Feed(chunk, [&observer](const SseEvent& event) { return DispatchSseEvent(event, observer); });
         },
@@ -630,25 +662,6 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
 
     if (!stream_response.ok()) {
       NotifyErrorAndStop(*state, observer, stream_response.error());
-      return;
-    }
-
-    const auto version_check = ValidateResponseVersion(stream_response.value());
-    if (!version_check.ok()) {
-      NotifyErrorAndStop(*state, observer, version_check.error());
-      return;
-    }
-
-    if (stream_response.value().status_code < kHttpOkMin || stream_response.value().status_code > kHttpOkMax) {
-      NotifyErrorAndStop(*state, observer, BuildHttpError(method, endpoint, stream_response.value()));
-      return;
-    }
-
-    if (!HasSseContentType(stream_response.value().headers)) {
-      NotifyErrorAndStop(*state, observer,
-                         core::Error::RemoteProtocol("HTTP stream response must use text/event-stream")
-                             .WithTransport("http")
-                             .WithHttpStatus(stream_response.value().status_code));
       return;
     }
 

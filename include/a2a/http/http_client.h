@@ -46,6 +46,7 @@ struct HeaderCapture final {
 };
 
 struct StreamCallbackContext final {
+  const std::function<core::Result<void>(const Response&)>* on_metadata = nullptr;
   const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
   const std::function<bool()>* is_cancelled = nullptr;
   HeaderCapture* header_capture = nullptr;
@@ -60,7 +61,8 @@ class Client final {
 
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
   [[nodiscard]] core::Result<Response> StreamRequest(
-      const Request& request, const std::function<core::Result<void>(std::string_view)>& on_chunk,
+      const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+      const std::function<core::Result<void>(std::string_view)>& on_chunk,
       const std::function<bool()>& is_cancelled) const;
 
  private:

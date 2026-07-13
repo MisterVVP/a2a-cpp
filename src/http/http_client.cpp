@@ -78,6 +78,16 @@ struct CurlSlistDeleter final {
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
+struct CurlEasyDeleter final {
+  void operator()(CURL* handle) const noexcept {
+    if (handle != nullptr) {
+      curl_easy_cleanup(handle);
+    }
+  }
+};
+
+using CurlEasyHandle = std::unique_ptr<CURL, CurlEasyDeleter>;
+
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
   message << prefix << ": " << curl_easy_strerror(code);
@@ -209,7 +219,8 @@ size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user
   return byte_count;
 }
 
-core::Result<void> ValidateStreamMetadata(const detail::HeaderCapture& capture) {
+core::Result<void> ValidateStreamMetadata(detail::StreamCallbackContext* context) {
+  const detail::HeaderCapture& capture = *context->header_capture;
   if (capture.response_code == kHttpResponseCodeUnset) {
     return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
   }
@@ -222,6 +233,10 @@ core::Result<void> ValidateStreamMetadata(const detail::HeaderCapture& capture) 
     return core::Error::RemoteProtocol(std::string(kStreamContentTypeFailureMessage))
         .WithTransport("http")
         .WithHttpStatus(static_cast<int>(capture.response_code));
+  }
+  if (context->on_metadata != nullptr) {
+    return (*context->on_metadata)(Response{
+        .status_code = static_cast<int>(capture.response_code), .headers = *capture.response_headers, .body = {}});
   }
   return {};
 }
@@ -240,7 +255,7 @@ size_t WriteStreamBody(char* contents, size_t size, size_t nmemb, void* user_dat
     return 0;
   }
   if (!context->metadata_checked) {
-    const auto metadata = ValidateStreamMetadata(*context->header_capture);
+    const auto metadata = ValidateStreamMetadata(context);
     if (!metadata.ok()) {
       context->error = metadata.error();
       return 0;
@@ -355,12 +370,11 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
     return headers.error();
   }
 
-  std::lock_guard<std::mutex> lock(state_->mutex);
-  if (state_->handle == nullptr) {
+  CurlEasyHandle stream_handle(curl_easy_init());
+  if (stream_handle == nullptr) {
     return core::Error::Internal(std::string(kCurlInitFailureMessage));
   }
-  CURL* const handle = state_->handle;
-  curl_easy_reset(handle);
+  CURL* const handle = stream_handle.get();
 
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
   const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
@@ -395,6 +409,7 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
 }
 
 core::Result<Response> Client::StreamRequest(const Request& request,
+                                             const std::function<core::Result<void>(const Response&)>& on_metadata,
                                              const std::function<core::Result<void>(std::string_view)>& on_chunk,
                                              const std::function<bool()>& is_cancelled) const {
   if (state_->global_state->code != CURLE_OK) {
@@ -404,12 +419,11 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (!headers.ok()) {
     return headers.error();
   }
-  std::lock_guard<std::mutex> lock(state_->mutex);
-  if (state_->handle == nullptr) {
+  CurlEasyHandle stream_handle(curl_easy_init());
+  if (stream_handle == nullptr) {
     return core::Error::Internal(std::string(kCurlInitFailureMessage));
   }
-  CURL* const handle = state_->handle;
-  curl_easy_reset(handle);
+  CURL* const handle = stream_handle.get();
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
   const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
   if (set_error_buffer != CURLE_OK) {
@@ -417,7 +431,8 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   }
   std::vector<Header> response_headers;
   detail::HeaderCapture header_capture{.response_headers = &response_headers};
-  detail::StreamCallbackContext stream_context{.on_chunk = &on_chunk,
+  detail::StreamCallbackContext stream_context{.on_metadata = &on_metadata,
+                                               .on_chunk = &on_chunk,
                                                .is_cancelled = &is_cancelled,
                                                .header_capture = &header_capture,
                                                .error = std::nullopt,
@@ -465,6 +480,7 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
 }
 
 core::Result<Response> Client::StreamRequest(const Request& request,
+                                             const std::function<core::Result<void>(const Response&)>& on_metadata,
                                              const std::function<core::Result<void>(std::string_view)>& on_chunk,
                                              const std::function<bool()>& is_cancelled) const {
   (void)request;

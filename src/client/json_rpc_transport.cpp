@@ -212,11 +212,37 @@ void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const Http
                          std::string request_id) {
   SseParser parser;
   HttpClientResponse response_metadata;
+  bool metadata_validated = false;
+  const auto validate_metadata = [&response_metadata,
+                                  &metadata_validated](const HttpClientResponse& response) -> core::Result<void> {
+    response_metadata = response;
+    const auto version_check = ValidateResponseVersion(response_metadata);
+    if (!version_check.ok()) {
+      return version_check.error();
+    }
+    if (response_metadata.status_code < kHttpOkMin || response_metadata.status_code > kHttpOkMax) {
+      return core::Error::RemoteProtocol("JSON-RPC stream returned non-success HTTP status")
+          .WithTransport("jsonrpc")
+          .WithHttpStatus(response_metadata.status_code);
+    }
+    if (!HasSseContentType(response_metadata.headers)) {
+      return core::Error::RemoteProtocol("JSON-RPC stream response must use text/event-stream")
+          .WithTransport("jsonrpc")
+          .WithHttpStatus(response_metadata.status_code);
+    }
+    metadata_validated = true;
+    return {};
+  };
   const auto stream_response = stream_requester(
-      http_request,
-      [&parser, &observer, state, &response_metadata, &request_id](std::string_view chunk) -> core::Result<void> {
+      http_request, validate_metadata,
+      [&parser, &observer, state, &response_metadata, &request_id,
+       &metadata_validated](std::string_view chunk) -> core::Result<void> {
         if (state->cancel_requested.load()) {
           return {};
+        }
+        if (!metadata_validated) {
+          return core::Error::RemoteProtocol("JSON-RPC stream metadata must be validated before body chunks")
+              .WithTransport("jsonrpc");
         }
         return parser.Feed(chunk, [&observer, &request_id, &response_metadata](const SseEvent& event) {
           return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
@@ -229,26 +255,6 @@ void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const Http
   }
   if (!stream_response.ok()) {
     NotifyErrorAndStop(*state, observer, stream_response.error());
-    return;
-  }
-  response_metadata = stream_response.value();
-  const auto version_check = ValidateResponseVersion(response_metadata);
-  if (!version_check.ok()) {
-    NotifyErrorAndStop(*state, observer, version_check.error());
-    return;
-  }
-  if (response_metadata.status_code < kHttpOkMin || response_metadata.status_code > kHttpOkMax) {
-    NotifyErrorAndStop(*state, observer,
-                       core::Error::RemoteProtocol("JSON-RPC stream returned non-success HTTP status")
-                           .WithTransport("jsonrpc")
-                           .WithHttpStatus(response_metadata.status_code));
-    return;
-  }
-  if (!HasSseContentType(response_metadata.headers)) {
-    NotifyErrorAndStop(*state, observer,
-                       core::Error::RemoteProtocol("JSON-RPC stream response must use text/event-stream")
-                           .WithTransport("jsonrpc")
-                           .WithHttpStatus(response_metadata.status_code));
     return;
   }
   const auto finish = parser.Finish([&observer, &request_id, &response_metadata](const SseEvent& event) {
