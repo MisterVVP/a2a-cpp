@@ -41,21 +41,36 @@ a2a::core::Result<HttpClientResponse> UnusedHttpRequester(const HttpRequest& req
 }
 
 a2a::core::Result<HttpClientResponse> EmitSseChunks(const std::vector<std::string>& chunks,
+                                                    const a2a::client::HttpStreamMetadataHandler& on_metadata,
                                                     const a2a::client::HttpStreamChunkHandler& on_chunk) {
+  HttpClientResponse response{
+      .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}}, .body = ""};
+  const auto metadata = on_metadata(response);
+  if (!metadata.ok()) {
+    return metadata.error();
+  }
   for (const auto& chunk : chunks) {
     const auto status = on_chunk(chunk);
     if (!status.ok()) {
       return status.error();
     }
   }
-  return HttpClientResponse{
-      .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}}, .body = ""};
+  return response;
+}
+
+a2a::core::Result<HttpClientResponse> EmitMetadataOnly(HttpClientResponse response,
+                                                       const a2a::client::HttpStreamMetadataHandler& on_metadata) {
+  const auto metadata = on_metadata(response);
+  if (!metadata.ok()) {
+    return metadata.error();
+  }
+  return response;
 }
 
 std::unique_ptr<HttpJsonTransport> MakeStreamingTransport(
-    const std::function<a2a::core::Result<HttpClientResponse>(const HttpRequest&,
-                                                              const a2a::client::HttpStreamChunkHandler&,
-                                                              const a2a::client::StreamCancelled&)>& stream_requester) {
+    const std::function<a2a::core::Result<HttpClientResponse>(
+        const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+        const a2a::client::StreamCancelled&)>& stream_requester) {
   return std::make_unique<HttpJsonTransport>(MakeResolvedRest(), UnusedHttpRequester, stream_requester);
 }
 
@@ -109,9 +124,10 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
       "\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n",
       "data: {\"artifactUpdate\":{\"taskId\":\"t-1\",\"artifact\":{\"artifactId\":\"a-1\"}}}\n\n"};
 
-  auto transport =
-      MakeStreamingTransport([chunks](const HttpRequest& request, const a2a::client::HttpStreamChunkHandler& on_chunk,
-                                      const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+  auto transport = MakeStreamingTransport(
+      [chunks](const HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+               const a2a::client::HttpStreamChunkHandler& on_chunk,
+               const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
         if (request.method != "POST") {
           return a2a::core::Error::Internal("unexpected method");
         }
@@ -121,7 +137,7 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
         if (request.headers.at("Accept") != "text/event-stream") {
           return a2a::core::Error::Internal("unexpected accept header");
         }
-        return EmitSseChunks(chunks, on_chunk);
+        return EmitSseChunks(chunks, on_metadata, on_chunk);
       });
 
   A2AClient client(std::move(transport));
@@ -146,9 +162,10 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
   auto transport =
-      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
+      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                const a2a::client::HttpStreamChunkHandler& on_chunk,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return EmitSseChunks({"broken-field\n\n"}, on_chunk);
+        return EmitSseChunks({"broken-field\n\n"}, on_metadata, on_chunk);
       });
 
   A2AClient client(std::move(transport));
@@ -168,8 +185,16 @@ TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompletion) {
   auto transport = MakeStreamingTransport(
-      [](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+         const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<HttpClientResponse> {
+        HttpClientResponse response{.status_code = kHttpOk,
+                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                    .body = ""};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
+        }
         for (int i = 0; i < kStreamLoopMaxIterations; ++i) {
           if (is_cancelled()) {
             break;
@@ -180,9 +205,7 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
-                                  .body = ""};
+        return response;
       });
 
   A2AClient client(std::move(transport));
@@ -206,9 +229,10 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes) {
   auto transport =
-      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
+      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                const a2a::client::HttpStreamChunkHandler& on_chunk,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return EmitSseChunks({"data: {\"task\":{\"id\":\"t-1\"}}\n\n"}, on_chunk);
+        return EmitSseChunks({"data: {\"task\":{\"id\":\"t-1\"}}\n\n"}, on_metadata, on_chunk);
       });
 
   A2AClient client(std::move(transport));
@@ -230,9 +254,11 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes)
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolError) {
   auto transport =
-      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler& on_chunk,
+      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                const a2a::client::HttpStreamChunkHandler& on_chunk,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return EmitSseChunks({"event: error\ndata: {\"code\":\"TASK_FAILED\",\"message\":\"boom\"}\n\n"}, on_chunk);
+        return EmitSseChunks({"event: error\ndata: {\"code\":\"TASK_FAILED\",\"message\":\"boom\"}\n\n"}, on_metadata,
+                             on_chunk);
       });
 
   A2AClient client(std::move(transport));
@@ -256,11 +282,14 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolErr
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) {
   auto transport =
-      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
+      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                const a2a::client::HttpStreamChunkHandler&,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpBadGateway,
-                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
-                                  .body = R"({"code":"UPSTREAM_FAILURE"})"};
+        return EmitMetadataOnly(
+            HttpClientResponse{.status_code = kHttpBadGateway,
+                               .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                               .body = R"({"code":"UPSTREAM_FAILURE"})"},
+            on_metadata);
       });
 
   A2AClient client(std::move(transport));
@@ -282,11 +311,14 @@ TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) 
 
 TEST(HttpJsonStreamingIntegrationTest, RejectsContentTypePrefixLookalike) {
   auto transport =
-      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
+      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                const a2a::client::HttpStreamChunkHandler&,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return HttpClientResponse{.status_code = kHttpOk,
-                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-streaming"}},
-                                  .body = ""};
+        return EmitMetadataOnly(
+            HttpClientResponse{.status_code = kHttpOk,
+                               .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-streaming"}},
+                               .body = ""},
+            on_metadata);
       });
 
   A2AClient client(std::move(transport));
@@ -306,13 +338,83 @@ TEST(HttpJsonStreamingIntegrationTest, RejectsContentTypePrefixLookalike) {
   EXPECT_FALSE(observer.completed);
 }
 
-TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskWithoutIdReturnsValidationError) {
-  auto transport =
-      MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamChunkHandler&,
-                                const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+TEST(HttpJsonStreamingIntegrationTest, EmptyResponseWithoutMetadataCallbackStillCompletes) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
         return HttpClientResponse{.status_code = kHttpOk,
                                   .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
                                   .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  EXPECT_TRUE(observer.errors.empty());
+  EXPECT_TRUE(observer.completed);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, ReturnedUnsupportedVersionIsValidatedForEmptyStream) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "2.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kUnsupportedVersion);
+  EXPECT_FALSE(observer.completed);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, ReturnedMissingContentTypeIsValidatedForEmptyStream) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_FALSE(observer.completed);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskWithoutIdReturnsValidationError) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return a2a::core::Error::Internal("unexpected stream requester call");
       });
 
   A2AClient client(std::move(transport));

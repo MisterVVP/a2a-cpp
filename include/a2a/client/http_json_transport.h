@@ -32,10 +32,12 @@ struct HttpClientResponse final {
 };
 
 using HttpRequester = std::function<core::Result<HttpClientResponse>(const HttpRequest& request)>;
+using HttpStreamMetadataHandler = std::function<core::Result<void>(const HttpClientResponse& response)>;
 using HttpStreamChunkHandler = std::function<core::Result<void>(std::string_view chunk)>;
 using StreamCancelled = std::function<bool()>;
 using HttpStreamRequester = std::function<core::Result<HttpClientResponse>(
-    const HttpRequest& request, const HttpStreamChunkHandler& on_chunk, const StreamCancelled& is_cancelled)>;
+    const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata, const HttpStreamChunkHandler& on_chunk,
+    const StreamCancelled& is_cancelled)>;
 
 [[nodiscard]] HttpRequester MakeDefaultHttpRequester();
 [[nodiscard]] HttpStreamRequester MakeDefaultHttpStreamRequester();
