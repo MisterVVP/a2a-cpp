@@ -3,7 +3,7 @@ name: Apply PR 147 clang-tidy fix
 on:
   push:
     branches:
-      - dev-fix-unresolved-review-threads-in-pr-#145
+      - "dev-fix-unresolved-review-threads-in-pr-#145"
     paths:
       - scripts/apply_pr147_clang_tidy_fix.py
       - .github/workflows/apply-pr147-clang-tidy-fix.yml
