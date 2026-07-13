@@ -47,6 +47,9 @@ constexpr std::string_view kRestTaskBody = R"({"id":"task-1"})";
 constexpr std::string_view kJsonRpcTaskBody = R"({"jsonrpc":"2.0","id":"req-1","result":{"id":"task-1"}})";
 constexpr std::string_view kSseHeaders =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kEmptySseResponse =
+    "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nContent-Length: "
+    "0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kFirstSseChunk = "data: first\n\n";
 constexpr std::string_view kSecondSseChunk = "data: second\n\n";
 constexpr std::string_view kAgentCardBody =
@@ -347,6 +350,36 @@ TEST(DefaultHttpFetcherTest, DiscoveryUsesSharedLibcurlFetcher) {
   ASSERT_TRUE(response.ok()) << response.error().message();
   ASSERT_EQ(response.value().supported_interfaces().size(), 1);
   EXPECT_NE(server.request().find("GET /.well-known/agent-card.json HTTP/1.1"), std::string::npos);
+}
+
+TEST(SharedHttpClientTest, EmptyStreamStillDeliversMetadata) {
+  LoopbackHttpServer server{std::string(kEmptySseResponse)};
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = "GET";
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  bool metadata_received = false;
+  bool chunk_received = false;
+  const auto response = client.StreamRequest(
+      request,
+      [&metadata_received](const a2a::http::Response& metadata) -> a2a::core::Result<void> {
+        metadata_received = true;
+        EXPECT_EQ(metadata.status_code, kHttpOk);
+        return {};
+      },
+      [&chunk_received](std::string_view) -> a2a::core::Result<void> {
+        chunk_received = true;
+        return {};
+      },
+      [] { return false; });
+
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_TRUE(metadata_received);
+  EXPECT_FALSE(chunk_received);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
 }
 
 TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {

@@ -338,6 +338,78 @@ TEST(HttpJsonStreamingIntegrationTest, RejectsContentTypePrefixLookalike) {
   EXPECT_FALSE(observer.completed);
 }
 
+TEST(HttpJsonStreamingIntegrationTest, EmptyResponseWithoutMetadataCallbackStillCompletes) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  EXPECT_TRUE(observer.errors.empty());
+  EXPECT_TRUE(observer.completed);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, ReturnedUnsupportedVersionIsValidatedForEmptyStream) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "2.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kUnsupportedVersion);
+  EXPECT_FALSE(observer.completed);
+}
+
+TEST(HttpJsonStreamingIntegrationTest, ReturnedMissingContentTypeIsValidatedForEmptyStream) {
+  auto transport = MakeStreamingTransport(
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  stream.value()->Cancel();
+
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_FALSE(observer.completed);
+}
+
 TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskWithoutIdReturnsValidationError) {
   auto transport = MakeStreamingTransport(
       [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,

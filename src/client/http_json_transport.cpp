@@ -665,6 +665,14 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
       return;
     }
 
+    if (!metadata_validated) {
+      const auto metadata = validate_metadata(stream_response.value());
+      if (!metadata.ok()) {
+        NotifyErrorAndStop(*state, observer, metadata.error());
+        return;
+      }
+    }
+
     const auto finish = parser.Finish([&observer](const SseEvent& event) { return DispatchSseEvent(event, observer); });
     if (!finish.ok()) {
       NotifyErrorAndStop(*state, observer, finish.error());

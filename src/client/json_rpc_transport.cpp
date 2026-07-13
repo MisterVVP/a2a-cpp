@@ -257,6 +257,13 @@ void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const Http
     NotifyErrorAndStop(*state, observer, stream_response.error());
     return;
   }
+  if (!metadata_validated) {
+    const auto metadata = validate_metadata(stream_response.value());
+    if (!metadata.ok()) {
+      NotifyErrorAndStop(*state, observer, metadata.error());
+      return;
+    }
+  }
   const auto finish = parser.Finish([&observer, &request_id, &response_metadata](const SseEvent& event) {
     return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
   });

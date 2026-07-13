@@ -370,11 +370,12 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
     return headers.error();
   }
 
-  CurlEasyHandle stream_handle(curl_easy_init());
-  if (stream_handle == nullptr) {
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  if (state_->handle == nullptr) {
     return core::Error::Internal(std::string(kCurlInitFailureMessage));
   }
-  CURL* const handle = stream_handle.get();
+  CURL* const handle = state_->handle;
+  curl_easy_reset(handle);
 
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
   const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
@@ -451,6 +452,13 @@ core::Result<Response> Client::StreamRequest(const Request& request,
     }
     return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
   }
+  if (!stream_context.metadata_checked) {
+    const auto metadata = ValidateStreamMetadata(&stream_context);
+    if (!metadata.ok()) {
+      return metadata.error();
+    }
+    stream_context.metadata_checked = true;
+  }
   long response_code = kHttpResponseCodeUnset;
   const CURLcode info_code = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
   if (info_code != CURLE_OK) {
@@ -484,6 +492,7 @@ core::Result<Response> Client::StreamRequest(const Request& request,
                                              const std::function<core::Result<void>(std::string_view)>& on_chunk,
                                              const std::function<bool()>& is_cancelled) const {
   (void)request;
+  (void)on_metadata;
   (void)on_chunk;
   (void)is_cancelled;
   return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");

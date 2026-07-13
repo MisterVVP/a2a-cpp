@@ -525,6 +525,108 @@ TEST(JsonRpcTransportUnitTest, StreamingRejectsContentTypePrefixLookalike) {
   EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
 }
 
+TEST(JsonRpcTransportUnitTest, EmptyResponseWithoutMetadataCallbackStillCompletes) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  EXPECT_TRUE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  EXPECT_TRUE(observer.errors.empty());
+}
+
+TEST(JsonRpcTransportUnitTest, EmptyStreamValidatesReturnedUnsupportedVersion) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "2.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kUnsupportedVersion);
+}
+
+TEST(JsonRpcTransportUnitTest, EmptyStreamValidatesReturnedNonSuccessStatus) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpBadGateway,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
+}
+
+TEST(JsonRpcTransportUnitTest, EmptyStreamValidatesReturnedMissingContentType) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler&, const a2a::client::HttpStreamChunkHandler&,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = ""};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
+}
+
 TEST(JsonRpcTransportUnitTest, StreamingMismatchedResponseIdReportsErrorOnce) {
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
