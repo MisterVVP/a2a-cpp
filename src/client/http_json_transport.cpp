@@ -690,7 +690,10 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                                                  .state = state,
                                                                  .observer = &observer,
                                                                  .method = std::string(operation.method),
-                                                                 .endpoint = std::string(operation.endpoint)});
+                                                                 .endpoint = std::string(operation.endpoint),
+                                                                 .parser = {},
+                                                                 .response_metadata = {},
+                                                                 .metadata_validated = false});
   auto worker = StreamHandle::WorkerThread([session = std::move(session)] { session->Run(); });
   return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
