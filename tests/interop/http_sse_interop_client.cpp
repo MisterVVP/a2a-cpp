@@ -26,6 +26,7 @@ constexpr std::string_view kSubscribe = "subscribe";
 constexpr std::string_view kCancel = "cancel";
 constexpr std::string_view kTaskId = "fixture-task";
 constexpr std::string_view kMessageId = "http-sse-interop-message";
+constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 
 class RecordingObserver final : public a2a::client::StreamObserver {
  public:
@@ -138,6 +139,7 @@ int main(int argc, char** argv) {
   a2a::client::A2AClient client(MakeTransport(transport, argv[3]));
   RecordingObserver observer;
   a2a::client::CallOptions options;
+  options.extensions = {std::string(kRequiredExtension)};
   if (operation == kCancel) {
     options.headers["X-Fixture-Mode"] = "cancel";
   }
