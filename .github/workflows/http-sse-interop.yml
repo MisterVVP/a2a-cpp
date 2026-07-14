@@ -32,9 +32,9 @@ jobs:
       - name: Install dependencies
         run: ./scripts/install_build_deps.sh
       - name: Run HTTP SSE interoperability fixtures
-        run: ./scripts/run_http_sse_interop.sh
+        run: bash ./scripts/run_http_sse_interop.sh
       - name: Run production HTTP clients against C++ SUT
-        run: ./scripts/run_cpp_sut_streaming_functional.sh
+        run: bash ./scripts/run_cpp_sut_streaming_functional.sh
       - name: Upload fixture and SUT logs
         if: failure()
         uses: actions/upload-artifact@v6
