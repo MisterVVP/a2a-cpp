@@ -1,0 +1,27 @@
+name: Export PR149 Gap Patch
+
+on:
+  pull_request:
+    types: [synchronize]
+
+jobs:
+  export:
+    if: github.head_ref == 'automation/pr149-remaining-sse-gaps-patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Export patch against PR149 head
+        run: |
+          git diff --binary 64af0524502ee48059c53ff4e59442ea38c71898...HEAD -- \
+            . ':(exclude).github/workflows/export-pr149-gap-patch.yml' \
+            > pr149_remaining_sse_gaps.patch
+          test -s pr149_remaining_sse_gaps.patch
+          git apply --check pr149_remaining_sse_gaps.patch
+      - name: Upload patch
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr149-remaining-sse-gaps-patch
+          path: pr149_remaining_sse_gaps.patch
+          if-no-files-found: error
