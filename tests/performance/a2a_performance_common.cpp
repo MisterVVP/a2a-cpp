@@ -89,7 +89,7 @@ void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_vi
   SetNumberField(object, "throughput_ops_per_sec", result.throughput);
   SetIntegerField(object, "successful_deliveries", result.success);
   SetIntegerField(object, "failed_deliveries", result.errors);
-  SetIntegerField(object, "event_count", result.success);
+  SetIntegerField(object, "event_count", result.event_count > 0 ? result.event_count : result.success);
   SetIntegerField(object, "callback_count", result.success);
 }
 
@@ -101,6 +101,26 @@ void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& res
   SetNumberField(&latency, "p99", Percentile(result.latencies, kP99));
   SetNumberField(&latency, "max", result.latencies.empty() ? 0.0 : result.latencies.back());
   (*object->mutable_fields())["latency_ms"].mutable_struct_value()->Swap(&latency);
+  if (!result.first_event_latencies.empty()) {
+    google::protobuf::Struct first_event_latency;
+    SetNumberField(&first_event_latency, "p50", Percentile(result.first_event_latencies, kP50));
+    SetNumberField(&first_event_latency, "p90", Percentile(result.first_event_latencies, kP90));
+    SetNumberField(&first_event_latency, "p95", Percentile(result.first_event_latencies, kP95));
+    SetNumberField(&first_event_latency, "p99", Percentile(result.first_event_latencies, kP99));
+    SetNumberField(&first_event_latency, "max",
+                   result.first_event_latencies.empty() ? 0.0 : result.first_event_latencies.back());
+    (*object->mutable_fields())["first_event_latency_ms"].mutable_struct_value()->Swap(&first_event_latency);
+  }
+  if (!result.completion_latencies.empty()) {
+    google::protobuf::Struct completion_latency;
+    SetNumberField(&completion_latency, "p50", Percentile(result.completion_latencies, kP50));
+    SetNumberField(&completion_latency, "p90", Percentile(result.completion_latencies, kP90));
+    SetNumberField(&completion_latency, "p95", Percentile(result.completion_latencies, kP95));
+    SetNumberField(&completion_latency, "p99", Percentile(result.completion_latencies, kP99));
+    SetNumberField(&completion_latency, "max",
+                   result.completion_latencies.empty() ? 0.0 : result.completion_latencies.back());
+    (*object->mutable_fields())["stream_completion_latency_ms"].mutable_struct_value()->Swap(&completion_latency);
+  }
 }
 
 }  // namespace a2a::tests::performance
