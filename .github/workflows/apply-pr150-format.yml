@@ -1,0 +1,31 @@
+name: Apply PR150 formatting
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.head_ref == 'automation/pr149-remaining-sse-gaps-patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/pr149-remaining-sse-gaps-patch
+          fetch-depth: 0
+      - name: Format changed C++ files
+        run: |
+          clang-format -i \
+            tests/interop/http_sse_interop_client.cpp \
+            tests/interop/http_streaming_gap_test.cpp
+      - name: Commit formatting and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-pr150-format.yml
+          git add tests/interop/http_sse_interop_client.cpp tests/interop/http_streaming_gap_test.cpp
+          git commit -m "Format PR150 interoperability tests"
+          git push
