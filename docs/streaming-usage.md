@@ -41,3 +41,15 @@ auto subscription = jsonrpc_client.SubscribeTask(get_task_request, observer, cal
 Both default HTTP transports use the shared libcurl-backed SSE requester. Custom `HttpStreamRequester` injection remains available for tests and custom HTTP stacks.
 
 See `examples/apps/streaming_client/main.cpp` and `tests/functional/examples_functional_test.cpp`.
+
+## Production streaming client example
+
+`examples/apps/streaming_client/main.cpp` demonstrates production default transports for both HTTP+JSON and JSON-RPC. Build it with libcurl-enabled examples and point it at a server whose Agent Card advertises `capabilities.streaming: true`:
+
+```bash
+./build/examples/apps/streaming_client/streaming_client --transport http_json --endpoint http://127.0.0.1:8080/a2a --operation send --timeout-ms 10000
+./build/examples/apps/streaming_client/streaming_client --transport jsonrpc --endpoint http://127.0.0.1:8080/rpc --operation send --timeout-ms 10000
+./build/examples/apps/streaming_client/streaming_client --transport http_json --endpoint http://127.0.0.1:8080/a2a --operation subscribe --task-id task-123 --timeout-ms 10000
+```
+
+The example prints `Task`, status-update, and artifact-update variants, keeps the observer alive for the full stream lifetime, uses a bounded condition-variable wait, and returns non-zero on timeout or `OnError`. Add `--cancel-after-first-event` to request cancellation after the first event.
