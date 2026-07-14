@@ -47,9 +47,15 @@ start_fixture() {
 }
 
 start_fixture "${HTTP_JSON_PORT}"
-"${CLIENT}" http_json "http://${HOST}:${HTTP_JSON_PORT}/a2a"
+REST_ENDPOINT="http://${HOST}:${HTTP_JSON_PORT}/a2a"
+"${CLIENT}" http_json send "${REST_ENDPOINT}"
+"${CLIENT}" http_json subscribe "${REST_ENDPOINT}"
+"${CLIENT}" http_json cancel "${REST_ENDPOINT}"
 
 start_fixture "${JSON_RPC_PORT}"
-"${CLIENT}" jsonrpc "http://${HOST}:${JSON_RPC_PORT}/rpc"
+JSON_RPC_ENDPOINT="http://${HOST}:${JSON_RPC_PORT}/rpc"
+"${CLIENT}" jsonrpc send "${JSON_RPC_ENDPOINT}"
+"${CLIENT}" jsonrpc subscribe "${JSON_RPC_ENDPOINT}"
+"${CLIENT}" jsonrpc cancel "${JSON_RPC_ENDPOINT}"
 
-echo "[http-sse-interop] focused regression tests and HTTP fixtures passed"
+echo "[http-sse-interop] focused regression tests and six HTTP fixture scenarios passed"
