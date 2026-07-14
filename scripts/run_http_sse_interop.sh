@@ -8,7 +8,8 @@ HOST=${HOST:-127.0.0.1}
 HTTP_JSON_PORT=${HTTP_JSON_PORT:-50281}
 JSON_RPC_PORT=${JSON_RPC_PORT:-50282}
 FIXTURE="${ROOT}/scripts/interop/python_http_sse_fixture.py"
-CLIENT="${BUILD_DIR}/tests/http_sse_interop_client"
+CLIENT="${BUILD_DIR}/http_sse_interop_client"
+CONSUMER_SOURCE="${ROOT}/tests/interop/http_sse_consumer"
 
 PIDS=()
 cleanup() {
@@ -19,7 +20,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cmake -S "${ROOT}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DA2A_ENABLE_TESTING=ON
+cmake -S "${CONSUMER_SOURCE}" -B "${BUILD_DIR}" -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DA2A_SOURCE_DIR="${ROOT}"
 cmake --build "${BUILD_DIR}" --parallel --target http_sse_interop_client
 
 start_fixture() {
