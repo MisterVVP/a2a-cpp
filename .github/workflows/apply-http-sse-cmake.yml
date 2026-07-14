@@ -1,0 +1,51 @@
+name: Apply HTTP SSE interop CMake registration
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'automation/pr149-remaining-sse-gaps-patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/pr149-remaining-sse-gaps-patch
+          fetch-depth: 0
+      - name: Register interop target
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/CMakeLists.txt')
+          text = path.read_text(encoding='utf-8')
+          marker = 'add_executable(auth_test\n'
+          block = '''add_executable(http_sse_interop_client
+  interop/http_sse_interop_client.cpp
+)
+
+target_link_libraries(http_sse_interop_client
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+)
+
+'''
+          if 'add_executable(http_sse_interop_client' not in text:
+              if marker not in text:
+                  raise SystemExit('CMake insertion marker not found')
+              text = text.replace(marker, block + marker, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+      - name: Commit registration and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-http-sse-cmake.yml
+          git add tests/CMakeLists.txt
+          git commit -m "Register HTTP SSE interoperability client"
+          git push
