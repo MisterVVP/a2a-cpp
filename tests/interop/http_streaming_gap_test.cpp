@@ -53,8 +53,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
   [[nodiscard]] bool WaitForTerminal() {
     std::unique_lock lock(mutex_);
-    return condition_.wait_for(lock, kWaitTimeout,
-                               [this] { return completion_count_ > 0 || !errors_.empty(); });
+    return condition_.wait_for(lock, kWaitTimeout, [this] { return completion_count_ > 0 || !errors_.empty(); });
   }
 
   [[nodiscard]] std::vector<lf::a2a::v1::StreamResponse> events() const {
@@ -109,8 +108,7 @@ TEST(HttpJsonStreamingGapTest, PropagatesOptionsAndAcceptsContentTypeParameters)
   a2a::client::HttpRequest captured;
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
       MakeRestInterface(), UnusedRequester,
-      [&captured](const a2a::client::HttpRequest& request,
-                  const a2a::client::HttpStreamMetadataHandler& on_metadata,
+      [&captured](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
                   const a2a::client::HttpStreamChunkHandler& on_chunk,
                   const a2a::client::StreamCancelled&) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         captured = request;
@@ -125,8 +123,7 @@ TEST(HttpJsonStreamingGapTest, PropagatesOptionsAndAcceptsContentTypeParameters)
         const auto chunk = on_chunk(
             R"(data: {"statusUpdate":{"taskId":"task-1","status":{"state":"TASK_STATE_WORKING"}}}
 
-)"
-        );
+)");
         if (!chunk.ok()) {
           return chunk.error();
         }
@@ -163,8 +160,7 @@ TEST(JsonRpcStreamingGapTest, SubscribeUsesExpectedMethodAndMissingResponseIdFai
   a2a::client::HttpRequest captured;
   auto transport = std::make_unique<a2a::client::JsonRpcTransport>(
       MakeJsonRpcInterface(), UnusedRequester,
-      [&captured](const a2a::client::HttpRequest& request,
-                  const a2a::client::HttpStreamMetadataHandler& on_metadata,
+      [&captured](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
                   const a2a::client::HttpStreamChunkHandler& on_chunk,
                   const a2a::client::StreamCancelled&) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         captured = request;
@@ -179,8 +175,7 @@ TEST(JsonRpcStreamingGapTest, SubscribeUsesExpectedMethodAndMissingResponseIdFai
         const auto chunk = on_chunk(
             R"(data: {"jsonrpc":"2.0","result":{"statusUpdate":{"taskId":"task-1","status":{"state":"TASK_STATE_WORKING"}}}}
 
-)"
-        );
+)");
         if (!chunk.ok()) {
           return chunk.error();
         }
@@ -209,8 +204,7 @@ TEST(JsonRpcStreamingGapTest, SubscribeUsesExpectedMethodAndMissingResponseIdFai
 TEST(JsonRpcStreamingGapTest, DecodesStatusAndArtifactEventsFromOneChunk) {
   auto transport = std::make_unique<a2a::client::JsonRpcTransport>(
       MakeJsonRpcInterface(), UnusedRequester,
-      [](const a2a::client::HttpRequest&,
-         const a2a::client::HttpStreamMetadataHandler& on_metadata,
+      [](const a2a::client::HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
          const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled&) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         a2a::client::HttpClientResponse response{
@@ -226,8 +220,7 @@ TEST(JsonRpcStreamingGapTest, DecodesStatusAndArtifactEventsFromOneChunk) {
 
 data: {"jsonrpc":"2.0","id":"stream-id","result":{"artifactUpdate":{"taskId":"task-1","artifact":{"artifactId":"artifact-1"}}}}
 
-)"
-        );
+)");
         if (!chunks.ok()) {
           return chunks.error();
         }
@@ -257,8 +250,7 @@ TEST(StreamHandleLifecycleGapTest, NoObserverCallbacksOccurAfterCancelReturns) {
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
       MakeRestInterface(), UnusedRequester,
       [&mutex, &condition, &started, &release](
-          const a2a::client::HttpRequest&,
-          const a2a::client::HttpStreamMetadataHandler& on_metadata,
+          const a2a::client::HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
           const a2a::client::HttpStreamChunkHandler& on_chunk,
           const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<a2a::client::HttpClientResponse> {
         a2a::client::HttpClientResponse response{
@@ -281,8 +273,7 @@ TEST(StreamHandleLifecycleGapTest, NoObserverCallbacksOccurAfterCancelReturns) {
         const auto late_chunk = on_chunk(
             R"(data: {"statusUpdate":{"taskId":"task-1","status":{"state":"TASK_STATE_WORKING"}}}
 
-)"
-        );
+)");
         if (!late_chunk.ok()) {
           return late_chunk.error();
         }

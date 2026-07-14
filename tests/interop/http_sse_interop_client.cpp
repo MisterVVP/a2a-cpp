@@ -54,8 +54,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
   [[nodiscard]] bool WaitForTerminal() {
     std::unique_lock lock(mutex_);
-    return condition_.wait_for(lock, kWaitTimeout,
-                               [this] { return completion_count_ > 0 || !error_.empty(); });
+    return condition_.wait_for(lock, kWaitTimeout, [this] { return completion_count_ > 0 || !error_.empty(); });
   }
 
   [[nodiscard]] bool WaitForEventCount(std::size_t expected) {
@@ -67,8 +66,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   [[nodiscard]] bool IsSuccessful() const {
     std::lock_guard lock(mutex_);
     return error_.empty() && completion_count_ == 1 && states_.size() == 2U &&
-           states_.front() == lf::a2a::v1::TASK_STATE_WORKING &&
-           states_.back() == lf::a2a::v1::TASK_STATE_COMPLETED;
+           states_.front() == lf::a2a::v1::TASK_STATE_WORKING && states_.back() == lf::a2a::v1::TASK_STATE_COMPLETED;
   }
 
   [[nodiscard]] bool IsCancelledCleanly() const {
@@ -92,17 +90,15 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
 std::unique_ptr<a2a::client::ClientTransport> MakeTransport(std::string_view transport, std::string endpoint) {
   if (transport == kJsonRpc) {
-    return a2a::client::JsonRpcTransport::CreateDefault(
-        {.transport = a2a::client::PreferredTransport::kJsonRpc,
-         .url = std::move(endpoint),
-         .security_requirements = {},
-         .security_schemes = {}});
+    return a2a::client::JsonRpcTransport::CreateDefault({.transport = a2a::client::PreferredTransport::kJsonRpc,
+                                                         .url = std::move(endpoint),
+                                                         .security_requirements = {},
+                                                         .security_schemes = {}});
   }
-  return a2a::client::HttpJsonTransport::CreateDefault(
-      {.transport = a2a::client::PreferredTransport::kRest,
-       .url = std::move(endpoint),
-       .security_requirements = {},
-       .security_schemes = {}});
+  return a2a::client::HttpJsonTransport::CreateDefault({.transport = a2a::client::PreferredTransport::kRest,
+                                                        .url = std::move(endpoint),
+                                                        .security_requirements = {},
+                                                        .security_schemes = {}});
 }
 
 lf::a2a::v1::SendMessageRequest MakeSendRequest() {
