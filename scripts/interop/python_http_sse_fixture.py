@@ -100,7 +100,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
     def _rest_frames() -> list[str]:
         return [
             'data: {"statusUpdate":{"taskId":"fixture-task","status":{"state":"TASK_STATE_WORKING"}}}\n\n',
-            'data: {"statusUpdate":{"taskId":"fixture-task","status":{"state":"TASK_STATE_COMPLETED"},"final":true}}\n\n',
+            'data: {"statusUpdate":{"taskId":"fixture-task","status":{"state":"TASK_STATE_COMPLETED"}}}\n\n',
         ]
 
     def _json_rpc_frames(self, request: object) -> list[str] | None:
@@ -128,7 +128,6 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "statusUpdate": {
                     "taskId": "fixture-task",
                     "status": {"state": "TASK_STATE_COMPLETED"},
-                    "final": True,
                 }
             },
         }
