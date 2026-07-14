@@ -373,7 +373,7 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig) -> Non
 
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
@@ -381,7 +381,19 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
             latency = result["latency_ms"]
             assert isinstance(latency, dict)
             row = {key: result.get(key, 0) for key in fieldnames[:17]}
+            first_event_latency = result.get("first_event_latency_ms", {})
+            if not isinstance(first_event_latency, dict):
+                first_event_latency = {}
+            completion_latency = result.get("stream_completion_latency_ms", {})
+            if not isinstance(completion_latency, dict):
+                completion_latency = {}
             row.update({"p50_ms": latency["p50"], "p90_ms": latency["p90"], "p95_ms": latency["p95"], "p99_ms": latency["p99"], "max_ms": latency["max"]})
+            row.update({
+                "first_event_p50_ms": first_event_latency.get("p50", 0),
+                "first_event_p95_ms": first_event_latency.get("p95", 0),
+                "stream_completion_p50_ms": completion_latency.get("p50", 0),
+                "stream_completion_p95_ms": completion_latency.get("p95", 0),
+            })
             writer.writerow(row)
 
 
