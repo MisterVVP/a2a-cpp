@@ -14,6 +14,8 @@ if(NOT DEFINED A2A_SOURCE_DIR)
   message(FATAL_ERROR "A2A_SOURCE_DIR must point to the a2a-cpp repository")
 endif()
 
+find_package(GTest CONFIG REQUIRED)
+
 add_subdirectory("${A2A_SOURCE_DIR}" a2a-cpp-build)
 
 add_executable(http_sse_interop_client
