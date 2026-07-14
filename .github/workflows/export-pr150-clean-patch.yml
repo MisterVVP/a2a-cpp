@@ -1,0 +1,32 @@
+name: Export PR150 Clean Patch
+
+on:
+  pull_request:
+    types: [synchronize]
+
+jobs:
+  export:
+    if: github.head_ref == 'automation/pr149-remaining-sse-gaps-patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: automation/pr149-remaining-sse-gaps-patch
+          fetch-depth: 0
+      - name: Export and validate patch
+        run: |
+          git diff --binary 64af0524502ee48059c53ff4e59442ea38c71898...HEAD -- \
+            . \
+            ':(exclude).github/workflows/export-pr150-clean-patch.yml' \
+            ':(exclude)pr150_fixture_diagnostic.txt' \
+            ':(exclude)pr150_sut_diagnostic.txt' \
+            > pr149_remaining_sse_gaps.patch
+          test -s pr149_remaining_sse_gaps.patch
+          git worktree add /tmp/pr149-base 64af0524502ee48059c53ff4e59442ea38c71898
+          git -C /tmp/pr149-base apply --check "$GITHUB_WORKSPACE/pr149_remaining_sse_gaps.patch"
+      - name: Upload patch
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr149-remaining-sse-gaps-patch
+          path: pr149_remaining_sse_gaps.patch
+          if-no-files-found: error
