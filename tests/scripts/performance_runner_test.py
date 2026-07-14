@@ -47,7 +47,18 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertEqual(ordered, payload["results"])
             self.assertIn("configured_duration_seconds", payload["results"][0])
             self.assertIn("measured_duration_seconds", payload["results"][0])
+            streaming_rows = [
+                result for result in wire_rows
+                if result["scenario"] in {"SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"}
+            ]
+            self.assertEqual(2, len(streaming_rows))
+            self.assertTrue(all(result["event_count"] > 0 for result in streaming_rows))
+            self.assertTrue(all("first_event_latency_ms" in result for result in streaming_rows))
+            self.assertTrue(all("stream_completion_latency_ms" in result for result in streaming_rows))
             self.assertTrue((report_dir / "results.csv").exists())
+            csv_header = (report_dir / "results.csv").read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn("first_event_p50_ms", csv_header)
+            self.assertIn("stream_completion_p50_ms", csv_header)
             self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
             self.assertIn("[perf] estimated_rows=", completed.stdout)
             self.assertIn("[perf] start in-process transport=grpc store=inmemory concurrency=1 requests=3", completed.stdout)

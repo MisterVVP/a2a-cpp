@@ -440,6 +440,14 @@ class JsonRpcRecordingObserver final : public a2a::client::StreamObserver {
   bool completed = false;
 };
 
+void ExpectSingleStreamError(const JsonRpcRecordingObserver& observer, ErrorCode code, int http_status) {
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), code);
+  EXPECT_EQ(observer.errors.front().http_status().value_or(0), http_status);
+}
+
 a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataOnly(
     HttpClientResponse response, const a2a::client::HttpStreamMetadataHandler& on_metadata) {
   const auto metadata = on_metadata(response);
@@ -596,11 +604,7 @@ TEST(JsonRpcTransportUnitTest, EmptyStreamValidatesReturnedNonSuccessStatus) {
   ASSERT_TRUE(stream.ok()) << stream.error().message();
   ASSERT_TRUE(observer.Wait());
 
-  EXPECT_FALSE(observer.completed);
-  EXPECT_TRUE(observer.events.empty());
-  ASSERT_EQ(observer.errors.size(), 1U);
-  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
-  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
+  ExpectSingleStreamError(observer, ErrorCode::kRemoteProtocol, kHttpBadGateway);
 }
 
 TEST(JsonRpcTransportUnitTest, EmptyStreamValidatesReturnedMissingContentType) {

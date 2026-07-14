@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -109,8 +110,18 @@ struct ScenarioResult final {
   double measured_duration_seconds = 0.0;
   int success = 0;
   int errors = 0;
+  int event_count = 0;
   double throughput = 0.0;
   std::vector<double> latencies;
+  std::vector<double> first_event_latencies;
+  std::vector<double> completion_latencies;
+};
+
+struct OperationOutcome final {
+  bool ok = false;
+  int event_count = 0;
+  double first_event_latency_ms = 0.0;
+  double completion_latency_ms = 0.0;
 };
 
 [[nodiscard]] lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id,
@@ -134,7 +145,10 @@ template <typename ExecuteOperation>
   struct ThreadResult final {
     int success = 0;
     int errors = 0;
+    int event_count = 0;
     std::vector<double> latencies;
+    std::vector<double> first_event_latencies;
+    std::vector<double> completion_latencies;
   };
 
   const int worker_count = std::min(concurrency, requests);
@@ -167,13 +181,27 @@ template <typename ExecuteOperation>
             return;
           }
           const auto op_started = std::chrono::steady_clock::now();
-          const bool ok = execute_operation(worker_index, operation_index);
+          const auto outcome = execute_operation(worker_index, operation_index);
           const auto op_finished = std::chrono::steady_clock::now();
           const double latency =
               static_cast<double>(
                   std::chrono::duration_cast<std::chrono::nanoseconds>(op_finished - op_started).count()) /
               kNanosecondsPerMillisecond;
-          if (ok) {
+          if constexpr (std::is_same_v<std::decay_t<decltype(outcome)>, OperationOutcome>) {
+            if (outcome.ok) {
+              ++thread_result.success;
+              thread_result.latencies.push_back(latency);
+              thread_result.event_count += outcome.event_count;
+              if (outcome.first_event_latency_ms > 0.0) {
+                thread_result.first_event_latencies.push_back(outcome.first_event_latency_ms);
+              }
+              if (outcome.completion_latency_ms > 0.0) {
+                thread_result.completion_latencies.push_back(outcome.completion_latency_ms);
+              }
+            } else {
+              ++thread_result.errors;
+            }
+          } else if (outcome) {
             ++thread_result.success;
             thread_result.latencies.push_back(latency);
           } else {
@@ -197,14 +225,23 @@ template <typename ExecuteOperation>
   for (auto& thread_result : thread_results) {
     result.success += thread_result.success;
     result.errors += thread_result.errors;
+    result.event_count += thread_result.event_count;
     result.latencies.insert(result.latencies.end(), std::make_move_iterator(thread_result.latencies.begin()),
                             std::make_move_iterator(thread_result.latencies.end()));
+    result.first_event_latencies.insert(result.first_event_latencies.end(),
+                                        std::make_move_iterator(thread_result.first_event_latencies.begin()),
+                                        std::make_move_iterator(thread_result.first_event_latencies.end()));
+    result.completion_latencies.insert(result.completion_latencies.end(),
+                                       std::make_move_iterator(thread_result.completion_latencies.begin()),
+                                       std::make_move_iterator(thread_result.completion_latencies.end()));
   }
   result.operations = result.success + result.errors;
   const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
   result.measured_duration_seconds = elapsed;
   result.throughput = static_cast<double>(result.success) / std::max(elapsed, kMinElapsedSeconds);
   std::ranges::sort(result.latencies);
+  std::ranges::sort(result.first_event_latencies);
+  std::ranges::sort(result.completion_latencies);
   return result;
 }
 
