@@ -9,6 +9,7 @@ HTTP_JSON_PORT=${HTTP_JSON_PORT:-50281}
 JSON_RPC_PORT=${JSON_RPC_PORT:-50282}
 FIXTURE="${ROOT}/scripts/interop/python_http_sse_fixture.py"
 CLIENT="${BUILD_DIR}/http_sse_interop_client"
+GAP_TEST="${BUILD_DIR}/http_streaming_gap_test"
 CONSUMER_SOURCE="${ROOT}/tests/interop/http_sse_consumer"
 
 PIDS=()
@@ -23,7 +24,8 @@ trap cleanup EXIT
 cmake -S "${CONSUMER_SOURCE}" -B "${BUILD_DIR}" -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DA2A_SOURCE_DIR="${ROOT}"
-cmake --build "${BUILD_DIR}" --parallel --target http_sse_interop_client
+cmake --build "${BUILD_DIR}" --parallel --target http_sse_interop_client http_streaming_gap_test
+"${GAP_TEST}"
 
 start_fixture() {
   local port=$1
@@ -50,4 +52,4 @@ start_fixture "${HTTP_JSON_PORT}"
 start_fixture "${JSON_RPC_PORT}"
 "${CLIENT}" jsonrpc "http://${HOST}:${JSON_RPC_PORT}/rpc"
 
-echo "[http-sse-interop] HTTP+JSON and JSON-RPC fixtures passed"
+echo "[http-sse-interop] focused regression tests and HTTP fixtures passed"
