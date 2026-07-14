@@ -1,0 +1,130 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "a2a/client/client.h"
+#include "a2a/client/http_json_transport.h"
+#include "a2a/client/json_rpc_transport.h"
+
+namespace {
+
+constexpr std::chrono::seconds kWaitTimeout{10};
+constexpr std::string_view kHttpJson = "http_json";
+constexpr std::string_view kJsonRpc = "jsonrpc";
+constexpr std::string_view kTaskId = "fixture-task";
+
+class RecordingObserver final : public a2a::client::StreamObserver {
+ public:
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    {
+      std::lock_guard lock(mutex_);
+      states_.push_back(response.status_update().status().state());
+    }
+    condition_.notify_all();
+  }
+
+  void OnError(const a2a::core::Error& error) override {
+    {
+      std::lock_guard lock(mutex_);
+      error_ = error.message();
+    }
+    condition_.notify_all();
+  }
+
+  void OnCompleted() override {
+    {
+      std::lock_guard lock(mutex_);
+      ++completion_count_;
+    }
+    condition_.notify_all();
+  }
+
+  [[nodiscard]] bool Wait() {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, kWaitTimeout,
+                               [this] { return completion_count_ > 0 || !error_.empty(); });
+  }
+
+  [[nodiscard]] bool IsSuccessful() const {
+    std::lock_guard lock(mutex_);
+    return error_.empty() && completion_count_ == 1 && states_.size() == 2U &&
+           states_.front() == lf::a2a::v1::TASK_STATE_WORKING &&
+           states_.back() == lf::a2a::v1::TASK_STATE_COMPLETED;
+  }
+
+  [[nodiscard]] std::string error() const {
+    std::lock_guard lock(mutex_);
+    return error_;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::condition_variable condition_;
+  std::vector<lf::a2a::v1::TaskState> states_;
+  std::string error_;
+  int completion_count_ = 0;
+};
+
+std::unique_ptr<a2a::client::ClientTransport> MakeTransport(std::string_view transport, std::string endpoint) {
+  if (transport == kJsonRpc) {
+    return a2a::client::JsonRpcTransport::CreateDefault(
+        {.transport = a2a::client::PreferredTransport::kJsonRpc,
+         .url = std::move(endpoint),
+         .security_requirements = {},
+         .security_schemes = {}});
+  }
+  return a2a::client::HttpJsonTransport::CreateDefault(
+      {.transport = a2a::client::PreferredTransport::kRest,
+       .url = std::move(endpoint),
+       .security_requirements = {},
+       .security_schemes = {}});
+}
+
+lf::a2a::v1::SendMessageRequest MakeRequest() {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  request.mutable_message()->set_task_id(std::string(kTaskId));
+  request.mutable_message()->add_parts()->set_text("HTTP SSE interoperability fixture");
+  return request;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc != 3) {
+    std::cerr << "usage: http_sse_interop_client http_json|jsonrpc <endpoint>\n";
+    return EXIT_FAILURE;
+  }
+  const std::string_view transport(argv[1]);
+  if (transport != kHttpJson && transport != kJsonRpc) {
+    std::cerr << "unsupported transport\n";
+    return EXIT_FAILURE;
+  }
+
+  a2a::client::A2AClient client(MakeTransport(transport, argv[2]));
+  RecordingObserver observer;
+  auto handle = client.SendStreamingMessage(MakeRequest(), observer);
+  if (!handle.ok()) {
+    std::cerr << handle.error().message() << '\n';
+    return EXIT_FAILURE;
+  }
+  if (!observer.Wait()) {
+    handle.value()->Cancel();
+    std::cerr << "stream timed out\n";
+    return EXIT_FAILURE;
+  }
+  if (!observer.IsSuccessful()) {
+    handle.value()->Cancel();
+    std::cerr << "unexpected stream result: " << observer.error() << '\n';
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
