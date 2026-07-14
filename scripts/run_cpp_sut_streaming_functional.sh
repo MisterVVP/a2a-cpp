@@ -21,7 +21,7 @@ fi
 BUILD_DIR="${SUT_BUILD_DIR}" SUT_HOST="${SUT_HOST}" SUT_PORT="${SUT_PORT}" \
   "${ROOT}/scripts/run_tck_sut.sh"
 
-"${CLIENT}" http_json "http://${SUT_HOST}:${SUT_PORT}/a2a"
-"${CLIENT}" jsonrpc "http://${SUT_HOST}:${SUT_PORT}/rpc"
+"${CLIENT}" http_json send "http://${SUT_HOST}:${SUT_PORT}/a2a"
+"${CLIENT}" jsonrpc send "http://${SUT_HOST}:${SUT_PORT}/rpc"
 
-echo "[cpp-sut-streaming] production HTTP clients passed against tck_sut"
+echo "[cpp-sut-streaming] production HTTP clients passed finite streams against tck_sut"
