@@ -1,0 +1,201 @@
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3")
+-- Found Protobuf: /usr/lib/x86_64-linux-gnu/libprotobuf.so (found version "3.21.12")
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.13")
+-- Found c-ares: /usr/lib/x86_64-linux-gnu/cmake/c-ares/c-ares-config.cmake (found version "1.27.0")
+-- Found Threads: TRUE
+-- Found PkgConfig: /usr/bin/pkg-config (found version "1.8.1")
+-- Found RE2 via pkg-config.
+-- libcurl found: default outbound HTTP support enabled
+-- A2A_BUILD_EXAMPLES is enabled; use examples/fetch_content_consumer or examples/installed_package_consumer to build curated examples
+-- Configuring done (0.6s)
+-- Generating done (0.2s)
+-- Build files have been written to: /home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut
+[1/48] Generating protobuf C++ sources
+[2/48] Generating gRPC C++ sources from /home/runner/work/a2a-cpp/a2a-cpp/proto/a2a/v1/a2a.proto
+[3/48] Building CXX object proto/CMakeFiles/a2a_proto_generated.dir/__/generated/google/api/annotations.pb.cc.o
+[4/48] Building CXX object proto/CMakeFiles/a2a_proto_generated.dir/__/generated/google/api/client.pb.cc.o
+[5/48] Building CXX object proto/CMakeFiles/a2a_proto_generated.dir/__/generated/google/api/field_behavior.pb.cc.o
+[6/48] Building CXX object proto/CMakeFiles/a2a_proto_generated.dir/__/generated/google/api/http.pb.cc.o
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc: In member function ‘virtual uint8_t* google::api::Http::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc:286:50: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+  286 |     const auto& repfield = this->_internal_rules(i);
+      |                                                  ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc: In member function ‘virtual size_t google::api::Http::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc:314:49: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+  314 |   total_size += 1UL * this->_internal_rules_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc: In member function ‘virtual uint8_t* google::api::HttpRule::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc:796:64: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+  796 |     const auto& repfield = this->_internal_additional_bindings(i);
+      |                                                                ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc: In member function ‘virtual size_t google::api::HttpRule::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/google/api/http.pb.cc:828:63: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+  828 |   total_size += 1UL * this->_internal_additional_bindings_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+[7/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/error.cpp.o
+[8/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/agent_card/agent_card_provider.cpp.o
+[9/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/core.cpp.o
+[10/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/extensions.cpp.o
+[11/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/http_utils.cpp.o
+[12/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/agent_card/agent_card_builder.cpp.o
+[13/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/string_utils.cpp.o
+[14/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/version.cpp.o
+[15/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/protojson.cpp.o
+[16/48] Building CXX object src/CMakeFiles/a2a_core.dir/core/response_builders.cpp.o
+[17/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/agent_card/agent_card_serializer.cpp.o
+[18/48] Building CXX object src/CMakeFiles/a2a_http.dir/http/http_client.cpp.o
+[19/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/required_extensions_validator.cpp.o
+[20/48] Building CXX object proto/CMakeFiles/a2a_proto_generated.dir/__/generated/a2a/v1/a2a.grpc.pb.cc.o
+[21/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/http_adapter.cpp.o
+[22/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/push_notifications/push_notification_delivery.cpp.o
+[23/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/grpc_server_transport.cpp.o
+[24/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/rest_server_transport.cpp.o
+[25/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/rest_transport.cpp.o
+[26/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/stores/sql_identifier.cpp.o
+[27/48] Building CXX object proto/CMakeFiles/a2a_proto_generated.dir/__/generated/a2a/v1/a2a.pb.cc.o
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual const char* lf::a2a::v1::SendMessageConfiguration::_InternalParse(const char*, google::protobuf::internal::ParseContext*)’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:1906:83: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+ 1906 |           _impl_.history_length_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::Task::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:2342:54: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 2342 |     const auto& repfield = this->_internal_artifacts(i);
+      |                                                      ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:2350:52: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 2350 |     const auto& repfield = this->_internal_history(i);
+      |                                                    ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::Task::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:2379:53: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 2379 |   total_size += 1UL * this->_internal_artifacts_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:2386:51: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 2386 |   total_size += 1UL * this->_internal_history_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::Message::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:3596:50: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 3596 |     const auto& repfield = this->_internal_parts(i);
+      |                                                  ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::Message::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:3645:49: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 3645 |   total_size += 1UL * this->_internal_parts_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::Artifact::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:4054:50: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 4054 |     const auto& repfield = this->_internal_parts(i);
+      |                                                  ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::Artifact::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:4093:49: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 4093 |   total_size += 1UL * this->_internal_parts_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::AgentCard::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6021:65: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 6021 |     const auto& repfield = this->_internal_supported_interfaces(i);
+      |                                                                 ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6089:66: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 6089 |     const auto& repfield = this->_internal_security_requirements(i);
+      |                                                                  ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6117:51: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 6117 |     const auto& repfield = this->_internal_skills(i);
+      |                                                   ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6125:55: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 6125 |     const auto& repfield = this->_internal_signatures(i);
+      |                                                       ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::AgentCard::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6157:64: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 6157 |   total_size += 1UL * this->_internal_supported_interfaces_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6173:65: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 6173 |   total_size += 1UL * this->_internal_security_requirements_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6196:50: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 6196 |   total_size += 1UL * this->_internal_skills_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6203:54: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 6203 |   total_size += 1UL * this->_internal_signatures_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::AgentCapabilities::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6804:55: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 6804 |     const auto& repfield = this->_internal_extensions(i);
+      |                                                       ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::AgentCapabilities::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:6832:54: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 6832 |   total_size += 1UL * this->_internal_extensions_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::AgentSkill::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:7589:66: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+ 7589 |     const auto& repfield = this->_internal_security_requirements(i);
+      |                                                                  ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::AgentSkill::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:7643:65: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+ 7643 |   total_size += 1UL * this->_internal_security_requirements_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual const char* lf::a2a::v1::GetTaskRequest::_InternalParse(const char*, google::protobuf::internal::ParseContext*)’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:13497:83: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+13497 |           _impl_.history_length_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual const char* lf::a2a::v1::ListTasksRequest::_InternalParse(const char*, google::protobuf::internal::ParseContext*)’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:13855:78: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+13855 |           _impl_.page_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:13874:83: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+13874 |           _impl_.history_length_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual const char* lf::a2a::v1::ListTasksResponse::_InternalParse(const char*, google::protobuf::internal::ParseContext*)’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:14268:78: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+14268 |           _impl_.page_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:14276:79: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+14276 |           _impl_.total_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::ListTasksResponse::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:14313:50: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+14313 |     const auto& repfield = this->_internal_tasks(i);
+      |                                                  ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::ListTasksResponse::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:14357:49: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+14357 |   total_size += 1UL * this->_internal_tasks_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual const char* lf::a2a::v1::ListTaskPushNotificationConfigsRequest::_InternalParse(const char*, google::protobuf::internal::ParseContext*)’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:15734:78: warning: conversion to ‘int32_t’ {aka ‘int’} from ‘uint32_t’ {aka ‘unsigned int’} may change the sign of the result [-Wsign-conversion]
+15734 |           _impl_.page_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+      |                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual uint8_t* lf::a2a::v1::ListTaskPushNotificationConfigsResponse::_InternalSerialize(uint8_t*, google::protobuf::io::EpsCopyOutputStream*) const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:17003:52: warning: conversion to ‘int’ from ‘unsigned int’ may change the sign of the result [-Wsign-conversion]
+17003 |     const auto& repfield = this->_internal_configs(i);
+      |                                                    ^
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc: In member function ‘virtual size_t lf::a2a::v1::ListTaskPushNotificationConfigsResponse::ByteSizeLong() const’:
+/home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/generated/a2a/v1/a2a.pb.cc:17035:51: warning: conversion to ‘long unsigned int’ from ‘int’ may change the sign of the result [-Wsign-conversion]
+17035 |   total_size += 1UL * this->_internal_configs_size();
+      |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+[28/48] Linking CXX static library proto/liba2a_proto_generated.a
+[29/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/push_notifications/push_notification_store.cpp.o
+[30/48] Linking CXX static library src/liba2a_core.a
+[31/48] Linking CXX static library src/liba2a_http.a
+[32/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/push_notifications/push_notification_service.cpp.o
+[33/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/network_utils.cpp.o
+[34/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/task_id_generator.cpp.o
+[35/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/request_context.cpp.o
+[36/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/json_rpc_server_transport.cpp.o
+[37/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/tasks/list_tasks.cpp.o
+[38/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/task_subscription_service.cpp.o
+[39/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/tasks/in_memory_task_store.cpp.o
+[40/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/transport_mux.cpp.o
+[41/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/tasks/task_history.cpp.o
+[42/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/dispatcher.cpp.o
+[43/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/tasks/task_lifecycle_service.cpp.o
+[44/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/tasks/task_ordering.cpp.o
+[45/48] Building CXX object src/CMakeFiles/a2a_server.dir/server/stores/store_factory.cpp.o
+[46/48] Linking CXX static library src/liba2a_server.a
+[47/48] Building CXX object tests/CMakeFiles/tck_sut.dir/sut/tck_sut.cpp.o
+[48/48] Linking CXX executable tests/tck_sut
+[tck-sut] Starting tck_sut with inmemory store on 127.0.0.1:50381
+[tck-sut] Ready: 127.0.0.1:50381 (PID 4152). Logs: /home/runner/work/a2a-cpp/a2a-cpp/build-http-sse-sut/tck-sut.log
+unexpected stream result: HTTP stream response received with non-success status
+[tck-sut] Stopped PID 4152.
+exit_status=1
