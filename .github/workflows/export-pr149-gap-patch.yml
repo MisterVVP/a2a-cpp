@@ -1,21 +1,20 @@
 name: Export PR149 Gap Patch
 
 on:
-  push:
-    branches:
-      - automation/pr149-remaining-sse-gaps-patch
-    paths-ignore:
-      - pr149_remaining_sse_gaps.patch
+  pull_request:
+    types: [reopened, synchronize]
 
 permissions:
   contents: write
 
 jobs:
   export:
+    if: github.head_ref == 'automation/pr149-remaining-sse-gaps-patch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: automation/pr149-remaining-sse-gaps-patch
           fetch-depth: 0
       - name: Export patch against PR149 head
         run: |
