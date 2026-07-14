@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - automation/pr149-remaining-sse-gaps-patch
+    paths-ignore:
+      - pr149_remaining_sse_gaps.patch
+
+permissions:
+  contents: write
 
 jobs:
   export:
@@ -15,13 +20,16 @@ jobs:
       - name: Export patch against PR149 head
         run: |
           git diff --binary 64af0524502ee48059c53ff4e59442ea38c71898...HEAD -- \
-            . ':(exclude).github/workflows/export-pr149-gap-patch.yml' \
+            . \
+            ':(exclude).github/workflows/export-pr149-gap-patch.yml' \
+            ':(exclude)pr149_remaining_sse_gaps.patch' \
             > pr149_remaining_sse_gaps.patch
           test -s pr149_remaining_sse_gaps.patch
           git apply --check pr149_remaining_sse_gaps.patch
-      - name: Upload patch
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr149-remaining-sse-gaps-patch
-          path: pr149_remaining_sse_gaps.patch
-          if-no-files-found: error
+      - name: Commit patch file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pr149_remaining_sse_gaps.patch
+          git commit -m "Export PR149 remaining SSE gaps patch"
+          git push
