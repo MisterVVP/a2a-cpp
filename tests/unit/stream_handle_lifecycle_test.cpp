@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 
 #include "a2a/client/client.h"
@@ -17,11 +18,12 @@ namespace {
 constexpr std::chrono::milliseconds kWaitTimeout{2000};
 constexpr std::chrono::milliseconds kPromptCancelTimeout{500};
 constexpr std::chrono::milliseconds kCancelPollInterval{10};
+constexpr int kInactivePollAttempts = 50;
 constexpr int kHttpOk = 200;
 constexpr int kHttpServerError = 500;
-constexpr char kContentTypeHeader[] = "content-type";
-constexpr char kEventStreamContentType[] = "text/event-stream";
-constexpr char kEndpointUrl[] = "http://127.0.0.1/a2a";
+const std::string kContentTypeHeader = "content-type";
+const std::string kEventStreamContentType = "text/event-stream";
+const std::string kEndpointUrl = "http://127.0.0.1/a2a";
 
 class CountingObserver final : public a2a::client::StreamObserver {
  public:
@@ -58,6 +60,11 @@ class CountingObserver final : public a2a::client::StreamObserver {
   [[nodiscard]] int errors() const {
     std::lock_guard lock(mutex_);
     return errors_;
+  }
+
+  [[nodiscard]] int events() const {
+    std::lock_guard lock(mutex_);
+    return events_;
   }
 
  private:
@@ -107,6 +114,12 @@ class BlockingStreamFixture final {
   std::condition_variable cv_;
   bool started_ = false;
 };
+
+void WaitForInactive(const std::unique_ptr<a2a::client::StreamHandle>& handle) {
+  for (int attempt = 0; attempt < kInactivePollAttempts && handle->IsActive(); ++attempt) {
+    std::this_thread::sleep_for(kCancelPollInterval);
+  }
+}
 
 [[nodiscard]] a2a::client::ResolvedInterface MakeResolvedRest() {
   return {.transport = a2a::client::PreferredTransport::kRest,
@@ -216,9 +229,123 @@ TEST(StreamHandleLifecycleTest, ErrorAndCompletionAreMutuallyExclusive) {
   ASSERT_TRUE(handle.ok()) << handle.error().message();
   ASSERT_TRUE(observer.WaitForTerminal());
 
+  WaitForInactive(handle.value());
   EXPECT_EQ(observer.errors(), 1);
   EXPECT_EQ(observer.completions(), 0);
   EXPECT_FALSE(handle.value()->IsActive());
+}
+
+TEST(StreamHandleLifecycleTest, EventAfterTerminalCallbacksIsIgnored) {
+  auto client = MakeClient(
+      [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+         const a2a::client::HttpStreamChunkHandler& unused_on_chunk, const a2a::client::StreamCancelled& is_cancelled) {
+        (void)request;
+        (void)unused_on_chunk;
+        (void)is_cancelled;
+        const a2a::client::HttpClientResponse response{
+            .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+        }
+        return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+      });
+  CountingObserver observer;
+
+  auto handle = client->SendStreamingMessage(MakeRequest(), observer);
+  ASSERT_TRUE(handle.ok()) << handle.error().message();
+  ASSERT_TRUE(observer.WaitForTerminal());
+
+  EXPECT_EQ(observer.events(), 0);
+  EXPECT_EQ(observer.completions(), 1);
+  EXPECT_EQ(observer.errors(), 0);
+}
+
+class CancelFromEventObserver final : public a2a::client::StreamObserver {
+ public:
+  void SetHandle(a2a::client::StreamHandle* handle) {
+    {
+      std::lock_guard lock(mutex_);
+      handle_ = handle;
+    }
+    cv_.notify_all();
+  }
+
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    (void)response;
+    a2a::client::StreamHandle* handle = nullptr;
+    {
+      std::unique_lock lock(mutex_);
+      ++events_;
+      cv_.notify_all();
+      cv_.wait(lock, [this] { return handle_ != nullptr; });
+      handle = handle_;
+    }
+    handle->Cancel();
+  }
+
+  void OnError(const a2a::core::Error& error) override {
+    (void)error;
+    ++errors_;
+  }
+  void OnCompleted() override { ++completions_; }
+
+  [[nodiscard]] bool WaitForEvent() {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, kWaitTimeout, [this] { return events_ > 0; });
+  }
+
+  [[nodiscard]] int events() const noexcept { return events_; }
+  [[nodiscard]] int errors() const noexcept { return errors_; }
+  [[nodiscard]] int completions() const noexcept { return completions_; }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  a2a::client::StreamHandle* handle_ = nullptr;
+  int events_ = 0;
+  int errors_ = 0;
+  int completions_ = 0;
+};
+
+[[nodiscard]] a2a::client::HttpStreamRequester MakeCancelFromEventRequester() {
+  return
+      [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+         const a2a::client::HttpStreamChunkHandler& on_chunk, const a2a::client::StreamCancelled& unused_is_cancelled) {
+        (void)request;
+        (void)unused_is_cancelled;
+        const a2a::client::HttpClientResponse response{
+            .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+        }
+        const auto chunk = on_chunk(
+            "data: "
+            "{\"statusUpdate\":{\"taskId\":\"stream-handle-task\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n");
+        if (!chunk.ok()) {
+          return a2a::core::Result<a2a::client::HttpClientResponse>(chunk.error());
+        }
+        return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+      };
+}
+
+TEST(StreamHandleLifecycleTest, CancellationFromOnEventDoesNotDeadlockOrSelfJoin) {
+  auto client = MakeClient(MakeCancelFromEventRequester());
+  CancelFromEventObserver observer;
+
+  auto handle = client->SendStreamingMessage(MakeRequest(), observer);
+  ASSERT_TRUE(handle.ok()) << handle.error().message();
+  ASSERT_TRUE(observer.WaitForEvent());
+  const auto started = std::chrono::steady_clock::now();
+  observer.SetHandle(handle.value().get());
+  handle.value()->Cancel();
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+
+  EXPECT_LT(elapsed, kPromptCancelTimeout);
+  EXPECT_FALSE(handle.value()->IsActive());
+  EXPECT_EQ(observer.events(), 1);
+  EXPECT_EQ(observer.errors(), 0);
 }
 
 }  // namespace

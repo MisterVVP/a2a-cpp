@@ -34,7 +34,7 @@ void StreamHandle::Cancel() {
       cancel_callback();
     }
   }
-  if (worker_.joinable()) {
+  if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
 #if A2A_HAS_JTHREAD
     worker_.request_stop();
 #endif

@@ -104,6 +104,44 @@ a2a::core::Result<a2a::client::HttpClientResponse> UnusedRequester(const a2a::cl
   return a2a::core::Error::Internal("unused unary requester");
 }
 
+void ExpectJsonRpcStreamFailure(std::string_view payload) {
+  auto transport = std::make_unique<a2a::client::JsonRpcTransport>(
+      MakeJsonRpcInterface(), UnusedRequester,
+      [payload](const a2a::client::HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                const a2a::client::HttpStreamChunkHandler& on_chunk,
+                const a2a::client::StreamCancelled&) -> a2a::core::Result<a2a::client::HttpClientResponse> {
+        a2a::client::HttpClientResponse response{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+            .body = {}};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
+        }
+        std::string event;
+        event.reserve(payload.size() + std::string_view("data: \n\n").size());
+        event.append("data: ");
+        event.append(payload);
+        event.append("\n\n");
+        const auto chunk = on_chunk(event);
+        if (!chunk.ok()) {
+          return chunk.error();
+        }
+        return response;
+      },
+      a2a::client::JsonRpcTransport::kDefaultTimeout, [] { return "stream-id"; });
+  a2a::client::A2AClient client(std::move(transport));
+  RecordingObserver observer;
+
+  auto handle = client.SendStreamingMessage(MakeSendRequest(), observer);
+  ASSERT_TRUE(handle.ok()) << handle.error().message();
+  ASSERT_TRUE(observer.WaitForTerminal());
+
+  EXPECT_TRUE(observer.events().empty());
+  EXPECT_EQ(observer.errors().size(), 1U);
+  EXPECT_EQ(observer.completion_count(), 0);
+}
+
 TEST(HttpJsonStreamingGapTest, PropagatesOptionsAndAcceptsContentTypeParameters) {
   a2a::client::HttpRequest captured;
   auto transport = std::make_unique<a2a::client::HttpJsonTransport>(
@@ -198,6 +236,53 @@ TEST(JsonRpcStreamingGapTest, SubscribeUsesExpectedMethodAndMissingResponseIdFai
   EXPECT_NE(captured.body.find("stream-id"), std::string::npos);
   EXPECT_TRUE(observer.events().empty());
   ASSERT_EQ(observer.errors().size(), 1U);
+  EXPECT_EQ(observer.completion_count(), 0);
+}
+
+TEST(JsonRpcStreamingGapTest, RejectsInvalidStreamingEnvelopesOnce) {
+  ExpectJsonRpcStreamFailure(
+      R"({"jsonrpc":"2.0","id":"other","result":{"statusUpdate":{"taskId":"task-1","status":{"state":"TASK_STATE_WORKING"}}}})");
+  ExpectJsonRpcStreamFailure(
+      R"({"jsonrpc":"1.0","id":"stream-id","result":{"statusUpdate":{"taskId":"task-1","status":{"state":"TASK_STATE_WORKING"}}}})");
+  ExpectJsonRpcStreamFailure(
+      R"({"jsonrpc":"2.0","id":"stream-id","result":{},"error":{"code":-32000,"message":"boom"}})");
+  ExpectJsonRpcStreamFailure(R"({"jsonrpc":"2.0","id":"stream-id"})");
+  ExpectJsonRpcStreamFailure(R"({"jsonrpc":"2.0","id":"stream-id","error":{"code":-32000,"message":"boom"}})");
+  ExpectJsonRpcStreamFailure(R"({"jsonrpc":"2.0","id":"stream-id","result":{"statusUpdate":{"taskId":7}}})");
+  ExpectJsonRpcStreamFailure(R"({not-json})");
+}
+
+TEST(JsonRpcStreamingGapTest, IncompleteFinalSseEventDoesNotDispatchOrComplete) {
+  auto transport = std::make_unique<a2a::client::JsonRpcTransport>(
+      MakeJsonRpcInterface(), UnusedRequester,
+      [](const a2a::client::HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+         const a2a::client::HttpStreamChunkHandler& on_chunk,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<a2a::client::HttpClientResponse> {
+        a2a::client::HttpClientResponse response{
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+            .body = {}};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
+        }
+        const auto chunk = on_chunk(
+            R"(data: {"jsonrpc":"2.0","id":"stream-id","result":{"statusUpdate":{"taskId":"task-1","status":{"state":"TASK_STATE_WORKING"}}}})");
+        if (!chunk.ok()) {
+          return chunk.error();
+        }
+        return response;
+      },
+      a2a::client::JsonRpcTransport::kDefaultTimeout, [] { return "stream-id"; });
+  a2a::client::A2AClient client(std::move(transport));
+  RecordingObserver observer;
+
+  auto handle = client.SendStreamingMessage(MakeSendRequest(), observer);
+  ASSERT_TRUE(handle.ok()) << handle.error().message();
+  ASSERT_TRUE(observer.WaitForTerminal());
+
+  EXPECT_TRUE(observer.events().empty());
+  EXPECT_EQ(observer.errors().size(), 1U);
   EXPECT_EQ(observer.completion_count(), 0);
 }
 

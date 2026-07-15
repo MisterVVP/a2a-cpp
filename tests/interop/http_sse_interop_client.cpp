@@ -6,6 +6,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -26,14 +27,21 @@ constexpr std::string_view kSubscribe = "subscribe";
 constexpr std::string_view kCancel = "cancel";
 constexpr std::string_view kTaskId = "fixture-task";
 constexpr std::string_view kMessageId = "http-sse-interop-message";
+constexpr std::string_view kSubscribeSeedMessageId = "subscribe-seed-message";
+constexpr std::string_view kSubscribeTerminalMessageId = "complete-task-subscribe-terminal-message";
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
+constexpr std::string_view kRealSubscribeEnv = "A2A_INTEROP_REAL_SUBSCRIBE";
 
 class RecordingObserver final : public a2a::client::StreamObserver {
  public:
   void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
     {
       std::lock_guard lock(mutex_);
-      states_.push_back(response.status_update().status().state());
+      if (response.has_status_update()) {
+        states_.push_back(response.status_update().status().state());
+      } else if (response.has_task()) {
+        states_.push_back(response.task().status().state());
+      }
     }
     condition_.notify_all();
   }
@@ -67,7 +75,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
   [[nodiscard]] bool IsSuccessful() const {
     std::lock_guard lock(mutex_);
-    return error_.empty() && completion_count_ == 1 && states_.size() == 2U &&
+    return error_.empty() && completion_count_ == 1 && states_.size() >= 2U &&
            states_.front() == lf::a2a::v1::TASK_STATE_WORKING && states_.back() == lf::a2a::v1::TASK_STATE_COMPLETED;
   }
 
@@ -79,7 +87,18 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
   [[nodiscard]] std::string error() const {
     std::lock_guard lock(mutex_);
-    return error_;
+    std::string summary = error_;
+    summary.append(" states=");
+    summary.append(std::to_string(states_.size()));
+    summary.append(" completions=");
+    summary.append(std::to_string(completion_count_));
+    if (!states_.empty()) {
+      summary.append(" first=");
+      summary.append(std::to_string(states_.front()));
+      summary.append(" last=");
+      summary.append(std::to_string(states_.back()));
+    }
+    return summary;
   }
 
  private:
@@ -111,9 +130,18 @@ lf::a2a::v1::SendMessageRequest MakeSendRequest() {
   return request;
 }
 
-lf::a2a::v1::GetTaskRequest MakeSubscribeRequest() {
+lf::a2a::v1::SendMessageRequest MakeTaskUpdateRequest(std::string_view task_id, std::string_view message_id) {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  request.mutable_message()->set_task_id(std::string(task_id));
+  request.mutable_message()->set_message_id(std::string(message_id));
+  request.mutable_message()->add_parts()->set_text("HTTP SSE subscribe fixture");
+  return request;
+}
+
+lf::a2a::v1::GetTaskRequest MakeSubscribeRequest(std::string_view task_id) {
   lf::a2a::v1::GetTaskRequest request;
-  request.set_id(std::string(kTaskId));
+  request.set_id(std::string(task_id));
   return request;
 }
 
@@ -133,16 +161,35 @@ int main(int argc, char** argv) {
   }
 
   a2a::client::A2AClient client(MakeTransport(transport, argv[3]));
+  const bool use_real_subscribe_flow = std::getenv(std::string(kRealSubscribeEnv).c_str()) != nullptr;
+  std::string task_id(kTaskId);
+  if (use_real_subscribe_flow) {
+    task_id.append("-");
+    task_id.append(transport);
+    task_id.append("-");
+    task_id.append(operation);
+  }
   RecordingObserver observer;
   a2a::client::CallOptions options;
   options.extensions = {std::string(kRequiredExtension)};
-  if (operation == kCancel) {
-    options.headers["X-Fixture-Mode"] = "cancel";
+  if (use_real_subscribe_flow && (operation == kSubscribe || operation == kCancel)) {
+    RecordingObserver seed_observer;
+    auto seed =
+        client.SendStreamingMessage(MakeTaskUpdateRequest(task_id, kSubscribeSeedMessageId), seed_observer, options);
+    if (!seed.ok()) {
+      std::cerr << seed.error().message() << '\n';
+      return EXIT_FAILURE;
+    }
+    if (!seed_observer.WaitForTerminal()) {
+      seed.value()->Cancel();
+      std::cerr << "seed stream timed out\n";
+      return EXIT_FAILURE;
+    }
   }
   a2a::core::Result<std::unique_ptr<a2a::client::StreamHandle>> handle =
       a2a::core::Error::Internal("stream not started");
-  if (operation == kSubscribe) {
-    handle = client.SubscribeTask(MakeSubscribeRequest(), observer, options);
+  if (operation == kSubscribe || operation == kCancel) {
+    handle = client.SubscribeTask(MakeSubscribeRequest(task_id), observer, options);
   } else {
     handle = client.SendStreamingMessage(MakeSendRequest(), observer, options);
   }
@@ -164,6 +211,20 @@ int main(int argc, char** argv) {
       return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
+  }
+
+  if (use_real_subscribe_flow && operation == kSubscribe) {
+    if (!observer.WaitForEventCount(1U)) {
+      handle.value()->Cancel();
+      std::cerr << "subscribe stream did not start\n";
+      return EXIT_FAILURE;
+    }
+    const auto terminal = client.SendMessage(MakeTaskUpdateRequest(task_id, kSubscribeTerminalMessageId), options);
+    if (!terminal.ok()) {
+      handle.value()->Cancel();
+      std::cerr << terminal.error().message() << '\n';
+      return EXIT_FAILURE;
+    }
   }
 
   if (!observer.WaitForTerminal()) {
