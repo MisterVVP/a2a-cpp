@@ -128,7 +128,16 @@ class LoopbackHttpServer final : private a2a::core::NonCopyable {
   }
 
   [[nodiscard]] int port() const noexcept { return port_; }
-  [[nodiscard]] const std::string& request() const noexcept { return request_; }
+
+  [[nodiscard]] std::string request() const {
+    std::lock_guard lock(mutex_);
+    return request_;
+  }
+
+  [[nodiscard]] bool WaitForRequest(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, timeout, [this] { return request_observed_; });
+  }
 
  private:
   void AcceptOnce() {
@@ -136,7 +145,13 @@ class LoopbackHttpServer final : private a2a::core::NonCopyable {
     if (client == kSocketError) {
       return;
     }
-    request_ = ReadCompleteRequest(client);
+    auto request = ReadCompleteRequest(client);
+    {
+      std::lock_guard lock(mutex_);
+      request_ = std::move(request);
+      request_observed_ = true;
+    }
+    cv_.notify_all();
     (void)::send(client, response_.data(), response_.size(), 0);
     ::close(client);
   }
@@ -174,7 +189,10 @@ class LoopbackHttpServer final : private a2a::core::NonCopyable {
   int fd_ = kSocketError;
   int port_ = 0;
   std::string response_;
+  mutable std::mutex mutex_;
+  std::condition_variable cv_;
   std::string request_;
+  bool request_observed_ = false;
   std::thread worker_;
 };
 
@@ -387,6 +405,7 @@ TEST(SharedHttpClientTest, AttemptsHttpsThroughLibcurlTlsPath) {
   const auto response = client.SendRequest(request);
 
   EXPECT_FALSE(response.ok());
+  EXPECT_TRUE(server.WaitForRequest(std::chrono::milliseconds(kLoopbackTimeoutMs)));
   EXPECT_FALSE(server.request().empty());
 }
 
