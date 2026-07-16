@@ -830,4 +830,111 @@ TEST(JsonRpcTransportUnitTest, StreamingMismatchedResponseIdReportsErrorOnce) {
   EXPECT_EQ(observer.errors.size(), 1U);
 }
 
+class JsonRpcCancelFromEventObserver final : public a2a::client::StreamObserver {
+ public:
+  void SetHandle(a2a::client::StreamHandle* handle) {
+    {
+      std::lock_guard lock(mutex_);
+      handle_ = handle;
+    }
+    cv_.notify_all();
+  }
+
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    (void)response;
+    a2a::client::StreamHandle* handle = nullptr;
+    {
+      std::unique_lock lock(mutex_);
+      ++events_;
+      cv_.notify_all();
+      cv_.wait(lock, [this] { return handle_ != nullptr; });
+      handle = handle_;
+    }
+    handle->Cancel();
+  }
+
+  void OnError(const a2a::core::Error& error) override {
+    (void)error;
+    std::lock_guard lock(mutex_);
+    ++errors_;
+  }
+
+  void OnCompleted() override {
+    std::lock_guard lock(mutex_);
+    ++completions_;
+  }
+
+  [[nodiscard]] bool WaitForEvent() {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, kStreamWaitTimeout, [this] { return events_ > 0; });
+  }
+
+  [[nodiscard]] int events() const {
+    std::lock_guard lock(mutex_);
+    return events_;
+  }
+
+  [[nodiscard]] int errors() const {
+    std::lock_guard lock(mutex_);
+    return errors_;
+  }
+
+  [[nodiscard]] int completions() const {
+    std::lock_guard lock(mutex_);
+    return completions_;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::condition_variable cv_;
+  a2a::client::StreamHandle* handle_ = nullptr;
+  int events_ = 0;
+  int errors_ = 0;
+  int completions_ = 0;
+};
+
+TEST(JsonRpcTransportUnitTest, CancellationFromOnEventStopsCoalescedFrames) {
+  constexpr std::string_view kCoalescedEvents =
+      R"(data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-1"}}}
+
+data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
+
+)";
+
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [kCoalescedEvents](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                         const a2a::client::HttpStreamChunkHandler& on_chunk,
+                         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        HttpClientResponse response{.status_code = kHttpOk,
+                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                    .body = ""};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
+        }
+        const auto chunk = on_chunk(kCoalescedEvents);
+        if (!chunk.ok()) {
+          return chunk.error();
+        }
+        return response;
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcCancelFromEventObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  observer.SetHandle(stream.value().get());
+  ASSERT_TRUE(observer.WaitForEvent());
+  stream.value()->Cancel();
+
+  EXPECT_EQ(observer.events(), 1);
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(observer.completions(), 0);
+}
+
 }  // namespace

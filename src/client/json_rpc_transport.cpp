@@ -244,9 +244,13 @@ void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const Http
           return core::Error::RemoteProtocol("JSON-RPC stream metadata must be validated before body chunks")
               .WithTransport("jsonrpc");
         }
-        return parser.Feed(chunk, [&observer, &request_id, &response_metadata](const SseEvent& event) {
-          return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
-        });
+        return parser.Feed(
+            chunk, [&observer, state, &request_id, &response_metadata](const SseEvent& event) -> core::Result<void> {
+              if (state->cancel_requested.load()) {
+                return {};
+              }
+              return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
+            });
       },
       [state]() { return state->cancel_requested.load(); });
   if (state->cancel_requested.load()) {
@@ -264,9 +268,17 @@ void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const Http
       return;
     }
   }
-  const auto finish = parser.Finish([&observer, &request_id, &response_metadata](const SseEvent& event) {
-    return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
-  });
+  const auto finish =
+      parser.Finish([&observer, state, &request_id, &response_metadata](const SseEvent& event) -> core::Result<void> {
+        if (state->cancel_requested.load()) {
+          return {};
+        }
+        return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
+      });
+  if (state->cancel_requested.load()) {
+    MarkInactive(*state);
+    return;
+  }
   if (!finish.ok()) {
     NotifyErrorAndStop(*state, observer, finish.error());
     return;

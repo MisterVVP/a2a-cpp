@@ -383,6 +383,8 @@ class CancelFromEventObserver final : public a2a::client::StreamObserver {
         }
         const auto chunk = on_chunk(
             "data: "
+            "{\"statusUpdate\":{\"taskId\":\"stream-handle-task\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n"
+            "data: "
             "{\"statusUpdate\":{\"taskId\":\"stream-handle-task\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n");
         if (!chunk.ok()) {
           return a2a::core::Result<a2a::client::HttpClientResponse>{chunk.error()};
@@ -397,9 +399,9 @@ TEST(StreamHandleLifecycleTest, CancellationFromOnEventDoesNotDeadlockOrSelfJoin
 
   auto handle = client->SendStreamingMessage(MakeRequest(), observer);
   ASSERT_TRUE(handle.ok()) << handle.error().message();
+  observer.SetHandle(handle.value().get());
   ASSERT_TRUE(observer.WaitForEvent());
   const auto started = std::chrono::steady_clock::now();
-  observer.SetHandle(handle.value().get());
   handle.value()->Cancel();
   const auto elapsed = std::chrono::steady_clock::now() - started;
 
