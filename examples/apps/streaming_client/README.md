@@ -4,23 +4,24 @@
 
 ## Build
 
-Configure the repository or example consumer with libcurl support enabled, then build examples:
+Build the standalone example consumer with the repository example runner:
 
 ```bash
-cmake -S . -B build -DA2A_ENABLE_EXAMPLES=ON -DA2A_ENABLE_LIBCURL=ON
-cmake --build build --target streaming_client
+./scripts/run_examples.sh build-example streaming_client
 ```
 
-You can also use the repository example runner:
+The runner configures `examples/fetch_content_consumer` for `streaming_client` and writes the binary to `./build-example-streaming_client/a2a_example`.
+
+Verify the built client:
 
 ```bash
-./scripts/run_examples.sh build-examples
+./build-example-streaming_client/a2a_example --help
 ```
 
 ## Usage
 
 ```text
-streaming_client \
+./build-example-streaming_client/a2a_example \
   --transport http_json|jsonrpc \
   --endpoint <url> \
   --operation send|subscribe \
@@ -29,14 +30,14 @@ streaming_client \
   [--cancel-after-first-event]
 ```
 
-The target server must advertise `capabilities.streaming: true` and expose the selected transport endpoint.
+The target server must advertise `capabilities.streaming: true` and expose the selected transport endpoint. Use `--task-id` with `--operation send` only when updating an existing task. Use `--task-id` with `--operation subscribe` to identify the existing task subscription.
 
 ### Send streaming message
 
 HTTP+JSON:
 
 ```bash
-./build/examples/apps/streaming_client/streaming_client \
+./build-example-streaming_client/a2a_example \
   --transport http_json \
   --endpoint http://127.0.0.1:8080/a2a \
   --operation send \
@@ -46,7 +47,7 @@ HTTP+JSON:
 JSON-RPC:
 
 ```bash
-./build/examples/apps/streaming_client/streaming_client \
+./build-example-streaming_client/a2a_example \
   --transport jsonrpc \
   --endpoint http://127.0.0.1:8080/rpc \
   --operation send \
@@ -56,7 +57,7 @@ JSON-RPC:
 ### Subscribe to an existing task
 
 ```bash
-./build/examples/apps/streaming_client/streaming_client \
+./build-example-streaming_client/a2a_example \
   --transport http_json \
   --endpoint http://127.0.0.1:8080/a2a \
   --operation subscribe \
