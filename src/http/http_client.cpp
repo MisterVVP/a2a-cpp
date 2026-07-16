@@ -54,6 +54,9 @@ constexpr std::string_view kCurlHeaderFailureMessage = "failed to build HTTP req
 constexpr std::string_view kConfigureRequestFailureMessage = "failed to configure HTTP request";
 constexpr std::string_view kErrorBufferFailureMessage = "failed to configure HTTP client error buffer";
 constexpr std::string_view kRequestFailureMessage = "failed to execute HTTP request";
+constexpr std::string_view kCurlMultiInitFailureMessage = "failed to initialize HTTP stream poller";
+constexpr std::string_view kCurlMultiFailureMessage = "failed to execute polled HTTP stream";
+constexpr std::string_view kCurlMultiCompletionFailureMessage = "HTTP stream ended without a libcurl completion";
 constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP response status";
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
@@ -62,6 +65,7 @@ constexpr std::string_view kStreamStatusFailureMessage = "HTTP stream response r
 constexpr std::string_view kStreamContentTypeFailureMessage = "HTTP stream response must use text/event-stream";
 constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
+constexpr int kStreamPollTimeoutMs = 100;
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   static const auto init = std::make_shared<detail::ClientGlobalState>();
@@ -88,12 +92,49 @@ struct CurlEasyDeleter final {
 
 using CurlEasyHandle = std::unique_ptr<CURL, CurlEasyDeleter>;
 
+struct CurlMultiDeleter final {
+  void operator()(CURLM* handle) const noexcept {
+    if (handle != nullptr) {
+      curl_multi_cleanup(handle);
+    }
+  }
+};
+
+using CurlMultiHandle = std::unique_ptr<CURLM, CurlMultiDeleter>;
+
+class CurlMultiAttachment final {
+ public:
+  CurlMultiAttachment(CURLM* multi_handle, CURL* easy_handle)
+      : multi_handle_(multi_handle), easy_handle_(easy_handle) {}
+
+  ~CurlMultiAttachment() {
+    if (multi_handle_ != nullptr && easy_handle_ != nullptr) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle_);
+    }
+  }
+
+  CurlMultiAttachment(const CurlMultiAttachment&) = delete;
+  CurlMultiAttachment& operator=(const CurlMultiAttachment&) = delete;
+  CurlMultiAttachment(CurlMultiAttachment&&) = delete;
+  CurlMultiAttachment& operator=(CurlMultiAttachment&&) = delete;
+
+ private:
+  CURLM* multi_handle_;
+  CURL* easy_handle_;
+};
+
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
   message << prefix << ": " << curl_easy_strerror(code);
   if (!detail.empty()) {
     message << " (" << detail << ')';
   }
+  return message.str();
+}
+
+std::string BuildCurlMultiErrorMessage(std::string_view prefix, CURLMcode code) {
+  std::ostringstream message;
+  message << prefix << ": " << curl_multi_strerror(code);
   return message.str();
 }
 
@@ -348,6 +389,53 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
   return {};
 }
 
+core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, const std::function<bool()>& is_cancelled) {
+  if (is_cancelled()) {
+    return CURLE_ABORTED_BY_CALLBACK;
+  }
+
+  CurlMultiHandle multi_handle(curl_multi_init());
+  if (multi_handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  }
+
+  const CURLMcode add_code = curl_multi_add_handle(multi_handle.get(), easy_handle);
+  if (add_code != CURLM_OK) {
+    return core::Error::Internal(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, add_code));
+  }
+  [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle.get(), easy_handle);
+
+  int running_handles = 0;
+  CURLMcode multi_code = curl_multi_perform(multi_handle.get(), &running_handles);
+  while (multi_code == CURLM_OK && running_handles > 0) {
+    if (is_cancelled()) {
+      return CURLE_ABORTED_BY_CALLBACK;
+    }
+
+    int ready_descriptors = 0;
+    multi_code = curl_multi_poll(multi_handle.get(), nullptr, 0, kStreamPollTimeoutMs, &ready_descriptors);
+    if (multi_code != CURLM_OK) {
+      break;
+    }
+    if (is_cancelled()) {
+      return CURLE_ABORTED_BY_CALLBACK;
+    }
+    multi_code = curl_multi_perform(multi_handle.get(), &running_handles);
+  }
+
+  if (multi_code != CURLM_OK) {
+    return core::Error::Network(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, multi_code));
+  }
+
+  int pending_messages = 0;
+  while (CURLMsg* message = curl_multi_info_read(multi_handle.get(), &pending_messages)) {
+    if (message->msg == CURLMSG_DONE && message->easy_handle == easy_handle) {
+      return message->data.result;
+    }
+  }
+  return core::Error::Internal(std::string(kCurlMultiCompletionFailureMessage));
+}
+
 }  // namespace
 
 bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
@@ -442,7 +530,11 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (!configured.ok()) {
     return configured.error();
   }
-  const CURLcode code = curl_easy_perform(handle);
+  const auto performed = PerformStreamingTransfer(handle, is_cancelled);
+  if (!performed.ok()) {
+    return performed.error();
+  }
+  const CURLcode code = performed.value();
   if (code != CURLE_OK) {
     if (stream_context.error.has_value()) {
       return stream_context.error.value();

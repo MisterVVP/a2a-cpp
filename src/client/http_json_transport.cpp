@@ -293,7 +293,12 @@ struct HttpSseSession final {
       return core::Error::RemoteProtocol("HTTP stream metadata must be validated before body chunks")
           .WithTransport("http");
     }
-    return parser.Feed(chunk, [this](const SseEvent& event) { return DispatchSseEvent(event, *observer); });
+    return parser.Feed(chunk, [this](const SseEvent& event) -> core::Result<void> {
+      if (state->cancel_requested.load()) {
+        return {};
+      }
+      return DispatchSseEvent(event, *observer);
+    });
   }
 
   void Run() {
@@ -316,7 +321,16 @@ struct HttpSseSession final {
         return;
       }
     }
-    const auto finish = parser.Finish([this](const SseEvent& event) { return DispatchSseEvent(event, *observer); });
+    const auto finish = parser.Finish([this](const SseEvent& event) -> core::Result<void> {
+      if (state->cancel_requested.load()) {
+        return {};
+      }
+      return DispatchSseEvent(event, *observer);
+    });
+    if (state->cancel_requested.load()) {
+      MarkInactive(*state);
+      return;
+    }
     if (!finish.ok()) {
       NotifyErrorAndStop(*state, *observer, finish.error());
       return;
