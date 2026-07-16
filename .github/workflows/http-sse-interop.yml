@@ -1,0 +1,46 @@
+name: HTTP SSE Interoperability
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/http-sse-interop.yml'
+      - 'include/a2a/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/run_http_sse_interop.sh'
+      - 'scripts/run_cpp_sut_streaming_functional.sh'
+      - 'scripts/interop/python_http_sse_fixture.py'
+      - 'CMakeLists.txt'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/http-sse-interop.yml'
+      - 'include/a2a/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/run_http_sse_interop.sh'
+      - 'scripts/run_cpp_sut_streaming_functional.sh'
+      - 'scripts/interop/python_http_sse_fixture.py'
+      - 'CMakeLists.txt'
+
+jobs:
+  python-http-sse-server-cpp-client-interop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: ./scripts/install_build_deps.sh
+      - name: Run HTTP SSE interoperability fixtures
+        run: bash ./scripts/run_http_sse_interop.sh
+      - name: Run production HTTP clients against C++ SUT
+        run: bash ./scripts/run_cpp_sut_streaming_functional.sh
+      - name: Upload fixture and SUT logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: http-sse-interop-logs
+          path: |
+            build-http-sse-interop/fixture-*.log
+            build-http-sse-sut/tck-sut.log
+          if-no-files-found: ignore

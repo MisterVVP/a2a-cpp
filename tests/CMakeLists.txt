@@ -237,6 +237,20 @@ target_link_libraries(client_test
 
 gtest_discover_tests(client_test)
 
+add_executable(stream_handle_lifecycle_test
+  unit/stream_handle_lifecycle_test.cpp
+)
+
+target_link_libraries(stream_handle_lifecycle_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(stream_handle_lifecycle_test)
+
 
 add_executable(auth_test
   unit/auth_test.cpp
