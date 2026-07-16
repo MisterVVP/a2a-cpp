@@ -58,4 +58,45 @@ JSON_RPC_ENDPOINT="http://${HOST}:${JSON_RPC_PORT}/rpc"
 "${CLIENT}" jsonrpc subscribe "${JSON_RPC_ENDPOINT}"
 "${CLIENT}" jsonrpc cancel "${JSON_RPC_ENDPOINT}"
 
+expect_json_rpc_rejected() {
+  local name=$1
+  local payload=$2
+  local status
+  status=$("${PYTHON}" - "${JSON_RPC_ENDPOINT}" "${payload}" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+endpoint = sys.argv[1]
+payload = sys.argv[2].encode("utf-8")
+request = urllib.request.Request(
+    endpoint,
+    data=payload,
+    headers={
+        "Accept": "text/event-stream",
+        "A2A-Version": "1.0",
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=5) as response:
+        print(response.status)
+except urllib.error.HTTPError as error:
+    print(error.code)
+PY
+)
+  if [[ "${status}" != "400" ]]; then
+    echo "[http-sse-interop] expected ${name} to be rejected with HTTP 400, got ${status}" >&2
+    return 1
+  fi
+}
+
+expect_json_rpc_rejected "unexpected method" \
+  '{"jsonrpc":"2.0","id":"bad-method","method":"a2a.wrong","params":{"message":{"messageId":"m-1"}}}'
+expect_json_rpc_rejected "send missing messageId" \
+  '{"jsonrpc":"2.0","id":"bad-send","method":"a2a.sendStreamingMessage","params":{"message":{}}}'
+expect_json_rpc_rejected "subscribe missing id" \
+  '{"jsonrpc":"2.0","id":"bad-subscribe","method":"a2a.subscribeToTask","params":{}}'
+
 echo "[http-sse-interop] focused regression tests and six HTTP fixture scenarios passed"

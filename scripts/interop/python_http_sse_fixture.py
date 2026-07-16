@@ -12,6 +12,8 @@ REST_SEND_PATH = "/a2a/message:stream"
 REST_SUBSCRIBE_PATH = "/a2a/tasks/fixture-task:subscribe"
 JSON_RPC_PATH = "/rpc"
 CANCEL_DELAY_SECONDS = 5
+JSON_RPC_SEND_METHOD = "a2a.sendStreamingMessage"
+JSON_RPC_SUBSCRIBE_METHOD = "a2a.subscribeToTask"
 
 
 def fragment(payload: bytes) -> list[bytes]:
@@ -110,6 +112,19 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if request.get("jsonrpc") != "2.0" or not request.get("id") or "params" not in request:
             self.send_error(400, "invalid JSON-RPC envelope")
             return None
+        method = request.get("method")
+        params = request.get("params")
+        if method == JSON_RPC_SEND_METHOD:
+            if not self._has_valid_send_params(params):
+                self.send_error(400, "invalid send params")
+                return None
+        elif method == JSON_RPC_SUBSCRIBE_METHOD:
+            if not self._has_valid_subscribe_params(params):
+                self.send_error(400, "invalid subscribe params")
+                return None
+        else:
+            self.send_error(400, "unexpected JSON-RPC method")
+            return None
         request_id = request["id"]
         working = {
             "jsonrpc": "2.0",
@@ -135,6 +150,23 @@ class FixtureHandler(BaseHTTPRequestHandler):
             f"data: {json.dumps(working, separators=(',', ':'))}\n\n",
             f"data: {json.dumps(completed, separators=(',', ':'))}\n\n",
         ]
+
+    @staticmethod
+    def _has_valid_send_params(params: object) -> bool:
+        if not isinstance(params, dict):
+            return False
+        message = params.get("message")
+        if not isinstance(message, dict):
+            return False
+        message_id = message.get("messageId")
+        return isinstance(message_id, str) and bool(message_id)
+
+    @staticmethod
+    def _has_valid_subscribe_params(params: object) -> bool:
+        if not isinstance(params, dict):
+            return False
+        task_id = params.get("id")
+        return isinstance(task_id, str) and bool(task_id)
 
 
 def main() -> None:

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -23,10 +24,20 @@ constexpr char kHttpJsonTransport[] = "http_json";
 constexpr char kJsonRpcTransport[] = "jsonrpc";
 constexpr char kSendOperation[] = "send";
 constexpr char kSubscribeOperation[] = "subscribe";
-constexpr char kDefaultTaskId[] = "streaming-client-task";
+constexpr char kHelpFlag[] = "--help";
+constexpr char kTransportFlag[] = "--transport";
+constexpr char kEndpointFlag[] = "--endpoint";
+constexpr char kOperationFlag[] = "--operation";
+constexpr char kTaskIdFlag[] = "--task-id";
+constexpr char kTimeoutMsFlag[] = "--timeout-ms";
+constexpr char kCancelAfterFirstEventFlag[] = "--cancel-after-first-event";
+constexpr char kMessageIdPrefix[] = "streaming-client-message-";
+constexpr char kMessageText[] = "Hello from the production streaming_client example";
 constexpr int kSuccess = 0;
 constexpr int kUsageError = 2;
 constexpr int kRuntimeError = 1;
+
+std::atomic<std::uint64_t> g_message_sequence{0};
 
 struct Options final {
   std::string transport = kHttpJsonTransport;
@@ -38,9 +49,9 @@ struct Options final {
 };
 
 void PrintUsage(std::ostream& output) {
-  output << "Usage: streaming_client --transport http_json|jsonrpc --endpoint <url> "
-            "--operation send|subscribe [--task-id <id>] [--timeout-ms <milliseconds>] "
-            "[--cancel-after-first-event]\n";
+  output << "Usage: streaming_client " << kTransportFlag << " http_json|jsonrpc " << kEndpointFlag << " <url> "
+         << kOperationFlag << " send|subscribe [" << kTaskIdFlag << " <id>] [" << kTimeoutMsFlag << " <milliseconds>] ["
+         << kCancelAfterFirstEventFlag << "]\n";
 }
 
 std::optional<std::chrono::milliseconds> ParseTimeout(std::string_view value) {
@@ -67,26 +78,26 @@ std::optional<Options> ParseOptions(int argc, char** argv) {
       *destination = argv[++index];
       return true;
     };
-    if (argument == "--help") {
+    if (argument == kHelpFlag) {
       PrintUsage(std::cout);
       std::exit(kSuccess);
-    } else if (argument == "--transport") {
+    } else if (argument == kTransportFlag) {
       if (!require_value(&options.transport)) {
         return std::nullopt;
       }
-    } else if (argument == "--endpoint") {
+    } else if (argument == kEndpointFlag) {
       if (!require_value(&options.endpoint)) {
         return std::nullopt;
       }
-    } else if (argument == "--operation") {
+    } else if (argument == kOperationFlag) {
       if (!require_value(&options.operation)) {
         return std::nullopt;
       }
-    } else if (argument == "--task-id") {
+    } else if (argument == kTaskIdFlag) {
       if (!require_value(&options.task_id)) {
         return std::nullopt;
       }
-    } else if (argument == "--timeout-ms") {
+    } else if (argument == kTimeoutMsFlag) {
       std::string raw_timeout;
       if (!require_value(&raw_timeout)) {
         return std::nullopt;
@@ -96,7 +107,7 @@ std::optional<Options> ParseOptions(int argc, char** argv) {
         return std::nullopt;
       }
       options.timeout = *timeout;
-    } else if (argument == "--cancel-after-first-event") {
+    } else if (argument == kCancelAfterFirstEventFlag) {
       options.cancel_after_first_event = true;
     } else {
       return std::nullopt;
@@ -109,9 +120,6 @@ std::optional<Options> ParseOptions(int argc, char** argv) {
   }
   if (options.operation == kSubscribeOperation && options.task_id.empty()) {
     return std::nullopt;
-  }
-  if (options.task_id.empty()) {
-    options.task_id = kDefaultTaskId;
   }
   return options;
 }
@@ -195,11 +203,27 @@ std::unique_ptr<a2a::client::ClientTransport> CreateTransport(const Options& opt
                                                        options.timeout);
 }
 
+std::string MakeMessageId() {
+  const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto sequence = g_message_sequence.fetch_add(1, std::memory_order_relaxed);
+  std::string message_id;
+  message_id.reserve(std::string_view(kMessageIdPrefix).size() + 32U);
+  message_id.append(kMessageIdPrefix);
+  message_id.append(std::to_string(now));
+  message_id.push_back('-');
+  message_id.append(std::to_string(sequence));
+  return message_id;
+}
+
 lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view task_id) {
   lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-  request.mutable_message()->set_task_id(std::string(task_id));
-  request.mutable_message()->add_parts()->set_text("Hello from the production streaming_client example");
+  auto* message = request.mutable_message();
+  message->set_role(lf::a2a::v1::ROLE_USER);
+  message->set_message_id(MakeMessageId());
+  if (!task_id.empty()) {
+    message->set_task_id(std::string(task_id));
+  }
+  message->add_parts()->set_text(kMessageText);
   return request;
 }
 
