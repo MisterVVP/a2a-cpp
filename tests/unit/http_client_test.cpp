@@ -40,7 +40,9 @@ constexpr int kHttpOk = 200;
 constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
 constexpr int kShortStreamTimeoutMs = 100;
+constexpr int kCancellationRequestTimeoutMs = 30000;
 constexpr std::chrono::milliseconds kHangPollInterval{10};
+constexpr std::chrono::milliseconds kCancellationDeadline{1000};
 constexpr std::string_view kHttpVersion11 = "HTTP/1.1";
 constexpr std::string_view kTaskId = "task-1";
 constexpr std::string_view kResponseHeaderName = "X-Test-Header";
@@ -603,7 +605,7 @@ TEST(SharedHttpClientTest, StreamRequestStopsPromptlyWhenCancellationCallbackCha
   a2a::http::Request request;
   request.method = "GET";
   request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
-  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.timeout = std::chrono::milliseconds(kCancellationRequestTimeoutMs);
   request.http_version = std::string(kHttpVersion11);
 
   std::atomic_bool cancelled{false};
@@ -612,10 +614,13 @@ TEST(SharedHttpClientTest, StreamRequestStopsPromptlyWhenCancellationCallbackCha
 
   ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
   EXPECT_FALSE(server.released());
+  const auto cancellation_started = std::chrono::steady_clock::now();
   cancelled.store(true);
-  ASSERT_EQ(response_future.wait_for(std::chrono::milliseconds(kStreamTimeoutMs)), std::future_status::ready);
+  ASSERT_EQ(response_future.wait_for(kCancellationDeadline), std::future_status::ready);
+  const auto cancellation_elapsed = std::chrono::steady_clock::now() - cancellation_started;
   const auto response = response_future.get();
 
+  EXPECT_LT(cancellation_elapsed, kCancellationDeadline);
   EXPECT_FALSE(response.ok());
   EXPECT_FALSE(server.released());
   EXPECT_EQ(chunks.load(), 0);
