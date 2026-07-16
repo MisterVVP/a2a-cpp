@@ -6,9 +6,12 @@
 #include <google/protobuf/struct.pb.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -464,6 +467,164 @@ void ExpectSuccessfulStream(const HttpRequest& captured, JsonRpcRecordingObserve
   EXPECT_TRUE(observer.completed);
   ASSERT_EQ(observer.events.size(), 1U);
   EXPECT_EQ(observer.events.front().task().id(), "task-1");
+}
+
+class ControlledJsonRpcStreams final {
+ public:
+  struct Stream final {
+    HttpRequest request;
+    a2a::client::HttpStreamChunkHandler on_chunk;
+    bool started = false;
+  };
+
+  [[nodiscard]] a2a::client::HttpStreamRequester MakeRequester() {
+    return [this](const HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                  const a2a::client::HttpStreamChunkHandler& on_chunk,
+                  const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<HttpClientResponse> {
+      HttpClientResponse response{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                  .body = ""};
+      const auto metadata = on_metadata(response);
+      if (!metadata.ok()) {
+        return metadata.error();
+      }
+      const std::size_t index = RegisterStream(request, on_chunk);
+      std::unique_lock lock(mu_);
+      cv_.wait(lock, [this, index, &is_cancelled] { return release_[index] || is_cancelled(); });
+      if (errors_[index].has_value()) {
+        return errors_[index].value();
+      }
+      return response;
+    };
+  }
+
+  [[nodiscard]] bool WaitForStreamCount(std::size_t count, std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mu_);
+    return cv_.wait_for(lock, timeout, [this, count] { return StartedCount() >= count; });
+  }
+
+  [[nodiscard]] std::string RequestId(std::size_t index) const {
+    const auto envelope = ParseJsonStruct(streams_[index].request.body);
+    EXPECT_TRUE(envelope.ok()) << envelope.error().message();
+    if (!envelope.ok()) {
+      return "";
+    }
+    return envelope.value().fields().at("id").string_value();
+  }
+
+  [[nodiscard]] a2a::core::Result<void> Emit(std::size_t index, std::string_view id) {
+    std::string chunk;
+    chunk.reserve(std::string_view(R"(data: {"jsonrpc":"2.0","id":"","result":{"task":{"id":"task-1"}}}
+
+)")
+                      .size() +
+                  id.size());
+    chunk.append(R"(data: {"jsonrpc":"2.0","id":")");
+    chunk.append(id);
+    chunk.append(R"(","result":{"task":{"id":"task-1"}}}
+
+)");
+    const auto result = streams_[index].on_chunk(chunk);
+    if (!result.ok()) {
+      {
+        std::lock_guard lock(mu_);
+        errors_[index] = result.error();
+        release_[index] = true;
+      }
+      cv_.notify_all();
+    }
+    return result;
+  }
+
+  void Release(std::size_t index) {
+    {
+      std::lock_guard lock(mu_);
+      release_[index] = true;
+    }
+    cv_.notify_all();
+  }
+
+ private:
+  [[nodiscard]] std::size_t RegisterStream(const HttpRequest& request, a2a::client::HttpStreamChunkHandler on_chunk) {
+    std::lock_guard lock(mu_);
+    const std::size_t index = streams_[0].started ? 1U : 0U;
+    streams_[index].request = request;
+    streams_[index].on_chunk = std::move(on_chunk);
+    streams_[index].started = true;
+    cv_.notify_all();
+    return index;
+  }
+
+  mutable std::mutex mu_;
+  std::condition_variable cv_;
+  std::array<Stream, 2> streams_{};
+  [[nodiscard]] std::size_t StartedCount() const noexcept {
+    std::size_t count = 0;
+    for (const auto& stream : streams_) {
+      if (stream.started) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  std::array<bool, 2> release_{};
+  std::array<std::optional<a2a::core::Error>, 2> errors_{};
+};
+
+void ExpectRejectedCrossStreamResponse(const a2a::core::Result<void>& result, JsonRpcRecordingObserver& observer) {
+  EXPECT_FALSE(result.ok());
+  ASSERT_TRUE(observer.Wait());
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
+}
+
+void ExpectAcceptedStreamResponse(const a2a::core::Result<void>& result, JsonRpcRecordingObserver& observer) {
+  EXPECT_TRUE(result.ok()) << result.error().message();
+  ASSERT_TRUE(observer.Wait());
+  EXPECT_TRUE(observer.completed);
+  EXPECT_TRUE(observer.errors.empty());
+  ASSERT_EQ(observer.events.size(), 1U);
+}
+
+TEST(JsonRpcTransportUnitTest, IndependentStreamingRequestsUseUniqueIdsAndRejectCrossStreamResponses) {
+  ControlledJsonRpcStreams streams;
+  int next_id = 0;
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      streams.MakeRequester(), JsonRpcTransport::kDefaultTimeout,
+      [&next_id] {
+        ++next_id;
+        std::string id = "stream-";
+        id.append(std::to_string(next_id));
+        return id;
+      });
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver first_observer;
+  JsonRpcRecordingObserver second_observer;
+
+  auto first = client.SendStreamingMessage(request, first_observer);
+  ASSERT_TRUE(first.ok()) << first.error().message();
+  ASSERT_TRUE(streams.WaitForStreamCount(1U, kStreamWaitTimeout));
+  auto second = client.SendStreamingMessage(request, second_observer);
+  ASSERT_TRUE(second.ok()) << second.error().message();
+  ASSERT_TRUE(streams.WaitForStreamCount(2U, kStreamWaitTimeout));
+
+  const std::string first_id = streams.RequestId(0);
+  const std::string second_id = streams.RequestId(1);
+  ASSERT_NE(first_id, second_id);
+
+  ExpectRejectedCrossStreamResponse(streams.Emit(0, second_id), first_observer);
+
+  const auto second_accept = streams.Emit(1, second_id);
+  streams.Release(1);
+  ExpectAcceptedStreamResponse(second_accept, second_observer);
+
+  streams.Release(0);
 }
 
 TEST(JsonRpcTransportUnitTest, SendStreamingMessageParsesJsonRpcSseEnvelope) {
