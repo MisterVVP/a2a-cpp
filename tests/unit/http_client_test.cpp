@@ -18,6 +18,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -314,6 +315,85 @@ class ConcurrentSseLoopbackServer final : private a2a::core::NonCopyable {
   std::thread first_worker_;
 };
 
+class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  OpenSseLoopbackServer() {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = 1;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, 1), 0);
+
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+    worker_ = std::thread([this] { AcceptAndKeepOpen(); });
+  }
+
+  ~OpenSseLoopbackServer() {
+    Release();
+    if (fd_ != kSocketError) {
+      ::shutdown(fd_, SHUT_RDWR);
+    }
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    if (fd_ != kSocketError) {
+      ::close(fd_);
+    }
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+
+  [[nodiscard]] bool WaitForOpenStream(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, timeout, [this] { return stream_open_; });
+  }
+
+  [[nodiscard]] bool released() const noexcept { return released_.load(); }
+
+ private:
+  void Release() {
+    released_.store(true);
+    cv_.notify_all();
+  }
+
+  void AcceptAndKeepOpen() {
+    const int client = ::accept(fd_, nullptr, nullptr);
+    if (client == kSocketError) {
+      return;
+    }
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    (void)::recv(client, buffer.data(), buffer.size(), 0);
+    (void)::send(client, kSseHeaders.data(), kSseHeaders.size(), 0);
+    {
+      std::lock_guard lock(mutex_);
+      stream_open_ = true;
+    }
+    cv_.notify_all();
+    {
+      std::unique_lock lock(mutex_);
+      cv_.wait(lock, [this] { return released_.load(); });
+    }
+    ::close(client);
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  mutable std::mutex mutex_;
+  std::condition_variable cv_;
+  bool stream_open_ = false;
+  std::atomic_bool released_{false};
+  std::thread worker_;
+};
+
 class HangingLoopbackServer final : private a2a::core::NonCopyable {
  public:
   HangingLoopbackServer() {
@@ -495,6 +575,50 @@ struct StreamRequestCapture final {
         return {};
       },
       [] { return false; });
+}
+
+[[nodiscard]] std::future<a2a::core::Result<a2a::http::Response>> StartCancellableStreamRequest(
+    a2a::http::Client* client, const a2a::http::Request& request, std::atomic_bool* cancelled,
+    std::atomic_int* chunks) {
+  return std::async(std::launch::async, [client, request, cancelled, chunks] {
+    return client->StreamRequest(
+        request,
+        [](const a2a::http::Response& metadata) -> a2a::core::Result<void> {
+          if (metadata.status_code != kHttpOk) {
+            return a2a::core::Error::Internal("unexpected stream metadata status");
+          }
+          return {};
+        },
+        [chunks](std::string_view) -> a2a::core::Result<void> {
+          chunks->fetch_add(1);
+          return {};
+        },
+        [cancelled] { return cancelled->load(); });
+  });
+}
+
+TEST(SharedHttpClientTest, StreamRequestStopsPromptlyWhenCancellationCallbackChanges) {
+  OpenSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = "GET";
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  std::atomic_bool cancelled{false};
+  std::atomic_int chunks{0};
+  auto response_future = StartCancellableStreamRequest(&client, request, &cancelled, &chunks);
+
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  EXPECT_FALSE(server.released());
+  cancelled.store(true);
+  ASSERT_EQ(response_future.wait_for(std::chrono::milliseconds(kStreamTimeoutMs)), std::future_status::ready);
+  const auto response = response_future.get();
+
+  EXPECT_FALSE(response.ok());
+  EXPECT_FALSE(server.released());
+  EXPECT_EQ(chunks.load(), 0);
 }
 
 TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResponse) {

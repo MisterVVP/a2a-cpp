@@ -87,7 +87,7 @@ class BlockingStreamFixture final {
               .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
           const auto metadata = on_metadata(response);
           if (!metadata.ok()) {
-            return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+            return a2a::core::Result<a2a::client::HttpClientResponse>{metadata.error()};
           }
           {
             std::lock_guard lock(mutex_);
@@ -98,7 +98,7 @@ class BlockingStreamFixture final {
             std::unique_lock lock(mutex_);
             cv_.wait_for(lock, kCancelPollInterval);
           }
-          return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+          return a2a::core::Result<a2a::client::HttpClientResponse>{response};
         };
   }
 
@@ -182,6 +182,66 @@ TEST(StreamHandleLifecycleTest, DestroyingActiveHandleCancelsAndJoinsSafely) {
   EXPECT_EQ(observer.errors(), 0);
 }
 
+class LateCallbackRequester final {
+ public:
+  [[nodiscard]] a2a::client::HttpStreamRequester MakeRequester() {
+    return [this](
+               const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+               const a2a::client::HttpStreamChunkHandler& on_chunk,
+               const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<a2a::client::HttpClientResponse> {
+      (void)request;
+      const a2a::client::HttpClientResponse response{
+          .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
+      const auto metadata = on_metadata(response);
+      if (!metadata.ok()) {
+        return a2a::core::Result<a2a::client::HttpClientResponse>{metadata.error()};
+      }
+      {
+        std::lock_guard lock(mutex_);
+        started_ = true;
+      }
+      cv_.notify_all();
+      while (!is_cancelled()) {
+        std::unique_lock lock(mutex_);
+        cv_.wait_for(lock, kCancelPollInterval);
+      }
+      const auto chunk = on_chunk(
+          "data: "
+          "{\"statusUpdate\":{\"taskId\":\"stream-handle-task\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n");
+      if (!chunk.ok()) {
+        return a2a::core::Result<a2a::client::HttpClientResponse>{chunk.error()};
+      }
+      return a2a::core::Result<a2a::client::HttpClientResponse>{response};
+    };
+  }
+
+  [[nodiscard]] bool WaitUntilStarted() {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, kWaitTimeout, [this] { return started_; });
+  }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool started_ = false;
+};
+
+TEST(StreamHandleLifecycleTest, DestroyedHandleSuppressesLateRequesterCallbacks) {
+  LateCallbackRequester requester;
+  auto client = MakeClient(requester.MakeRequester());
+  CountingObserver observer;
+
+  {
+    auto handle = client->SendStreamingMessage(MakeRequest(), observer);
+    ASSERT_TRUE(handle.ok()) << handle.error().message();
+    ASSERT_TRUE(requester.WaitUntilStarted());
+  }
+
+  EXPECT_EQ(observer.events(), 0);
+  EXPECT_EQ(observer.completions(), 0);
+  EXPECT_EQ(observer.errors(), 0);
+}
+
 TEST(StreamHandleLifecycleTest, CompletionIsReportedAtMostOnce) {
   auto client = MakeClient(
       [](const a2a::client::HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
@@ -193,9 +253,9 @@ TEST(StreamHandleLifecycleTest, CompletionIsReportedAtMostOnce) {
             .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
         const auto metadata = on_metadata(response);
         if (!metadata.ok()) {
-          return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+          return a2a::core::Result<a2a::client::HttpClientResponse>{metadata.error()};
         }
-        return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+        return a2a::core::Result<a2a::client::HttpClientResponse>{response};
       });
   CountingObserver observer;
 
@@ -203,6 +263,7 @@ TEST(StreamHandleLifecycleTest, CompletionIsReportedAtMostOnce) {
   ASSERT_TRUE(handle.ok()) << handle.error().message();
   ASSERT_TRUE(observer.WaitForTerminal());
 
+  WaitForInactive(handle.value());
   EXPECT_EQ(observer.completions(), 1);
   EXPECT_EQ(observer.errors(), 0);
   EXPECT_FALSE(handle.value()->IsActive());
@@ -219,9 +280,9 @@ TEST(StreamHandleLifecycleTest, ErrorAndCompletionAreMutuallyExclusive) {
             .status_code = kHttpServerError, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
         const auto metadata = on_metadata(response);
         if (!metadata.ok()) {
-          return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+          return a2a::core::Result<a2a::client::HttpClientResponse>{metadata.error()};
         }
-        return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+        return a2a::core::Result<a2a::client::HttpClientResponse>{response};
       });
   CountingObserver observer;
 
@@ -246,9 +307,9 @@ TEST(StreamHandleLifecycleTest, EventAfterTerminalCallbacksIsIgnored) {
             .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
         const auto metadata = on_metadata(response);
         if (!metadata.ok()) {
-          return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+          return a2a::core::Result<a2a::client::HttpClientResponse>{metadata.error()};
         }
-        return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+        return a2a::core::Result<a2a::client::HttpClientResponse>{response};
       });
   CountingObserver observer;
 
@@ -318,15 +379,15 @@ class CancelFromEventObserver final : public a2a::client::StreamObserver {
             .status_code = kHttpOk, .headers = {{kContentTypeHeader, kEventStreamContentType}}, .body = {}};
         const auto metadata = on_metadata(response);
         if (!metadata.ok()) {
-          return a2a::core::Result<a2a::client::HttpClientResponse>(metadata.error());
+          return a2a::core::Result<a2a::client::HttpClientResponse>{metadata.error()};
         }
         const auto chunk = on_chunk(
             "data: "
             "{\"statusUpdate\":{\"taskId\":\"stream-handle-task\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}\n\n");
         if (!chunk.ok()) {
-          return a2a::core::Result<a2a::client::HttpClientResponse>(chunk.error());
+          return a2a::core::Result<a2a::client::HttpClientResponse>{chunk.error()};
         }
-        return a2a::core::Result<a2a::client::HttpClientResponse>(response);
+        return a2a::core::Result<a2a::client::HttpClientResponse>{response};
       };
 }
 
