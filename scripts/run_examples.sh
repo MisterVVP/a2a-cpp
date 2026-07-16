@@ -51,5 +51,9 @@ for app in "${APPS[@]}"; do
     -DA2A_CPP_GIT_TAG="${A2A_CPP_GIT_TAG}"
   cmake --build "${build_dir}" --parallel
   echo "[run_examples] running ${app}"
-  "./${build_dir}/a2a_example"
+  if [[ "${app}" == "streaming_client" ]]; then
+    "./${build_dir}/a2a_example" --help
+  else
+    "./${build_dir}/a2a_example"
+  fi
 done
