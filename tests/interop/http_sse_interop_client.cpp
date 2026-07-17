@@ -31,6 +31,8 @@ constexpr std::string_view kSubscribeSeedMessageId = "subscribe-seed-message";
 constexpr std::string_view kSubscribeTerminalMessageId = "complete-task-subscribe-terminal-message";
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 constexpr std::string_view kRealSubscribeEnv = "A2A_INTEROP_REAL_SUBSCRIBE";
+constexpr std::string_view kFixtureModeHeader = "X-Fixture-Mode";
+constexpr std::string_view kFixtureCancelMode = "cancel";
 
 class RecordingObserver final : public a2a::client::StreamObserver {
  public:
@@ -172,6 +174,9 @@ int main(int argc, char** argv) {
   RecordingObserver observer;
   a2a::client::CallOptions options;
   options.extensions = {std::string(kRequiredExtension)};
+  if (!use_real_subscribe_flow && operation == kCancel) {
+    options.headers[std::string(kFixtureModeHeader)] = std::string(kFixtureCancelMode);
+  }
   if (use_real_subscribe_flow && (operation == kSubscribe || operation == kCancel)) {
     RecordingObserver seed_observer;
     auto seed =

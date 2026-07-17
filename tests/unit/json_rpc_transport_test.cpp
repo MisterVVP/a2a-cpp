@@ -407,6 +407,9 @@ TEST(JsonRpcTransportUnitTest, PropagatesConfiguredRequestHeadersAndExtensions) 
 namespace {
 
 constexpr std::chrono::milliseconds kStreamWaitTimeout{1000};
+constexpr std::string_view kTerminalTaskErrorMessage = "task is already terminal";
+constexpr std::string_view kTerminalTaskErrorEnvelope =
+    R"({"jsonrpc":"2.0","id":"stream-1","error":{"code":-32603,"message":"task is already terminal"}})";
 
 class JsonRpcRecordingObserver final : public a2a::client::StreamObserver {
  public:
@@ -663,6 +666,44 @@ TEST(JsonRpcTransportUnitTest, SendStreamingMessageParsesJsonRpcSseEnvelope) {
   ASSERT_TRUE(observer.Wait());
 
   ExpectSuccessfulStream(captured, observer);
+}
+
+TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
+      [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+         const a2a::client::HttpStreamChunkHandler& on_chunk,
+         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        HttpClientResponse response{.status_code = kHttpOk,
+                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "application/json"}},
+                                    .body = ""};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
+        }
+        const auto chunk = on_chunk(kTerminalTaskErrorEnvelope);
+        if (!chunk.ok()) {
+          return chunk.error();
+        }
+        return response;
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+
+  A2AClient client(std::move(transport));
+  lf::a2a::v1::SendMessageRequest request;
+  JsonRpcRecordingObserver observer;
+
+  auto stream = client.SendStreamingMessage(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(observer.Wait());
+
+  EXPECT_FALSE(observer.completed);
+  EXPECT_TRUE(observer.events.empty());
+  ASSERT_EQ(observer.errors.size(), 1U);
+  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(observer.errors.front().message(), kTerminalTaskErrorMessage);
+  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), "-32603");
 }
 
 TEST(JsonRpcTransportUnitTest, StreamingRejectsContentTypePrefixLookalike) {
