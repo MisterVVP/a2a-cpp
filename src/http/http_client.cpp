@@ -12,7 +12,6 @@
 #include <curl/curl.h>
 
 #include <array>
-#include <cctype>
 #include <charconv>
 #include <cstddef>
 #include <memory>
@@ -62,7 +61,9 @@ constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client support
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
 constexpr std::string_view kHttpStatusLinePrefix = "HTTP/";
 constexpr std::string_view kStreamStatusFailureMessage = "HTTP stream response received with non-success status";
-constexpr std::string_view kStreamContentTypeFailureMessage = "HTTP stream response must use text/event-stream";
+constexpr std::string_view kMissingStreamMetadataCallbackMessage = "HTTP stream metadata callback is required";
+constexpr std::string_view kMissingStreamChunkCallbackMessage = "HTTP stream chunk callback is required";
+constexpr std::string_view kMissingStreamCancellationCallbackMessage = "HTTP stream cancellation callback is required";
 constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 constexpr int kStreamPollTimeoutMs = 100;
@@ -138,6 +139,19 @@ std::string BuildCurlMultiErrorMessage(std::string_view prefix, CURLMcode code) 
   return message.str();
 }
 
+core::Result<void> ValidateStreamCallbacks(const detail::StreamCallbackContext& context) {
+  if (context.on_metadata == nullptr || !*context.on_metadata) {
+    return core::Error::Validation(std::string(kMissingStreamMetadataCallbackMessage)).WithTransport("http");
+  }
+  if (context.on_chunk == nullptr || !*context.on_chunk) {
+    return core::Error::Validation(std::string(kMissingStreamChunkCallbackMessage)).WithTransport("http");
+  }
+  if (context.is_cancelled == nullptr || !*context.is_cancelled) {
+    return core::Error::Validation(std::string(kMissingStreamCancellationCallbackMessage)).WithTransport("http");
+  }
+  return {};
+}
+
 std::string BuildHeaderValue(const Header& header) {
   std::string value;
   value.reserve(header.name.size() + core::http::kHeaderNameValueSeparator.size() + header.value.size());
@@ -203,35 +217,6 @@ std::optional<long> ParseHttpStatusCode(std::string_view line) {
   return status;
 }
 
-bool EqualsIgnoreCase(std::string_view lhs, std::string_view rhs) {
-  if (lhs.size() != rhs.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < lhs.size(); ++index) {
-    const auto left = static_cast<unsigned char>(lhs[index]);
-    const auto right = static_cast<unsigned char>(rhs[index]);
-    if (std::tolower(left) != std::tolower(right)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool HasSseContentType(const std::vector<Header>& headers) {
-  for (const auto& header : headers) {
-    if (!EqualsIgnoreCase(header.name, core::http::kContentTypeHeaderName)) {
-      continue;
-    }
-    std::string_view value = TrimHeaderValue(header.value);
-    const auto parameter_separator = value.find(core::http::kContentTypeParameterSeparator);
-    if (parameter_separator != std::string_view::npos) {
-      value = TrimHeaderValue(value.substr(0, parameter_separator));
-    }
-    return EqualsIgnoreCase(value, core::http::kContentTypeTextEventStream);
-  }
-  return false;
-}
-
 std::optional<Header> ParseHeaderLine(std::string_view line) {
   const auto separator = line.find(kHeaderSeparator);
   if (separator == std::string_view::npos) {
@@ -267,11 +252,6 @@ core::Result<void> ValidateStreamMetadata(detail::StreamCallbackContext* context
   }
   if (capture.response_code < core::http::kSuccessStatusMin || capture.response_code > core::http::kSuccessStatusMax) {
     return core::Error::RemoteProtocol(std::string(kStreamStatusFailureMessage))
-        .WithTransport("http")
-        .WithHttpStatus(static_cast<int>(capture.response_code));
-  }
-  if (capture.response_headers == nullptr || !HasSseContentType(*capture.response_headers)) {
-    return core::Error::RemoteProtocol(std::string(kStreamContentTypeFailureMessage))
         .WithTransport("http")
         .WithHttpStatus(static_cast<int>(capture.response_code));
   }
@@ -372,6 +352,10 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
 core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, const CurlHeaderList& headers,
                                        detail::StreamCallbackContext* stream_context,
                                        detail::HeaderCapture* response_headers) {
+  const auto callbacks = ValidateStreamCallbacks(*stream_context);
+  if (!callbacks.ok()) {
+    return callbacks.error();
+  }
   std::string unused_body;
   const auto configured = ConfigureCurl(handle, request, headers, &unused_body, response_headers);
   if (!configured.ok()) {

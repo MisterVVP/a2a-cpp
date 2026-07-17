@@ -18,6 +18,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -53,6 +54,8 @@ constexpr std::string_view kRestTaskBody = R"({"id":"task-1"})";
 constexpr std::string_view kJsonRpcTaskBody = R"({"jsonrpc":"2.0","id":"req-1","result":{"id":"task-1"}})";
 constexpr std::string_view kSseHeaders =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kJsonStreamHeaders =
+    "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kEmptySseResponse =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nContent-Length: "
     "0\r\nConnection: close\r\n\r\n";
@@ -553,6 +556,29 @@ TEST(SharedHttpClientTest, StreamRequestTimesOutOpenStream) {
   EXPECT_FALSE(response.ok());
 }
 
+TEST(SharedHttpClientTest, StreamRequestRejectsMissingCallbacks) {
+  a2a::http::Client client;
+  a2a::http::Request request;
+  const auto on_metadata = [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; };
+  const auto on_chunk = [](std::string_view) -> a2a::core::Result<void> { return {}; };
+  const auto is_cancelled = [] { return false; };
+
+  const std::function<a2a::core::Result<void>(const a2a::http::Response&)> missing_metadata;
+  const std::function<a2a::core::Result<void>(std::string_view)> missing_chunk;
+  const std::function<bool()> missing_cancellation;
+
+  const auto metadata_result = client.StreamRequest(request, missing_metadata, on_chunk, is_cancelled);
+  const auto chunk_result = client.StreamRequest(request, on_metadata, missing_chunk, is_cancelled);
+  const auto cancellation_result = client.StreamRequest(request, on_metadata, on_chunk, missing_cancellation);
+
+  ASSERT_FALSE(metadata_result.ok());
+  ASSERT_FALSE(chunk_result.ok());
+  ASSERT_FALSE(cancellation_result.ok());
+  EXPECT_EQ(metadata_result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(chunk_result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(cancellation_result.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
 struct StreamRequestCapture final {
   bool metadata_before_chunk = false;
   bool metadata_received = false;
@@ -646,6 +672,24 @@ TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResp
   EXPECT_NE(server.request().find("POST /stream HTTP/1.1"), std::string::npos);
   EXPECT_NE(server.request().find("X-Stream-Test: yes"), std::string::npos);
   EXPECT_NE(server.request().find(R"({"hello":"world"})"), std::string::npos);
+}
+
+TEST(SharedHttpClientTest, StreamRequestPassesJsonResponseToHandlers) {
+  LoopbackHttpServer server{std::string(kJsonStreamHeaders) + std::string(kJsonRpcTaskBody)};
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = "POST";
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/rpc");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture capture;
+  const auto response = ExecuteCapturedStreamRequest(client, request, capture);
+
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_TRUE(capture.metadata_before_chunk);
+  EXPECT_EQ(capture.chunks, kJsonRpcTaskBody);
+  EXPECT_EQ(response.value().status_code, kHttpOk);
 }
 
 TEST(SharedHttpClientTest, StreamRequestPropagatesHandlerFailuresAndConnectionFailure) {
