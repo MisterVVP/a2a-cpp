@@ -147,6 +147,15 @@ lf::a2a::v1::GetTaskRequest MakeSubscribeRequest(std::string_view task_id) {
   return request;
 }
 
+a2a::client::CallOptions BuildCallOptions(bool use_real_subscribe_flow, std::string_view operation) {
+  a2a::client::CallOptions options;
+  options.extensions = {std::string(kRequiredExtension)};
+  if (!use_real_subscribe_flow && operation == kCancel) {
+    options.headers[std::string(kFixtureModeHeader)] = std::string(kFixtureCancelMode);
+  }
+  return options;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -172,11 +181,7 @@ int main(int argc, char** argv) {
     task_id.append(operation);
   }
   RecordingObserver observer;
-  a2a::client::CallOptions options;
-  options.extensions = {std::string(kRequiredExtension)};
-  if (!use_real_subscribe_flow && operation == kCancel) {
-    options.headers[std::string(kFixtureModeHeader)] = std::string(kFixtureCancelMode);
-  }
+  a2a::client::CallOptions options = BuildCallOptions(use_real_subscribe_flow, operation);
   if (use_real_subscribe_flow && (operation == kSubscribe || operation == kCancel)) {
     RecordingObserver seed_observer;
     auto seed =

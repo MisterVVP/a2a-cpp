@@ -215,109 +215,146 @@ core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_vi
   return {};
 }
 
-void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
-                         StreamObserver& observer, const std::shared_ptr<StreamHandle::State>& state,
-                         std::string request_id) {
-  SseParser parser;
-  HttpClientResponse response_metadata;
-  std::string json_response_body;
-  bool metadata_validated = false;
-  bool is_json_response = false;
-  const auto validate_metadata = [&response_metadata, &metadata_validated,
-                                  &is_json_response](const HttpClientResponse& response) -> core::Result<void> {
-    response_metadata = response;
-    const auto version_check = ValidateResponseVersion(response_metadata);
+class JsonRpcSseSession final {
+ public:
+  JsonRpcSseSession(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
+                    StreamObserver& observer, std::shared_ptr<StreamHandle::State> state, std::string request_id)
+      : stream_requester_(stream_requester),
+        http_request_(http_request),
+        observer_(observer),
+        state_(std::move(state)),
+        request_id_(std::move(request_id)) {}
+
+  void Run() {
+    const auto stream_response = stream_requester_(
+        http_request_, [this](const HttpClientResponse& response) { return ValidateMetadata(response); },
+        [this](std::string_view chunk) { return HandleChunk(chunk); },
+        [this]() { return state_->cancel_requested.load(); });
+    if (StopIfCancelled()) {
+      return;
+    }
+    if (!stream_response.ok()) {
+      NotifyErrorAndStop(*state_, observer_, stream_response.error());
+      return;
+    }
+
+    const auto metadata = EnsureMetadata(stream_response.value());
+    if (!metadata.ok()) {
+      NotifyErrorAndStop(*state_, observer_, metadata.error());
+      return;
+    }
+    if (is_json_response_) {
+      HandleJsonResponse(stream_response.value());
+      return;
+    }
+
+    const auto finish = parser_.Finish([this](const SseEvent& event) { return DispatchEvent(event); });
+    if (StopIfCancelled()) {
+      return;
+    }
+    if (!finish.ok()) {
+      NotifyErrorAndStop(*state_, observer_, finish.error());
+      return;
+    }
+    observer_.OnCompleted();
+    MarkInactive(*state_);
+  }
+
+ private:
+  core::Result<void> ValidateMetadata(const HttpClientResponse& response) {
+    response_metadata_ = response;
+    const auto version_check = ValidateResponseVersion(response_metadata_);
     if (!version_check.ok()) {
       return version_check.error();
     }
-    if (response_metadata.status_code < kHttpOkMin || response_metadata.status_code > kHttpOkMax) {
+    if (response_metadata_.status_code < kHttpOkMin || response_metadata_.status_code > kHttpOkMax) {
       return core::Error::RemoteProtocol("JSON-RPC stream returned non-success HTTP status")
           .WithTransport("jsonrpc")
-          .WithHttpStatus(response_metadata.status_code);
+          .WithHttpStatus(response_metadata_.status_code);
     }
-    if (HasSseContentType(response_metadata.headers)) {
-      metadata_validated = true;
+    if (HasSseContentType(response_metadata_.headers)) {
+      metadata_validated_ = true;
       return {};
     }
-    if (HasJsonContentType(response_metadata.headers)) {
-      is_json_response = true;
-      metadata_validated = true;
+    if (HasJsonContentType(response_metadata_.headers)) {
+      is_json_response_ = true;
+      metadata_validated_ = true;
       return {};
     }
     return core::Error::RemoteProtocol("JSON-RPC stream response must use text/event-stream")
         .WithTransport("jsonrpc")
-        .WithHttpStatus(response_metadata.status_code);
-  };
-  const auto stream_response = stream_requester(
-      http_request, validate_metadata,
-      [&parser, &observer, state, &response_metadata, &json_response_body, &request_id, &metadata_validated,
-       &is_json_response](std::string_view chunk) -> core::Result<void> {
-        if (state->cancel_requested.load()) {
-          return {};
-        }
-        if (!metadata_validated) {
-          return core::Error::RemoteProtocol("JSON-RPC stream metadata must be validated before body chunks")
-              .WithTransport("jsonrpc");
-        }
-        if (is_json_response) {
-          json_response_body.append(chunk);
-          return {};
-        }
-        return parser.Feed(
-            chunk, [&observer, state, &request_id, &response_metadata](const SseEvent& event) -> core::Result<void> {
-              if (state->cancel_requested.load()) {
-                return {};
-              }
-              return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
-            });
-      },
-      [state]() { return state->cancel_requested.load(); });
-  if (state->cancel_requested.load()) {
-    MarkInactive(*state);
-    return;
+        .WithHttpStatus(response_metadata_.status_code);
   }
-  if (!stream_response.ok()) {
-    NotifyErrorAndStop(*state, observer, stream_response.error());
-    return;
-  }
-  if (!metadata_validated) {
-    const auto metadata = validate_metadata(stream_response.value());
-    if (!metadata.ok()) {
-      NotifyErrorAndStop(*state, observer, metadata.error());
-      return;
+
+  core::Result<void> EnsureMetadata(const HttpClientResponse& response) {
+    if (metadata_validated_) {
+      return {};
     }
+    return ValidateMetadata(response);
   }
-  if (is_json_response) {
-    if (json_response_body.empty()) {
-      json_response_body = stream_response.value().body;
+
+  core::Result<void> HandleChunk(std::string_view chunk) {
+    if (state_->cancel_requested.load()) {
+      return {};
     }
-    HttpClientResponse json_response = response_metadata;
-    json_response.body = std::move(json_response_body);
-    const auto result = ParseResponseResult(json_response, request_id);
+    if (!metadata_validated_) {
+      return core::Error::RemoteProtocol("JSON-RPC stream metadata must be validated before body chunks")
+          .WithTransport("jsonrpc");
+    }
+    if (is_json_response_) {
+      json_response_body_.append(chunk);
+      return {};
+    }
+    return parser_.Feed(chunk, [this](const SseEvent& event) { return DispatchEvent(event); });
+  }
+
+  core::Result<void> DispatchEvent(const SseEvent& event) {
+    if (state_->cancel_requested.load()) {
+      return {};
+    }
+    return DispatchJsonRpcSseEvent(event, request_id_, response_metadata_, observer_);
+  }
+
+  bool StopIfCancelled() {
+    if (!state_->cancel_requested.load()) {
+      return false;
+    }
+    MarkInactive(*state_);
+    return true;
+  }
+
+  void HandleJsonResponse(const HttpClientResponse& stream_response) {
+    if (json_response_body_.empty()) {
+      json_response_body_ = stream_response.body;
+    }
+    HttpClientResponse json_response = response_metadata_;
+    json_response.body = std::move(json_response_body_);
+    const auto result = ParseResponseResult(json_response, request_id_);
     if (!result.ok()) {
-      NotifyErrorAndStop(*state, observer, result.error());
+      NotifyErrorAndStop(*state_, observer_, result.error());
       return;
     }
-    NotifyErrorAndStop(*state, observer, BuildJsonRpcEnvelopeError(kStreamingSuccessRequiresSseMessage, json_response));
-    return;
+    NotifyErrorAndStop(*state_, observer_,
+                       BuildJsonRpcEnvelopeError(kStreamingSuccessRequiresSseMessage, json_response));
   }
-  const auto finish =
-      parser.Finish([&observer, state, &request_id, &response_metadata](const SseEvent& event) -> core::Result<void> {
-        if (state->cancel_requested.load()) {
-          return {};
-        }
-        return DispatchJsonRpcSseEvent(event, request_id, response_metadata, observer);
-      });
-  if (state->cancel_requested.load()) {
-    MarkInactive(*state);
-    return;
-  }
-  if (!finish.ok()) {
-    NotifyErrorAndStop(*state, observer, finish.error());
-    return;
-  }
-  observer.OnCompleted();
-  MarkInactive(*state);
+
+  const HttpStreamRequester& stream_requester_;
+  const HttpRequest& http_request_;
+  StreamObserver& observer_;
+  std::shared_ptr<StreamHandle::State> state_;
+  std::string request_id_;
+  SseParser parser_;
+  HttpClientResponse response_metadata_;
+  std::string json_response_body_;
+  bool metadata_validated_ = false;
+  bool is_json_response_ = false;
+};
+
+void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
+                         StreamObserver& observer, const std::shared_ptr<StreamHandle::State>& state,
+                         std::string request_id) {
+  JsonRpcSseSession session(stream_requester, http_request, observer, state, std::move(request_id));
+  session.Run();
 }
 
 }  // namespace
