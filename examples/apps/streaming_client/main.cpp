@@ -128,6 +128,14 @@ class PrintingObserver final : public a2a::client::StreamObserver {
  public:
   explicit PrintingObserver(bool cancel_after_first_event) : cancel_after_first_event_(cancel_after_first_event) {}
 
+  void SetHandle(a2a::client::StreamHandle* handle) {
+    {
+      std::lock_guard lock(mutex_);
+      handle_ = handle;
+    }
+    completion_cv_.notify_all();
+  }
+
   [[nodiscard]] bool WaitForTerminal(std::chrono::milliseconds timeout) {
     std::unique_lock lock(mutex_);
     return completion_cv_.wait_for(lock, timeout, [this] { return completed_ || failed_ || cancelled_; });
@@ -140,14 +148,26 @@ class PrintingObserver final : public a2a::client::StreamObserver {
 
   void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
     PrintEvent(response);
+    a2a::client::StreamHandle* handle = nullptr;
     {
-      std::lock_guard lock(mutex_);
+      std::unique_lock lock(mutex_);
       ++event_count_;
-      if (cancel_after_first_event_) {
-        cancelled_ = true;
-        completion_cv_.notify_all();
+      if (cancel_after_first_event_ && event_count_ == 1U) {
+        completion_cv_.wait(lock, [this] { return handle_ != nullptr; });
+        handle = handle_;
       }
     }
+    if (handle == nullptr) {
+      return;
+    }
+
+    std::cout << "streaming_client cancelling after first event\n";
+    handle->Cancel();
+    {
+      std::lock_guard lock(mutex_);
+      cancelled_ = true;
+    }
+    completion_cv_.notify_all();
   }
 
   void OnError(const a2a::core::Error& error) override {
@@ -181,6 +201,7 @@ class PrintingObserver final : public a2a::client::StreamObserver {
 
   mutable std::mutex mutex_;
   std::condition_variable completion_cv_;
+  a2a::client::StreamHandle* handle_ = nullptr;
   bool cancel_after_first_event_ = false;
   bool completed_ = false;
   bool failed_ = false;
@@ -256,11 +277,8 @@ int main(int argc, char** argv) {
     return kRuntimeError;
   }
 
+  observer.SetHandle(handle.value().get());
   const bool finished = observer.WaitForTerminal(options->timeout);
-  if (options->cancel_after_first_event && finished && handle.value()->IsActive()) {
-    std::cout << "streaming_client cancelling after first event\n";
-    handle.value()->Cancel();
-  }
   if (!finished) {
     std::cerr << "streaming_client timed out after " << options->timeout.count() << " ms\n";
     handle.value()->Cancel();
