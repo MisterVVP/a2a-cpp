@@ -172,6 +172,12 @@ bool HasJsonContentType(const HeaderMap& headers) {
   return content_type.has_value() && core::http::IsJsonContentType(content_type.value());
 }
 
+core::Error BuildJsonRpcStreamStatusError(const HttpClientResponse& response) {
+  return core::Error::RemoteProtocol("JSON-RPC stream returned non-success HTTP status")
+      .WithTransport("jsonrpc")
+      .WithHttpStatus(response.status_code);
+}
+
 void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
 
 void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer, const core::Error& error) {
@@ -267,17 +273,15 @@ class JsonRpcSseSession final {
     if (!version_check.ok()) {
       return version_check.error();
     }
-    if (response_metadata_.status_code < kHttpOkMin || response_metadata_.status_code > kHttpOkMax) {
-      return core::Error::RemoteProtocol("JSON-RPC stream returned non-success HTTP status")
-          .WithTransport("jsonrpc")
-          .WithHttpStatus(response_metadata_.status_code);
-    }
-    if (HasSseContentType(response_metadata_.headers)) {
+    if (HasJsonContentType(response_metadata_.headers)) {
+      is_json_response_ = true;
       metadata_validated_ = true;
       return {};
     }
-    if (HasJsonContentType(response_metadata_.headers)) {
-      is_json_response_ = true;
+    if (response_metadata_.status_code < kHttpOkMin || response_metadata_.status_code > kHttpOkMax) {
+      return BuildJsonRpcStreamStatusError(response_metadata_);
+    }
+    if (HasSseContentType(response_metadata_.headers)) {
       metadata_validated_ = true;
       return {};
     }
@@ -332,6 +336,10 @@ class JsonRpcSseSession final {
     const auto result = ParseResponseResult(json_response, request_id_);
     if (!result.ok()) {
       NotifyErrorAndStop(*state_, observer_, result.error());
+      return;
+    }
+    if (json_response.status_code < kHttpOkMin || json_response.status_code > kHttpOkMax) {
+      NotifyErrorAndStop(*state_, observer_, BuildJsonRpcStreamStatusError(json_response));
       return;
     }
     NotifyErrorAndStop(*state_, observer_,

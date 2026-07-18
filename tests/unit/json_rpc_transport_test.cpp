@@ -10,9 +10,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "a2a/client/auth.h"
@@ -407,6 +409,7 @@ TEST(JsonRpcTransportUnitTest, PropagatesConfiguredRequestHeadersAndExtensions) 
 namespace {
 
 constexpr std::chrono::milliseconds kStreamWaitTimeout{1000};
+constexpr std::chrono::milliseconds kStreamPollInterval{1};
 constexpr std::string_view kTerminalTaskErrorMessage = "task is already terminal";
 constexpr std::string_view kTerminalTaskErrorEnvelope =
     R"({"jsonrpc":"2.0","id":"stream-1","error":{"code":-32603,"message":"task is already terminal"}})";
@@ -675,7 +678,7 @@ TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
       [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
          const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpOk,
+        HttpClientResponse response{.status_code = kHttpBadGateway,
                                     .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "application/json"}},
                                     .body = ""};
         const auto metadata = on_metadata(response);
@@ -704,6 +707,7 @@ TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
   EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
   EXPECT_EQ(observer.errors.front().message(), kTerminalTaskErrorMessage);
   EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), "-32603");
+  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
 }
 
 TEST(JsonRpcTransportUnitTest, StreamingRejectsContentTypePrefixLookalike) {
@@ -888,10 +892,15 @@ class JsonRpcCancelFromEventObserver final : public a2a::client::StreamObserver 
       std::unique_lock lock(mutex_);
       ++events_;
       cv_.notify_all();
-      cv_.wait(lock, [this] { return handle_ != nullptr; });
+      cv_.wait(lock, [this] { return handle_ != nullptr && callback_cancel_allowed_; });
       handle = handle_;
     }
     handle->Cancel();
+    {
+      std::lock_guard lock(mutex_);
+      callback_cancelled_ = true;
+    }
+    cv_.notify_all();
   }
 
   void OnError(const a2a::core::Error& error) override {
@@ -908,6 +917,19 @@ class JsonRpcCancelFromEventObserver final : public a2a::client::StreamObserver 
   [[nodiscard]] bool WaitForEvent() {
     std::unique_lock lock(mutex_);
     return cv_.wait_for(lock, kStreamWaitTimeout, [this] { return events_ > 0; });
+  }
+
+  void AllowCallbackCancel() {
+    {
+      std::lock_guard lock(mutex_);
+      callback_cancel_allowed_ = true;
+    }
+    cv_.notify_all();
+  }
+
+  [[nodiscard]] bool WaitForCallbackCancel() {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, kStreamWaitTimeout, [this] { return callback_cancelled_; });
   }
 
   [[nodiscard]] int events() const {
@@ -929,10 +951,20 @@ class JsonRpcCancelFromEventObserver final : public a2a::client::StreamObserver 
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   a2a::client::StreamHandle* handle_ = nullptr;
+  bool callback_cancel_allowed_ = false;
+  bool callback_cancelled_ = false;
   int events_ = 0;
   int errors_ = 0;
   int completions_ = 0;
 };
+
+[[nodiscard]] bool WaitUntilInactive(a2a::client::StreamHandle& handle) {
+  const auto deadline = std::chrono::steady_clock::now() + kStreamWaitTimeout;
+  while (handle.IsActive() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(kStreamPollInterval);
+  }
+  return !handle.IsActive();
+}
 
 TEST(JsonRpcTransportUnitTest, CancellationFromOnEventStopsCoalescedFrames) {
   constexpr std::string_view kCoalescedEvents =
@@ -969,10 +1001,17 @@ data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
 
   auto stream = client.SendStreamingMessage(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  observer.SetHandle(stream.value().get());
+  auto* handle = stream.value().get();
+  observer.SetHandle(handle);
   ASSERT_TRUE(observer.WaitForEvent());
-  stream.value()->Cancel();
+  auto owner_cancel = std::async(std::launch::async, [handle] { handle->Cancel(); });
+  const bool owner_cancel_started = WaitUntilInactive(*handle);
+  observer.AllowCallbackCancel();
 
+  EXPECT_TRUE(owner_cancel_started);
+  ASSERT_EQ(owner_cancel.wait_for(kStreamWaitTimeout), std::future_status::ready);
+  owner_cancel.get();
+  ASSERT_TRUE(observer.WaitForCallbackCancel());
   EXPECT_EQ(observer.events(), 1);
   EXPECT_EQ(observer.errors(), 0);
   EXPECT_EQ(observer.completions(), 0);

@@ -60,7 +60,6 @@ constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP resp
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
 constexpr std::string_view kHttpStatusLinePrefix = "HTTP/";
-constexpr std::string_view kStreamStatusFailureMessage = "HTTP stream response received with non-success status";
 constexpr std::string_view kMissingStreamMetadataCallbackMessage = "HTTP stream metadata callback is required";
 constexpr std::string_view kMissingStreamChunkCallbackMessage = "HTTP stream chunk callback is required";
 constexpr std::string_view kMissingStreamCancellationCallbackMessage = "HTTP stream cancellation callback is required";
@@ -249,11 +248,6 @@ core::Result<void> ValidateStreamMetadata(detail::StreamCallbackContext* context
   const detail::HeaderCapture& capture = *context->header_capture;
   if (capture.response_code == kHttpResponseCodeUnset) {
     return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
-  }
-  if (capture.response_code < core::http::kSuccessStatusMin || capture.response_code > core::http::kSuccessStatusMax) {
-    return core::Error::RemoteProtocol(std::string(kStreamStatusFailureMessage))
-        .WithTransport("http")
-        .WithHttpStatus(static_cast<int>(capture.response_code));
   }
   if (context->on_metadata != nullptr) {
     return (*context->on_metadata)(Response{

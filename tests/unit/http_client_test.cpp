@@ -38,6 +38,7 @@ namespace {
 
 constexpr int kSocketError = -1;
 constexpr int kHttpOk = 200;
+constexpr int kHttpBadGateway = 502;
 constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
 constexpr int kShortStreamTimeoutMs = 100;
@@ -52,10 +53,12 @@ constexpr std::string_view kA2aVersionHeader = "A2A-Version";
 constexpr std::string_view kA2aVersionValue = "1.0";
 constexpr std::string_view kRestTaskBody = R"({"id":"task-1"})";
 constexpr std::string_view kJsonRpcTaskBody = R"({"jsonrpc":"2.0","id":"req-1","result":{"id":"task-1"}})";
+constexpr std::string_view kJsonRpcErrorBody =
+    R"({"jsonrpc":"2.0","id":"req-1","error":{"code":-32603,"message":"failed"}})";
 constexpr std::string_view kSseHeaders =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kJsonStreamHeaders =
-    "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
+    "HTTP/1.1 502 Bad Gateway\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kEmptySseResponse =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nContent-Length: "
     "0\r\nConnection: close\r\n\r\n";
@@ -582,6 +585,7 @@ TEST(SharedHttpClientTest, StreamRequestRejectsMissingCallbacks) {
 struct StreamRequestCapture final {
   bool metadata_before_chunk = false;
   bool metadata_received = false;
+  int status_code = 0;
   std::string chunks;
 };
 
@@ -592,9 +596,7 @@ struct StreamRequestCapture final {
       request,
       [&capture](const a2a::http::Response& metadata) -> a2a::core::Result<void> {
         capture.metadata_received = true;
-        if (metadata.status_code != kHttpOk) {
-          return a2a::core::Error::Internal("unexpected stream metadata status");
-        }
+        capture.status_code = metadata.status_code;
         return {};
       },
       [&capture](std::string_view chunk) -> a2a::core::Result<void> {
@@ -674,8 +676,8 @@ TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResp
   EXPECT_NE(server.request().find(R"({"hello":"world"})"), std::string::npos);
 }
 
-TEST(SharedHttpClientTest, StreamRequestPassesJsonResponseToHandlers) {
-  LoopbackHttpServer server{std::string(kJsonStreamHeaders) + std::string(kJsonRpcTaskBody)};
+TEST(SharedHttpClientTest, StreamRequestPassesNonSuccessJsonResponseToHandlers) {
+  LoopbackHttpServer server{std::string(kJsonStreamHeaders) + std::string(kJsonRpcErrorBody)};
   a2a::http::Client client;
   a2a::http::Request request;
   request.method = "POST";
@@ -688,8 +690,9 @@ TEST(SharedHttpClientTest, StreamRequestPassesJsonResponseToHandlers) {
 
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_TRUE(capture.metadata_before_chunk);
-  EXPECT_EQ(capture.chunks, kJsonRpcTaskBody);
-  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(capture.status_code, kHttpBadGateway);
+  EXPECT_EQ(capture.chunks, kJsonRpcErrorBody);
+  EXPECT_EQ(response.value().status_code, kHttpBadGateway);
 }
 
 TEST(SharedHttpClientTest, StreamRequestPropagatesHandlerFailuresAndConnectionFailure) {
