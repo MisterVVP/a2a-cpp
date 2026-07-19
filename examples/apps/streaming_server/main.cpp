@@ -179,7 +179,7 @@ class ExampleExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
-                                                a2a::server::RequestContext& context) override {
+                                               a2a::server::RequestContext& context) override {
     (void)context;
     if (request.id().empty()) {
       return a2a::core::Error::Validation(kTaskIdRequiredMessage);
@@ -202,7 +202,7 @@ class ExampleExecutor final : public a2a::server::AgentExecutor {
   }
 
   a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
-                                                   a2a::server::RequestContext& context) override {
+                                                  a2a::server::RequestContext& context) override {
     (void)context;
     if (request.id().empty()) {
       return a2a::core::Error::Validation(kTaskIdRequiredMessage);
