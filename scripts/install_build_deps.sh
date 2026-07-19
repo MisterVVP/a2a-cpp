@@ -96,6 +96,7 @@ find_vcpkg_executable() {
         return 0
       fi
     done
+    return 1
   fi
 
   candidate="$(type -P vcpkg.exe 2>/dev/null || true)"
