@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -16,6 +17,7 @@
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/core/error.h"
+#include "a2a/core/http_constants.h"
 
 namespace {
 
@@ -32,6 +34,8 @@ constexpr int kHttpOk = 200;
 constexpr int kHttpBadGateway = 502;
 constexpr int kStreamLoopMaxIterations = 100;
 constexpr int kCancelDelayMs = 30;
+constexpr std::chrono::milliseconds kRequestCaptureTimeout{2000};
+constexpr std::string_view kAcceptHeaderName = "Accept";
 
 ResolvedInterface MakeResolvedRest();
 
@@ -249,6 +253,41 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes)
   EXPECT_TRUE(observer.completed);
   ASSERT_EQ(observer.events.size(), 1U);
   EXPECT_EQ(observer.events[0].task().id(), "t-1");
+}
+
+TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskBuildsBodylessGetRequest) {
+  std::promise<HttpRequest> request_promise;
+  auto request_future = request_promise.get_future();
+  auto transport = MakeStreamingTransport(
+      [&request_promise](const HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                         const a2a::client::HttpStreamChunkHandler&,
+                         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
+        request_promise.set_value(request);
+        return EmitMetadataOnly(
+            HttpClientResponse{.status_code = kHttpOk,
+                               .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                               .body = ""},
+            on_metadata);
+      });
+
+  A2AClient client(std::move(transport));
+  RecordingObserver observer;
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id("t-1");
+
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_EQ(request_future.wait_for(kRequestCaptureTimeout), std::future_status::ready);
+  const HttpRequest captured_request = request_future.get();
+  ASSERT_TRUE(observer.WaitForCompletion(kRequestCaptureTimeout));
+  stream.value()->Cancel();
+
+  EXPECT_EQ(captured_request.method, a2a::core::http::kMethodGet);
+  EXPECT_TRUE(captured_request.body.empty());
+  EXPECT_FALSE(captured_request.headers.contains(std::string(a2a::core::http::kContentTypeHeaderName)));
+  const auto accept = captured_request.headers.find(std::string(kAcceptHeaderName));
+  ASSERT_NE(accept, captured_request.headers.end());
+  EXPECT_EQ(accept->second, a2a::core::http::kContentTypeTextEventStream);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

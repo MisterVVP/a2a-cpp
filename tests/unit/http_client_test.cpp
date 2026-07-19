@@ -64,6 +64,10 @@ constexpr std::string_view kEmptySseResponse =
     "0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kFirstSseChunk = "data: first\n\n";
 constexpr std::string_view kSecondSseChunk = "data: second\n\n";
+constexpr std::string_view kMetadataRejectedMessage = "metadata rejected before stream body";
+constexpr std::string_view kGetStreamRequestLine = "GET /stream HTTP/1.1";
+constexpr std::string_view kContentLengthHeaderPrefix = "Content-Length:";
+constexpr std::string_view kFormContentTypeHeader = "Content-Type: application/x-www-form-urlencoded";
 constexpr std::string_view kAgentCardBody =
     R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}]})";
 
@@ -654,6 +658,39 @@ TEST(SharedHttpClientTest, StreamRequestStopsPromptlyWhenCancellationCallbackCha
   EXPECT_EQ(chunks.load(), 0);
 }
 
+TEST(SharedHttpClientTest, StreamRequestDeliversMetadataBeforeFirstBodyByte) {
+  OpenSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kCancellationRequestTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  std::atomic_bool cancelled{false};
+  auto response_future = std::async(std::launch::async, [&] {
+    return client.StreamRequest(
+        request,
+        [](const a2a::http::Response&) -> a2a::core::Result<void> {
+          return a2a::core::Error::RemoteProtocol(std::string(kMetadataRejectedMessage));
+        },
+        [](std::string_view) -> a2a::core::Result<void> { return {}; }, [&cancelled] { return cancelled.load(); });
+  });
+
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  const auto response_status = response_future.wait_for(kCancellationDeadline);
+  if (response_status != std::future_status::ready) {
+    cancelled.store(true);
+  }
+  ASSERT_EQ(response_status, std::future_status::ready);
+  const auto response = response_future.get();
+
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(response.error().message(), kMetadataRejectedMessage);
+  EXPECT_FALSE(server.released());
+}
+
 TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResponse) {
   LoopbackHttpServer server{std::string(kSseHeaders) + "data: fir" + "st\n\n"};
   a2a::http::Client client;
@@ -755,6 +792,9 @@ TEST(SharedHttpClientTest, EmptyStreamStillDeliversMetadata) {
   EXPECT_TRUE(metadata_received);
   EXPECT_FALSE(chunk_received);
   EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(server.request().find(kGetStreamRequestLine), std::string::npos);
+  EXPECT_EQ(server.request().find(kContentLengthHeaderPrefix), std::string::npos);
+  EXPECT_EQ(server.request().find(kFormContentTypeHeader), std::string::npos);
 }
 
 TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {

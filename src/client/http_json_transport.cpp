@@ -357,7 +357,10 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
   request.timeout = options.timeout.value_or(default_timeout);
   request.headers = options.headers;
   request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  request.headers["Content-Type"] = "application/json";
+  if (!request.body.empty()) {
+    request.headers[std::string(core::http::kContentTypeHeaderName)] =
+        std::string(core::http::kContentTypeApplicationJson);
+  }
   request.headers["Accept"] = "text/event-stream";
   request.mtls = options.mtls;
 
