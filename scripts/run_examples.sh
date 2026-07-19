@@ -55,6 +55,34 @@ find_example_binary() {
   return 1
 }
 
+contains_app() {
+  local target="$1"
+  local app
+  for app in "${APPS[@]}"; do
+    if [[ "${app}" == "${target}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+print_streaming_pair_instructions() {
+  local server_build_dir="${build_prefix}-streaming_server"
+  local client_build_dir="${build_prefix}-streaming_client"
+  local server_binary
+  local client_binary
+  server_binary="$(find_example_binary "${server_build_dir}" "${build_config}")"
+  client_binary="$(find_example_binary "${client_build_dir}" "${build_config}")"
+
+  echo
+  echo "[run_examples] streaming server and client are built and smoke-checked."
+  echo "[run_examples] terminal 1 - start the server:"
+  echo "  ./${server_binary}"
+  echo "[run_examples] terminal 2 - send a streaming request:"
+  echo "  ./${client_binary} --transport http_json --endpoint http://127.0.0.1:8080/a2a --operation send --timeout-ms 10000"
+  echo "[run_examples] stop the server with Ctrl+C."
+}
+
 # Backward compatibility: the legacy runner accepted an optional build directory
 # as its first positional argument. Treat a first argument that is not an app
 # name as the build prefix and use any remaining arguments as apps.
@@ -128,14 +156,19 @@ for app in "${APPS[@]}"; do
   fi
   cmake "${build_args[@]}"
 
-  echo "[run_examples] running ${app}"
   if ! example_binary="$(find_example_binary "${build_dir}" "${build_config}")"; then
     echo "[run_examples] built executable was not found under ${build_dir}" >&2
     exit 1
   fi
   if [[ "${app}" == "streaming_client" || "${app}" == "streaming_server" ]]; then
+    echo "[run_examples] smoke-checking ${app} with --help"
     "${example_binary}" --help
   else
+    echo "[run_examples] running ${app}"
     "${example_binary}"
   fi
 done
+
+if contains_app streaming_server && contains_app streaming_client; then
+  print_streaming_pair_instructions
+fi
