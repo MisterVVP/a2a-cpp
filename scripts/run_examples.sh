@@ -133,7 +133,7 @@ for app in "${APPS[@]}"; do
     echo "[run_examples] built executable was not found under ${build_dir}" >&2
     exit 1
   fi
-  if [[ "${app}" == "streaming_client" ]]; then
+  if [[ "${app}" == "streaming_client" || "${app}" == "streaming_server" ]]; then
     "${example_binary}" --help
   else
     "${example_binary}"
