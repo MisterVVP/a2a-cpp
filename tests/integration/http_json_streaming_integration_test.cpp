@@ -47,8 +47,8 @@ a2a::core::Result<HttpClientResponse> UnusedHttpRequester(const HttpRequest& req
 }
 
 a2a::core::Result<HttpClientResponse> EmitSseChunks(const std::vector<std::string>& chunks,
-                                                     const a2a::client::HttpStreamMetadataHandler& on_metadata,
-                                                     const a2a::client::HttpStreamChunkHandler& on_chunk) {
+                                                    const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                                    const a2a::client::HttpStreamChunkHandler& on_chunk) {
   HttpClientResponse response{
       .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}}, .body = ""};
   const auto metadata = on_metadata(response);
@@ -65,7 +65,7 @@ a2a::core::Result<HttpClientResponse> EmitSseChunks(const std::vector<std::strin
 }
 
 a2a::core::Result<HttpClientResponse> EmitMetadataOnly(HttpClientResponse response,
-                                                        const a2a::client::HttpStreamMetadataHandler& on_metadata) {
+                                                       const a2a::client::HttpStreamMetadataHandler& on_metadata) {
   const auto metadata = on_metadata(response);
   if (!metadata.ok()) {
     return metadata.error();
@@ -77,10 +77,10 @@ a2a::core::Result<HttpClientResponse> CaptureRequestAndEmitMetadata(
     std::promise<HttpRequest>& request_promise, const HttpRequest& request,
     const a2a::client::HttpStreamMetadataHandler& on_metadata) {
   request_promise.set_value(request);
-  return EmitMetadataOnly(
-      HttpClientResponse{
-          .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}}, .body = ""},
-      on_metadata);
+  return EmitMetadataOnly(HttpClientResponse{.status_code = kHttpOk,
+                                             .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                                             .body = ""},
+                          on_metadata);
 }
 
 std::unique_ptr<HttpJsonTransport> MakeStreamingTransport(
@@ -303,8 +303,8 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolErr
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
                                 const a2a::client::HttpStreamChunkHandler& on_chunk,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return EmitSseChunks({"event: error\ndata: {\"code\":\"TASK_FAILED\",\"message\":\"boom\"}\n\n"},
-                             on_metadata, on_chunk);
+        return EmitSseChunks({"event: error\ndata: {\"code\":\"TASK_FAILED\",\"message\":\"boom\"}\n\n"}, on_metadata,
+                             on_chunk);
       });
 
   A2AClient client(std::move(transport));

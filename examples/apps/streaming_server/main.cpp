@@ -97,8 +97,8 @@ class OneShotStreamSession final : public a2a::server::ServerStreamSession {
 
 class ExampleExecutor final : public a2a::server::AgentExecutor {
  public:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
-      const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
     (void)context;
     if (!request.has_message()) {
       return a2a::core::Error::Validation("message is required");
@@ -213,9 +213,9 @@ int RunServer(std::string_view endpoint) {
 
   ExampleExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  auto agent_card =
-      a2a::core::AgentCardBuilder::RestPreset("Streaming Example Agent", a2a::server::BuildHttpUrl(host, port, kRestBasePath))
-          .Build();
+  auto agent_card = a2a::core::AgentCardBuilder::RestPreset("Streaming Example Agent",
+                                                            a2a::server::BuildHttpUrl(host, port, kRestBasePath))
+                        .Build();
   agent_card.mutable_capabilities()->set_streaming(true);
   a2a::server::RestServerTransport server(
       &dispatcher, std::move(agent_card),
