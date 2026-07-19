@@ -38,6 +38,8 @@ constexpr char kRestBasePath[] = "/a2a";
 constexpr char kTaskId[] = "example-task-1";
 constexpr char kContextId[] = "example-context-1";
 constexpr char kAgentReply[] = "ack";
+constexpr char kTaskIdRequiredMessage[] = "task id is required";
+constexpr char kTaskNotFoundMessage[] = "task not found";
 constexpr int kListenBacklog = 16;
 constexpr int kReuseAddress = 1;
 volatile std::sig_atomic_t kKeepRunning = 1;
@@ -128,6 +130,42 @@ class ExampleExecutor final : public a2a::server::AgentExecutor {
     event.mutable_status_update()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
     std::unique_ptr<a2a::server::ServerStreamSession> stream = std::make_unique<OneShotStreamSession>(std::move(event));
     return stream;
+  }
+
+  a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                a2a::server::RequestContext& context) override {
+    (void)context;
+    if (request.id().empty()) {
+      return a2a::core::Error::Validation(kTaskIdRequiredMessage);
+    }
+    if (task_.id().empty() || request.id() != task_.id()) {
+      return a2a::core::Error::Validation(kTaskNotFoundMessage);
+    }
+    return task_;
+  }
+
+  a2a::core::Result<a2a::server::ListTasksResponse> ListTasks(const a2a::server::ListTasksRequest& request,
+                                                              a2a::server::RequestContext& context) override {
+    (void)request;
+    (void)context;
+    a2a::server::ListTasksResponse response;
+    if (!task_.id().empty()) {
+      response.tasks.push_back(task_);
+    }
+    return response;
+  }
+
+  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                   a2a::server::RequestContext& context) override {
+    (void)context;
+    if (request.id().empty()) {
+      return a2a::core::Error::Validation(kTaskIdRequiredMessage);
+    }
+    if (task_.id().empty() || request.id() != task_.id()) {
+      return a2a::core::Error::Validation(kTaskNotFoundMessage);
+    }
+    task_.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
+    return task_;
   }
 
  private:
