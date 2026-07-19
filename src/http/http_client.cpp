@@ -65,6 +65,8 @@ constexpr std::string_view kMissingStreamChunkCallbackMessage = "HTTP stream chu
 constexpr std::string_view kMissingStreamCancellationCallbackMessage = "HTTP stream cancellation callback is required";
 constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
+constexpr long kHttpInformationalStatusMin = 100;
+constexpr long kHttpInformationalStatusMax = 199;
 constexpr int kStreamPollTimeoutMs = 100;
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
@@ -227,6 +229,11 @@ std::optional<Header> ParseHeaderLine(std::string_view line) {
   return Header{.name = std::move(name), .value = std::string(value)};
 }
 
+struct StreamHeaderContext final {
+  detail::HeaderCapture* header_capture = nullptr;
+  detail::StreamCallbackContext* stream_context = nullptr;
+};
+
 size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
   auto* capture = static_cast<detail::HeaderCapture*>(user_data);
   const std::size_t byte_count = size * nmemb;
@@ -254,6 +261,36 @@ core::Result<void> ValidateStreamMetadata(detail::StreamCallbackContext* context
         .status_code = static_cast<int>(capture.response_code), .headers = *capture.response_headers, .body = {}});
   }
   return {};
+}
+
+size_t WriteStreamResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
+  auto* context = static_cast<StreamHeaderContext*>(user_data);
+  detail::HeaderCapture& capture = *context->header_capture;
+  const std::size_t byte_count = size * nmemb;
+  const std::string_view line(contents, byte_count);
+  if (line.starts_with(kHttpStatusLinePrefix)) {
+    capture.response_headers->clear();
+    capture.response_code = ParseHttpStatusCode(line).value_or(kHttpResponseCodeUnset);
+    return byte_count;
+  }
+  const auto header = ParseHeaderLine(line);
+  if (header.has_value()) {
+    capture.response_headers->push_back(header.value());
+    return byte_count;
+  }
+  if (context->stream_context->metadata_checked || !TrimHeaderValue(line).empty()) {
+    return byte_count;
+  }
+  if (capture.response_code >= kHttpInformationalStatusMin && capture.response_code <= kHttpInformationalStatusMax) {
+    return byte_count;
+  }
+  const auto metadata = ValidateStreamMetadata(context->stream_context);
+  if (!metadata.ok()) {
+    context->stream_context->error = metadata.error();
+    return 0;
+  }
+  context->stream_context->metadata_checked = true;
+  return byte_count;
 }
 
 size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_data) {
@@ -311,19 +348,37 @@ core::Result<long> MapHttpVersion(std::string_view http_version) {
   return core::Error::Validation(std::string(kUnsupportedHttpVersionMessage));
 }
 
+core::Result<void> ConfigureCurlMethodAndBody(CURL* handle, const Request& request) {
+  if (request.method == core::http::kMethodGet && request.body.empty()) {
+    if (curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L) != CURLE_OK) {
+      return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+    }
+    return {};
+  }
+
+  const auto set_method = curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, request.method.c_str());
+  const auto set_body = curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str());
+  const auto set_body_size =
+      curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
+  if (set_method != CURLE_OK || set_body != CURLE_OK || set_body_size != CURLE_OK) {
+    return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+  }
+  return {};
+}
+
 core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
                                  std::string* response_body, detail::HeaderCapture* response_headers) {
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();
   }
+  const auto method_and_body = ConfigureCurlMethodAndBody(handle, request);
+  if (!method_and_body.ok()) {
+    return method_and_body.error();
+  }
 
   const auto set_url = curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str());
-  const auto set_method = curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, request.method.c_str());
   const auto set_headers = curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers.get());
-  const auto set_body = curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str());
-  const auto set_body_size =
-      curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
   const auto set_timeout = curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count()));
   const auto set_connect_timeout =
       curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(request.timeout.count()));
@@ -334,10 +389,11 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
   const auto set_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, response_headers);
   const auto set_http_version = curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, http_version.value());
   const auto set_tls_minimum = curl_easy_setopt(handle, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
-  if (set_url != CURLE_OK || set_method != CURLE_OK || set_headers != CURLE_OK || set_body != CURLE_OK ||
-      set_body_size != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
+  const auto set_suppress_connect_headers = curl_easy_setopt(handle, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L);
+  if (set_url != CURLE_OK || set_headers != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
       set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK || set_header != CURLE_OK ||
-      set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK) {
+      set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK ||
+      set_suppress_connect_headers != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   return {};
@@ -507,6 +563,12 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &header_capture);
   if (!configured.ok()) {
     return configured.error();
+  }
+  StreamHeaderContext stream_header_context{.header_capture = &header_capture, .stream_context = &stream_context};
+  const auto set_stream_header = curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, WriteStreamResponseHeader);
+  const auto set_stream_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, &stream_header_context);
+  if (set_stream_header != CURLE_OK || set_stream_header_data != CURLE_OK) {
+    return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   const auto performed = PerformStreamingTransfer(handle, is_cancelled);
   if (!performed.ok()) {

@@ -29,6 +29,7 @@ PACKAGES=(
   ninja-build
   pkg-config
   curl
+  netcat-openbsd
   ca-certificates
   git
   protobuf-compiler
