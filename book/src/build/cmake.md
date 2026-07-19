@@ -22,6 +22,12 @@ On macOS, install equivalent packages with Homebrew:
 brew install cmake ninja protobuf grpc re2 abseil curl
 ```
 
+On Windows, install Visual Studio 2022 with the **Desktop development with C++** workload and Git for Windows. Then run the repository dependency helper from Git Bash:
+
+```bash
+./scripts/install_build_deps.sh
+```
+
 ## Configure from source
 
 The default source build enables tests, keeps the curated example apps out of the top-level build, and enables libcurl-backed HTTP support when CMake can find `CURL::libcurl`.
@@ -43,9 +49,18 @@ cmake -S . -B build \
 
 ## Build and test
 
+Single-configuration generators:
+
 ```bash
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
+```
+
+Visual Studio generators from Git Bash:
+
+```bash
+cmake --build build --config RelWithDebInfo --parallel
+ctest --test-dir build -C RelWithDebInfo --output-on-failure
 ```
 
 For the repository's full local code validation flow, run:
@@ -145,27 +160,24 @@ Most applications should link the smallest set they use. The examples link `a2a:
 
 ## Build the curated examples
 
-Use the FetchContent example when testing source consumption:
+Use the repository runner for FetchContent examples:
 
 ```bash
-cmake -S examples/fetch_content_consumer -B build-example \
-  -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-example --parallel
-./build-example/a2a_example
+./scripts/run_examples.sh build-example hello_agent
 ```
 
-Use the installed-package example when testing package consumption:
+When `VCPKG_ROOT` is set, the runner forwards the vcpkg toolchain and optional target/host triplets. It builds `RelWithDebInfo` by default and finds either `build-example-hello_agent/a2a_example` or the Visual Studio output at `build-example-hello_agent/RelWithDebInfo/a2a_example.exe`.
+
+Windows Git Bash:
 
 ```bash
-cmake -S examples/installed_package_consumer -B build-installed-example \
-  -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-install \
-  -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-installed-example --parallel
-./build-installed-example/a2a_example
+./scripts/install_build_deps.sh
+rm -rf build-example-hello_agent
+./scripts/run_examples.sh build-example hello_agent
 ```
 
 ## Platform notes
 
 - Linux CI configures with CMake and validates build, tests, examples, clang-format, clang-tidy, coverage, and selected sanitizer/interop flows.
 - macOS CI builds with Homebrew-provided dependencies and Ninja.
-- Windows CI uses vcpkg manifest dependencies and the Visual Studio 2022 generator. See [vcpkg](vcpkg.md) for manifest, triplet, and overlay details.
+- Windows CI and local Windows builds use vcpkg manifest dependencies and the Visual Studio 2022 generator. See [vcpkg](vcpkg.md) for the helper script, manifest, triplet, and overlay details.

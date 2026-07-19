@@ -7,21 +7,61 @@ This page reflects the current build surface for the latest documented release.
 Install these tools before configuring the repository:
 
 - CMake 3.25 or newer.
-- A C++20 compiler, tested primarily with GCC and Clang.
+- A C++20 compiler: GCC, Clang, AppleClang, or Visual Studio 2022.
 - Protobuf with `protoc`.
 - gRPC C++ with `grpc_cpp_plugin`.
+- libcurl when using the built-in HTTP, JSON-RPC, or SSE clients.
 - `clang-format` and `clang-tidy` for contributor validation.
 - Optional: Doxygen for API reference generation.
-- Optional: libcurl for built-in outbound HTTP support.
 - Optional: PostgreSQL client libraries when building PostgreSQL-backed stores.
 
+### Debian or Ubuntu
+
+```bash
+./scripts/install_build_deps.sh
+```
+
+The Bash installer intentionally supports Debian/Ubuntu only.
+
+### macOS
+
+```bash
+brew install cmake ninja protobuf grpc re2 abseil curl
+```
+
+### Windows Git Bash
+
+Install Visual Studio 2022 with the **Desktop development with C++** workload and Git for Windows. Open Git Bash in the repository root and run:
+
+```bash
+./scripts/install_build_deps.sh
+```
+
+The script uses `${VCPKG_ROOT:-$HOME/vcpkg}`, bootstraps vcpkg through `bootstrap-vcpkg.bat`, and installs the dependencies declared by the root `vcpkg.json`. Override `VCPKG_ROOT`, `VCPKG_TARGET_TRIPLET`, or `VCPKG_HOST_TRIPLET` before running it when needed.
+
 ## Configure from source
+
+On Linux or macOS:
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
+
+On Windows Git Bash:
+
+```bash
+export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
+export VCPKG_TARGET_TRIPLET="${VCPKG_TARGET_TRIPLET:-x64-windows}"
+export VCPKG_HOST_TRIPLET="${VCPKG_HOST_TRIPLET:-$VCPKG_TARGET_TRIPLET}"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET" \
+  -DVCPKG_HOST_TRIPLET="$VCPKG_HOST_TRIPLET"
+```
+
+If a build directory was first configured without the vcpkg toolchain, delete it before reconfiguring. CMake caches the toolchain during the first configure.
 
 Useful options:
 
@@ -30,14 +70,23 @@ Useful options:
 | `A2A_ENABLE_TESTING` | `ON` | Builds unit and integration tests. |
 | `A2A_BUILD_EXAMPLES` | `ON` | Keeps the root project compatible with example-related CI messaging; curated examples are built as standalone consumers. |
 | `A2A_BUILD_BENCHMARKS` | `OFF` | Builds the optional Google Benchmark suite. |
-| `A2A_ENABLE_LIBCURL` | `ON` | Enables default buffered outbound HTTP when `CURL::libcurl` is found. |
+| `A2A_ENABLE_LIBCURL` | `ON` | Enables default outbound HTTP and SSE support when `CURL::libcurl` is found. |
 | `A2A_ENABLE_POSTGRES_STORE` | `OFF` | Builds PostgreSQL task and push-notification stores. |
 
 ## Build and test
 
+Linux or macOS:
+
 ```bash
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
+```
+
+Windows Visual Studio generators are multi-configuration; run these commands from Git Bash:
+
+```bash
+cmake --build build --config RelWithDebInfo --parallel
+ctest --test-dir build -C RelWithDebInfo --output-on-failure
 ```
 
 Generate only protobuf outputs when needed:
@@ -53,6 +102,8 @@ Generated headers are written under `build/generated/a2a/v1/` and are installed 
 ```bash
 cmake --install build --prefix /tmp/a2a-cpp-install
 ```
+
+On a Visual Studio build, also pass `--config RelWithDebInfo`.
 
 The install tree includes public headers, generated protobuf headers, libraries, and CMake package files under `lib/cmake/a2a_cpp`.
 

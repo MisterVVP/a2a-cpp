@@ -1,35 +1,51 @@
 # Quickstart: Build and Run Examples
 
-The fastest way to exercise the SDK is through the curated consumer examples. They build the example app sources the same way downstream applications consume the SDK.
+The curated examples build app sources the same way downstream applications consume the SDK.
 
-## 1. Run the smallest end-to-end example
+## 1. Install dependencies
+
+Follow the platform instructions in [Installation and Build](installation.md). On Windows, run the repository helper from Git Bash before the example runner:
 
 ```bash
-cmake -S examples/fetch_content_consumer -B build-example \
-  -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-example --parallel
-./build-example/a2a_example
+./scripts/install_build_deps.sh
 ```
+
+## 2. Run the smallest end-to-end example
+
+Linux or macOS:
+
+```bash
+./scripts/run_examples.sh build-example hello_agent
+```
+
+Windows Git Bash cleanup and rebuild:
+
+```bash
+rm -rf build-example-hello_agent
+./scripts/run_examples.sh build-example hello_agent
+```
+
+The executable is written to `build-example-hello_agent/a2a_example` on single-configuration generators and to `build-example-hello_agent/RelWithDebInfo/a2a_example.exe` with Visual Studio.
 
 `hello_agent` creates a minimal in-process client/server flow and exits deterministically.
 
-## 2. Try transport-specific examples
+## 3. Try transport-specific examples
 
 ```bash
-./scripts/run_examples.sh rest_server json_rpc_server grpc_server
+./scripts/run_examples.sh build-example rest_server json_rpc_server grpc_server
 ```
 
 These examples cover server transport setup and deterministic request handling across REST, JSON-RPC, and gRPC.
 
-## 3. Try streaming, push, and auth examples
+## 4. Try streaming, push, and auth examples
 
 ```bash
-./scripts/run_examples.sh streaming_client streaming_server push_notifications auth_policy_server
+./scripts/run_examples.sh build-example streaming_client streaming_server push_notifications auth_policy_server
 ```
 
-Use these when validating event streams, webhook configuration flows, or server-side auth metadata policy shapes.
+Use these when validating event streams, webhook configuration flows, or server-side auth metadata policy shapes. On Windows, the runner automatically forwards the vcpkg toolchain and locates the Visual Studio configuration output when `VCPKG_ROOT` is set.
 
-## 4. Consume an installed SDK package
+## 5. Consume an installed SDK package
 
 After installing the SDK into a prefix, build the same app source with `find_package(a2a_cpp CONFIG REQUIRED)`:
 
@@ -41,7 +57,9 @@ cmake --build build-installed-example --parallel
 ./build-installed-example/a2a_example
 ```
 
-## 5. Validate your local checkout
+For Visual Studio, add `--config RelWithDebInfo` to the build and run `build-installed-example/RelWithDebInfo/a2a_example.exe`.
+
+## 6. Validate your local checkout
 
 ```bash
 ./scripts/verify_changes.sh

@@ -803,6 +803,12 @@ if(Python3_Interpreter_FOUND)
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
   )
+  add_test(
+    NAME run_examples_script_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_examples_script_test.py
+            ${CMAKE_SOURCE_DIR}/scripts/run_examples.sh
+            ${CMAKE_SOURCE_DIR}/scripts/install_build_deps.sh
+  )
 endif()
 
 add_executable(a2a_performance_driver
