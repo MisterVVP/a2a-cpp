@@ -10,33 +10,61 @@ The SDK always requires gRPC and Protobuf. This example also requires libcurl fo
 - macOS: run `brew install cmake ninja protobuf grpc re2 abseil curl`.
 - Windows: use Visual Studio 2022 with the Desktop development with C++ workload and Git for Windows. Run `./scripts/install_build_deps.sh` from Git Bash.
 
-## Build on Linux or macOS
+## Build the client and example server
+
+Linux or macOS:
 
 ```bash
-./scripts/run_examples.sh build-example streaming_client
+./scripts/run_examples.sh build-example streaming_server streaming_client
 ```
 
-The executable is written to `./build-example-streaming_client/a2a_example`. The runner invokes it with `--help` as a smoke check.
+The runner builds both programs and invokes their `--help` modes as non-blocking smoke checks. It does not leave the server running.
 
-## Build on Windows
-
-From Git Bash in the repository root:
+Windows Git Bash:
 
 ```bash
 ./scripts/install_build_deps.sh
-rm -rf build-example-streaming_client
-./scripts/run_examples.sh build-example streaming_client
+rm -rf build-example-streaming_server build-example-streaming_client
+./scripts/run_examples.sh build-example streaming_server streaming_client
 ```
 
 The dependency script bootstraps vcpkg under `${VCPKG_ROOT:-$HOME/vcpkg}`, installs the root manifest's gRPC, Protobuf, and curl dependencies, and defaults both triplets to `x64-windows`. The example runner uses the same defaults, passes the vcpkg CMake toolchain, builds `RelWithDebInfo`, and locates the Visual Studio multi-configuration output automatically.
 
-Verify the executable directly with:
+Delete an example build directory before retrying if it was previously configured without `CMAKE_TOOLCHAIN_FILE`; CMake caches the toolchain during the first configure.
+
+## Run the paired examples
+
+Terminal 1 — start the HTTP+JSON SSE server:
 
 ```bash
-./build-example-streaming_client/RelWithDebInfo/a2a_example.exe --help
+./build-example-streaming_server/a2a_example
 ```
 
-Delete the example build directory before retrying if it was previously configured without `CMAKE_TOOLCHAIN_FILE`; CMake caches the toolchain during the first configure.
+Terminal 2 — send a streaming request:
+
+```bash
+./build-example-streaming_client/a2a_example \
+  --transport http_json \
+  --endpoint http://127.0.0.1:8080/a2a \
+  --operation send \
+  --timeout-ms 10000
+```
+
+On Windows Git Bash, use:
+
+```bash
+./build-example-streaming_server/RelWithDebInfo/a2a_example.exe
+```
+
+```bash
+./build-example-streaming_client/RelWithDebInfo/a2a_example.exe \
+  --transport http_json \
+  --endpoint http://127.0.0.1:8080/a2a \
+  --operation send \
+  --timeout-ms 10000
+```
+
+Stop the server with `Ctrl+C`. See [`../streaming_server/README.md`](../streaming_server/README.md) for custom listen addresses and server details.
 
 ## Usage
 
@@ -88,6 +116,8 @@ JSON-RPC:
   --timeout-ms 10000
 ```
 
+The repository's `streaming_server` example currently exposes HTTP+JSON SSE. Use a JSON-RPC-capable server for the JSON-RPC command.
+
 ### Subscribe to an existing task
 
 ```bash
@@ -108,7 +138,3 @@ Add `--cancel-after-first-event` to demonstrate explicit cancellation after the 
 ## Output and lifecycle notes
 
 The example prints every supported stream variant: `Task`, `TaskStatusUpdateEvent`, and `TaskArtifactUpdateEvent`. Observer callbacks run on the transport worker thread, so the observer is kept alive until completion, error, cancellation, or timeout. The wait is bounded by `--timeout-ms`; a timeout cancels the stream and returns non-zero.
-
-## Running against the repository SUT
-
-Start the local REST or JSON-RPC example server in another terminal, note its loopback port and endpoint, then run one of the commands above. Use the REST `/a2a` endpoint with `--transport http_json` and the JSON-RPC `/rpc` endpoint with `--transport jsonrpc`.
