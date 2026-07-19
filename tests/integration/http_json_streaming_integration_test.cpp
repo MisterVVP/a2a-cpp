@@ -36,6 +36,8 @@ constexpr int kStreamLoopMaxIterations = 100;
 constexpr int kCancelDelayMs = 30;
 constexpr std::chrono::milliseconds kRequestCaptureTimeout{2000};
 constexpr std::string_view kAcceptHeaderName = "Accept";
+constexpr std::string_view kUpstreamFailureCode = "UPSTREAM_FAILURE";
+constexpr std::string_view kUpstreamFailureBody = R"({"code":"UPSTREAM_FAILURE","message":"upstream failed"})";
 
 ResolvedInterface MakeResolvedRest();
 
@@ -319,16 +321,25 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolErr
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) {
+TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusPreservesJsonErrorBody) {
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
-                                const a2a::client::HttpStreamChunkHandler&,
+                                const a2a::client::HttpStreamChunkHandler& on_chunk,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        return EmitMetadataOnly(
-            HttpClientResponse{.status_code = kHttpBadGateway,
-                               .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
-                               .body = R"({"code":"UPSTREAM_FAILURE"})"},
-            on_metadata);
+        HttpClientResponse response{.status_code = kHttpBadGateway,
+                                    .headers = {{"A2A-Version", "1.0"},
+                                                {std::string(a2a::core::http::kContentTypeHeaderName),
+                                                 std::string(a2a::core::http::kContentTypeApplicationJson)}},
+                                    .body = ""};
+        const auto metadata = on_metadata(response);
+        if (!metadata.ok()) {
+          return metadata.error();
+        }
+        const auto body = on_chunk(kUpstreamFailureBody);
+        if (!body.ok()) {
+          return body.error();
+        }
+        return response;
       });
 
   A2AClient client(std::move(transport));
@@ -345,6 +356,8 @@ TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusMapsToObserverError) 
   EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
   ASSERT_TRUE(observer.errors.front().http_status().has_value());
   EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
+  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), kUpstreamFailureCode);
+  EXPECT_NE(observer.errors.front().message().find(kUpstreamFailureBody), std::string::npos);
   EXPECT_FALSE(observer.completed);
 }
 

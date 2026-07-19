@@ -33,6 +33,23 @@ export VCPKG_ROOT="$HOME/vcpkg"
 $env:VCPKG_ROOT = 'C:\vcpkg'
 ```
 
+### Repository helper on Windows Git Bash
+
+From the repository root, the Bash helper clones, bootstraps, and installs the vcpkg manifest dependencies:
+
+```bash
+./scripts/install_build_deps.sh
+```
+
+The default vcpkg checkout is `$HOME/vcpkg`; no fixed `C:/vcpkg` location is required. Override the root or triplets with environment variables:
+
+```bash
+export VCPKG_ROOT=/d/tools/vcpkg
+export VCPKG_TARGET_TRIPLET=x64-windows-static
+export VCPKG_HOST_TRIPLET=x64-windows
+./scripts/install_build_deps.sh
+```
+
 ## Build this repository with manifest dependencies
 
 From the repository root, let vcpkg install the manifest dependencies and then configure CMake with the vcpkg toolchain file:
@@ -81,6 +98,19 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
   -DVCPKG_TARGET_TRIPLET=ci-x64-windows-release `
   -DVCPKG_HOST_TRIPLET=ci-x64-windows-release
 ```
+
+## Build standalone FetchContent examples on Windows
+
+The example runner uses the already-installed root manifest dependencies. It automatically passes the vcpkg toolchain and triplets when `VCPKG_ROOT` is set:
+
+```bash
+./scripts/install_build_deps.sh
+rm -rf build-example-streaming_client
+./scripts/run_examples.sh build-example streaming_client
+./build-example-streaming_client/RelWithDebInfo/a2a_example.exe --help
+```
+
+Delete a build directory that was configured before the toolchain was supplied; changing `CMAKE_TOOLCHAIN_FILE` in an existing CMake cache is not reliable.
 
 ## Consume `a2a-cpp` through the repository overlay port
 
@@ -182,3 +212,5 @@ New-Item -ItemType Directory -Force C:\vcpkg-binary-cache | Out-Null
 - **Unexpected manifest behavior in classic mode**: classic `vcpkg install a2a-cpp` should be run outside directories containing `vcpkg.json`, otherwise vcpkg switches to manifest mode.
 - **Different host and target triplets**: pass both `VCPKG_TARGET_TRIPLET` and `VCPKG_HOST_TRIPLET` when cross-compiling or when CI uses a custom host triplet.
 - **Slow clean builds**: enable binary caching and prefer release-only dependency triplets for CI jobs that only link release configurations.
+- **Example executable is not in the build root on Windows**: Visual Studio is multi-configuration; use `build-example-<app>/RelWithDebInfo/a2a_example.exe`, or let `scripts/run_examples.sh` locate and run it.
+- **The dependency helper reports an unsupported shell on Windows**: run `scripts/install_build_deps.sh` from Git Bash rather than another Windows shell.

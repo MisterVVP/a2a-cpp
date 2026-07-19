@@ -42,20 +42,50 @@ Both default HTTP transports use the shared libcurl-backed SSE requester. Custom
 
 See `examples/apps/streaming_client/main.cpp` and `tests/functional/examples_functional_test.cpp`.
 
-## Production streaming client example
+## Build the production streaming client
 
-`examples/apps/streaming_client/main.cpp` demonstrates production default transports for both HTTP+JSON and JSON-RPC. Build it with the repository example runner:
+The SDK build requires gRPC and Protobuf even when the example uses an HTTP transport. The default HTTP streaming transports additionally require libcurl.
+
+On Debian or Ubuntu, install dependencies and build the example with:
 
 ```bash
+./scripts/install_build_deps.sh
 ./scripts/run_examples.sh build-example streaming_client
 ```
 
-Then point the generated client at a server whose Agent Card advertises `capabilities.streaming: true`:
+On macOS:
+
+```bash
+brew install cmake ninja protobuf grpc re2 abseil curl
+./scripts/run_examples.sh build-example streaming_client
+```
+
+On Windows, install Visual Studio 2022 with the C++ workload and use Git Bash:
+
+```bash
+./scripts/install_build_deps.sh
+rm -rf build-example-streaming_client
+./scripts/run_examples.sh build-example streaming_client
+```
+
+The Windows cleanup step is required when that build directory was previously configured without the vcpkg toolchain. The executable is placed under the selected Visual Studio configuration:
+
+```bash
+./build-example-streaming_client/RelWithDebInfo/a2a_example.exe --help
+```
+
+On single-configuration generators, use `./build-example-streaming_client/a2a_example`.
+
+## Run the client
+
+Point the generated client at a server whose Agent Card advertises `capabilities.streaming: true`:
 
 ```bash
 ./build-example-streaming_client/a2a_example --transport http_json --endpoint http://127.0.0.1:8080/a2a --operation send --timeout-ms 10000
 ./build-example-streaming_client/a2a_example --transport jsonrpc --endpoint http://127.0.0.1:8080/rpc --operation send --timeout-ms 10000
 ./build-example-streaming_client/a2a_example --transport http_json --endpoint http://127.0.0.1:8080/a2a --operation subscribe --task-id task-123 --timeout-ms 10000
 ```
+
+On Windows, replace the executable path with `./build-example-streaming_client/RelWithDebInfo/a2a_example.exe` when running from Git Bash.
 
 The example prints `Task`, status-update, and artifact-update variants, keeps the observer alive for the full stream lifetime, uses a bounded condition-variable wait, and returns non-zero on timeout or `OnError`. Add `--cancel-after-first-event` to request cancellation after the first event.

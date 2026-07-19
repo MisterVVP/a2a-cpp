@@ -266,6 +266,7 @@ struct HttpSseSession final {
   SseParser parser;
   HttpClientResponse response_metadata;
   bool metadata_validated = false;
+  bool collecting_error_body = false;
 
   core::Result<void> ValidateMetadata(const HttpClientResponse& response) {
     response_metadata = response;
@@ -274,7 +275,9 @@ struct HttpSseSession final {
       return version_check.error();
     }
     if (response_metadata.status_code < kHttpOkMin || response_metadata.status_code > kHttpOkMax) {
-      return BuildHttpError(method, endpoint, response_metadata);
+      collecting_error_body = true;
+      metadata_validated = true;
+      return {};
     }
     if (!HasSseContentType(response_metadata.headers)) {
       return core::Error::RemoteProtocol("HTTP stream response must use text/event-stream")
@@ -292,6 +295,10 @@ struct HttpSseSession final {
     if (!metadata_validated) {
       return core::Error::RemoteProtocol("HTTP stream metadata must be validated before body chunks")
           .WithTransport("http");
+    }
+    if (collecting_error_body) {
+      response_metadata.body.append(chunk);
+      return {};
     }
     return parser.Feed(chunk, [this](const SseEvent& event) -> core::Result<void> {
       if (state->cancel_requested.load()) {
@@ -320,6 +327,13 @@ struct HttpSseSession final {
         NotifyErrorAndStop(*state, *observer, metadata.error());
         return;
       }
+    }
+    if (collecting_error_body) {
+      if (response_metadata.body.empty()) {
+        response_metadata.body = response.value().body;
+      }
+      NotifyErrorAndStop(*state, *observer, BuildHttpError(method, endpoint, response_metadata));
+      return;
     }
     const auto finish = parser.Finish([this](const SseEvent& event) -> core::Result<void> {
       if (state->cancel_requested.load()) {
