@@ -411,8 +411,15 @@ namespace {
 constexpr std::chrono::milliseconds kStreamWaitTimeout{1000};
 constexpr std::chrono::milliseconds kStreamPollInterval{1};
 constexpr std::string_view kTerminalTaskErrorMessage = "task is already terminal";
+constexpr std::string_view kTerminalTaskErrorProtocolCode = "-32603";
 constexpr std::string_view kTerminalTaskErrorEnvelope =
     R"({"jsonrpc":"2.0","id":"stream-1","error":{"code":-32603,"message":"task is already terminal"}})";
+constexpr std::string_view kCoalescedStreamEvents =
+    R"(data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-1"}}}
+
+data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
+
+)";
 
 class JsonRpcRecordingObserver final : public a2a::client::StreamObserver {
  public:
@@ -464,6 +471,38 @@ a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataOnly(
     return metadata.error();
   }
   return response;
+}
+
+a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataAndChunk(
+    HttpClientResponse response, std::string_view chunk, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+    const a2a::client::HttpStreamChunkHandler& on_chunk) {
+  const auto metadata = on_metadata(response);
+  if (!metadata.ok()) {
+    return metadata.error();
+  }
+
+  const auto chunk_result = on_chunk(chunk);
+  if (!chunk_result.ok()) {
+    return chunk_result.error();
+  }
+  return response;
+}
+
+a2a::core::Result<HttpClientResponse> EmitCoalescedJsonRpcEvents(
+    const HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+    const a2a::client::HttpStreamChunkHandler& on_chunk, const a2a::client::StreamCancelled& is_cancelled) {
+  (void)request;
+  (void)is_cancelled;
+  return EmitJsonRpcMetadataAndChunk(
+      HttpClientResponse{.status_code = kHttpOk,
+                         .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                         .body = ""},
+      kCoalescedStreamEvents, on_metadata, on_chunk);
+}
+
+void ExpectTerminalTaskErrorDetails(const a2a::core::Error& error) {
+  EXPECT_EQ(error.message(), kTerminalTaskErrorMessage);
+  EXPECT_EQ(error.protocol_code().value_or(""), kTerminalTaskErrorProtocolCode);
 }
 
 void ExpectSuccessfulStream(const HttpRequest& captured, JsonRpcRecordingObserver& observer) {
@@ -678,18 +717,11 @@ TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
       [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
          const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpBadGateway,
-                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "application/json"}},
-                                    .body = ""};
-        const auto metadata = on_metadata(response);
-        if (!metadata.ok()) {
-          return metadata.error();
-        }
-        const auto chunk = on_chunk(kTerminalTaskErrorEnvelope);
-        if (!chunk.ok()) {
-          return chunk.error();
-        }
-        return response;
+        return EmitJsonRpcMetadataAndChunk(
+            HttpClientResponse{.status_code = kHttpBadGateway,
+                               .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "application/json"}},
+                               .body = ""},
+            kTerminalTaskErrorEnvelope, on_metadata, on_chunk);
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
 
@@ -701,13 +733,9 @@ TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
   ASSERT_TRUE(stream.ok()) << stream.error().message();
   ASSERT_TRUE(observer.Wait());
 
-  EXPECT_FALSE(observer.completed);
-  EXPECT_TRUE(observer.events.empty());
+  ExpectSingleStreamError(observer, ErrorCode::kRemoteProtocol, kHttpBadGateway);
   ASSERT_EQ(observer.errors.size(), 1U);
-  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
-  EXPECT_EQ(observer.errors.front().message(), kTerminalTaskErrorMessage);
-  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), "-32603");
-  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
+  ExpectTerminalTaskErrorDetails(observer.errors.front());
 }
 
 TEST(JsonRpcTransportUnitTest, StreamingRejectsContentTypePrefixLookalike) {
@@ -966,34 +994,22 @@ class JsonRpcCancelFromEventObserver final : public a2a::client::StreamObserver 
   return !handle.IsActive();
 }
 
+void ExpectCancellationFromOnEventResult(std::future<void>& owner_cancel, bool owner_cancel_started,
+                                         JsonRpcCancelFromEventObserver& observer) {
+  EXPECT_TRUE(owner_cancel_started);
+  ASSERT_EQ(owner_cancel.wait_for(kStreamWaitTimeout), std::future_status::ready);
+  owner_cancel.get();
+  ASSERT_TRUE(observer.WaitForCallbackCancel());
+  EXPECT_EQ(observer.events(), 1);
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(observer.completions(), 0);
+}
+
 TEST(JsonRpcTransportUnitTest, CancellationFromOnEventStopsCoalescedFrames) {
-  constexpr std::string_view kCoalescedEvents =
-      R"(data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-1"}}}
-
-data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
-
-)";
-
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
       [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
-      [kCoalescedEvents](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
-                         const a2a::client::HttpStreamChunkHandler& on_chunk,
-                         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
-                                    .body = ""};
-        const auto metadata = on_metadata(response);
-        if (!metadata.ok()) {
-          return metadata.error();
-        }
-        const auto chunk = on_chunk(kCoalescedEvents);
-        if (!chunk.ok()) {
-          return chunk.error();
-        }
-        return response;
-      },
-      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+      EmitCoalescedJsonRpcEvents, JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
 
   A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest request;
@@ -1008,13 +1024,7 @@ data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
   const bool owner_cancel_started = WaitUntilInactive(*handle);
   observer.AllowCallbackCancel();
 
-  EXPECT_TRUE(owner_cancel_started);
-  ASSERT_EQ(owner_cancel.wait_for(kStreamWaitTimeout), std::future_status::ready);
-  owner_cancel.get();
-  ASSERT_TRUE(observer.WaitForCallbackCancel());
-  EXPECT_EQ(observer.events(), 1);
-  EXPECT_EQ(observer.errors(), 0);
-  EXPECT_EQ(observer.completions(), 0);
+  ExpectCancellationFromOnEventResult(owner_cancel, owner_cancel_started, observer);
 }
 
 }  // namespace
