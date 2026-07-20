@@ -30,8 +30,8 @@ Built-in HTTP+JSON and JSON-RPC SSE clients require libcurl support. Custom HTTP
 
 TCK validation snapshot:
 
-- 219 tests passed
-- 46 tests skipped
+- 249 tests passed
+- 16 tests skipped
 - 0 executed test failures
 - 100.0% compatibility for tested, non-skipped requirements
 
