@@ -414,6 +414,12 @@ constexpr std::string_view kTerminalTaskErrorMessage = "task is already terminal
 constexpr std::string_view kTerminalTaskErrorProtocolCode = "-32603";
 constexpr std::string_view kTerminalTaskErrorEnvelope =
     R"({"jsonrpc":"2.0","id":"stream-1","error":{"code":-32603,"message":"task is already terminal"}})";
+constexpr std::string_view kCoalescedStreamEvents =
+    R"(data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-1"}}}
+
+data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
+
+)";
 
 class JsonRpcRecordingObserver final : public a2a::client::StreamObserver {
  public:
@@ -480,6 +486,16 @@ a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataAndChunk(
     return chunk_result.error();
   }
   return response;
+}
+
+a2a::core::Result<HttpClientResponse> EmitCoalescedJsonRpcEvents(
+    const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+    const a2a::client::HttpStreamChunkHandler& on_chunk, const a2a::client::StreamCancelled&) {
+  return EmitJsonRpcMetadataAndChunk(
+      HttpClientResponse{.status_code = kHttpOk,
+                         .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
+                         .body = ""},
+      kCoalescedStreamEvents, on_metadata, on_chunk);
 }
 
 void ExpectTerminalTaskErrorDetails(const a2a::core::Error& error) {
@@ -976,34 +992,22 @@ class JsonRpcCancelFromEventObserver final : public a2a::client::StreamObserver 
   return !handle.IsActive();
 }
 
+void ExpectCancellationFromOnEventResult(std::future<void>& owner_cancel, bool owner_cancel_started,
+                                         JsonRpcCancelFromEventObserver& observer) {
+  EXPECT_TRUE(owner_cancel_started);
+  ASSERT_EQ(owner_cancel.wait_for(kStreamWaitTimeout), std::future_status::ready);
+  owner_cancel.get();
+  ASSERT_TRUE(observer.WaitForCallbackCancel());
+  EXPECT_EQ(observer.events(), 1);
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(observer.completions(), 0);
+}
+
 TEST(JsonRpcTransportUnitTest, CancellationFromOnEventStopsCoalescedFrames) {
-  constexpr std::string_view kCoalescedEvents =
-      R"(data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-1"}}}
-
-data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
-
-)";
-
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
       [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> { return a2a::core::Error::Internal("unused"); },
-      [kCoalescedEvents](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
-                         const a2a::client::HttpStreamChunkHandler& on_chunk,
-                         const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
-                                    .body = ""};
-        const auto metadata = on_metadata(response);
-        if (!metadata.ok()) {
-          return metadata.error();
-        }
-        const auto chunk = on_chunk(kCoalescedEvents);
-        if (!chunk.ok()) {
-          return chunk.error();
-        }
-        return response;
-      },
-      JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
+      EmitCoalescedJsonRpcEvents, JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
 
   A2AClient client(std::move(transport));
   lf::a2a::v1::SendMessageRequest request;
@@ -1018,13 +1022,7 @@ data: {"jsonrpc":"2.0","id":"stream-1","result":{"task":{"id":"task-2"}}}
   const bool owner_cancel_started = WaitUntilInactive(*handle);
   observer.AllowCallbackCancel();
 
-  EXPECT_TRUE(owner_cancel_started);
-  ASSERT_EQ(owner_cancel.wait_for(kStreamWaitTimeout), std::future_status::ready);
-  owner_cancel.get();
-  ASSERT_TRUE(observer.WaitForCallbackCancel());
-  EXPECT_EQ(observer.events(), 1);
-  EXPECT_EQ(observer.errors(), 0);
-  EXPECT_EQ(observer.completions(), 0);
+  ExpectCancellationFromOnEventResult(owner_cancel, owner_cancel_started, observer);
 }
 
 }  // namespace
