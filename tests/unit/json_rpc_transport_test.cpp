@@ -411,6 +411,7 @@ namespace {
 constexpr std::chrono::milliseconds kStreamWaitTimeout{1000};
 constexpr std::chrono::milliseconds kStreamPollInterval{1};
 constexpr std::string_view kTerminalTaskErrorMessage = "task is already terminal";
+constexpr std::string_view kTerminalTaskErrorProtocolCode = "-32603";
 constexpr std::string_view kTerminalTaskErrorEnvelope =
     R"({"jsonrpc":"2.0","id":"stream-1","error":{"code":-32603,"message":"task is already terminal"}})";
 
@@ -464,6 +465,26 @@ a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataOnly(
     return metadata.error();
   }
   return response;
+}
+
+a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataAndChunk(
+    HttpClientResponse response, std::string_view chunk, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+    const a2a::client::HttpStreamChunkHandler& on_chunk) {
+  const auto metadata = on_metadata(response);
+  if (!metadata.ok()) {
+    return metadata.error();
+  }
+
+  const auto chunk_result = on_chunk(chunk);
+  if (!chunk_result.ok()) {
+    return chunk_result.error();
+  }
+  return response;
+}
+
+void ExpectTerminalTaskErrorDetails(const a2a::core::Error& error) {
+  EXPECT_EQ(error.message(), kTerminalTaskErrorMessage);
+  EXPECT_EQ(error.protocol_code().value_or(""), kTerminalTaskErrorProtocolCode);
 }
 
 void ExpectSuccessfulStream(const HttpRequest& captured, JsonRpcRecordingObserver& observer) {
@@ -678,18 +699,11 @@ TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
       [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
          const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpBadGateway,
-                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "application/json"}},
-                                    .body = ""};
-        const auto metadata = on_metadata(response);
-        if (!metadata.ok()) {
-          return metadata.error();
-        }
-        const auto chunk = on_chunk(kTerminalTaskErrorEnvelope);
-        if (!chunk.ok()) {
-          return chunk.error();
-        }
-        return response;
+        return EmitJsonRpcMetadataAndChunk(
+            HttpClientResponse{.status_code = kHttpBadGateway,
+                               .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "application/json"}},
+                               .body = ""},
+            kTerminalTaskErrorEnvelope, on_metadata, on_chunk);
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "stream-1"; });
 
@@ -701,13 +715,9 @@ TEST(JsonRpcTransportUnitTest, StreamingJsonErrorEnvelopePreservesRemoteError) {
   ASSERT_TRUE(stream.ok()) << stream.error().message();
   ASSERT_TRUE(observer.Wait());
 
-  EXPECT_FALSE(observer.completed);
-  EXPECT_TRUE(observer.events.empty());
+  ExpectSingleStreamError(observer, ErrorCode::kRemoteProtocol, kHttpBadGateway);
   ASSERT_EQ(observer.errors.size(), 1U);
-  EXPECT_EQ(observer.errors.front().code(), ErrorCode::kRemoteProtocol);
-  EXPECT_EQ(observer.errors.front().message(), kTerminalTaskErrorMessage);
-  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), "-32603");
-  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
+  ExpectTerminalTaskErrorDetails(observer.errors.front());
 }
 
 TEST(JsonRpcTransportUnitTest, StreamingRejectsContentTypePrefixLookalike) {
