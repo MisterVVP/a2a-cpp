@@ -489,8 +489,10 @@ a2a::core::Result<HttpClientResponse> EmitJsonRpcMetadataAndChunk(
 }
 
 a2a::core::Result<HttpClientResponse> EmitCoalescedJsonRpcEvents(
-    const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
-    const a2a::client::HttpStreamChunkHandler& on_chunk, const a2a::client::StreamCancelled&) {
+    const HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
+    const a2a::client::HttpStreamChunkHandler& on_chunk, const a2a::client::StreamCancelled& is_cancelled) {
+  (void)request;
+  (void)is_cancelled;
   return EmitJsonRpcMetadataAndChunk(
       HttpClientResponse{.status_code = kHttpOk,
                          .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
