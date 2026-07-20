@@ -36,7 +36,7 @@ target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 
 ## Registry publishing preparation
 
-The overlay pins the upstream source to the stable `v0.2.0` release tag. For an official `microsoft/vcpkg` registry PR, copy the port files into `ports/a2a-cpp` in a `microsoft/vcpkg` fork and replace `vcpkg_from_git` with a release archive source:
+The overlay pins the upstream source to the stable `v0.3.0` release tag. For an official `microsoft/vcpkg` registry PR, copy the port files into `ports/a2a-cpp` in a `microsoft/vcpkg` fork and replace `vcpkg_from_git` with a release archive source:
 
 ```cmake
 vcpkg_from_github(

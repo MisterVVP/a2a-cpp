@@ -289,12 +289,14 @@ TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskBuildsBodylessGetRequest) {
   ASSERT_TRUE(observer.WaitForCompletion(kRequestCaptureTimeout));
   stream.value()->Cancel();
 
-  EXPECT_EQ(captured_request.method, a2a::core::http::kMethodGet);
-  EXPECT_TRUE(captured_request.body.empty());
-  EXPECT_FALSE(captured_request.headers.contains(std::string(a2a::core::http::kContentTypeHeaderName)));
   const auto accept = captured_request.headers.find(std::string(kAcceptHeaderName));
-  ASSERT_NE(accept, captured_request.headers.end());
-  EXPECT_EQ(accept->second, a2a::core::http::kContentTypeTextEventStream);
+  const bool has_expected_accept_header =
+      accept != captured_request.headers.end() && accept->second == a2a::core::http::kContentTypeTextEventStream;
+  const bool is_bodyless_get_request =
+      captured_request.method == a2a::core::http::kMethodGet && captured_request.body.empty() &&
+      !captured_request.headers.contains(std::string(a2a::core::http::kContentTypeHeaderName)) &&
+      has_expected_accept_header;
+  EXPECT_TRUE(is_bodyless_get_request);
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
