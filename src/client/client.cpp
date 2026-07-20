@@ -22,23 +22,31 @@ StreamHandle& StreamHandle::operator=(StreamHandle&&) noexcept = default;
 StreamHandle::~StreamHandle() { Cancel(); }
 
 void StreamHandle::Cancel() {
-  if (state_ != nullptr) {
-    state_->cancel_requested.store(true);
-    state_->active.store(false);
-    std::function<void()> cancel_callback;
-    {
-      std::lock_guard lock(state_->cancellation_mutex);
+  if (state_ == nullptr) {
+    return;
+  }
+
+  state_->active.store(false);
+  std::function<void()> cancel_callback;
+  WorkerThread worker;
+  {
+    std::lock_guard lock(state_->cancellation_mutex);
+    const bool first_cancellation = !state_->cancel_requested.exchange(true);
+    if (first_cancellation) {
       cancel_callback = state_->cancel_callback;
     }
-    if (cancel_callback) {
-      cancel_callback();
+    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) {
+#if A2A_HAS_JTHREAD
+      worker_.request_stop();
+#endif
+      worker = std::move(worker_);
     }
   }
-  if (worker_.joinable()) {
-#if A2A_HAS_JTHREAD
-    worker_.request_stop();
-#endif
-    worker_.join();
+  if (cancel_callback) {
+    cancel_callback();
+  }
+  if (worker.joinable()) {
+    worker.join();
   }
 }
 

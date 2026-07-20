@@ -47,7 +47,18 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertEqual(ordered, payload["results"])
             self.assertIn("configured_duration_seconds", payload["results"][0])
             self.assertIn("measured_duration_seconds", payload["results"][0])
+            streaming_rows = [
+                result for result in wire_rows
+                if result["scenario"] in {"SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"}
+            ]
+            self.assertEqual(2, len(streaming_rows))
+            self.assertTrue(all(result["event_count"] > 0 for result in streaming_rows))
+            self.assertTrue(all("first_event_latency_ms" in result for result in streaming_rows))
+            self.assertTrue(all("stream_completion_latency_ms" in result for result in streaming_rows))
             self.assertTrue((report_dir / "results.csv").exists())
+            csv_header = (report_dir / "results.csv").read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn("first_event_p50_ms", csv_header)
+            self.assertIn("stream_completion_p50_ms", csv_header)
             self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
             self.assertIn("[perf] estimated_rows=", completed.stdout)
             self.assertIn("[perf] start in-process transport=grpc store=inmemory concurrency=1 requests=3", completed.stdout)
@@ -57,11 +68,13 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
             self.assertIn("| Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
 
-    def test_wire_scenarios_filter_streaming_to_grpc(self):
+    def test_wire_scenarios_include_streaming_for_http_transports(self):
         runner = load_runner_module()
         self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("grpc"))
-        self.assertNotIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertNotIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -8,17 +8,19 @@
 
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
+#include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
@@ -28,6 +30,9 @@ namespace {
 
 constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
+constexpr std::string_view kStreamingSuccessRequiresSseMessage =
+    "JSON-RPC streaming success response must use text/event-stream";
+
 std::string JoinUrl(std::string_view interface_base_url) {
   std::string base(interface_base_url);
   while (!base.empty() && base.back() == '/') {
@@ -43,26 +48,15 @@ std::string BuildDefaultRequestId() {
 }
 
 core::Result<void> ValidateResponseVersion(const HttpClientResponse& response) {
-  const auto header_it = std::ranges::find_if(response.headers, [](const auto& pair) {
-    if (pair.first.size() != std::string_view(core::Version::kHeaderName).size()) {
-      return false;
-    }
-    for (std::size_t index = 0; index < pair.first.size(); ++index) {
-      if (std::tolower(static_cast<unsigned char>(pair.first[index])) !=
-          std::tolower(static_cast<unsigned char>(core::Version::kHeaderName[index]))) {
-        return false;
-      }
-    }
-    return true;
-  });
-  if (header_it == response.headers.end()) {
+  const auto version = core::http::FindHeaderValue(response.headers, core::Version::kHeaderName);
+  if (!version.has_value()) {
     return {};
   }
 
-  if (!core::Version::IsSupported(header_it->second)) {
+  if (!core::Version::IsSupported(version.value())) {
     return core::Error::UnsupportedVersion("Server returned unsupported A2A-Version header")
         .WithTransport("jsonrpc")
-        .WithProtocolCode(header_it->second);
+        .WithProtocolCode(std::string(version.value()));
   }
 
   return {};
@@ -168,12 +162,222 @@ core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, 
   return message;
 }
 
+bool HasSseContentType(const HeaderMap& headers) {
+  const auto content_type = core::http::FindHeaderValue(headers, core::http::kContentTypeHeaderName);
+  return content_type.has_value() && core::http::IsSseContentType(content_type.value());
+}
+
+bool HasJsonContentType(const HeaderMap& headers) {
+  const auto content_type = core::http::FindHeaderValue(headers, core::http::kContentTypeHeaderName);
+  return content_type.has_value() && core::http::IsJsonContentType(content_type.value());
+}
+
+core::Error BuildJsonRpcStreamStatusError(const HttpClientResponse& response) {
+  return core::Error::RemoteProtocol("JSON-RPC stream returned non-success HTTP status")
+      .WithTransport("jsonrpc")
+      .WithHttpStatus(response.status_code);
+}
+
+void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
+
+void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer, const core::Error& error) {
+  observer.OnError(error);
+  MarkInactive(state);
+}
+
+// Shared by unary and SSE JSON-RPC calls so request envelope fields stay consistent.
+core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, const google::protobuf::Message& request,
+                                               std::string_view request_id) {
+  const auto request_json = core::MessageToJson(request);
+  if (!request_json.ok()) {
+    return request_json.error();
+  }
+  google::protobuf::Value params;
+  const auto parse_params = core::JsonToMessage(request_json.value(), &params);
+  if (!parse_params.ok()) {
+    return parse_params.error();
+  }
+  google::protobuf::Struct envelope;
+  (*envelope.mutable_fields())["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
+  (*envelope.mutable_fields())["id"].set_string_value(std::string(request_id));
+  (*envelope.mutable_fields())["method"].set_string_value(std::string(method_name));
+  (*envelope.mutable_fields())["params"] = params;
+  return core::MessageToJson(envelope);
+}
+
+core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_view request_id,
+                                           const HttpClientResponse& response, StreamObserver& observer) {
+  const HttpClientResponse event_response{
+      .status_code = response.status_code, .headers = response.headers, .body = event.data};
+  const auto result = ParseResponseResult(event_response, request_id);
+  if (!result.ok()) {
+    return result.error();
+  }
+  const auto parsed = ParseResultMessage<lf::a2a::v1::StreamResponse>(result.value(), response.status_code);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  observer.OnEvent(parsed.value());
+  return {};
+}
+
+class JsonRpcSseSession final {
+ public:
+  JsonRpcSseSession(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
+                    StreamObserver& observer, std::shared_ptr<StreamHandle::State> state, std::string request_id)
+      : stream_requester_(stream_requester),
+        http_request_(http_request),
+        observer_(observer),
+        state_(std::move(state)),
+        request_id_(std::move(request_id)) {}
+
+  void Run() {
+    const auto stream_response = stream_requester_(
+        http_request_, [this](const HttpClientResponse& response) { return ValidateMetadata(response); },
+        [this](std::string_view chunk) { return HandleChunk(chunk); },
+        [this]() { return state_->cancel_requested.load(); });
+    if (StopIfCancelled()) {
+      return;
+    }
+    if (!stream_response.ok()) {
+      NotifyErrorAndStop(*state_, observer_, stream_response.error());
+      return;
+    }
+
+    const auto metadata = EnsureMetadata(stream_response.value());
+    if (!metadata.ok()) {
+      NotifyErrorAndStop(*state_, observer_, metadata.error());
+      return;
+    }
+    if (is_json_response_) {
+      HandleJsonResponse(stream_response.value());
+      return;
+    }
+
+    const auto finish = parser_.Finish([this](const SseEvent& event) { return DispatchEvent(event); });
+    if (StopIfCancelled()) {
+      return;
+    }
+    if (!finish.ok()) {
+      NotifyErrorAndStop(*state_, observer_, finish.error());
+      return;
+    }
+    observer_.OnCompleted();
+    MarkInactive(*state_);
+  }
+
+ private:
+  core::Result<void> ValidateMetadata(const HttpClientResponse& response) {
+    response_metadata_ = response;
+    const auto version_check = ValidateResponseVersion(response_metadata_);
+    if (!version_check.ok()) {
+      return version_check.error();
+    }
+    if (HasJsonContentType(response_metadata_.headers)) {
+      is_json_response_ = true;
+      metadata_validated_ = true;
+      return {};
+    }
+    if (response_metadata_.status_code < kHttpOkMin || response_metadata_.status_code > kHttpOkMax) {
+      return BuildJsonRpcStreamStatusError(response_metadata_);
+    }
+    if (HasSseContentType(response_metadata_.headers)) {
+      metadata_validated_ = true;
+      return {};
+    }
+    return core::Error::RemoteProtocol("JSON-RPC stream response must use text/event-stream")
+        .WithTransport("jsonrpc")
+        .WithHttpStatus(response_metadata_.status_code);
+  }
+
+  core::Result<void> EnsureMetadata(const HttpClientResponse& response) {
+    if (metadata_validated_) {
+      return {};
+    }
+    return ValidateMetadata(response);
+  }
+
+  core::Result<void> HandleChunk(std::string_view chunk) {
+    if (state_->cancel_requested.load()) {
+      return {};
+    }
+    if (!metadata_validated_) {
+      return core::Error::RemoteProtocol("JSON-RPC stream metadata must be validated before body chunks")
+          .WithTransport("jsonrpc");
+    }
+    if (is_json_response_) {
+      json_response_body_.append(chunk);
+      return {};
+    }
+    return parser_.Feed(chunk, [this](const SseEvent& event) { return DispatchEvent(event); });
+  }
+
+  core::Result<void> DispatchEvent(const SseEvent& event) {
+    if (state_->cancel_requested.load()) {
+      return {};
+    }
+    return DispatchJsonRpcSseEvent(event, request_id_, response_metadata_, observer_);
+  }
+
+  bool StopIfCancelled() {
+    if (!state_->cancel_requested.load()) {
+      return false;
+    }
+    MarkInactive(*state_);
+    return true;
+  }
+
+  void HandleJsonResponse(const HttpClientResponse& stream_response) {
+    if (json_response_body_.empty()) {
+      json_response_body_ = stream_response.body;
+    }
+    HttpClientResponse json_response = response_metadata_;
+    json_response.body = std::move(json_response_body_);
+    const auto result = ParseResponseResult(json_response, request_id_);
+    if (!result.ok()) {
+      NotifyErrorAndStop(*state_, observer_, result.error());
+      return;
+    }
+    if (json_response.status_code < kHttpOkMin || json_response.status_code > kHttpOkMax) {
+      NotifyErrorAndStop(*state_, observer_, BuildJsonRpcStreamStatusError(json_response));
+      return;
+    }
+    NotifyErrorAndStop(*state_, observer_,
+                       BuildJsonRpcEnvelopeError(kStreamingSuccessRequiresSseMessage, json_response));
+  }
+
+  const HttpStreamRequester& stream_requester_;
+  const HttpRequest& http_request_;
+  StreamObserver& observer_;
+  std::shared_ptr<StreamHandle::State> state_;
+  std::string request_id_;
+  SseParser parser_;
+  HttpClientResponse response_metadata_;
+  std::string json_response_body_;
+  bool metadata_validated_ = false;
+  bool is_json_response_ = false;
+};
+
+void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
+                         StreamObserver& observer, const std::shared_ptr<StreamHandle::State>& state,
+                         std::string request_id) {
+  JsonRpcSseSession session(stream_requester, http_request, observer, state, std::move(request_id));
+  session.Run();
+}
+
 }  // namespace
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                    std::chrono::milliseconds default_timeout, RequestIdGenerator id_generator)
+    : JsonRpcTransport(std::move(resolved_interface), std::move(requester), {}, default_timeout,
+                       std::move(id_generator)) {}
+
+JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                                   HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout,
+                                   RequestIdGenerator id_generator)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
+      stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout),
       id_generator_(std::move(id_generator)) {
   if (id_generator_ == nullptr) {
@@ -184,8 +388,8 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
 std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                   std::chrono::milliseconds default_timeout,
                                                                   RequestIdGenerator id_generator) {
-  return std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(), default_timeout,
-                                            std::move(id_generator));
+  return std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
+                                            MakeDefaultHttpStreamRequester(), default_timeout, std::move(id_generator));
 }
 
 core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
@@ -249,24 +453,7 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(std
     return core::Error::Internal("JSON-RPC request id generator returned an empty id");
   }
 
-  const auto request_json = core::MessageToJson(request);
-  if (!request_json.ok()) {
-    return request_json.error();
-  }
-
-  google::protobuf::Value params;
-  const auto parse_params = core::JsonToMessage(request_json.value(), &params);
-  if (!parse_params.ok()) {
-    return parse_params.error();
-  }
-
-  google::protobuf::Struct envelope;
-  (*envelope.mutable_fields())["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
-  (*envelope.mutable_fields())["id"].set_string_value(request_id);
-  (*envelope.mutable_fields())["method"].set_string_value(std::string(method_name));
-  (*envelope.mutable_fields())["params"] = params;
-
-  const auto envelope_json = core::MessageToJson(envelope);
+  const auto envelope_json = BuildJsonRpcEnvelope(method_name, request, request_id);
   if (!envelope_json.ok()) {
     return envelope_json.error();
   }
@@ -461,21 +648,69 @@ core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
   return {};
 }
 
+core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std::string_view method_name,
+                                                                             const google::protobuf::Message& request,
+                                                                             StreamObserver& observer,
+                                                                             const CallOptions& options) const {
+  if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {
+    return core::Error::Validation("JsonRpcTransport requires a JSON-RPC interface");
+  }
+  if (resolved_interface_.url.empty()) {
+    return core::Error::Validation("Resolved JSON-RPC interface URL is required");
+  }
+  if (stream_requester_ == nullptr) {
+    return core::Error::Internal("HTTP stream requester is not configured");
+  }
+  const std::string request_id = id_generator_();
+  if (request_id.empty()) {
+    return core::Error::Internal("JSON-RPC request id generator returned an empty id");
+  }
+  const auto envelope_json = BuildJsonRpcEnvelope(method_name, request, request_id);
+  if (!envelope_json.ok()) {
+    return envelope_json.error();
+  }
+  HttpRequest http_request;
+  http_request.method = std::string(core::http::kMethodPost);
+  http_request.url = JoinUrl(resolved_interface_.url);
+  http_request.body = envelope_json.value();
+  http_request.timeout = options.timeout.value_or(default_timeout_);
+  http_request.headers = options.headers;
+  http_request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  http_request.headers["Content-Type"] = "application/json";
+  http_request.headers["Accept"] = "text/event-stream";
+  http_request.mtls = options.mtls;
+  if (!options.extensions.empty()) {
+    http_request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
+  }
+  if (options.auth_hook) {
+    options.auth_hook(http_request.headers);
+  }
+  if (options.credential_provider != nullptr) {
+    const auto applied =
+        ApplyCredentialProvider(*options.credential_provider, options.auth_context, &http_request.headers);
+    if (!applied.ok()) {
+      return applied.error();
+    }
+  }
+  auto state = std::make_shared<StreamHandle::State>();
+  StreamHandle::WorkerThread worker(
+      [stream_requester = stream_requester_, http_request = std::move(http_request), &observer, state,
+       request_id]() mutable { RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id); });
+  return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
+}
+
 core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SendStreamingMessage(
     const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) {
-  (void)request;
-  (void)observer;
-  (void)options;
-  return core::Error::Validation("JSON-RPC transport does not support streaming operations");
+  return StartSseStream(core::json_rpc::MethodNames::kSendStreamingMessage, request, observer, options);
 }
 
 core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                             StreamObserver& observer,
                                                                             const CallOptions& options) {
-  (void)request;
-  (void)observer;
-  (void)options;
-  return core::Error::Validation("JSON-RPC transport does not support streaming operations");
+  if (request.id().empty()) {
+    return core::Error::Validation("GetTaskRequest.id is required");
+  }
+  return StartSseStream(core::json_rpc::MethodNames::kSubscribeToTask, request, observer, options);
 }
 
 }  // namespace a2a::client

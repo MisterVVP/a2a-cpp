@@ -12,11 +12,13 @@
 #include <curl/curl.h>
 
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <system_error>
 #include <utility>
 #endif
 
@@ -51,12 +53,21 @@ constexpr std::string_view kCurlHeaderFailureMessage = "failed to build HTTP req
 constexpr std::string_view kConfigureRequestFailureMessage = "failed to configure HTTP request";
 constexpr std::string_view kErrorBufferFailureMessage = "failed to configure HTTP client error buffer";
 constexpr std::string_view kRequestFailureMessage = "failed to execute HTTP request";
+constexpr std::string_view kCurlMultiInitFailureMessage = "failed to initialize HTTP stream poller";
+constexpr std::string_view kCurlMultiFailureMessage = "failed to execute polled HTTP stream";
+constexpr std::string_view kCurlMultiCompletionFailureMessage = "HTTP stream ended without a libcurl completion";
 constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP response status";
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
 constexpr std::string_view kHttpStatusLinePrefix = "HTTP/";
+constexpr std::string_view kMissingStreamMetadataCallbackMessage = "HTTP stream metadata callback is required";
+constexpr std::string_view kMissingStreamChunkCallbackMessage = "HTTP stream chunk callback is required";
+constexpr std::string_view kMissingStreamCancellationCallbackMessage = "HTTP stream cancellation callback is required";
 constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
+constexpr long kHttpInformationalStatusMin = 100;
+constexpr long kHttpInformationalStatusMax = 199;
+constexpr int kStreamPollTimeoutMs = 100;
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   static const auto init = std::make_shared<detail::ClientGlobalState>();
@@ -73,6 +84,47 @@ struct CurlSlistDeleter final {
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
+struct CurlEasyDeleter final {
+  void operator()(CURL* handle) const noexcept {
+    if (handle != nullptr) {
+      curl_easy_cleanup(handle);
+    }
+  }
+};
+
+using CurlEasyHandle = std::unique_ptr<CURL, CurlEasyDeleter>;
+
+struct CurlMultiDeleter final {
+  void operator()(CURLM* handle) const noexcept {
+    if (handle != nullptr) {
+      curl_multi_cleanup(handle);
+    }
+  }
+};
+
+using CurlMultiHandle = std::unique_ptr<CURLM, CurlMultiDeleter>;
+
+class CurlMultiAttachment final {
+ public:
+  CurlMultiAttachment(CURLM* multi_handle, CURL* easy_handle)
+      : multi_handle_(multi_handle), easy_handle_(easy_handle) {}
+
+  ~CurlMultiAttachment() {
+    if (multi_handle_ != nullptr && easy_handle_ != nullptr) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle_);
+    }
+  }
+
+  CurlMultiAttachment(const CurlMultiAttachment&) = delete;
+  CurlMultiAttachment& operator=(const CurlMultiAttachment&) = delete;
+  CurlMultiAttachment(CurlMultiAttachment&&) = delete;
+  CurlMultiAttachment& operator=(CurlMultiAttachment&&) = delete;
+
+ private:
+  CURLM* multi_handle_;
+  CURL* easy_handle_;
+};
+
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
   message << prefix << ": " << curl_easy_strerror(code);
@@ -80,6 +132,25 @@ std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::s
     message << " (" << detail << ')';
   }
   return message.str();
+}
+
+std::string BuildCurlMultiErrorMessage(std::string_view prefix, CURLMcode code) {
+  std::ostringstream message;
+  message << prefix << ": " << curl_multi_strerror(code);
+  return message.str();
+}
+
+core::Result<void> ValidateStreamCallbacks(const detail::StreamCallbackContext& context) {
+  if (context.on_metadata == nullptr || !*context.on_metadata) {
+    return core::Error::Validation(std::string(kMissingStreamMetadataCallbackMessage)).WithTransport("http");
+  }
+  if (context.on_chunk == nullptr || !*context.on_chunk) {
+    return core::Error::Validation(std::string(kMissingStreamChunkCallbackMessage)).WithTransport("http");
+  }
+  if (context.is_cancelled == nullptr || !*context.is_cancelled) {
+    return core::Error::Validation(std::string(kMissingStreamCancellationCallbackMessage)).WithTransport("http");
+  }
+  return {};
 }
 
 std::string BuildHeaderValue(const Header& header) {
@@ -129,11 +200,25 @@ std::string_view TrimHeaderValue(std::string_view value) {
   return value;
 }
 
-std::optional<Header> ParseHeaderLine(std::string_view line) {
-  if (line.starts_with(kHttpStatusLinePrefix)) {
-    return Header{};
+std::optional<long> ParseHttpStatusCode(std::string_view line) {
+  if (!line.starts_with(kHttpStatusLinePrefix)) {
+    return std::nullopt;
   }
+  const auto status_start = line.find(' ');
+  if (status_start == std::string_view::npos || status_start + 1 >= line.size()) {
+    return std::nullopt;
+  }
+  long status = kHttpResponseCodeUnset;
+  const char* const first = line.data() + status_start + 1;
+  const char* const last = line.data() + line.size();
+  const auto parsed = std::from_chars(first, last, status);
+  if (parsed.ec != std::errc{}) {
+    return std::nullopt;
+  }
+  return status;
+}
 
+std::optional<Header> ParseHeaderLine(std::string_view line) {
   const auto separator = line.find(kHeaderSeparator);
   if (separator == std::string_view::npos) {
     return std::nullopt;
@@ -144,19 +229,67 @@ std::optional<Header> ParseHeaderLine(std::string_view line) {
   return Header{.name = std::move(name), .value = std::string(value)};
 }
 
+struct StreamHeaderContext final {
+  detail::HeaderCapture* header_capture = nullptr;
+  detail::StreamCallbackContext* stream_context = nullptr;
+};
+
 size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
-  auto* headers = static_cast<std::vector<Header>*>(user_data);
+  auto* capture = static_cast<detail::HeaderCapture*>(user_data);
   const std::size_t byte_count = size * nmemb;
   const std::string_view line(contents, byte_count);
+  if (line.starts_with(kHttpStatusLinePrefix)) {
+    capture->response_headers->clear();
+    capture->response_code = ParseHttpStatusCode(line).value_or(kHttpResponseCodeUnset);
+    return byte_count;
+  }
   const auto header = ParseHeaderLine(line);
   if (!header.has_value()) {
     return byte_count;
   }
-  if (header->name.empty() && header->value.empty()) {
-    headers->clear();
+  capture->response_headers->push_back(header.value());
+  return byte_count;
+}
+
+core::Result<void> ValidateStreamMetadata(detail::StreamCallbackContext* context) {
+  const detail::HeaderCapture& capture = *context->header_capture;
+  if (capture.response_code == kHttpResponseCodeUnset) {
+    return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
+  }
+  if (context->on_metadata != nullptr) {
+    return (*context->on_metadata)(Response{
+        .status_code = static_cast<int>(capture.response_code), .headers = *capture.response_headers, .body = {}});
+  }
+  return {};
+}
+
+size_t WriteStreamResponseHeader(char* contents, size_t size, size_t nmemb, void* user_data) {
+  auto* context = static_cast<StreamHeaderContext*>(user_data);
+  detail::HeaderCapture& capture = *context->header_capture;
+  const std::size_t byte_count = size * nmemb;
+  const std::string_view line(contents, byte_count);
+  if (line.starts_with(kHttpStatusLinePrefix)) {
+    capture.response_headers->clear();
+    capture.response_code = ParseHttpStatusCode(line).value_or(kHttpResponseCodeUnset);
     return byte_count;
   }
-  headers->push_back(header.value());
+  const auto header = ParseHeaderLine(line);
+  if (header.has_value()) {
+    capture.response_headers->push_back(header.value());
+    return byte_count;
+  }
+  if (context->stream_context->metadata_checked || !TrimHeaderValue(line).empty()) {
+    return byte_count;
+  }
+  if (capture.response_code >= kHttpInformationalStatusMin && capture.response_code <= kHttpInformationalStatusMax) {
+    return byte_count;
+  }
+  const auto metadata = ValidateStreamMetadata(context->stream_context);
+  if (!metadata.ok()) {
+    context->stream_context->error = metadata.error();
+    return 0;
+  }
+  context->stream_context->metadata_checked = true;
   return byte_count;
 }
 
@@ -165,6 +298,41 @@ size_t WriteResponseBody(char* contents, size_t size, size_t nmemb, void* user_d
   const std::size_t byte_count = size * nmemb;
   body->append(contents, byte_count);
   return byte_count;
+}
+
+size_t WriteStreamBody(char* contents, size_t size, size_t nmemb, void* user_data) {
+  auto* context = static_cast<detail::StreamCallbackContext*>(user_data);
+  const std::size_t byte_count = size * nmemb;
+  if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
+    return 0;
+  }
+  if (!context->metadata_checked) {
+    const auto metadata = ValidateStreamMetadata(context);
+    if (!metadata.ok()) {
+      context->error = metadata.error();
+      return 0;
+    }
+    context->metadata_checked = true;
+  }
+  const auto result = (*context->on_chunk)(std::string_view(contents, byte_count));
+  if (!result.ok()) {
+    context->error = result.error();
+    return 0;
+  }
+  return byte_count;
+}
+
+int CheckStreamProgress(void* clientp, curl_off_t download_total, curl_off_t downloaded, curl_off_t upload_total,
+                        curl_off_t uploaded) {
+  (void)download_total;
+  (void)downloaded;
+  (void)upload_total;
+  (void)uploaded;
+  auto* context = static_cast<detail::StreamCallbackContext*>(clientp);
+  if (context->is_cancelled != nullptr && (*context->is_cancelled)()) {
+    return 1;
+  }
+  return 0;
 }
 
 core::Result<long> MapHttpVersion(std::string_view http_version) {
@@ -180,19 +348,37 @@ core::Result<long> MapHttpVersion(std::string_view http_version) {
   return core::Error::Validation(std::string(kUnsupportedHttpVersionMessage));
 }
 
+core::Result<void> ConfigureCurlMethodAndBody(CURL* handle, const Request& request) {
+  if (request.method == core::http::kMethodGet && request.body.empty()) {
+    if (curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L) != CURLE_OK) {
+      return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+    }
+    return {};
+  }
+
+  const auto set_method = curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, request.method.c_str());
+  const auto set_body = curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str());
+  const auto set_body_size =
+      curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
+  if (set_method != CURLE_OK || set_body != CURLE_OK || set_body_size != CURLE_OK) {
+    return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+  }
+  return {};
+}
+
 core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
-                                 std::string* response_body, std::vector<Header>* response_headers) {
+                                 std::string* response_body, detail::HeaderCapture* response_headers) {
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();
   }
+  const auto method_and_body = ConfigureCurlMethodAndBody(handle, request);
+  if (!method_and_body.ok()) {
+    return method_and_body.error();
+  }
 
   const auto set_url = curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str());
-  const auto set_method = curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, request.method.c_str());
   const auto set_headers = curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers.get());
-  const auto set_body = curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str());
-  const auto set_body_size =
-      curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
   const auto set_timeout = curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, static_cast<long>(request.timeout.count()));
   const auto set_connect_timeout =
       curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(request.timeout.count()));
@@ -203,13 +389,85 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
   const auto set_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, response_headers);
   const auto set_http_version = curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, http_version.value());
   const auto set_tls_minimum = curl_easy_setopt(handle, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
-  if (set_url != CURLE_OK || set_method != CURLE_OK || set_headers != CURLE_OK || set_body != CURLE_OK ||
-      set_body_size != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
+  const auto set_suppress_connect_headers = curl_easy_setopt(handle, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L);
+  if (set_url != CURLE_OK || set_headers != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
       set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK || set_header != CURLE_OK ||
-      set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK) {
+      set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK ||
+      set_suppress_connect_headers != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   return {};
+}
+
+core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, const CurlHeaderList& headers,
+                                       detail::StreamCallbackContext* stream_context,
+                                       detail::HeaderCapture* response_headers) {
+  const auto callbacks = ValidateStreamCallbacks(*stream_context);
+  if (!callbacks.ok()) {
+    return callbacks.error();
+  }
+  std::string unused_body;
+  const auto configured = ConfigureCurl(handle, request, headers, &unused_body, response_headers);
+  if (!configured.ok()) {
+    return configured.error();
+  }
+  const auto set_write = curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, WriteStreamBody);
+  const auto set_write_data = curl_easy_setopt(handle, CURLOPT_WRITEDATA, stream_context);
+  const auto set_progress_data = curl_easy_setopt(handle, CURLOPT_XFERINFODATA, stream_context);
+  const auto set_progress = curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, CheckStreamProgress);
+  const auto set_no_progress = curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+  if (set_write != CURLE_OK || set_write_data != CURLE_OK || set_progress_data != CURLE_OK ||
+      set_progress != CURLE_OK || set_no_progress != CURLE_OK) {
+    return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+  }
+  return {};
+}
+
+core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, const std::function<bool()>& is_cancelled) {
+  if (is_cancelled()) {
+    return CURLE_ABORTED_BY_CALLBACK;
+  }
+
+  CurlMultiHandle multi_handle(curl_multi_init());
+  if (multi_handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  }
+
+  const CURLMcode add_code = curl_multi_add_handle(multi_handle.get(), easy_handle);
+  if (add_code != CURLM_OK) {
+    return core::Error::Internal(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, add_code));
+  }
+  [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle.get(), easy_handle);
+
+  int running_handles = 0;
+  CURLMcode multi_code = curl_multi_perform(multi_handle.get(), &running_handles);
+  while (multi_code == CURLM_OK && running_handles > 0) {
+    if (is_cancelled()) {
+      return CURLE_ABORTED_BY_CALLBACK;
+    }
+
+    int ready_descriptors = 0;
+    multi_code = curl_multi_poll(multi_handle.get(), nullptr, 0, kStreamPollTimeoutMs, &ready_descriptors);
+    if (multi_code != CURLM_OK) {
+      break;
+    }
+    if (is_cancelled()) {
+      return CURLE_ABORTED_BY_CALLBACK;
+    }
+    multi_code = curl_multi_perform(multi_handle.get(), &running_handles);
+  }
+
+  if (multi_code != CURLM_OK) {
+    return core::Error::Network(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, multi_code));
+  }
+
+  int pending_messages = 0;
+  while (CURLMsg* message = curl_multi_info_read(multi_handle.get(), &pending_messages)) {
+    if (message->msg == CURLMSG_DONE && message->easy_handle == easy_handle) {
+      return message->data.result;
+    }
+  }
+  return core::Error::Internal(std::string(kCurlMultiCompletionFailureMessage));
 }
 
 }  // namespace
@@ -249,7 +507,8 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
 
   std::string response_body;
   std::vector<Header> response_headers;
-  const auto configured = ConfigureCurl(handle, request, headers.value(), &response_body, &response_headers);
+  detail::HeaderCapture header_capture{.response_headers = &response_headers};
+  const auto configured = ConfigureCurl(handle, request, headers.value(), &response_body, &header_capture);
   if (!configured.ok()) {
     return configured.error();
   }
@@ -272,6 +531,77 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
                   .body = std::move(response_body)};
 }
 
+core::Result<Response> Client::StreamRequest(const Request& request,
+                                             const std::function<core::Result<void>(const Response&)>& on_metadata,
+                                             const std::function<core::Result<void>(std::string_view)>& on_chunk,
+                                             const std::function<bool()>& is_cancelled) const {
+  if (state_->global_state->code != CURLE_OK) {
+    return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, state_->global_state->code, {}));
+  }
+  auto headers = BuildHeaders(request.headers);
+  if (!headers.ok()) {
+    return headers.error();
+  }
+  CurlEasyHandle stream_handle(curl_easy_init());
+  if (stream_handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  }
+  CURL* const handle = stream_handle.get();
+  std::array<char, CURL_ERROR_SIZE> error_buffer{};
+  const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
+  if (set_error_buffer != CURLE_OK) {
+    return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
+  }
+  std::vector<Header> response_headers;
+  detail::HeaderCapture header_capture{.response_headers = &response_headers};
+  detail::StreamCallbackContext stream_context{.on_metadata = &on_metadata,
+                                               .on_chunk = &on_chunk,
+                                               .is_cancelled = &is_cancelled,
+                                               .header_capture = &header_capture,
+                                               .error = std::nullopt,
+                                               .metadata_checked = false};
+  const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &header_capture);
+  if (!configured.ok()) {
+    return configured.error();
+  }
+  StreamHeaderContext stream_header_context{.header_capture = &header_capture, .stream_context = &stream_context};
+  const auto set_stream_header = curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, WriteStreamResponseHeader);
+  const auto set_stream_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, &stream_header_context);
+  if (set_stream_header != CURLE_OK || set_stream_header_data != CURLE_OK) {
+    return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
+  }
+  const auto performed = PerformStreamingTransfer(handle, is_cancelled);
+  if (!performed.ok()) {
+    return performed.error();
+  }
+  const CURLcode code = performed.value();
+  if (code != CURLE_OK) {
+    if (stream_context.error.has_value()) {
+      return stream_context.error.value();
+    }
+    if (is_cancelled()) {
+      return core::Error::Network("HTTP stream was cancelled").WithTransport("http");
+    }
+    return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
+  }
+  if (!stream_context.metadata_checked) {
+    const auto metadata = ValidateStreamMetadata(&stream_context);
+    if (!metadata.ok()) {
+      return metadata.error();
+    }
+    stream_context.metadata_checked = true;
+  }
+  long response_code = kHttpResponseCodeUnset;
+  const CURLcode info_code = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
+  if (info_code != CURLE_OK) {
+    return core::Error::RemoteProtocol(BuildCurlErrorMessage(kReadStatusFailureMessage, info_code, {}));
+  }
+  if (response_code == kHttpResponseCodeUnset) {
+    return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
+  }
+  return Response{.status_code = static_cast<int>(response_code), .headers = std::move(response_headers), .body = {}};
+}
+
 #else
 
 namespace {
@@ -286,6 +616,17 @@ Client::Client() = default;
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
   (void)request;
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+}
+
+core::Result<Response> Client::StreamRequest(const Request& request,
+                                             const std::function<core::Result<void>(const Response&)>& on_metadata,
+                                             const std::function<core::Result<void>(std::string_view)>& on_chunk,
+                                             const std::function<bool()>& is_cancelled) const {
+  (void)request;
+  (void)on_metadata;
+  (void)on_chunk;
+  (void)is_cancelled;
   return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
 }
 

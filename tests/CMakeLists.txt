@@ -237,6 +237,20 @@ target_link_libraries(client_test
 
 gtest_discover_tests(client_test)
 
+add_executable(stream_handle_lifecycle_test
+  unit/stream_handle_lifecycle_test.cpp
+)
+
+target_link_libraries(stream_handle_lifecycle_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(stream_handle_lifecycle_test)
+
 
 add_executable(auth_test
   unit/auth_test.cpp
@@ -788,6 +802,12 @@ if(Python3_Interpreter_FOUND)
   add_test(
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
+  )
+  add_test(
+    NAME run_examples_script_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_examples_script_test.py
+            ${CMAKE_SOURCE_DIR}/scripts/run_examples.sh
+            ${CMAKE_SOURCE_DIR}/scripts/install_build_deps.sh
   )
 endif()
 

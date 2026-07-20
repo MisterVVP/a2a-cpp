@@ -75,11 +75,11 @@ Reports contain two clearly separated measurement paths:
   `driver_type=wire_tck_sut` with `transport_path=wire_http_json`,
   `wire_jsonrpc`, or `wire_grpc`.
 
-The current real wire-level scenario set covers core lifecycle operations and push notification config CRUD for HTTP+JSON, JSON-RPC, and gRPC. Finite streaming and first-event task subscription currently run as wire rows only for gRPC, because the JSON-RPC client intentionally does not expose streaming and the default HTTP+JSON client does not yet provide a production streaming requester. The common wire scenarios are `ListTasks_NoPagination`,
+The current real wire-level scenario set covers core lifecycle operations, push notification config CRUD, finite streaming, and first-event task subscription for HTTP+JSON, JSON-RPC, and gRPC. The common wire scenarios are `ListTasks_NoPagination`,
 `ListTasks_WithPagination`, `SendMessage_CreateTask`, `GetTask_ExistingTask`,
 `CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`,
 `GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
-`PushConfig_List`, and `PushConfig_Delete`; gRPC additionally runs `SendStreamingMessage_FiniteStream` and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
+`PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`, and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
 worker thread so measured operations do not recreate gRPC channels or HTTP
 transport objects. The libcurl-backed HTTP client also keeps a reusable easy
 handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
@@ -163,4 +163,4 @@ Performance reports distinguish the low-overhead SDK service/store layer from
 transport-level coverage. In-process rows use
 `driver_type=cpp_sdk_in_process` and `transport_path=in_process`. Wire rows use
 `driver_type=wire_tck_sut` and one of `wire_http_json`, `wire_jsonrpc`, or
-`wire_grpc`. Wire coverage includes bounded list with and without pagination, send/create, get existing, cancel working, follow-up send, missing-task get errors, and push config create/get/list/delete across gRPC, JSON-RPC, and HTTP+JSON. gRPC also covers finite streaming and first-event subscription. Known limitation: JSON-RPC streaming, default HTTP+JSON streaming, multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and local HTTP callback fan-out are currently not full wire rows.
+`wire_grpc`. Wire coverage includes bounded list with and without pagination, send/create, get existing, cancel working, follow-up send, missing-task get errors, finite streaming, first-event subscription, and push config create/get/list/delete across gRPC, JSON-RPC, and HTTP+JSON. Streaming rows record event counts plus first-event and completion latency histograms. Known limitation: multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and local HTTP callback fan-out are currently not full wire rows.

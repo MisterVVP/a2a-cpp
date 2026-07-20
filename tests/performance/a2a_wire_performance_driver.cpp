@@ -42,6 +42,9 @@ class CountingObserver final : public a2a::client::StreamObserver {
   void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
     (void)response;
     std::lock_guard lock(mutex_);
+    if (events_ == 0) {
+      first_event_at_ = std::chrono::steady_clock::now();
+    }
     ++events_;
     ready_.notify_all();
   }
@@ -56,6 +59,7 @@ class CountingObserver final : public a2a::client::StreamObserver {
 
   void OnCompleted() override {
     std::lock_guard lock(mutex_);
+    completed_at_ = std::chrono::steady_clock::now();
     completed_ = true;
     ready_.notify_all();
   }
@@ -73,12 +77,40 @@ class CountingObserver final : public a2a::client::StreamObserver {
            events_ > 0;
   }
 
+  [[nodiscard]] int event_count() const {
+    std::lock_guard lock(mutex_);
+    return events_;
+  }
+
+  [[nodiscard]] double FirstEventLatencySince(std::chrono::steady_clock::time_point started) const {
+    std::lock_guard lock(mutex_);
+    if (events_ == 0) {
+      return 0.0;
+    }
+    return DurationMillis(first_event_at_ - started);
+  }
+
+  [[nodiscard]] double CompletionLatencySince(std::chrono::steady_clock::time_point started) const {
+    std::lock_guard lock(mutex_);
+    if (!completed_) {
+      return 0.0;
+    }
+    return DurationMillis(completed_at_ - started);
+  }
+
  private:
-  std::mutex mutex_;
+  [[nodiscard]] static double DurationMillis(std::chrono::steady_clock::duration duration) {
+    return static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count()) /
+           kNanosecondsPerMillisecond;
+  }
+
+  mutable std::mutex mutex_;
   std::condition_variable ready_;
   int events_ = 0;
   int errors_ = 0;
   bool completed_ = false;
+  std::chrono::steady_clock::time_point first_event_at_;
+  std::chrono::steady_clock::time_point completed_at_;
 };
 
 struct WireOptions final {
@@ -174,27 +206,47 @@ bool SeedListFixture(a2a::client::A2AClient* client, const a2a::client::CallOpti
   return true;
 }
 
-bool ExecuteWireStreaming(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
+OperationOutcome ExecuteWireStreaming(a2a::client::A2AClient* client, int index,
+                                      const a2a::client::CallOptions& call_options) {
   CountingObserver observer;
+  const auto started = std::chrono::steady_clock::now();
   auto stream = client->SendStreamingMessage(MakeSendRequest(BuildId("wire-stream", index)), observer, call_options);
-  return stream.ok() && observer.WaitForCompletion();
+  const bool completed = stream.ok() && observer.WaitForCompletion();
+  return {.ok = completed,
+          .event_count = observer.event_count(),
+          .first_event_latency_ms = observer.FirstEventLatencySince(started),
+          .completion_latency_ms = observer.CompletionLatencySince(started)};
 }
 
-bool ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, int index,
-                                    const a2a::client::CallOptions& call_options) {
+OperationOutcome ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, int index,
+                                                const a2a::client::CallOptions& call_options) {
   const std::string task_id = SeedTask(client, BuildId("wire-subscribe-seed", index), call_options);
   if (task_id.empty()) {
-    return false;
+    return {};
   }
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(task_id);
   CountingObserver observer;
+  const auto started = std::chrono::steady_clock::now();
   auto stream = client->SubscribeTask(request, observer, call_options);
-  const bool ok = stream.ok() && observer.WaitForEventCount(1);
-  if (stream.ok()) {
+  if (!stream.ok() || !observer.WaitForEventCount(1)) {
+    if (stream.ok()) {
+      stream.value()->Cancel();
+    }
+    return {};
+  }
+  const double first_event_latency_ms = observer.FirstEventLatencySince(started);
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(task_id);
+  const bool cancelled = client->CancelTask(cancel_request, call_options).ok();
+  const bool completed = observer.WaitForCompletion();
+  if (!completed) {
     stream.value()->Cancel();
   }
-  return ok;
+  return {.ok = cancelled && completed,
+          .event_count = observer.event_count(),
+          .first_event_latency_ms = first_event_latency_ms,
+          .completion_latency_ms = observer.CompletionLatencySince(started)};
 }
 
 bool ExecuteWirePushCreate(a2a::client::A2AClient* client, int index, const a2a::client::CallOptions& call_options) {
@@ -247,28 +299,30 @@ bool ExecuteWirePushDelete(a2a::client::A2AClient* client, int index, const a2a:
   return client->DeleteTaskPushNotificationConfig(request, call_options).ok();
 }
 
-bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index) {
+OperationOutcome MakeOutcome(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
+
+OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index) {
   const a2a::client::CallOptions call_options = MakeCallOptions();
   if (scenario == kScenarioSendMessageCreateTask) {
-    return client->SendMessage(MakeSendRequest(BuildId("wire-create", index)), call_options).ok();
+    return MakeOutcome(client->SendMessage(MakeSendRequest(BuildId("wire-create", index)), call_options).ok());
   }
   if (scenario == kScenarioGetTaskExistingTask) {
     const std::string task_id = SeedTask(client, BuildId("wire-get-seed", index), call_options);
     if (task_id.empty()) {
-      return false;
+      return {};
     }
     lf::a2a::v1::GetTaskRequest request;
     request.set_id(task_id);
-    return client->GetTask(request, call_options).ok();
+    return MakeOutcome(client->GetTask(request, call_options).ok());
   }
   if (scenario == kScenarioCancelTaskWorkingTask) {
     const std::string task_id = SeedTask(client, BuildId("wire-cancel-seed", index), call_options);
     if (task_id.empty()) {
-      return false;
+      return {};
     }
     lf::a2a::v1::CancelTaskRequest request;
     request.set_id(task_id);
-    return client->CancelTask(request, call_options).ok();
+    return MakeOutcome(client->CancelTask(request, call_options).ok());
   }
   if (IsListScenario(scenario)) {
     (void)index;
@@ -276,19 +330,20 @@ bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, 
     if (scenario == kScenarioListTasksWithPagination) {
       request.page_size = kListPageSize;
     }
-    return client->ListTasks(request, call_options).ok();
+    return MakeOutcome(client->ListTasks(request, call_options).ok());
   }
   if (scenario == kScenarioSendMessageFollowUpExistingTask) {
     const std::string task_id = SeedTask(client, BuildId("wire-follow-seed", index), call_options);
     if (task_id.empty()) {
-      return false;
+      return {};
     }
-    return client->SendMessage(MakeSendRequest(BuildId("wire-follow-up", index), task_id), call_options).ok();
+    return MakeOutcome(
+        client->SendMessage(MakeSendRequest(BuildId("wire-follow-up", index), task_id), call_options).ok());
   }
   if (scenario == kScenarioGetTaskMissingTaskError) {
     lf::a2a::v1::GetTaskRequest request;
     request.set_id(BuildId("wire-missing", index));
-    return !client->GetTask(request, call_options).ok();
+    return MakeOutcome(!client->GetTask(request, call_options).ok());
   }
   if (scenario == kScenarioSendStreamingMessageFiniteStream) {
     return ExecuteWireStreaming(client, index, call_options);
@@ -297,18 +352,18 @@ bool ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, 
     return ExecuteWireSubscribeFirstEvent(client, index, call_options);
   }
   if (scenario == kScenarioPushConfigCreate) {
-    return ExecuteWirePushCreate(client, index, call_options);
+    return MakeOutcome(ExecuteWirePushCreate(client, index, call_options));
   }
   if (scenario == kScenarioPushConfigGet) {
-    return ExecuteWirePushGet(client, index, call_options);
+    return MakeOutcome(ExecuteWirePushGet(client, index, call_options));
   }
   if (scenario == kScenarioPushConfigList) {
-    return ExecuteWirePushList(client, index, call_options);
+    return MakeOutcome(ExecuteWirePushList(client, index, call_options));
   }
   if (scenario == kScenarioPushConfigDelete) {
-    return ExecuteWirePushDelete(client, index, call_options);
+    return MakeOutcome(ExecuteWirePushDelete(client, index, call_options));
   }
-  return false;
+  return {};
 }
 
 ScenarioResult RunWireScenario(const WireOptions& options, const std::string& scenario) {
@@ -343,22 +398,26 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
                              });
 }
 
+bool IsPushConfigWireScenario(std::string_view scenario) {
+  return scenario == kScenarioPushConfigCreate || scenario == kScenarioPushConfigGet ||
+         scenario == kScenarioPushConfigList || scenario == kScenarioPushConfigDelete;
+}
+
 bool IsStreamingWireScenario(std::string_view scenario) {
   return scenario == kScenarioSendStreamingMessageFiniteStream || scenario == kScenarioSubscribeToTaskFirstEventLatency;
 }
 
 bool IsWireScenario(std::string_view scenario, std::string_view transport) {
+  (void)transport;
   const bool supported_core =
       scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
       scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
       scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
-      scenario == kScenarioGetTaskMissingTaskError || scenario == kScenarioPushConfigCreate ||
-      scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList ||
-      scenario == kScenarioPushConfigDelete;
+      scenario == kScenarioGetTaskMissingTaskError;
   if (supported_core) {
     return true;
   }
-  return transport == kGrpcTransport && IsStreamingWireScenario(scenario);
+  return IsStreamingWireScenario(scenario) || IsPushConfigWireScenario(scenario);
 }
 
 bool ParseScenarios(std::string_view value, WireOptions* options) {
@@ -417,17 +476,19 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
   if (!options.scenarios.empty()) {
     return options.scenarios;
   }
-  std::vector<std::string> scenarios = {
-      std::string(kScenarioListTasksNoPagination),   std::string(kScenarioListTasksWithPagination),
-      std::string(kScenarioSendMessageCreateTask),   std::string(kScenarioGetTaskExistingTask),
-      std::string(kScenarioCancelTaskWorkingTask),   std::string(kScenarioSendMessageFollowUpExistingTask),
-      std::string(kScenarioGetTaskMissingTaskError), std::string(kScenarioPushConfigCreate),
-      std::string(kScenarioPushConfigGet),           std::string(kScenarioPushConfigList),
-      std::string(kScenarioPushConfigDelete)};
-  if (options.transport == kGrpcTransport) {
-    scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStream);
-    scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatency);
-  }
+  std::vector<std::string> scenarios = {std::string(kScenarioListTasksNoPagination),
+                                        std::string(kScenarioListTasksWithPagination),
+                                        std::string(kScenarioSendMessageCreateTask),
+                                        std::string(kScenarioGetTaskExistingTask),
+                                        std::string(kScenarioCancelTaskWorkingTask),
+                                        std::string(kScenarioSendMessageFollowUpExistingTask),
+                                        std::string(kScenarioGetTaskMissingTaskError),
+                                        std::string(kScenarioSendStreamingMessageFiniteStream),
+                                        std::string(kScenarioSubscribeToTaskFirstEventLatency),
+                                        std::string(kScenarioPushConfigCreate),
+                                        std::string(kScenarioPushConfigGet),
+                                        std::string(kScenarioPushConfigList),
+                                        std::string(kScenarioPushConfigDelete)};
   return scenarios;
 }
 

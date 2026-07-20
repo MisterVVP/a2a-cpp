@@ -278,6 +278,32 @@ jobs:
           SCENARIO: cpp-server-python-client
         run: ./scripts/run_mixed_runtime_interop.sh
 
+  http-sse-interop:
+    name: HTTP SSE interoperability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: ./scripts/install_build_deps.sh
+
+      - name: Run HTTP SSE interoperability fixtures
+        run: ./scripts/run_http_sse_interop.sh
+
+      - name: Run production HTTP clients against C++ SUT
+        run: ./scripts/run_cpp_sut_streaming_functional.sh
+
+      - name: Upload fixture and SUT logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: http-sse-interop-logs
+          path: |
+            build-http-sse-interop/fixture-*.log
+            build-http-sse-sut/tck-sut.log
+          if-no-files-found: ignore
+
   macos-build:
     runs-on: macos-14
     steps:

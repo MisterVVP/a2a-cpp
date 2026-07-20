@@ -4,19 +4,18 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/error.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/result.h"
 
 namespace a2a::http {
-
-namespace detail {
-struct ClientState;
-}
 
 struct Header final {
   std::string name;
@@ -38,11 +37,33 @@ struct Response final {
   std::string body;
 };
 
+namespace detail {
+struct ClientState;
+
+struct HeaderCapture final {
+  std::vector<Header>* response_headers = nullptr;
+  long response_code = 0;
+};
+
+struct StreamCallbackContext final {
+  const std::function<core::Result<void>(const Response&)>* on_metadata = nullptr;
+  const std::function<core::Result<void>(std::string_view)>* on_chunk = nullptr;
+  const std::function<bool()>* is_cancelled = nullptr;
+  HeaderCapture* header_capture = nullptr;
+  std::optional<core::Error> error;
+  bool metadata_checked = false;
+};
+}  // namespace detail
+
 class Client final {
  public:
   Client();
 
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
+  [[nodiscard]] core::Result<Response> StreamRequest(
+      const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+      const std::function<core::Result<void>(std::string_view)>& on_chunk,
+      const std::function<bool()>& is_cancelled) const;
 
  private:
   std::shared_ptr<detail::ClientState> state_;

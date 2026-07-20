@@ -9,6 +9,8 @@
 - clang-format
 - clang-tidy
 
+On Debian or Ubuntu, run `./scripts/install_build_deps.sh`. On Windows, install Visual Studio 2022 and Git for Windows, open Git Bash, and run the same command. The Windows path bootstraps vcpkg under `${VCPKG_ROOT:-$HOME/vcpkg}` and installs gRPC, Protobuf, and curl from the root manifest.
+
 ## Configure
 
 ```bash
@@ -36,23 +38,21 @@ When `A2A_ENABLE_LIBCURL=ON` (the default), CMake enables the shared libcurl-bac
 
 ## Build examples
 
-Curated examples are standalone consumer projects under `examples/`. Build them through the same CMake paths used by downstream applications instead of through the repository root:
+Curated examples are standalone consumer projects under `examples/`. The runner forwards the vcpkg toolchain when `VCPKG_ROOT` is set and handles both single- and multi-configuration executable layouts:
 
 ```bash
-cmake -S examples/fetch_content_consumer -B build-example -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-example --parallel
-./build-example/a2a_example
+./scripts/run_examples.sh build-example hello_agent
 ```
 
-After installing the SDK, the same app sources can be built with `find_package`:
+On Windows Git Bash:
 
 ```bash
-cmake -S examples/installed_package_consumer -B build-installed-example \
-  -DCMAKE_PREFIX_PATH=<install-prefix> \
-  -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-installed-example --parallel
-./build-installed-example/a2a_example
+./scripts/install_build_deps.sh
+rm -rf build-example-hello_agent
+./scripts/run_examples.sh build-example hello_agent
 ```
+
+The Windows executable is under `build-example-hello_agent/RelWithDebInfo/a2a_example.exe`. Delete an existing build directory if it was originally configured without the vcpkg toolchain.
 
 To run only proto generation:
 
@@ -196,4 +196,4 @@ This enforces:
 ./scripts/run_examples.sh hello_agent streaming_server push_notifications
 ```
 
-With no arguments, the script runs every app under `examples/apps/` through `examples/fetch_content_consumer/`.
+With no arguments, the script runs every app under `examples/apps/` through `examples/fetch_content_consumer/`. Set `A2A_EXAMPLE_BUILD_CONFIG` to select a Visual Studio configuration; it defaults to `RelWithDebInfo`.
