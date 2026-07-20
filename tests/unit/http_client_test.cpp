@@ -588,6 +588,7 @@ TEST(SharedHttpClientTest, StreamRequestRejectsMissingCallbacks) {
 
 struct StreamRequestCapture final {
   bool metadata_before_chunk = false;
+  bool chunk_received = false;
   bool metadata_received = false;
   int status_code = 0;
   std::string chunks;
@@ -604,11 +605,29 @@ struct StreamRequestCapture final {
         return {};
       },
       [&capture](std::string_view chunk) -> a2a::core::Result<void> {
+        capture.chunk_received = true;
         capture.metadata_before_chunk = capture.metadata_received;
         capture.chunks.append(chunk);
         return {};
       },
       [] { return false; });
+}
+
+void ExpectSuccessfulEmptyStreamResponse(const a2a::core::Result<a2a::http::Response>& response) {
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+}
+
+void ExpectEmptyStreamCallbacks(const StreamRequestCapture& capture) {
+  EXPECT_TRUE(capture.metadata_received);
+  EXPECT_FALSE(capture.chunk_received);
+  EXPECT_EQ(capture.status_code, kHttpOk);
+}
+
+void ExpectBodylessGetStreamRequest(std::string_view request) {
+  EXPECT_NE(request.find(kGetStreamRequestLine), std::string_view::npos);
+  EXPECT_EQ(request.find(kContentLengthHeaderPrefix), std::string_view::npos);
+  EXPECT_EQ(request.find(kFormContentTypeHeader), std::string_view::npos);
 }
 
 [[nodiscard]] std::future<a2a::core::Result<a2a::http::Response>> StartCancellableStreamRequest(
@@ -773,28 +792,13 @@ TEST(SharedHttpClientTest, EmptyStreamStillDeliversMetadata) {
   request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
   request.http_version = std::string(kHttpVersion11);
 
-  bool metadata_received = false;
-  bool chunk_received = false;
-  const auto response = client.StreamRequest(
-      request,
-      [&metadata_received](const a2a::http::Response& metadata) -> a2a::core::Result<void> {
-        metadata_received = true;
-        EXPECT_EQ(metadata.status_code, kHttpOk);
-        return {};
-      },
-      [&chunk_received](std::string_view) -> a2a::core::Result<void> {
-        chunk_received = true;
-        return {};
-      },
-      [] { return false; });
+  StreamRequestCapture capture;
+  const auto response = ExecuteCapturedStreamRequest(client, request, capture);
+  const std::string captured_request = server.request();
 
-  ASSERT_TRUE(response.ok()) << response.error().message();
-  EXPECT_TRUE(metadata_received);
-  EXPECT_FALSE(chunk_received);
-  EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_NE(server.request().find(kGetStreamRequestLine), std::string::npos);
-  EXPECT_EQ(server.request().find(kContentLengthHeaderPrefix), std::string::npos);
-  EXPECT_EQ(server.request().find(kFormContentTypeHeader), std::string::npos);
+  ExpectSuccessfulEmptyStreamResponse(response);
+  ExpectEmptyStreamCallbacks(capture);
+  ExpectBodylessGetStreamRequest(captured_request);
 }
 
 TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {
