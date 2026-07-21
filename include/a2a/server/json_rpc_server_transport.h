@@ -16,6 +16,7 @@
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_server_transport.h"
+#include "a2a/server/version_header_validator.h"
 
 namespace a2a::server {
 
@@ -56,7 +57,6 @@ class JsonRpcServerTransport final {
     DispatchRequest dispatch;
   };
 
-  [[nodiscard]] core::Result<void> ValidateVersionHeader(const HttpServerRequest& request) const;
   [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
   [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(const JsonRpcEnvelope& envelope,
                                                                  const JsonRpcServerTransportOptions& options);
@@ -73,6 +73,7 @@ class JsonRpcServerTransport final {
   Dispatcher* dispatcher_ = nullptr;
   JsonRpcServerTransportOptions options_;
   RequiredExtensionsValidator required_extensions_validator_;
+  VersionHeaderValidator version_header_validator_;
 };
 
 }  // namespace a2a::server

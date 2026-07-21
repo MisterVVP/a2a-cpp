@@ -85,6 +85,7 @@ add_library(a2a_server STATIC
   server/http_adapter.cpp
   server/rest_server_transport.cpp
   server/required_extensions_validator.cpp
+  server/version_header_validator.cpp
   server/rest_transport.cpp
   server/json_rpc_server_transport.cpp
   server/push_notifications/push_notification_delivery.cpp

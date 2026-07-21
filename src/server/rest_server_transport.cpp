@@ -351,7 +351,8 @@ RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::Ag
       transport_(dispatcher),
       agent_card_(std::move(agent_card)),
       options_(std::move(options)),
-      required_extensions_validator_(options_.required_extensions) {
+      required_extensions_validator_(options_.required_extensions),
+      version_header_validator_(options_.require_version_header) {
   options_.rest_api_base_path = NormalizeBasePath(options_.rest_api_base_path);
   for (auto& iface : *agent_card_.mutable_supported_interfaces()) {
     if (iface.protocol_version().empty()) {
@@ -396,7 +397,7 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
     return HandleExtendedAgentCard(request, *tenant);
   }
 
-  const auto version = ValidateVersionHeader(request);
+  const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
@@ -456,21 +457,6 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
   return rest_request;
 }
 
-core::Result<void> RestServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
-  const auto version_header = core::http::FindHeaderValue(request.headers, core::Version::kHeaderName);
-  const std::string version = version_header.has_value() ? std::string(*version_header) : std::string();
-  if (version.empty()) {
-    if (options_.require_version_header) {
-      return core::Error::UnsupportedVersion("Missing required A2A-Version header");
-    }
-    return {};
-  }
-  if (!core::Version::IsSupported(version)) {
-    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value").WithProtocolCode(version);
-  }
-  return {};
-}
-
 core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const HttpServerRequest& request) const {
   if (request.method != core::http::kMethodGet) {
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
@@ -504,7 +490,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
     return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
                                   "UNSUPPORTED_OPERATION");
   }
-  const auto version = ValidateVersionHeader(request);
+  const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
   }
