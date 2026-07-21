@@ -775,7 +775,8 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
 JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcServerTransportOptions options)
     : dispatcher_(dispatcher),
       options_(std::move(options)),
-      required_extensions_validator_(options_.required_extensions) {
+      required_extensions_validator_(options_.required_extensions),
+      version_header_validator_(options_.require_version_header) {
   options_.rpc_path = NormalizePath(std::move(options_.rpc_path));
 }
 
@@ -801,7 +802,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
                               ResponseId{}, envelope.error(), core::http::kStatusOk);
   }
 
-  const auto version = ValidateVersionHeader(request);
+  const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
     const auto error = version.error().WithTransport("jsonrpc");
     return BuildErrorResponse(JsonRpcCodeFromError(error), error.message(), envelope.value().id, error,
@@ -893,23 +894,6 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   }
 
   return BuildSuccessResponse(parsed.value().id, result.value(), activated_extensions);
-}
-
-core::Result<void> JsonRpcServerTransport::ValidateVersionHeader(const HttpServerRequest& request) const {
-  const auto version_header = core::http::FindHeaderValue(request.headers, core::Version::kHeaderName);
-  const std::string version = version_header.has_value() ? std::string(*version_header) : std::string();
-  if (version.empty()) {
-    if (options_.require_version_header) {
-      return core::protocol_errors::VersionNotSupported("Missing required A2A-Version header");
-    }
-    return {};
-  }
-
-  if (!core::Version::IsSupported(version)) {
-    return core::protocol_errors::VersionNotSupported("Unsupported A2A-Version header value");
-  }
-
-  return {};
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcEnvelope> JsonRpcServerTransport::ParseEnvelope(std::string_view body) {

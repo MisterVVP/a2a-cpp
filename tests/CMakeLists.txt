@@ -393,6 +393,18 @@ target_link_libraries(http_adapter_test
 )
 
 gtest_discover_tests(http_adapter_test)
+add_executable(version_header_validator_test
+  unit/version_header_validator_test.cpp
+)
+
+target_link_libraries(version_header_validator_test
+  PRIVATE
+    a2a::server
+    GTest::gtest_main
+)
+
+gtest_discover_tests(version_header_validator_test)
+
 add_executable(rest_server_transport_test
   unit/rest_server_transport_test.cpp
 )
