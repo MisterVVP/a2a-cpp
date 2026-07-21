@@ -2,6 +2,15 @@
 
 This page reflects the current build surface for the latest documented release.
 
+## Choose an integration method
+
+Use the workflow that matches your application:
+
+- Build the SDK directly from source as described below.
+- Use CMake [`FetchContent`](../build/cmake.md#fetchcontent-consumer) and pin a release tag or reviewed commit.
+- Install the SDK as a CMake package and consume it with [`find_package`](../build/cmake.md#install-as-a-cmake-package).
+- Consume the repository-local [`vcpkg` overlay port](../build/vcpkg.md#consume-a2a-cpp-through-the-repository-overlay-port).
+
 ## Prerequisites
 
 Install these tools before configuring the repository:
@@ -19,14 +28,23 @@ Install these tools before configuring the repository:
 
 ```bash
 ./scripts/install_build_deps.sh
+cmake --version
 ```
 
-The Bash installer intentionally supports Debian/Ubuntu only.
+The installer supports Debian and Ubuntu. Confirm that the installed CMake version is 3.25 or newer. Some older distributions, including Ubuntu 22.04, provide an older CMake package and require a newer CMake installation from another source.
+
+The same script also supports Windows when run from Git Bash.
 
 ### macOS
 
 ```bash
 brew install cmake ninja protobuf grpc re2 abseil curl
+```
+
+When enabling PostgreSQL-backed stores, also install the PostgreSQL client package:
+
+```bash
+brew install libpq
 ```
 
 ### Windows Git Bash
@@ -37,11 +55,15 @@ Install Visual Studio 2022 with the **Desktop development with C++** workload an
 ./scripts/install_build_deps.sh
 ```
 
-The script uses `${VCPKG_ROOT:-$HOME/vcpkg}`, bootstraps vcpkg through `bootstrap-vcpkg.bat`, and installs the dependencies declared by the root `vcpkg.json`. Override `VCPKG_ROOT`, `VCPKG_TARGET_TRIPLET`, or `VCPKG_HOST_TRIPLET` before running it when needed.
+The script first checks `VCPKG_ROOT`, then searches for `vcpkg.exe` or `vcpkg` on `PATH`, and then checks `$HOME/vcpkg`. It clones and bootstraps vcpkg under `${VCPKG_ROOT:-$HOME/vcpkg}` only when an existing installation is not found. It installs the dependencies declared by the root `vcpkg.json` and prints the resolved `VCPKG_ROOT`, target triplet, and host triplet when it finishes.
+
+Override `VCPKG_ROOT`, `VCPKG_TARGET_TRIPLET`, or `VCPKG_HOST_TRIPLET` before running the script when needed. Keep the resolved `VCPKG_ROOT` value for the CMake configuration step below; do not reset it to `$HOME/vcpkg` when the script found vcpkg elsewhere.
+
+The root manifest does not install PostgreSQL client libraries. For PostgreSQL-enabled Windows builds, use a vcpkg manifest that includes `libpq`, or consume the SDK through the repository overlay port with its `postgres-store` feature. See [Build with vcpkg](../build/vcpkg.md#enable-postgresql-store-support).
 
 ## Configure from source
 
-On Linux or macOS:
+On Linux:
 
 ```bash
 cmake -S . -B build \
@@ -49,10 +71,21 @@ cmake -S . -B build \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
 
-On Windows Git Bash:
+On macOS, use the same Homebrew prefixes validated by CI:
 
 ```bash
-export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)"
+```
+
+When `A2A_ENABLE_POSTGRES_STORE=ON`, append `$(brew --prefix libpq)` to `CMAKE_PREFIX_PATH`.
+
+On Windows Git Bash, set `VCPKG_ROOT` to the value printed by `install_build_deps.sh` or to an existing vcpkg checkout:
+
+```bash
+export VCPKG_ROOT="/path/to/vcpkg"
 export VCPKG_TARGET_TRIPLET="${VCPKG_TARGET_TRIPLET:-x64-windows}"
 export VCPKG_HOST_TRIPLET="${VCPKG_HOST_TRIPLET:-$VCPKG_TARGET_TRIPLET}"
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
@@ -95,7 +128,7 @@ Generate only protobuf outputs when needed:
 cmake --build build --target a2a_proto_codegen
 ```
 
-Generated headers are written under `build/generated/a2a/v1/` and are installed with the SDK.
+Generated A2A headers are written under `build/generated/a2a/v1/`. Generated Google API annotation headers are written under `build/generated/google/api/`. Both sets are installed with the SDK.
 
 ## Install CMake package artifacts
 
@@ -105,17 +138,19 @@ cmake --install build --prefix /tmp/a2a-cpp-install
 
 On a Visual Studio build, also pass `--config RelWithDebInfo`.
 
-The install tree includes public headers, generated protobuf headers, libraries, and CMake package files under `lib/cmake/a2a_cpp`.
+The install tree includes public headers, generated protobuf headers, libraries, and CMake package files under `${CMAKE_INSTALL_LIBDIR}/cmake/a2a_cpp`, commonly `lib/cmake/a2a_cpp`.
 
 ## Contributor validation
 
-For code changes, run the canonical validation script before opening or updating a PR:
+For code changes in a Linux CI-compatible environment, run the canonical validation script before opening or updating a PR:
 
 ```bash
 ./scripts/verify_changes.sh
 ```
 
-The script runs the same major local gates as CI: clang-format dry run, configure/build, tests, and clang-tidy.
+The script runs the same main validation categories as CI: formatting, configure/build, tests, and clang-tidy. It runs `clang-format -i` first and can modify tracked C and C++ files, so review `git diff` after it completes.
+
+The current script assumes a Unix environment with `nproc` and a single-configuration build. On macOS or Windows, use the platform-specific configure, build, and test commands above and run the required formatting and clang-tidy checks separately.
 
 For documentation-only mdBook changes, build the book:
 
