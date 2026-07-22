@@ -82,6 +82,7 @@ target_link_libraries(a2a_client
 add_library(a2a_server STATIC
   server/agent_card/agent_card_serializer.cpp
   server/grpc_server_transport.cpp
+  server/stream_cancellation_watcher.cpp
   server/http_adapter.cpp
   server/rest_server_transport.cpp
   server/required_extensions_validator.cpp

@@ -493,6 +493,11 @@ add_executable(grpc_server_transport_test
   unit/grpc_server_transport_test.cpp
 )
 
+target_include_directories(grpc_server_transport_test
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+)
+
 target_link_libraries(grpc_server_transport_test
   PRIVATE
     a2a::server
