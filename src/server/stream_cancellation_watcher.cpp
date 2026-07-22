@@ -19,11 +19,29 @@ StreamCancellationWatcher::StreamCancellationWatcher(::grpc::ServerContext* cont
 StreamCancellationWatcher::StreamCancellationWatcher(IsCancelled is_cancelled, ServerStreamSession* stream)
     : is_cancelled_(std::move(is_cancelled)), stream_(stream) {
   if (is_cancelled_ && stream_ != nullptr && stream_->IsLive()) {
-    worker_ = std::jthread([this](std::stop_token stop_token) { Watch(stop_token); });
+#if defined(__cpp_lib_jthread)
+    worker_ = std::jthread([this](const std::stop_token& stop_token) { Watch(stop_token); });
+#else
+    worker_ = std::thread([this] { Watch(); });
+#endif
   }
 }
 
-void StreamCancellationWatcher::Watch(std::stop_token stop_token) {
+StreamCancellationWatcher::~StreamCancellationWatcher() {
+#if !defined(__cpp_lib_jthread)
+  {
+    std::lock_guard lock(wait_mutex_);
+    stop_requested_ = true;
+  }
+  wait_condition_.notify_all();
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+#endif
+}
+
+#if defined(__cpp_lib_jthread)
+void StreamCancellationWatcher::Watch(const std::stop_token& stop_token) {
   while (!stop_token.stop_requested()) {
     if (is_cancelled_()) {
       stream_->Cancel();
@@ -34,5 +52,20 @@ void StreamCancellationWatcher::Watch(std::stop_token stop_token) {
     wait_condition_.wait_for(lock, stop_token, kStreamCancellationPollInterval, [] { return false; });
   }
 }
+#else
+void StreamCancellationWatcher::Watch() {
+  while (true) {
+    if (is_cancelled_()) {
+      stream_->Cancel();
+      return;
+    }
+
+    std::unique_lock lock(wait_mutex_);
+    if (wait_condition_.wait_for(lock, kStreamCancellationPollInterval, [this] { return stop_requested_; })) {
+      return;
+    }
+  }
+}
+#endif
 
 }  // namespace a2a::server

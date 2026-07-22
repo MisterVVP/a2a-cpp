@@ -198,8 +198,9 @@ TEST(StreamCancellationWatcherTest, CompletionCancellationRaceIsSafe) {
     RecordingLiveStreamSession stream;
     {
       a2a::server::StreamCancellationWatcher watcher([&cancelled] { return cancelled.load(); }, &stream);
-      std::jthread canceller([&cancelled] { cancelled.store(true); });
+      std::thread canceller([&cancelled] { cancelled.store(true); });
       stream.Complete();
+      canceller.join();
     }
     EXPECT_LE(stream.CancelCount(), 1);
   }
