@@ -503,6 +503,49 @@ target_link_libraries(grpc_server_transport_test
 
 gtest_discover_tests(grpc_server_transport_test)
 
+add_executable(stream_cancellation_watcher_test
+  unit/stream_cancellation_watcher_test.cpp
+)
+
+target_include_directories(stream_cancellation_watcher_test
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(stream_cancellation_watcher_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(stream_cancellation_watcher_test)
+
+add_executable(stream_cancellation_watcher_fallback_test
+  unit/stream_cancellation_watcher_test.cpp
+  ${PROJECT_SOURCE_DIR}/src/server/stream_cancellation_watcher.cpp
+)
+
+target_include_directories(stream_cancellation_watcher_fallback_test
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(stream_cancellation_watcher_fallback_test
+  PRIVATE
+    A2A_FORCE_STREAM_CANCELLATION_WATCHER_THREAD_FALLBACK=1
+)
+
+target_link_libraries(stream_cancellation_watcher_fallback_test
+  PRIVATE
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(stream_cancellation_watcher_fallback_test)
+
 
 add_executable(push_notification_store_test
   unit/push_notification_store_test.cpp
