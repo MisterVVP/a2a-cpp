@@ -509,7 +509,7 @@ add_executable(stream_cancellation_watcher_test
 
 target_include_directories(stream_cancellation_watcher_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 target_link_libraries(stream_cancellation_watcher_test
@@ -524,12 +524,12 @@ gtest_discover_tests(stream_cancellation_watcher_test)
 
 add_executable(stream_cancellation_watcher_fallback_test
   unit/stream_cancellation_watcher_test.cpp
-  ${CMAKE_SOURCE_DIR}/src/server/stream_cancellation_watcher.cpp
+  ${PROJECT_SOURCE_DIR}/src/server/stream_cancellation_watcher.cpp
 )
 
 target_include_directories(stream_cancellation_watcher_fallback_test
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 target_compile_definitions(stream_cancellation_watcher_fallback_test
