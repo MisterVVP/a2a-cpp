@@ -17,9 +17,13 @@ StreamCancellationWatcher::StreamCancellationWatcher(::grpc::ServerContext* cont
           context == nullptr ? IsCancelled{} : [context] { return context->IsCancelled(); }, stream) {}
 
 StreamCancellationWatcher::StreamCancellationWatcher(IsCancelled is_cancelled, ServerStreamSession* stream)
-    : is_cancelled_(std::move(is_cancelled)), stream_(stream) {
+    : StreamCancellationWatcher(std::move(is_cancelled), stream, Options{}) {}
+
+StreamCancellationWatcher::StreamCancellationWatcher(IsCancelled is_cancelled, ServerStreamSession* stream,
+                                                     Options options)
+    : is_cancelled_(std::move(is_cancelled)), stream_(stream), options_(std::move(options)) {
   if (is_cancelled_ && stream_ != nullptr && stream_->IsLive()) {
-#if defined(__cpp_lib_jthread)
+#if A2A_STREAM_CANCELLATION_WATCHER_HAS_JTHREAD
     worker_ = std::jthread([this](const std::stop_token& stop_token) { Watch(stop_token); });
 #else
     worker_ = std::thread([this] { Watch(); });
@@ -28,7 +32,7 @@ StreamCancellationWatcher::StreamCancellationWatcher(IsCancelled is_cancelled, S
 }
 
 StreamCancellationWatcher::~StreamCancellationWatcher() {
-#if !defined(__cpp_lib_jthread)
+#if !A2A_STREAM_CANCELLATION_WATCHER_HAS_JTHREAD
   {
     std::lock_guard lock(wait_mutex_);
     stop_requested_ = true;
@@ -40,7 +44,7 @@ StreamCancellationWatcher::~StreamCancellationWatcher() {
 #endif
 }
 
-#if defined(__cpp_lib_jthread)
+#if A2A_STREAM_CANCELLATION_WATCHER_HAS_JTHREAD
 void StreamCancellationWatcher::Watch(const std::stop_token& stop_token) {
   while (!stop_token.stop_requested()) {
     if (is_cancelled_()) {
@@ -49,7 +53,10 @@ void StreamCancellationWatcher::Watch(const std::stop_token& stop_token) {
     }
 
     std::unique_lock lock(wait_mutex_);
-    wait_condition_.wait_for(lock, stop_token, kStreamCancellationPollInterval, [] { return false; });
+    if (options_.before_wait) {
+      options_.before_wait();
+    }
+    wait_condition_.wait_for(lock, stop_token, options_.poll_interval, [] { return false; });
   }
 }
 #else
@@ -61,7 +68,10 @@ void StreamCancellationWatcher::Watch() {
     }
 
     std::unique_lock lock(wait_mutex_);
-    if (wait_condition_.wait_for(lock, kStreamCancellationPollInterval, [this] { return stop_requested_; })) {
+    if (options_.before_wait) {
+      options_.before_wait();
+    }
+    if (wait_condition_.wait_for(lock, options_.poll_interval, [this] { return stop_requested_; })) {
       return;
     }
   }

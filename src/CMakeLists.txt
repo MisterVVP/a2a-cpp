@@ -1,3 +1,20 @@
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+#include <thread>
+int main() {
+#ifndef __cpp_lib_jthread
+#error std::jthread is unavailable
+#endif
+  std::jthread worker;
+  return 0;
+}
+" A2A_STDLIB_HAS_JTHREAD)
+if(A2A_STDLIB_HAS_JTHREAD)
+  message(STATUS "StreamCancellationWatcher: std::jthread implementation selected for native build")
+else()
+  message(STATUS "StreamCancellationWatcher: interruptible std::thread fallback selected for native build")
+endif()
+
 add_library(a2a_core STATIC
   core/agent_card/agent_card_builder.cpp
   core/agent_card/agent_card_provider.cpp

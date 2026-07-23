@@ -7,6 +7,7 @@
 #include <grpcpp/server_builder.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -52,9 +53,78 @@ class StreamSession final : public a2a::server::ServerStreamSession {
   std::size_t index_ = 0;
 };
 
+constexpr std::string_view kClientCancelledSubscribeTaskId = "grpc-client-cancel-subscribe";
+constexpr auto kClientCancellationTimeout = std::chrono::seconds(2);
+
+class ControlledSubscriptionRecorder final {
+ public:
+  void RecordCancel() {
+    cancel_count_.fetch_add(1);
+    {
+      std::lock_guard lock(mutex_);
+      cancelled_ = true;
+    }
+    changed_.notify_all();
+  }
+
+  [[nodiscard]] bool WaitForCancel() const {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, kClientCancellationTimeout, [this] { return cancelled_; });
+  }
+
+  [[nodiscard]] int CancelCount() const noexcept { return cancel_count_.load(); }
+
+ private:
+  std::atomic_int cancel_count_ = 0;
+  mutable std::mutex mutex_;
+  mutable std::condition_variable changed_;
+  bool cancelled_ = false;
+};
+
+class ControlledSubscriptionSession final : public a2a::server::ServerStreamSession {
+ public:
+  ControlledSubscriptionSession(lf::a2a::v1::Task task, std::shared_ptr<ControlledSubscriptionRecorder> recorder)
+      : recorder_(std::move(recorder)) {
+    *initial_event_.mutable_task() = std::move(task);
+  }
+
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    if (!delivered_initial_) {
+      delivered_initial_ = true;
+      return std::optional<lf::a2a::v1::StreamResponse>(initial_event_);
+    }
+
+    std::unique_lock lock(mutex_);
+    changed_.wait(lock, [this] { return cancelled_.load(); });
+    return std::optional<lf::a2a::v1::StreamResponse>{};
+  }
+
+  [[nodiscard]] bool IsLive() const noexcept override { return !cancelled_.load(); }
+
+  void Cancel() noexcept override {
+    if (!cancelled_.exchange(true) && recorder_ != nullptr) {
+      recorder_->RecordCancel();
+    }
+    changed_.notify_all();
+  }
+
+ private:
+  std::shared_ptr<ControlledSubscriptionRecorder> recorder_;
+  lf::a2a::v1::StreamResponse initial_event_;
+  bool delivered_initial_ = false;
+  std::atomic_bool cancelled_ = false;
+  std::mutex mutex_;
+  std::condition_variable changed_;
+};
+
 class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
  public:
   explicit StreamingStoreExecutor(a2a::server::TaskStore* store) : store_(store) {}
+
+  void RecordSubscribeCancellationFor(std::string task_id, std::shared_ptr<ControlledSubscriptionRecorder> recorder) {
+    controlled_subscription_task_id_ = std::move(task_id);
+    controlled_subscription_recorder_ = std::move(recorder);
+  }
 
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& context) override {
@@ -93,6 +163,10 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
     if (!task.ok()) {
       return task.error();
     }
+    if (controlled_subscription_recorder_ != nullptr && request.id() == controlled_subscription_task_id_) {
+      return std::unique_ptr<a2a::server::ServerStreamSession>(
+          std::make_unique<ControlledSubscriptionSession>(task.value(), controlled_subscription_recorder_));
+    }
     return subscriptions_.Subscribe(task.value());
   }
 
@@ -115,6 +189,8 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
  private:
   a2a::server::TaskStore* store_;
   a2a::server::TaskSubscriptionService subscriptions_;
+  std::string controlled_subscription_task_id_;
+  std::shared_ptr<ControlledSubscriptionRecorder> controlled_subscription_recorder_;
 };
 
 class RecordingObserver final : public a2a::client::StreamObserver {
@@ -122,7 +198,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   struct Snapshot final {
     std::vector<lf::a2a::v1::StreamResponse> events;
     std::vector<std::string> errors;
-    bool completed = false;
+    int completed_count = 0;
   };
 
   void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
@@ -144,7 +220,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   void OnCompleted() override {
     {
       std::lock_guard lock(mutex_);
-      completed_ = true;
+      ++completed_count_;
     }
     changed_.notify_all();
   }
@@ -157,7 +233,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
 
   [[nodiscard]] Snapshot GetSnapshot() const {
     std::lock_guard lock(mutex_);
-    return Snapshot{.events = events_, .errors = errors_, .completed = completed_};
+    return Snapshot{.events = events_, .errors = errors_, .completed_count = completed_count_};
   }
 
  private:
@@ -165,7 +241,7 @@ class RecordingObserver final : public a2a::client::StreamObserver {
   mutable std::condition_variable changed_;
   std::vector<lf::a2a::v1::StreamResponse> events_;
   std::vector<std::string> errors_;
-  bool completed_ = false;
+  int completed_count_ = 0;
 };
 
 struct GrpcServerHarness final {
@@ -262,7 +338,7 @@ std::unique_ptr<GrpcServerHarness> StartHarness() {
   if (snapshot.events.front().task().id() != "grpc-integration-1") {
     return a2a::core::Error::Internal("Streaming event returned unexpected task id");
   }
-  if (!snapshot.completed) {
+  if (snapshot.completed_count == 0) {
     return a2a::core::Error::Internal("Streaming observer was not completed");
   }
   if (!snapshot.errors.empty()) {
@@ -364,7 +440,7 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   if (!snapshot.errors.empty()) {
     return a2a::core::Error::Internal("SubscribeTask unexpectedly returned errors");
   }
-  if (!snapshot.completed) {
+  if (snapshot.completed_count == 0) {
     return a2a::core::Error::Internal("SubscribeTask stream did not complete");
   }
   constexpr std::size_t kExpectedSubscribeEventCount = 2U;
@@ -503,6 +579,55 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   return {};
 }
 
+[[nodiscard]] a2a::core::Result<void> VerifyClientStreamCancellationCancelsServerSubscription(
+    GrpcServerHarness* harness, a2a::client::A2AClient* client) {
+  if (harness == nullptr || client == nullptr) {
+    return a2a::core::Error::Internal("Harness and client must not be null");
+  }
+
+  auto recorder = std::make_shared<ControlledSubscriptionRecorder>();
+  harness->executor.RecordSubscribeCancellationFor(std::string(kClientCancelledSubscribeTaskId), recorder);
+
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send_request.mutable_message()->set_task_id(std::string(kClientCancelledSubscribeTaskId));
+  const auto send_response = client->SendMessage(send_request);
+  if (!send_response.ok()) {
+    return send_response.error();
+  }
+
+  lf::a2a::v1::GetTaskRequest subscribe_request;
+  subscribe_request.set_id(std::string(kClientCancelledSubscribeTaskId));
+  RecordingObserver observer;
+  auto stream = client->SubscribeTask(subscribe_request, observer);
+  if (!stream.ok()) {
+    return stream.error();
+  }
+  if (!observer.WaitForEventCount(1U)) {
+    return a2a::core::Error::Internal("SubscribeTask did not deliver the initial event before client cancellation");
+  }
+
+  stream.value()->Cancel();
+  if (!recorder->WaitForCancel()) {
+    return a2a::core::Error::Internal("Server subscription did not observe client stream cancellation");
+  }
+  if (recorder->CancelCount() != 1) {
+    return a2a::core::Error::Internal("Server subscription cancellation count was not exactly one");
+  }
+  if (stream.value()->IsActive()) {
+    return a2a::core::Error::Internal("Client stream remained active after cancellation");
+  }
+
+  const auto snapshot = observer.GetSnapshot();
+  if (snapshot.events.empty() || !snapshot.events.front().has_task()) {
+    return a2a::core::Error::Internal("Client stream cancellation test did not receive initial task event");
+  }
+  if (snapshot.completed_count > 1 || snapshot.errors.size() > 1U) {
+    return a2a::core::Error::Internal("Observer received duplicate terminal callbacks");
+  }
+  return {};
+}
+
 TEST(GrpcTransportIntegrationTest, ClientAndServerRoundTripCoreRpcsAndStreaming) {
   auto harness = StartHarness();
   ASSERT_NE(harness->server, nullptr);
@@ -539,6 +664,18 @@ TEST(GrpcTransportIntegrationTest, SubscribeTaskReturnsTaskEvents) {
   auto client = BuildClient(harness->port);
   const auto subscribe = VerifySubscribeTask(client.get());
   ASSERT_TRUE(subscribe.ok()) << subscribe.error().message();
+
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, ClientStreamCancellationCancelsServerSubscription) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  ASSERT_GT(harness->port, 0);
+
+  auto client = BuildClient(harness->port);
+  const auto cancellation = VerifyClientStreamCancellationCancelsServerSubscription(harness.get(), client.get());
+  ASSERT_TRUE(cancellation.ok()) << cancellation.error().message();
 
   harness->server->Shutdown();
 }

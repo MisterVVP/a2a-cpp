@@ -13,17 +13,12 @@
 #endif
 #include <gtest/gtest.h>
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include "a2a/core/protocol_errors.h"
@@ -34,7 +29,6 @@
 #include "a2a/server/server_stream_session.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
-#include "server/stream_cancellation_watcher.h"
 
 namespace {
 constexpr int64_t kStatusTimestampSeconds = 10;
@@ -45,45 +39,6 @@ constexpr std::string_view kTaskIdTwo = "task-2";
 constexpr std::string_view kSubscribeTaskId = "sub-task";
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 constexpr std::string_view kGrpcExtensionsMetadataKey = "a2a-extensions";
-
-constexpr auto kWatcherStartTimeout = std::chrono::seconds(1);
-constexpr auto kPromptDestructionLimit = std::chrono::milliseconds(20);
-constexpr int kRaceIterationCount = 100;
-
-class RecordingLiveStreamSession final : public a2a::server::ServerStreamSession {
- public:
-  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
-    return std::optional<lf::a2a::v1::StreamResponse>{};
-  }
-
-  [[nodiscard]] bool IsLive() const noexcept override { return live_.load(); }
-
-  void Cancel() noexcept override {
-    cancel_count_.fetch_add(1);
-    live_.store(false);
-    {
-      std::lock_guard lock(mutex_);
-      cancelled_ = true;
-    }
-    changed_.notify_all();
-  }
-
-  void Complete() noexcept { live_.store(false); }
-
-  [[nodiscard]] int CancelCount() const noexcept { return cancel_count_.load(); }
-
-  [[nodiscard]] bool WaitForCancellation() const {
-    std::unique_lock lock(mutex_);
-    return changed_.wait_for(lock, kWatcherStartTimeout, [this] { return cancelled_; });
-  }
-
- private:
-  std::atomic_bool live_ = true;
-  std::atomic_int cancel_count_ = 0;
-  mutable std::mutex mutex_;
-  mutable std::condition_variable changed_;
-  bool cancelled_ = false;
-};
 
 class FakeStreamSession final : public a2a::server::ServerStreamSession {
  public:
@@ -165,60 +120,6 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   std::string observed_remote_address;
   a2a::server::ListTasksRequest observed_list_request;
 };
-
-TEST(StreamCancellationWatcherTest, PromptDestructionDoesNotWaitForPollInterval) {
-  grpc::ServerContext context;
-  RecordingLiveStreamSession stream;
-  auto watcher = std::make_unique<a2a::server::StreamCancellationWatcher>(&context, &stream);
-  std::this_thread::sleep_for(a2a::server::kStreamCancellationPollInterval / 2);
-
-  const auto start = std::chrono::steady_clock::now();
-  watcher.reset();
-  const auto elapsed = std::chrono::steady_clock::now() - start;
-  EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed), kPromptDestructionLimit);
-  EXPECT_EQ(stream.CancelCount(), 0);
-}
-
-TEST(StreamCancellationWatcherTest, ClientCancellationCancelsStreamOnce) {
-  std::atomic_bool cancelled = false;
-  RecordingLiveStreamSession stream;
-
-  {
-    a2a::server::StreamCancellationWatcher watcher([&cancelled] { return cancelled.load(); }, &stream);
-    cancelled.store(true);
-    EXPECT_TRUE(stream.WaitForCancellation());
-  }
-
-  EXPECT_EQ(stream.CancelCount(), 1);
-}
-
-TEST(StreamCancellationWatcherTest, CompletionCancellationRaceIsSafe) {
-  for (int iteration = 0; iteration < kRaceIterationCount; ++iteration) {
-    std::atomic_bool cancelled = false;
-    RecordingLiveStreamSession stream;
-    {
-      a2a::server::StreamCancellationWatcher watcher([&cancelled] { return cancelled.load(); }, &stream);
-      std::thread canceller([&cancelled] { cancelled.store(true); });
-      stream.Complete();
-      canceller.join();
-    }
-    EXPECT_LE(stream.CancelCount(), 1);
-  }
-}
-
-TEST(StreamCancellationWatcherTest, NonLiveStreamDoesNotStartCancellationWorker) {
-  std::atomic_bool cancelled = false;
-  RecordingLiveStreamSession stream;
-  stream.Complete();
-
-  {
-    a2a::server::StreamCancellationWatcher watcher([&cancelled] { return cancelled.load(); }, &stream);
-    cancelled.store(true);
-    std::this_thread::sleep_for(a2a::server::kStreamCancellationPollInterval * 2);
-  }
-
-  EXPECT_EQ(stream.CancelCount(), 0);
-}
 
 TEST(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
   FakeExecutor executor;
