@@ -70,10 +70,13 @@ constexpr std::string_view kScenarioPushConfigCreate = "PushConfig_Create";
 constexpr std::string_view kScenarioPushConfigGet = "PushConfig_Get";
 constexpr std::string_view kScenarioPushConfigList = "PushConfig_List";
 constexpr std::string_view kScenarioPushConfigDelete = "PushConfig_Delete";
-constexpr std::string_view kScenarioPushNotifyManyConfigsOneTaskUpdate = "PushNotify_ManyConfigsOneTaskUpdate";
-constexpr std::string_view kScenarioPushDeliveryCallbackLatency = "PushDelivery_CallbackLatency";
+constexpr std::string_view kScenarioPushNotifyEndToEndManyConfigs = "PushNotify_EndToEndManyConfigs";
+constexpr std::string_view kScenarioPushConfigListManyConfigs = "PushConfig_ListManyConfigs";
+constexpr std::string_view kScenarioPushDeliveryCallbackFanout = "PushDelivery_CallbackFanout";
+constexpr std::string_view kScenarioPushConfigCreateMany = "PushConfig_CreateMany";
+constexpr std::string_view kScenarioPushDeliveryBuildPayload = "PushDelivery_BuildPayload";
 
-constexpr std::array<std::string_view, 18> kScenarios = {
+constexpr std::array<std::string_view, 21> kScenarios = {
     kScenarioSendMessageCreateTask,
     kScenarioGetTaskExistingTask,
     kScenarioCancelTaskWorkingTask,
@@ -90,8 +93,11 @@ constexpr std::array<std::string_view, 18> kScenarios = {
     kScenarioPushConfigGet,
     kScenarioPushConfigList,
     kScenarioPushConfigDelete,
-    kScenarioPushNotifyManyConfigsOneTaskUpdate,
-    kScenarioPushDeliveryCallbackLatency,
+    kScenarioPushNotifyEndToEndManyConfigs,
+    kScenarioPushConfigListManyConfigs,
+    kScenarioPushDeliveryCallbackFanout,
+    kScenarioPushConfigCreateMany,
+    kScenarioPushDeliveryBuildPayload,
 };
 
 struct Options final {
@@ -111,6 +117,10 @@ struct ScenarioResult final {
   int success = 0;
   int errors = 0;
   int event_count = 0;
+  int successful_deliveries = 0;
+  int failed_deliveries = 0;
+  int callback_count = 0;
+  int fanout_count = 0;
   double throughput = 0.0;
   std::vector<double> latencies;
   std::vector<double> first_event_latencies;
@@ -122,6 +132,10 @@ struct OperationOutcome final {
   int event_count = 0;
   double first_event_latency_ms = 0.0;
   double completion_latency_ms = 0.0;
+  int successful_deliveries = 0;
+  int failed_deliveries = 0;
+  int callback_count = 0;
+  int fanout_count = 0;
 };
 
 [[nodiscard]] lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id,
@@ -146,6 +160,10 @@ template <typename ExecuteOperation>
     int success = 0;
     int errors = 0;
     int event_count = 0;
+    int successful_deliveries = 0;
+    int failed_deliveries = 0;
+    int callback_count = 0;
+    int fanout_count = 0;
     std::vector<double> latencies;
     std::vector<double> first_event_latencies;
     std::vector<double> completion_latencies;
@@ -192,6 +210,10 @@ template <typename ExecuteOperation>
               ++thread_result.success;
               thread_result.latencies.push_back(latency);
               thread_result.event_count += outcome.event_count;
+              thread_result.successful_deliveries += outcome.successful_deliveries;
+              thread_result.failed_deliveries += outcome.failed_deliveries;
+              thread_result.callback_count += outcome.callback_count;
+              thread_result.fanout_count += outcome.fanout_count;
               if (outcome.first_event_latency_ms > 0.0) {
                 thread_result.first_event_latencies.push_back(outcome.first_event_latency_ms);
               }
@@ -226,6 +248,10 @@ template <typename ExecuteOperation>
     result.success += thread_result.success;
     result.errors += thread_result.errors;
     result.event_count += thread_result.event_count;
+    result.successful_deliveries += thread_result.successful_deliveries;
+    result.failed_deliveries += thread_result.failed_deliveries;
+    result.callback_count += thread_result.callback_count;
+    result.fanout_count += thread_result.fanout_count;
     result.latencies.insert(result.latencies.end(), std::make_move_iterator(thread_result.latencies.begin()),
                             std::make_move_iterator(thread_result.latencies.end()));
     result.first_event_latencies.insert(result.first_event_latencies.end(),

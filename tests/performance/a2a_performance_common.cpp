@@ -87,10 +87,11 @@ void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_vi
   SetIntegerField(object, "success", result.success);
   SetIntegerField(object, "errors", result.errors);
   SetNumberField(object, "throughput_ops_per_sec", result.throughput);
-  SetIntegerField(object, "successful_deliveries", result.success);
-  SetIntegerField(object, "failed_deliveries", result.errors);
+  SetIntegerField(object, "successful_deliveries", result.successful_deliveries);
+  SetIntegerField(object, "failed_deliveries", result.failed_deliveries);
   SetIntegerField(object, "event_count", result.event_count > 0 ? result.event_count : result.success);
-  SetIntegerField(object, "callback_count", result.success);
+  SetIntegerField(object, "callback_count", result.callback_count);
+  SetIntegerField(object, "fanout_count", result.fanout_count);
 }
 
 void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& result) {
