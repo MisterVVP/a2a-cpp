@@ -871,6 +871,17 @@ target_link_libraries(a2a_performance_driver_test
     GTest::gtest_main
 )
 
+if(A2A_ENABLE_POSTGRES_STORE)
+  target_link_libraries(a2a_performance_driver_test
+    PRIVATE
+      a2a::store_postgres
+  )
+  target_compile_definitions(a2a_performance_driver_test
+    PRIVATE
+      A2A_ENABLE_POSTGRES_STORE=1
+  )
+endif()
+
 gtest_discover_tests(a2a_performance_driver_test)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
