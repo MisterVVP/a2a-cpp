@@ -852,6 +852,27 @@ endif()
 
 gtest_discover_tests(store_conformance_test)
 
+add_executable(a2a_performance_driver_test
+  performance/a2a_performance_common.cpp
+  performance/a2a_performance_driver_test.cpp
+)
+
+target_include_directories(a2a_performance_driver_test
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/support
+)
+
+target_link_libraries(a2a_performance_driver_test
+  PRIVATE
+    a2a::server
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(a2a_performance_driver_test)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(

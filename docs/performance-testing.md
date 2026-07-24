@@ -55,7 +55,7 @@ task store, in-memory push notification store, and push notification service:
 - streaming and subscriptions: finite `SendStreamingMessage`, existing-task
   subscription first event, simultaneous multi-subscriber delivery to the same task, terminal update delivery followed by stream completion,
   and disconnect isolation where one cancelled subscription does not prevent remaining subscribers from receiving a later update;
-- push notifications: create/get/list/delete config, an end-to-end many-config task update, pre-seeded many-config list lookup, many-config create cost, payload construction, and in-process callback fan-out through a local recording delivery client implementation of the SDK delivery interface. Rows expose scenario-specific counters such as `successful_deliveries`, `failed_deliveries`, `event_count`, `callback_count`, and `fanout_count`.
+- push notifications: create/get/list/delete config, an end-to-end many-config task update, pre-seeded many-config list lookup, many-config create cost, payload construction, and in-process callback fan-out through a local recording delivery client implementation of the SDK delivery interface. Rows expose scenario-specific counters such as `successful_deliveries`, `failed_deliveries`, `event_count`, `callback_count`, `fanout_per_operation`, and `total_fanout_count`.
 
 Each row includes the required stable fields plus `driver_type` and
 `transport_path`. The current driver type is `cpp_sdk_in_process`.
@@ -67,10 +67,10 @@ The in-process push rows intentionally separate setup-heavy and delivery-only wo
 - `PushNotify_EndToEndManyConfigs` creates a task, writes eight push-notification configs, sends one task update, lets the push service list configs from the configured store, builds the update payload, and invokes the local recording callback once per config.
 - `PushConfig_ListManyConfigs` uses a task and eight configs seeded before warmup and measures only the list operation for that fixed fan-out.
 - `PushDelivery_CallbackFanout` uses preloaded configs and a prebuilt payload seeded before warmup, then measures only the in-process callback delivery loop. It does not create tasks, create configs, query the store, or perform network I/O inside the timed operation.
-- `PushConfig_CreateMany` measures the write/setup cost for creating eight configs as an explicit row rather than hiding it inside a delivery-latency row.
+- `PushConfig_CreateMany` uses a task seeded before warmup and measures only eight real `CreateTaskPushNotificationConfig` calls, including the production task-existence lookup for each config creation.
 - `PushDelivery_BuildPayload` measures construction of the push status-update payload separately.
 
-The default fan-out is eight configs per operation and is reported in `fanout_count`; callback rows report actual attempted callbacks in `callback_count` and split delivery outcomes into `successful_deliveries` and `failed_deliveries`.
+The default fan-out is eight configs per operation and is reported in `fanout_per_operation`. `total_fanout_count` is cumulative across measured operations and reflects actual attempted/configured fan-out where known; for example, 2,000 successful operations at fan-out 8 report `fanout_per_operation=8` and `total_fanout_count=16000`. `fanout_count` remains as a backward-compatible alias for the cumulative total. Callback rows report actual attempted callbacks in `callback_count` and split delivery outcomes into `successful_deliveries` and `failed_deliveries`, including failed operations.
 
 ## Transport coverage
 

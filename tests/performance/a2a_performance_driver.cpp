@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,6 +19,7 @@
 
 #include "a2a/core/protojson.h"
 #include "a2a/server/push_notification_delivery.h"
+#include "a2a/server/push_notification_service.h"
 #include "a2a/server/request_context.h"
 #include "a2a/server/server_stream_session.h"
 #include "a2a/server/stores/store_factory.h"
@@ -30,22 +32,67 @@ namespace {
 using namespace a2a::tests::performance;
 
 constexpr std::chrono::milliseconds kStreamWaitTimeout{5000};
+constexpr int kNoFailingDelivery = std::numeric_limits<int>::max();
+
+struct DeliveryStats final {
+  int attempted = 0;
+  int succeeded = 0;
+  int failed = 0;
+};
+
+struct ScenarioInstrumentation final {
+  std::atomic<int> task_creates{0};
+  std::atomic<int> config_creates{0};
+  std::atomic<int> config_lists{0};
+  std::atomic<int> payload_builds{0};
+};
 
 class RecordingPushDelivery final : public a2a::server::PushNotificationDeliveryClient {
  public:
   a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(const a2a::server::PushDeliveryRequest& request) override {
     (void)request;
-    deliveries_.fetch_add(1, std::memory_order_relaxed);
+    const int attempted = attempted_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (attempted == failing_delivery_index_) {
+      failed_.fetch_add(1, std::memory_order_relaxed);
+      return a2a::core::Error::Network("recording push delivery failure");
+    }
+    succeeded_.fetch_add(1, std::memory_order_relaxed);
     return a2a::server::PushDeliveryResult{.http_status = kHttpStatusOk, .error_message = {}};
   }
 
+  void set_failing_delivery_index(int failing_delivery_index) noexcept {
+    failing_delivery_index_ = failing_delivery_index;
+  }
+
+  [[nodiscard]] DeliveryStats Snapshot() const noexcept {
+    return {.attempted = attempted_.load(std::memory_order_relaxed),
+            .succeeded = succeeded_.load(std::memory_order_relaxed),
+            .failed = failed_.load(std::memory_order_relaxed)};
+  }
+
  private:
-  std::atomic<int> deliveries_{0};
+  std::atomic<int> attempted_{0};
+  std::atomic<int> succeeded_{0};
+  std::atomic<int> failed_{0};
+  int failing_delivery_index_ = kNoFailingDelivery;
 };
+
+lf::a2a::v1::Task BuildRepresentativePushPayloadTask(std::string_view task_id) {
+  lf::a2a::v1::Task task;
+  task.set_id(std::string(task_id));
+  task.set_context_id(BuildId("payload-context", 0));
+  task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+  return task;
+}
+
+lf::a2a::v1::StreamResponse BuildRepresentativePushPayload(std::string_view task_id) {
+  return a2a::server::BuildTaskStatusUpdatePayload(BuildRepresentativePushPayloadTask(task_id));
+}
 
 class ScenarioHarness final {
  public:
-  explicit ScenarioHarness(std::string_view store_backend) {
+  explicit ScenarioHarness(std::string_view store_backend, ScenarioInstrumentation* instrumentation = nullptr)
+      : instrumentation_(instrumentation) {
     if (!ConfigureStores(store_backend)) {
       return;
     }
@@ -54,11 +101,16 @@ class ScenarioHarness final {
     existing_task_id_ = SeedTask("existing-seed");
     subscribe_task_id_ = SeedTask("subscribe-seed");
     fanout_task_id_ = SeedTask("fanout-seed");
+    create_many_task_id_ = SeedTask("create-many-seed");
     SeedFanoutConfigs(fanout_task_id_, "preloaded-fanout");
     prebuilt_payload_ = BuildPushPayload(fanout_task_id_);
   }
 
   [[nodiscard]] bool ok() const noexcept { return executor_ != nullptr; }
+
+  void set_failing_delivery_index(int failing_delivery_index) noexcept {
+    delivery_.set_failing_delivery_index(failing_delivery_index);
+  }
 
   OperationOutcome Execute(std::string_view scenario, int worker_index, int index) {
     a2a::server::RequestContext context;
@@ -291,20 +343,22 @@ class ScenarioHarness final {
       return {};
     }
     SeedFanoutConfigs(task_id, BuildId("fanout", index));
+    const DeliveryStats before = delivery_.Snapshot();
     const bool ok = executor_->SendMessage(MakeSendRequest(BuildId("notify", index), task_id), context).ok();
-    return {.ok = ok,
-            .successful_deliveries = ok ? kPushConfigFanout : 0,
-            .failed_deliveries = ok ? 0 : kPushConfigFanout,
-            .callback_count = ok ? kPushConfigFanout : 0,
-            .fanout_count = kPushConfigFanout};
+    const DeliveryStats delta = DeliveryDelta(before, delivery_.Snapshot());
+    return OutcomeFromDeliveryStats(ok, delta, kPushConfigFanout);
   }
 
   OperationOutcome ListManyPushConfigs(a2a::server::RequestContext& context) {
     lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
     request.set_task_id(fanout_task_id_);
+    CountListConfig();
     const auto configs = executor_->ListTaskPushNotificationConfigs(request, context);
     const bool ok = configs.ok() && configs.value().configs_size() == kPushConfigFanout;
-    return {.ok = ok, .event_count = ok ? configs.value().configs_size() : 0, .fanout_count = kPushConfigFanout};
+    return {.ok = ok,
+            .event_count = ok ? configs.value().configs_size() : 0,
+            .fanout_per_operation = kPushConfigFanout,
+            .total_fanout_count = kPushConfigFanout};
   }
 
   OperationOutcome DeliverPreloadedCallbacks() {
@@ -322,24 +376,29 @@ class ScenarioHarness final {
             .successful_deliveries = successful_deliveries,
             .failed_deliveries = failed_deliveries,
             .callback_count = successful_deliveries + failed_deliveries,
-            .fanout_count = static_cast<int>(preloaded_configs_.size())};
+            .fanout_per_operation = static_cast<int>(preloaded_configs_.size()),
+            .total_fanout_count = successful_deliveries + failed_deliveries};
   }
 
   OperationOutcome CreateManyPushConfigs(int index, a2a::server::RequestContext& context) {
-    const std::string task_id = SeedTask(BuildId("create-many-task", index));
-    if (task_id.empty()) {
+    if (create_many_task_id_.empty()) {
       return {};
     }
     int created = 0;
     for (int config = 0; config < kPushConfigFanout; ++config) {
       const auto response = executor_->CreateTaskPushNotificationConfig(
-          MakePushConfig(task_id, BuildId(BuildId("create-many", index), config)), context);
+          MakePushConfig(create_many_task_id_, BuildId(BuildId("create-many", index), config)), context);
+      CountConfigCreate();
       if (!response.ok()) {
-        return {.failed_deliveries = kPushConfigFanout - created, .fanout_count = kPushConfigFanout};
+        return {
+            .event_count = created, .fanout_per_operation = kPushConfigFanout, .total_fanout_count = kPushConfigFanout};
       }
       ++created;
     }
-    return {.ok = true, .event_count = created, .fanout_count = kPushConfigFanout};
+    return {.ok = true,
+            .event_count = created,
+            .fanout_per_operation = kPushConfigFanout,
+            .total_fanout_count = kPushConfigFanout};
   }
 
   OperationOutcome BuildPushPayloadOnly() {
@@ -357,6 +416,7 @@ class ScenarioHarness final {
   }
 
   std::string SeedTask(std::string_view message_id) {
+    CountTaskCreate();
     a2a::server::RequestContext context;
     auto response = executor_->SendMessage(MakeSendRequest(message_id), context);
     if (response.ok() && response.value().has_task()) {
@@ -365,6 +425,7 @@ class ScenarioHarness final {
     return {};
   }
   void SeedPushConfig(std::string_view task_id, std::string_view config_id) {
+    CountConfigCreate();
     a2a::server::RequestContext context;
     (void)executor_->CreateTaskPushNotificationConfig(MakePushConfig(task_id, config_id), context);
   }
@@ -384,12 +445,49 @@ class ScenarioHarness final {
     }
   }
 
-  static lf::a2a::v1::StreamResponse BuildPushPayload(std::string_view task_id) {
-    lf::a2a::v1::StreamResponse payload;
-    auto* update = payload.mutable_status_update();
-    update->set_task_id(std::string(task_id));
-    update->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    return payload;
+  lf::a2a::v1::StreamResponse BuildPushPayload(std::string_view task_id) {
+    CountPayloadBuild();
+    return BuildRepresentativePushPayload(task_id);
+  }
+
+  static DeliveryStats DeliveryDelta(const DeliveryStats& before, const DeliveryStats& after) noexcept {
+    return {.attempted = after.attempted - before.attempted,
+            .succeeded = after.succeeded - before.succeeded,
+            .failed = after.failed - before.failed};
+  }
+
+  static OperationOutcome OutcomeFromDeliveryStats(bool ok, const DeliveryStats& stats,
+                                                   int configured_fanout) noexcept {
+    return {.ok = ok,
+            .successful_deliveries = stats.succeeded,
+            .failed_deliveries = stats.failed,
+            .callback_count = stats.attempted,
+            .fanout_per_operation = configured_fanout,
+            .total_fanout_count = stats.attempted};
+  }
+
+  void CountTaskCreate() const {
+    if (instrumentation_ != nullptr) {
+      instrumentation_->task_creates.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  void CountConfigCreate() const {
+    if (instrumentation_ != nullptr) {
+      instrumentation_->config_creates.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  void CountListConfig() const {
+    if (instrumentation_ != nullptr) {
+      instrumentation_->config_lists.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  void CountPayloadBuild() const {
+    if (instrumentation_ != nullptr) {
+      instrumentation_->payload_builds.fetch_add(1, std::memory_order_relaxed);
+    }
   }
   bool SubscribeOnce(std::string_view message_id, a2a::server::RequestContext& context) {
     const std::string task_id = SeedTask(message_id);
@@ -454,10 +552,15 @@ class ScenarioHarness final {
   std::string existing_task_id_;
   std::string subscribe_task_id_;
   std::string fanout_task_id_;
+  std::string create_many_task_id_;
   std::vector<lf::a2a::v1::TaskPushNotificationConfig> preloaded_configs_;
   lf::a2a::v1::StreamResponse prebuilt_payload_;
+  ScenarioInstrumentation* instrumentation_ = nullptr;
 };
 
+}  // namespace
+
+#ifndef A2A_PERFORMANCE_DRIVER_DISABLE_MAIN
 ScenarioResult RunScenario(const Options& options, const std::string& scenario) {
   ScenarioHarness harness(options.store_backend);
   if (!harness.ok()) {
@@ -570,7 +673,6 @@ void WriteResultJson(const Options& options, const ScenarioResult& result, bool 
   }
   std::cout << "  " << json.value();
 }
-}  // namespace
 
 int main(int argc, char** argv) {
   Options options;
@@ -592,3 +694,5 @@ int main(int argc, char** argv) {
   std::cout << "\n]\n";
   return 0;
 }
+
+#endif  // A2A_PERFORMANCE_DRIVER_DISABLE_MAIN

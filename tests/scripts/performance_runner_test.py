@@ -56,6 +56,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertEqual(24, callback_rows[0]["successful_deliveries"])
             self.assertEqual(0, callback_rows[0]["failed_deliveries"])
             self.assertEqual(24, callback_rows[0]["callback_count"])
+            self.assertEqual(8, callback_rows[0]["fanout_per_operation"])
+            self.assertEqual(24, callback_rows[0]["total_fanout_count"])
             self.assertEqual(24, callback_rows[0]["fanout_count"])
             list_many_rows = [
                 result for result in payload["results"]
@@ -63,6 +65,8 @@ class PerformanceRunnerTest(unittest.TestCase):
                 and result["scenario"] == "PushConfig_ListManyConfigs"
             ]
             self.assertEqual(1, len(list_many_rows))
+            self.assertEqual(8, list_many_rows[0]["fanout_per_operation"])
+            self.assertEqual(24, list_many_rows[0]["total_fanout_count"])
             self.assertEqual(24, list_many_rows[0]["fanout_count"])
             self.assertIn("measured_duration_seconds", payload["results"][0])
             streaming_rows = [
@@ -76,6 +80,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertTrue((report_dir / "results.csv").exists())
             csv_header = (report_dir / "results.csv").read_text(encoding="utf-8").splitlines()[0]
             self.assertIn("first_event_p50_ms", csv_header)
+            self.assertIn("fanout_per_operation", csv_header)
+            self.assertIn("total_fanout_count", csv_header)
             self.assertIn("fanout_count", csv_header)
             self.assertIn("stream_completion_p50_ms", csv_header)
             self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
