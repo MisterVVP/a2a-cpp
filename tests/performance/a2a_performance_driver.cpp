@@ -12,9 +12,11 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "a2a/core/protojson.h"
@@ -33,6 +35,7 @@ using namespace a2a::tests::performance;
 
 constexpr std::chrono::milliseconds kStreamWaitTimeout{5000};
 constexpr int kNoFailingDelivery = std::numeric_limits<int>::max();
+constexpr std::string_view kRecordingDeliveryFailure = "recording push delivery failure";
 
 struct DeliveryStats final {
   int attempted = 0;
@@ -50,30 +53,44 @@ struct ScenarioInstrumentation final {
 class RecordingPushDelivery final : public a2a::server::PushNotificationDeliveryClient {
  public:
   a2a::core::Result<a2a::server::PushDeliveryResult> Deliver(const a2a::server::PushDeliveryRequest& request) override {
-    (void)request;
-    const int attempted = attempted_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (attempted == failing_delivery_index_) {
-      failed_.fetch_add(1, std::memory_order_relaxed);
-      return a2a::core::Error::Network("recording push delivery failure");
+    const std::string& task_id = request.payload.status_update().task_id();
+    bool should_fail = false;
+    {
+      std::lock_guard lock(stats_mutex_);
+      DeliveryStats& stats = stats_by_task_[task_id];
+      ++stats.attempted;
+      should_fail = stats.attempted == failing_delivery_index_;
+      if (should_fail) {
+        ++stats.failed;
+      } else {
+        ++stats.succeeded;
+      }
     }
-    succeeded_.fetch_add(1, std::memory_order_relaxed);
+    if (should_fail) {
+      return a2a::core::Error::Network(std::string(kRecordingDeliveryFailure));
+    }
     return a2a::server::PushDeliveryResult{.http_status = kHttpStatusOk, .error_message = {}};
   }
 
-  void set_failing_delivery_index(int failing_delivery_index) noexcept {
+  void set_failing_delivery_index(int failing_delivery_index) {
+    std::lock_guard lock(stats_mutex_);
     failing_delivery_index_ = failing_delivery_index;
   }
 
-  [[nodiscard]] DeliveryStats Snapshot() const noexcept {
-    return {.attempted = attempted_.load(std::memory_order_relaxed),
-            .succeeded = succeeded_.load(std::memory_order_relaxed),
-            .failed = failed_.load(std::memory_order_relaxed)};
+  [[nodiscard]] DeliveryStats TakeStats(std::string_view task_id) {
+    std::lock_guard lock(stats_mutex_);
+    const auto stats = stats_by_task_.find(std::string(task_id));
+    if (stats == stats_by_task_.end()) {
+      return {};
+    }
+    const DeliveryStats result = stats->second;
+    stats_by_task_.erase(stats);
+    return result;
   }
 
  private:
-  std::atomic<int> attempted_{0};
-  std::atomic<int> succeeded_{0};
-  std::atomic<int> failed_{0};
+  std::mutex stats_mutex_;
+  std::unordered_map<std::string, DeliveryStats> stats_by_task_;
   int failing_delivery_index_ = kNoFailingDelivery;
 };
 
@@ -343,10 +360,8 @@ class ScenarioHarness final {
       return {};
     }
     SeedFanoutConfigs(task_id, BuildId("fanout", index));
-    const DeliveryStats before = delivery_.Snapshot();
     const bool ok = executor_->SendMessage(MakeSendRequest(BuildId("notify", index), task_id), context).ok();
-    const DeliveryStats delta = DeliveryDelta(before, delivery_.Snapshot());
-    return OutcomeFromDeliveryStats(ok, delta, kPushConfigFanout);
+    return OutcomeFromDeliveryStats(ok, delivery_.TakeStats(task_id), kPushConfigFanout);
   }
 
   OperationOutcome ListManyPushConfigs(a2a::server::RequestContext& context) {
@@ -448,12 +463,6 @@ class ScenarioHarness final {
   lf::a2a::v1::StreamResponse BuildPushPayload(std::string_view task_id) {
     CountPayloadBuild();
     return BuildRepresentativePushPayload(task_id);
-  }
-
-  static DeliveryStats DeliveryDelta(const DeliveryStats& before, const DeliveryStats& after) noexcept {
-    return {.attempted = after.attempted - before.attempted,
-            .succeeded = after.succeeded - before.succeeded,
-            .failed = after.failed - before.failed};
   }
 
   static OperationOutcome OutcomeFromDeliveryStats(bool ok, const DeliveryStats& stats,

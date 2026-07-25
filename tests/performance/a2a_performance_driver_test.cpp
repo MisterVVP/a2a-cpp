@@ -21,8 +21,14 @@ constexpr int kPartialFailureSuccessCount = 5;
 constexpr int kPartialFailureFailedCount = 3;
 constexpr int kPartialFailureCallbackCount = 8;
 constexpr int kPartialFailureEventCount = 7;
+constexpr int kConcurrentRequests = 16;
+constexpr int kConcurrentWorkers = 4;
+constexpr int kTwoDeliveryAttempts = 2;
+constexpr int kOneDeliveryAttempt = 1;
 constexpr std::string_view kAggregationScenario = "aggregation-test";
 constexpr std::string_view kPayloadTaskId = "payload-task";
+constexpr std::string_view kFirstDeliveryTaskId = "first-delivery-task";
+constexpr std::string_view kSecondDeliveryTaskId = "second-delivery-task";
 
 int AtomicValue(const std::atomic<int>& value) { return value.load(std::memory_order_relaxed); }
 
@@ -33,6 +39,24 @@ ScenarioResult RunSingleOutcome(OperationOutcome outcome) {
                                (void)index;
                                return outcome;
                              });
+}
+
+a2a::server::PushDeliveryRequest MakeDeliveryRequest(std::string_view task_id) {
+  return {.config = {}, .payload = BuildRepresentativePushPayload(task_id)};
+}
+
+void ExpectConcurrentOperationCounts(const ScenarioResult& result) {
+  EXPECT_EQ(kConcurrentRequests, result.success);
+  EXPECT_EQ(0, result.errors);
+  EXPECT_EQ(kPushConfigFanout, result.fanout_per_operation);
+}
+
+void ExpectConcurrentDeliveryCounts(const ScenarioResult& result) {
+  constexpr int kExpectedDeliveries = kConcurrentRequests * kPushConfigFanout;
+  EXPECT_EQ(kExpectedDeliveries, result.callback_count);
+  EXPECT_EQ(kExpectedDeliveries, result.successful_deliveries);
+  EXPECT_EQ(0, result.failed_deliveries);
+  EXPECT_EQ(kExpectedDeliveries, result.total_fanout_count);
 }
 
 }  // namespace
@@ -135,6 +159,57 @@ TEST(PerformanceScenarioIsolationTest, EndToEndUsesObservedPartialFailureDeliver
   EXPECT_EQ(kPartialFailureSuccessCount + 1, outcome.callback_count);
   EXPECT_EQ(kPushConfigFanout, outcome.fanout_per_operation);
   EXPECT_EQ(kPartialFailureSuccessCount + 1, outcome.total_fanout_count);
+}
+
+TEST(RecordingPushDeliveryTest, MaintainsAndTakesIndependentTaskStatistics) {
+  RecordingPushDelivery delivery;
+  ASSERT_TRUE(delivery.Deliver(MakeDeliveryRequest(kFirstDeliveryTaskId)).ok());
+  ASSERT_TRUE(delivery.Deliver(MakeDeliveryRequest(kSecondDeliveryTaskId)).ok());
+  ASSERT_TRUE(delivery.Deliver(MakeDeliveryRequest(kFirstDeliveryTaskId)).ok());
+
+  const DeliveryStats first_stats = delivery.TakeStats(kFirstDeliveryTaskId);
+  EXPECT_EQ(kTwoDeliveryAttempts, first_stats.attempted);
+  EXPECT_EQ(kTwoDeliveryAttempts, first_stats.succeeded);
+  EXPECT_EQ(0, first_stats.failed);
+  EXPECT_EQ(0, delivery.TakeStats(kFirstDeliveryTaskId).attempted);
+
+  const DeliveryStats second_stats = delivery.TakeStats(kSecondDeliveryTaskId);
+  EXPECT_EQ(kOneDeliveryAttempt, second_stats.attempted);
+  EXPECT_EQ(kOneDeliveryAttempt, second_stats.succeeded);
+  EXPECT_EQ(0, second_stats.failed);
+}
+
+TEST(RecordingPushDeliveryTest, FailureIndexAppliesIndependentlyToEachTask) {
+  RecordingPushDelivery delivery;
+  delivery.set_failing_delivery_index(kTwoDeliveryAttempts);
+  ASSERT_TRUE(delivery.Deliver(MakeDeliveryRequest(kFirstDeliveryTaskId)).ok());
+  ASSERT_FALSE(delivery.Deliver(MakeDeliveryRequest(kFirstDeliveryTaskId)).ok());
+  ASSERT_TRUE(delivery.Deliver(MakeDeliveryRequest(kSecondDeliveryTaskId)).ok());
+  ASSERT_FALSE(delivery.Deliver(MakeDeliveryRequest(kSecondDeliveryTaskId)).ok());
+
+  const DeliveryStats first_stats = delivery.TakeStats(kFirstDeliveryTaskId);
+  EXPECT_EQ(kTwoDeliveryAttempts, first_stats.attempted);
+  EXPECT_EQ(kOneDeliveryAttempt, first_stats.succeeded);
+  EXPECT_EQ(kOneDeliveryAttempt, first_stats.failed);
+
+  const DeliveryStats second_stats = delivery.TakeStats(kSecondDeliveryTaskId);
+  EXPECT_EQ(kTwoDeliveryAttempts, second_stats.attempted);
+  EXPECT_EQ(kOneDeliveryAttempt, second_stats.succeeded);
+  EXPECT_EQ(kOneDeliveryAttempt, second_stats.failed);
+}
+
+TEST(PerformanceScenarioConcurrencyTest, EndToEndAggregatesExactPerTaskDeliveryCounts) {
+  ScenarioHarness harness(kInMemoryStore);
+  ASSERT_TRUE(harness.ok());
+
+  const ScenarioResult result =
+      RunMeasuredScenario(std::string(kScenarioPushNotifyEndToEndManyConfigs), kConcurrentRequests, kConcurrentWorkers,
+                          kNoDurationLimitSeconds, [&harness](int worker_index, int index) {
+                            return harness.Execute(kScenarioPushNotifyEndToEndManyConfigs, worker_index, index);
+                          });
+
+  ExpectConcurrentOperationCounts(result);
+  ExpectConcurrentDeliveryCounts(result);
 }
 
 TEST(PerformancePayloadTest, RepresentativePayloadMatchesProductionHelperShape) {
