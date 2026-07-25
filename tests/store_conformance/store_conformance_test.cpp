@@ -20,6 +20,7 @@
 #include "store_conformance/task_store_conformance.h"
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
+#include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
 #endif
@@ -65,7 +66,6 @@ constexpr int kOldTargetTaskTimestampSeconds = 1000;
 constexpr int kNewTargetTaskTimestampSeconds = 3000;
 constexpr int kOtherContextTaskTimestampSeconds = 4000;
 constexpr int kCompletedTargetTaskTimestampSeconds = 5000;
-
 void AddPostgresTask(a2a::server::stores::PostgresTaskStore& store, std::string_view task_id,
                      std::string_view context_id, lf::a2a::v1::TaskState state, int timestamp_seconds) {
   ASSERT_TRUE(store
@@ -149,6 +149,26 @@ TEST(StoreConformanceTest, PostgresTaskStore) {
   const auto shared = second.Get("shared-postgres-task");
   ASSERT_TRUE(shared.ok());
   EXPECT_EQ(shared.value().id(), "shared-postgres-task");
+}
+
+TEST(StoreConformanceTest, PostgresSchemaCachesInsertSequences) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+  const std::string schema = MakePostgresTestSchema("sequence_cache");
+  a2a::server::stores::PostgresTaskStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
+  a2a::server::stores::PostgresConnectionPool inspection_pool(dsn, 1);
+  const auto task_cache = a2a::server::stores::ReadPostgresSequenceCacheSizeForTesting(
+      inspection_pool, schema, a2a::server::stores::kTaskCreatedSequenceName);
+  const auto push_cache = a2a::server::stores::ReadPostgresSequenceCacheSizeForTesting(
+      inspection_pool, schema, a2a::server::stores::kPushCreatedSequenceName);
+  ASSERT_TRUE(task_cache.ok());
+  ASSERT_TRUE(push_cache.ok());
+  EXPECT_EQ(task_cache.value(), a2a::server::stores::kPostgresSequenceCacheSize);
+  EXPECT_EQ(push_cache.value(), a2a::server::stores::kPostgresSequenceCacheSize);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) {

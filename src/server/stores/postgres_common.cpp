@@ -5,6 +5,8 @@
 
 #include <libpq-fe.h>
 
+#include <array>
+#include <charconv>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -44,6 +46,18 @@ std::optional<core::Error> g_test_acquire_failure;
 
 [[nodiscard]] std::string PushCreatedSequence(std::string_view schema) {
   return QualifiedSqlIdentifier(schema, kPushCreatedSequenceName);
+}
+
+[[nodiscard]] std::string CacheSequenceStatement(const std::string& sequence) {
+  std::string statement;
+  statement.reserve(std::string_view("ALTER SEQUENCE ").size() + sequence.size() + std::string_view(" CACHE ").size() +
+                    2);
+  statement.append("ALTER SEQUENCE ");
+  statement.append(sequence);
+  statement.append(" CACHE ");
+  statement.append(std::to_string(kPostgresSequenceCacheSize));
+  statement.push_back(';');
+  return statement;
 }
 
 [[nodiscard]] std::string SqlStringLiteral(const std::string& value) {
@@ -251,6 +265,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string push_created_sequence_regclass = SqlStringLiteral(push_created_sequence);
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
   const std::string create_push_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + push_created_sequence + ";";
+  const std::string cache_task_created_sequence = CacheSequenceStatement(task_created_sequence);
+  const std::string cache_push_created_sequence = CacheSequenceStatement(push_created_sequence);
   const std::string create_tasks = "CREATE TABLE IF NOT EXISTS " + tasks +
                                    " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
                                    "has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE, "
@@ -284,11 +300,20 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string create_push_configs_created_sequence_index =
       CreateIndexStatement(kPushConfigsCreatedSequenceIndex, push_configs, kPushConfigsCreatedSequenceIndexColumns);
 
-  const std::vector<std::string> schema_statements = {
-      create_task_created_sequence,      create_push_created_sequence,   create_tasks,
-      add_tasks_created_sequence,        add_tasks_has_status_timestamp, create_tasks_created_sequence_index,
-      create_tasks_context_index,        create_tasks_state_index,       create_push_configs,
-      add_push_configs_created_sequence, create_push_configs_task_index, create_push_configs_created_sequence_index};
+  const std::vector<std::string> schema_statements = {create_task_created_sequence,
+                                                      create_push_created_sequence,
+                                                      cache_task_created_sequence,
+                                                      cache_push_created_sequence,
+                                                      create_tasks,
+                                                      add_tasks_created_sequence,
+                                                      add_tasks_has_status_timestamp,
+                                                      create_tasks_created_sequence_index,
+                                                      create_tasks_context_index,
+                                                      create_tasks_state_index,
+                                                      create_push_configs,
+                                                      add_push_configs_created_sequence,
+                                                      create_push_configs_task_index,
+                                                      create_push_configs_created_sequence_index};
   for (const auto& statement : schema_statements) {
     const auto executed = Exec(connection, statement, "initialize postgres store schema");
     if (!executed.ok()) {
@@ -315,6 +340,35 @@ PostgresConnectionPool::Lease AcquireOrThrow(PostgresConnectionPool& pool) {
 void FailNextPostgresAcquireForTesting(core::Error error) {
   std::lock_guard<std::mutex> lock(g_test_acquire_failure_mutex);
   g_test_acquire_failure = std::move(error);
+}
+
+core::Result<std::size_t> ReadPostgresSequenceCacheSizeForTesting(PostgresConnectionPool& pool, std::string_view schema,
+                                                                  std::string_view sequence_name) {
+  constexpr auto kSequenceCacheQuery =
+      std::to_array("SELECT cache_size FROM pg_sequences WHERE schemaname = $1 AND sequencename = $2");
+  const std::string schema_value(schema);
+  const std::string sequence_value(sequence_name);
+  const std::array<const char*, 2> values = {schema_value.c_str(), sequence_value.c_str()};
+  auto lease = pool.Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result(PQexecParams(lease.value().get(), kSequenceCacheQuery.data(), static_cast<int>(values.size()),
+                               nullptr, values.data(), nullptr, nullptr, 0));
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "read postgres sequence cache size");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) != 1) {
+    return core::Error::Internal("read postgres sequence cache size: expected one row");
+  }
+  std::size_t cache_size = 0;
+  const std::string_view value(PQgetvalue(result.get(), 0, 0));
+  const auto parsed = std::from_chars(value.data(), value.data() + value.size(), cache_size);
+  if (parsed.ec != std::errc() || parsed.ptr != value.data() + value.size()) {
+    return core::Error::Internal("read postgres sequence cache size: invalid value");
+  }
+  return cache_size;
 }
 #endif
 
