@@ -2,6 +2,8 @@
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
 #include <array>
+#include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -9,6 +11,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/server/push_notification_store.h"
@@ -20,7 +24,6 @@
 #include "store_conformance/task_store_conformance.h"
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
-#include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
 #endif
@@ -66,6 +69,83 @@ constexpr int kOldTargetTaskTimestampSeconds = 1000;
 constexpr int kNewTargetTaskTimestampSeconds = 3000;
 constexpr int kOtherContextTaskTimestampSeconds = 4000;
 constexpr int kCompletedTargetTaskTimestampSeconds = 5000;
+constexpr std::size_t kConcurrentPageSize = 1;
+constexpr std::array<std::string_view, 4> kConcurrentIds = {"connection-a-first", "connection-b-first",
+                                                            "connection-a-second", "connection-b-second"};
+
+template <typename Insert>
+[[nodiscard]] bool RunDeterministicallyInterleavedInserts(Insert insert) {
+  std::barrier synchronization_point(2);
+  std::atomic<bool> succeeded{true};
+  const auto insert_and_record = [&](std::size_t connection, std::string_view id) {
+    if (!insert(connection, id)) {
+      succeeded.store(false, std::memory_order_relaxed);
+    }
+  };
+  std::thread connection_a([&] {
+    insert_and_record(0, kConcurrentIds[0]);
+    synchronization_point.arrive_and_wait();
+    synchronization_point.arrive_and_wait();
+    insert_and_record(0, kConcurrentIds[2]);
+    synchronization_point.arrive_and_wait();
+  });
+  std::thread connection_b([&] {
+    synchronization_point.arrive_and_wait();
+    insert_and_record(1, kConcurrentIds[1]);
+    synchronization_point.arrive_and_wait();
+    synchronization_point.arrive_and_wait();
+    insert_and_record(1, kConcurrentIds[3]);
+  });
+  connection_a.join();
+  connection_b.join();
+  return succeeded.load(std::memory_order_relaxed);
+}
+
+void ExpectTaskListOrder(a2a::server::stores::PostgresTaskStore& store) {
+  a2a::server::ListTasksRequest request;
+  const auto all_tasks = store.List(request);
+  ASSERT_TRUE(all_tasks.ok());
+  ASSERT_EQ(all_tasks.value().tasks.size(), kConcurrentIds.size());
+  for (std::size_t index = 0; index < kConcurrentIds.size(); ++index) {
+    EXPECT_EQ(all_tasks.value().tasks[index].id(), kConcurrentIds[index]);
+  }
+}
+
+void ExpectTaskPaginationOrder(a2a::server::stores::PostgresTaskStore& store) {
+  a2a::server::ListTasksRequest request;
+  request.page_size = kConcurrentPageSize;
+  for (const std::string_view expected_id : kConcurrentIds) {
+    const auto page = store.List(request);
+    ASSERT_TRUE(page.ok());
+    ASSERT_EQ(page.value().tasks.size(), kConcurrentPageSize);
+    EXPECT_EQ(page.value().tasks.front().id(), expected_id);
+    request.page_token = page.value().next_page_token;
+  }
+  EXPECT_TRUE(request.page_token.empty());
+}
+
+void ExpectPushConfigListOrder(a2a::server::stores::PostgresPushNotificationStore& store, std::string_view task_id) {
+  const auto all_configs = store.List(task_id);
+  ASSERT_TRUE(all_configs.ok());
+  ASSERT_EQ(all_configs.value().configs_size(), static_cast<int>(kConcurrentIds.size()));
+  for (std::size_t index = 0; index < kConcurrentIds.size(); ++index) {
+    EXPECT_EQ(all_configs.value().configs(static_cast<int>(index)).id(), kConcurrentIds[index]);
+  }
+}
+
+void ExpectPushConfigPaginationOrder(a2a::server::stores::PostgresPushNotificationStore& store,
+                                     std::string_view task_id) {
+  std::string page_token;
+  for (const std::string_view expected_id : kConcurrentIds) {
+    const auto page = store.List(task_id, static_cast<int>(kConcurrentPageSize), page_token);
+    ASSERT_TRUE(page.ok());
+    ASSERT_EQ(page.value().configs_size(), static_cast<int>(kConcurrentPageSize));
+    EXPECT_EQ(page.value().configs(0).id(), expected_id);
+    page_token = page.value().next_page_token();
+  }
+  EXPECT_TRUE(page_token.empty());
+}
+
 void AddPostgresTask(a2a::server::stores::PostgresTaskStore& store, std::string_view task_id,
                      std::string_view context_id, lf::a2a::v1::TaskState state, int timestamp_seconds) {
   ASSERT_TRUE(store
@@ -151,26 +231,6 @@ TEST(StoreConformanceTest, PostgresTaskStore) {
   EXPECT_EQ(shared.value().id(), "shared-postgres-task");
 }
 
-TEST(StoreConformanceTest, PostgresSchemaCachesInsertSequences) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
-  }
-  const std::string dsn = dsn_value;
-  const std::string schema = MakePostgresTestSchema("sequence_cache");
-  a2a::server::stores::PostgresTaskStore store(
-      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
-  a2a::server::stores::PostgresConnectionPool inspection_pool(dsn, 1);
-  const auto task_cache = a2a::server::stores::ReadPostgresSequenceCacheSizeForTesting(
-      inspection_pool, schema, a2a::server::stores::kTaskCreatedSequenceName);
-  const auto push_cache = a2a::server::stores::ReadPostgresSequenceCacheSizeForTesting(
-      inspection_pool, schema, a2a::server::stores::kPushCreatedSequenceName);
-  ASSERT_TRUE(task_cache.ok());
-  ASSERT_TRUE(push_cache.ok());
-  EXPECT_EQ(task_cache.value(), a2a::server::stores::kPostgresSequenceCacheSize);
-  EXPECT_EQ(push_cache.value(), a2a::server::stores::kPostgresSequenceCacheSize);
-}
-
 TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -195,6 +255,47 @@ TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) 
   const auto second_page = store.List(request);
   ASSERT_TRUE(second_page.ok());
   ExpectFilteredPostgresListPage(second_page.value(), kNewTargetTaskId, false);
+}
+
+TEST(StoreConformanceTest, PostgresTaskPaginationPreservesCreationOrderAcrossConnections) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+  const std::string schema = MakePostgresTestSchema("task_concurrent_order");
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn, .schema = schema};
+  std::array<a2a::server::stores::PostgresTaskStore, 2> stores = {a2a::server::stores::PostgresTaskStore(options),
+                                                                  a2a::server::stores::PostgresTaskStore(options)};
+  ASSERT_TRUE(RunDeterministicallyInterleavedInserts([&](std::size_t connection, std::string_view id) {
+    return stores[connection]
+        .CreateOrUpdate(a2a::tests::store_conformance::MakeTask(
+            std::string(id), "concurrent-context", lf::a2a::v1::TASK_STATE_WORKING, kOldTargetTaskTimestampSeconds))
+        .ok();
+  }));
+  ExpectTaskListOrder(stores.front());
+  ExpectTaskPaginationOrder(stores.front());
+}
+
+TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcrossConnections) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string dsn = dsn_value;
+  const std::string schema = MakePostgresTestSchema("push_concurrent_order");
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn, .schema = schema};
+  std::array<a2a::server::stores::PostgresPushNotificationStore, 2> stores = {
+      a2a::server::stores::PostgresPushNotificationStore(options),
+      a2a::server::stores::PostgresPushNotificationStore(options)};
+  constexpr std::string_view kTaskId = "concurrent-push-task";
+  ASSERT_TRUE(RunDeterministicallyInterleavedInserts([&](std::size_t connection, std::string_view id) {
+    return stores[connection]
+        .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kTaskId), std::string(id)))
+        .ok();
+  }));
+  ExpectPushConfigListOrder(stores.front(), kTaskId);
+  ExpectPushConfigPaginationOrder(stores.front(), kTaskId);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {

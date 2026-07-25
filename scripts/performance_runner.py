@@ -74,6 +74,14 @@ SUT_READY_TIMEOUT_SECONDS = 30.0
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
+POSTGRES_DIAGNOSTIC_PHASES = (
+    "connection_acquire_wait",
+    "task_upsert",
+    "push_config_upsert",
+    "push_config_list",
+    "transaction_begin",
+    "transaction_commit",
+)
 
 
 @dataclass(frozen=True)
@@ -377,6 +385,8 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig) -> Non
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
     fieldnames = ["scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    for phase in POSTGRES_DIAGNOSTIC_PHASES:
+        fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms"))
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
@@ -397,6 +407,18 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
                 "stream_completion_p50_ms": completion_latency.get("p50", 0),
                 "stream_completion_p95_ms": completion_latency.get("p95", 0),
             })
+            phase_latencies = result.get("postgres_phase_latency_ms", {})
+            if not isinstance(phase_latencies, dict):
+                phase_latencies = {}
+            for phase in POSTGRES_DIAGNOSTIC_PHASES:
+                phase_values = phase_latencies.get(phase, {})
+                if not isinstance(phase_values, dict):
+                    phase_values = {}
+                row.update({
+                    f"{phase}_p95_ms": phase_values.get("p95", 0),
+                    f"{phase}_p99_ms": phase_values.get("p99", 0),
+                    f"{phase}_max_ms": phase_values.get("max", 0),
+                })
             writer.writerow(row)
 
 
@@ -436,6 +458,25 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
             f"{result['success']} | {result['errors']} | {float(result['throughput_ops_per_sec']):.2f} | "
             f"{float(latency['p50']):.4f} | {float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} |"
         )
+    diagnostic_results = [result for result in results if "postgres_phase_latency_ms" in result]
+    if diagnostic_results:
+        lines.extend([
+            "",
+            "## PostgreSQL phase diagnostics",
+            "",
+            "| Scenario | Transport | Concurrency | Phase | p95 ms | p99 ms | Max ms |",
+            "| --- | --- | ---: | --- | ---: | ---: | ---: |",
+        ])
+        for result in diagnostic_results:
+            phases = result["postgres_phase_latency_ms"]
+            assert isinstance(phases, dict)
+            for phase in POSTGRES_DIAGNOSTIC_PHASES:
+                values = phases[phase]
+                assert isinstance(values, dict)
+                lines.append(
+                    f"| {result['scenario']} | {result['transport']} | {result['concurrency']} | {phase} | "
+                    f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} |"
+                )
     return "\n".join(lines)
 
 

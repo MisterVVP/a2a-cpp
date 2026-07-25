@@ -23,6 +23,7 @@ constexpr int kPartialFailureCallbackCount = 8;
 constexpr int kPartialFailureEventCount = 7;
 constexpr int kConcurrentRequests = 16;
 constexpr int kConcurrentWorkers = 4;
+constexpr double kDiagnosticTaskUpsertMs = 1.25;
 constexpr int kTwoDeliveryAttempts = 2;
 constexpr int kOneDeliveryAttempt = 1;
 constexpr std::string_view kAggregationScenario = "aggregation-test";
@@ -223,4 +224,21 @@ TEST(PerformancePayloadTest, RepresentativePayloadMatchesProductionHelperShape) 
   EXPECT_EQ(production_payload.status_update().context_id(), benchmark_payload.status_update().context_id());
   EXPECT_EQ(production_payload.status_update().status().SerializeAsString(),
             benchmark_payload.status_update().status().SerializeAsString());
+}
+
+TEST(PerformanceDiagnosticsTest, SerializesPerPhasePostgresLatency) {
+  const ScenarioResult result = RunMeasuredScenario(std::string(kScenarioPushNotifyEndToEndManyConfigs), kSingleRequest,
+                                                    kSingleConcurrency, kNoDurationLimitSeconds, [](int, int) {
+                                                      OperationOutcome outcome{.ok = true};
+                                                      outcome.postgres_phase_latency_ms[1] = kDiagnosticTaskUpsertMs;
+                                                      return outcome;
+                                                    });
+  google::protobuf::Struct object;
+  AddPostgresDiagnosticFields(&object, result);
+
+  const auto& phases = object.fields().at("postgres_phase_latency_ms").struct_value().fields();
+  const auto& task_upsert = phases.at("task_upsert").struct_value().fields();
+  EXPECT_DOUBLE_EQ(task_upsert.at("p95").number_value(), kDiagnosticTaskUpsertMs);
+  EXPECT_DOUBLE_EQ(task_upsert.at("p99").number_value(), kDiagnosticTaskUpsertMs);
+  EXPECT_DOUBLE_EQ(task_upsert.at("max").number_value(), kDiagnosticTaskUpsertMs);
 }

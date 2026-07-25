@@ -115,6 +115,9 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!lease.ok()) {
     return lease.error();
   }
+#ifdef A2A_POSTGRES_STORE_TESTING
+  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
+#endif
   PgResult result(
       PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
   const auto checked = CheckCommand(lease.value().get(), result.get(), "upsert postgres push notification config");
@@ -183,6 +186,9 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   if (!lease.ok()) {
     return lease.error();
   }
+#ifdef A2A_POSTGRES_STORE_TESTING
+  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigList);
+#endif
 
   const std::string count_sql = "SELECT count(*) FROM " + PushTable(options_.schema) + " WHERE task_id = $1";
   PgResult count_result(

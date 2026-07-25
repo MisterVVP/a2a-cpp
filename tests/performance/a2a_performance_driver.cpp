@@ -25,6 +25,9 @@
 #include "a2a/server/request_context.h"
 #include "a2a/server/server_stream_session.h"
 #include "a2a/server/stores/store_factory.h"
+#ifdef A2A_ENABLE_POSTGRES_STORE
+#include "a2a/server/stores/postgres_common.h"
+#endif
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
 #include "example_support/example_support.h"
@@ -130,22 +133,33 @@ class ScenarioHarness final {
   }
 
   OperationOutcome Execute(std::string_view scenario, int worker_index, int index) {
+#ifdef A2A_ENABLE_POSTGRES_STORE
+    a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+#endif
     a2a::server::RequestContext context;
     context.client_headers.emplace("perf.worker", BuildId("worker", worker_index));
     if (auto result = ExecuteTaskScenario(scenario, index, context); result.has_value()) {
-      return OperationSucceeded(*result);
+      return FinishOperation(OperationSucceeded(*result));
     }
     if (auto result = ExecuteStreamingScenario(scenario, index, context); result.has_value()) {
-      return OperationSucceeded(*result);
+      return FinishOperation(OperationSucceeded(*result));
     }
     if (auto result = ExecutePushScenario(scenario, index, context); result.has_value()) {
-      return *result;
+      return FinishOperation(*result);
     }
     return {};
   }
 
  private:
   static OperationOutcome OperationSucceeded(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
+
+  static OperationOutcome FinishOperation(OperationOutcome outcome) {
+#ifdef A2A_ENABLE_POSTGRES_STORE
+    const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+    outcome.postgres_phase_latency_ms = diagnostics.elapsed_ms;
+#endif
+    return outcome;
+  }
 
   bool ConfigureStores(std::string_view store_backend) {
     if (store_backend == kInMemoryStore) {
@@ -668,6 +682,9 @@ google::protobuf::Struct BuildResultObject(const Options& options, const Scenari
   SetStringField(&object, "transport_path", "in_process");
 
   AddLatencyField(&object, result);
+  if (options.store_backend == kPostgresStore) {
+    AddPostgresDiagnosticFields(&object, result);
+  }
   return object;
 }
 

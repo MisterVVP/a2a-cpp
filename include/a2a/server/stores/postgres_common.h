@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <memory>
@@ -20,19 +22,38 @@ typedef struct pg_result PGresult;
 
 namespace a2a::server::stores {
 
-class PostgresConnectionPool;
-
 #ifdef A2A_POSTGRES_STORE_TESTING
 void FailNextPostgresAcquireForTesting(core::Error error);
-[[nodiscard]] core::Result<std::size_t> ReadPostgresSequenceCacheSizeForTesting(PostgresConnectionPool& pool,
-                                                                                std::string_view schema,
-                                                                                std::string_view sequence_name);
+
+enum class PostgresDiagnosticPhase : std::size_t {
+  kConnectionAcquireWait,
+  kTaskUpsert,
+  kPushConfigUpsert,
+  kPushConfigList,
+  kTransactionBegin,
+  kTransactionCommit,
+  kCount,
+};
+
+struct PostgresOperationDiagnostics final {
+  std::array<double, static_cast<std::size_t>(PostgresDiagnosticPhase::kCount)> elapsed_ms{};
+};
+
+class PostgresDiagnosticTimerForTesting final {
+ public:
+  explicit PostgresDiagnosticTimerForTesting(PostgresDiagnosticPhase phase) noexcept;
+  ~PostgresDiagnosticTimerForTesting();
+
+ private:
+  PostgresDiagnosticPhase phase_;
+  std::chrono::steady_clock::time_point started_;
+};
+
+void ResetPostgresOperationDiagnosticsForTesting() noexcept;
+[[nodiscard]] PostgresOperationDiagnostics TakePostgresOperationDiagnosticsForTesting() noexcept;
 #endif
 
 constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
-// Reserving sequence values per PostgreSQL backend avoids synchronizing WAL for
-// every task or push-config insert on concurrent write-heavy paths.
-constexpr std::size_t kPostgresSequenceCacheSize = 32;
 constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";
