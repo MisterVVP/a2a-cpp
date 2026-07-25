@@ -13,6 +13,8 @@
 
 namespace a2a::server {
 
+[[nodiscard]] lf::a2a::v1::StreamResponse BuildTaskStatusUpdatePayload(const lf::a2a::v1::Task& task);
+
 class PushNotificationService final {
  public:
   static constexpr std::string_view kPushDeliveryNonSuccessStatusMessage =

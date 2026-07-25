@@ -11,6 +11,15 @@
 
 namespace a2a::server {
 
+lf::a2a::v1::StreamResponse BuildTaskStatusUpdatePayload(const lf::a2a::v1::Task& task) {
+  lf::a2a::v1::StreamResponse payload;
+  auto* update = payload.mutable_status_update();
+  update->set_task_id(task.id());
+  update->set_context_id(task.context_id());
+  *update->mutable_status() = task.status();
+  return payload;
+}
+
 PushNotificationService::PushNotificationService(TaskStore* task_store, PushNotificationStore* push_store,
                                                  PushNotificationDeliveryClient* delivery_client)
     : task_store_(task_store), push_store_(push_store), delivery_client_(delivery_client) {}
@@ -78,11 +87,7 @@ core::Result<void> PushNotificationService::NotifyTaskUpdated(const lf::a2a::v1:
     return configs.error();
   }
 
-  lf::a2a::v1::StreamResponse payload;
-  auto* update = payload.mutable_status_update();
-  update->set_task_id(task.id());
-  update->set_context_id(task.context_id());
-  *update->mutable_status() = task.status();
+  const lf::a2a::v1::StreamResponse payload = BuildTaskStatusUpdatePayload(task);
 
   for (const auto& config : configs.value().configs()) {
     PushDeliveryRequest request{.config = config, .payload = payload};
