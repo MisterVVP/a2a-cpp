@@ -126,4 +126,19 @@ void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& res
   }
 }
 
+void AddPostgresDiagnosticFields(google::protobuf::Struct* object, const ScenarioResult& result) {
+  google::protobuf::Struct phases;
+  for (std::size_t phase = 0; phase < result.postgres_phase_latencies.size(); ++phase) {
+    const auto& values = result.postgres_phase_latencies[phase];
+    google::protobuf::Struct latency;
+    SetNumberField(&latency, "p50", Percentile(values, kP50));
+    SetNumberField(&latency, "p95", Percentile(values, kP95));
+    SetNumberField(&latency, "p99", Percentile(values, kP99));
+    SetNumberField(&latency, "max", values.empty() ? 0.0 : values.back());
+    (*phases.mutable_fields())[std::string(kPostgresDiagnosticPhaseNames[phase])].mutable_struct_value()->Swap(
+        &latency);
+  }
+  (*object->mutable_fields())["postgres_phase_latency_ms"].mutable_struct_value()->Swap(&phases);
+}
+
 }  // namespace a2a::tests::performance

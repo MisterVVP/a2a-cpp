@@ -4,9 +4,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,6 +56,7 @@ constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
 constexpr std::string_view kStreamingTaskIdPrefix = "task-stream-";
+constexpr std::size_t kTaskLockStripeCount = 64U;
 
 [[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
   return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
@@ -103,7 +107,6 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                              server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!request.has_message() || request.message().parts_size() == 0) {
       return core::Error::Validation("message with at least one part is required");
     }
@@ -112,6 +115,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       return task_id_result.error();
     }
     std::string task_id = task_id_result.value();
+    std::lock_guard task_lock(TaskMutex(task_id));
 
     auto existing = task_store_->Get(task_id);
     lf::a2a::v1::Task task;
@@ -121,7 +125,6 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!IsTaskNotFoundError(existing.error())) {
         return existing.error();
       }
-      ordered_ids_.push_back(task_id);
     }
     task.set_id(task_id);
     if (task.context_id().empty()) {
@@ -135,8 +138,8 @@ class ExampleExecutor final : public server::AgentExecutor {
     task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
     task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
     task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
-    ++status_timestamp_counter_;
-    task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp_counter_));
+    const std::uint64_t status_timestamp = status_timestamp_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp));
 
     task.clear_artifacts();
     const ExampleIntent interop_intent = ExtractExampleIntent(request, task_id);
@@ -223,7 +226,6 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     std::string task_id = request.has_message() ? request.message().task_id() : "";
     if (task_id.empty()) {
@@ -251,7 +253,6 @@ class ExampleExecutor final : public server::AgentExecutor {
       if (!stored.ok()) {
         return stored.error();
       }
-      ordered_ids_.push_back(task_id);
     }
 
     lf::a2a::v1::StreamResponse working;
@@ -288,7 +289,6 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                            server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     auto task = task_store_->Get(request.id());
     if (!task.ok()) {
@@ -305,8 +305,8 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                              server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
+    std::lock_guard task_lock(TaskMutex(request.id()));
     auto task = lifecycle_.TransitionTaskStatus(request.id(), lf::a2a::v1::TASK_STATE_CANCELED);
     if (!task.ok()) {
       return task.error();
@@ -321,40 +321,36 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
       const lf::a2a::v1::TaskPushNotificationConfig& request, server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.CreateConfig(request);
   }
 
   core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
       const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.GetConfig(request);
   }
 
   core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
       const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.ListConfigs(request);
   }
 
   core::Result<void> DeleteTaskPushNotificationConfig(
       const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, server::RequestContext& context) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)context;
     return push_notifications_.DeleteConfig(request);
   }
 
-  void ShutdownSubscriptions() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    subscriptions_.Shutdown();
-  }
+  void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
 
  private:
-  mutable std::mutex mutex_;
-  std::vector<std::string> ordered_ids_;
+  [[nodiscard]] std::mutex& TaskMutex(std::string_view task_id) noexcept {
+    return task_mutexes_[std::hash<std::string_view>{}(task_id) % task_mutexes_.size()];
+  }
+
+  std::array<std::mutex, kTaskLockStripeCount> task_mutexes_;
   std::unique_ptr<server::InMemoryTaskStore> owned_task_store_;
   std::unique_ptr<server::InMemoryPushNotificationStore> owned_push_store_;
   std::unique_ptr<server::HttpPushNotificationDeliveryClient> owned_push_delivery_;
@@ -365,7 +361,7 @@ class ExampleExecutor final : public server::AgentExecutor {
   server::TaskLifecycleService lifecycle_;
   server::PushNotificationService push_notifications_;
   server::TaskSubscriptionService subscriptions_;
-  std::uint64_t status_timestamp_counter_ = 0;
+  std::atomic<std::uint64_t> status_timestamp_counter_{0};
 };
 
 inline lf::a2a::v1::AgentCard BuildRestAgentCard(std::string_view name, std::string_view url) {

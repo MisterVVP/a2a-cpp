@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <memory>
@@ -22,6 +24,33 @@ namespace a2a::server::stores {
 
 #ifdef A2A_POSTGRES_STORE_TESTING
 void FailNextPostgresAcquireForTesting(core::Error error);
+
+enum class PostgresDiagnosticPhase : std::size_t {
+  kConnectionAcquireWait,
+  kTaskUpsert,
+  kPushConfigUpsert,
+  kPushConfigList,
+  kTransactionBegin,
+  kTransactionCommit,
+  kCount,
+};
+
+struct PostgresOperationDiagnostics final {
+  std::array<double, static_cast<std::size_t>(PostgresDiagnosticPhase::kCount)> elapsed_ms{};
+};
+
+class PostgresDiagnosticTimerForTesting final {
+ public:
+  explicit PostgresDiagnosticTimerForTesting(PostgresDiagnosticPhase phase) noexcept;
+  ~PostgresDiagnosticTimerForTesting();
+
+ private:
+  PostgresDiagnosticPhase phase_;
+  std::chrono::steady_clock::time_point started_;
+};
+
+void ResetPostgresOperationDiagnosticsForTesting() noexcept;
+[[nodiscard]] PostgresOperationDiagnostics TakePostgresOperationDiagnosticsForTesting() noexcept;
 #endif
 
 constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;

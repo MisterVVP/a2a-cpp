@@ -48,7 +48,12 @@ constexpr double kP90 = 90.0;
 constexpr double kP95 = 95.0;
 constexpr double kP99 = 99.0;
 constexpr std::size_t kIdReserveSlack = 16U;
+constexpr std::size_t kPostgresDiagnosticPhaseCount = 6U;
+constexpr std::array<std::string_view, kPostgresDiagnosticPhaseCount> kPostgresDiagnosticPhaseNames = {
+    "connection_acquire_wait", "task_upsert",       "push_config_upsert",
+    "push_config_list",        "transaction_begin", "transaction_commit"};
 constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
+constexpr char kPostgresSchemaEnv[] = "A2A_PERF_POSTGRES_SCHEMA";
 constexpr std::string_view kPerfSchemaPrefix = "a2a_perf_";
 constexpr std::string_view kMessageText = "hello";
 constexpr std::string_view kPushCallbackUrl = "http://127.0.0.1/fake-push-callback";
@@ -126,6 +131,7 @@ struct ScenarioResult final {
   std::vector<double> latencies;
   std::vector<double> first_event_latencies;
   std::vector<double> completion_latencies;
+  std::array<std::vector<double>, kPostgresDiagnosticPhaseCount> postgres_phase_latencies;
 };
 
 struct OperationOutcome final {
@@ -138,6 +144,7 @@ struct OperationOutcome final {
   int callback_count = 0;
   int fanout_per_operation = 0;
   int total_fanout_count = 0;
+  std::array<double, kPostgresDiagnosticPhaseCount> postgres_phase_latency_ms{};
 };
 
 [[nodiscard]] lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id,
@@ -154,6 +161,7 @@ void SetIntegerField(google::protobuf::Struct* object, std::string_view key, int
 void PopulateCommonResultFields(google::protobuf::Struct* object, std::string_view scenario, std::string_view transport,
                                 std::string_view store_backend, int concurrency, const ScenarioResult& result);
 void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& result);
+void AddPostgresDiagnosticFields(google::protobuf::Struct* object, const ScenarioResult& result);
 
 template <typename ExecuteOperation>
 [[nodiscard]] ScenarioResult RunMeasuredScenario(std::string scenario, int requests, int concurrency,
@@ -170,6 +178,7 @@ template <typename ExecuteOperation>
     std::vector<double> latencies;
     std::vector<double> first_event_latencies;
     std::vector<double> completion_latencies;
+    std::array<std::vector<double>, kPostgresDiagnosticPhaseCount> postgres_phase_latencies;
   };
 
   const int worker_count = std::min(concurrency, requests);
@@ -225,6 +234,9 @@ template <typename ExecuteOperation>
               if (outcome.completion_latency_ms > 0.0) {
                 thread_result.completion_latencies.push_back(outcome.completion_latency_ms);
               }
+              for (std::size_t phase = 0; phase < outcome.postgres_phase_latency_ms.size(); ++phase) {
+                thread_result.postgres_phase_latencies[phase].push_back(outcome.postgres_phase_latency_ms[phase]);
+              }
             } else {
               ++thread_result.errors;
             }
@@ -266,6 +278,12 @@ template <typename ExecuteOperation>
     result.completion_latencies.insert(result.completion_latencies.end(),
                                        std::make_move_iterator(thread_result.completion_latencies.begin()),
                                        std::make_move_iterator(thread_result.completion_latencies.end()));
+    for (std::size_t phase = 0; phase < result.postgres_phase_latencies.size(); ++phase) {
+      auto& destination = result.postgres_phase_latencies[phase];
+      auto& source = thread_result.postgres_phase_latencies[phase];
+      destination.insert(destination.end(), std::make_move_iterator(source.begin()),
+                         std::make_move_iterator(source.end()));
+    }
   }
   result.operations = result.success + result.errors;
   const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -274,6 +292,9 @@ template <typename ExecuteOperation>
   std::ranges::sort(result.latencies);
   std::ranges::sort(result.first_event_latencies);
   std::ranges::sort(result.completion_latencies);
+  for (auto& phase_latencies : result.postgres_phase_latencies) {
+    std::ranges::sort(phase_latencies);
+  }
   return result;
 }
 

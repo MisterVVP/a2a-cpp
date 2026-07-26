@@ -5,6 +5,7 @@
 
 #include <libpq-fe.h>
 
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -24,6 +25,7 @@ namespace {
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
 std::optional<core::Error> g_test_acquire_failure;
+thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 #endif
 
 [[nodiscard]] core::Error DatabaseError(PGconn* connection, std::string_view operation) {
@@ -140,9 +142,17 @@ core::Result<void> Exec(PGconn* connection, const std::string& sql, std::string_
 
 Transaction::Transaction(PGconn* connection) : connection_(connection) {}
 
-core::Result<void> Transaction::Begin() { return Exec(connection_, "BEGIN", "begin postgres transaction"); }
+core::Result<void> Transaction::Begin() {
+#ifdef A2A_POSTGRES_STORE_TESTING
+  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTransactionBegin);
+#endif
+  return Exec(connection_, "BEGIN", "begin postgres transaction");
+}
 
 core::Result<void> Transaction::Commit() {
+#ifdef A2A_POSTGRES_STORE_TESTING
+  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTransactionCommit);
+#endif
   const auto committed = Exec(connection_, "COMMIT", "commit postgres transaction");
   if (committed.ok()) {
     committed_ = true;
@@ -194,6 +204,9 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
 
   PgConnection connection;
   {
+#ifdef A2A_POSTGRES_STORE_TESTING
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kConnectionAcquireWait);
+#endif
     std::unique_lock<std::mutex> lock(mutex_);
     condition_.wait(lock, [&] { return !connections_.empty(); });
     connection = std::move(connections_.back());
@@ -315,6 +328,23 @@ PostgresConnectionPool::Lease AcquireOrThrow(PostgresConnectionPool& pool) {
 void FailNextPostgresAcquireForTesting(core::Error error) {
   std::lock_guard<std::mutex> lock(g_test_acquire_failure_mutex);
   g_test_acquire_failure = std::move(error);
+}
+
+void ResetPostgresOperationDiagnosticsForTesting() noexcept { g_operation_diagnostics = {}; }
+
+PostgresDiagnosticTimerForTesting::PostgresDiagnosticTimerForTesting(PostgresDiagnosticPhase phase) noexcept
+    : phase_(phase), started_(std::chrono::steady_clock::now()) {}
+
+PostgresDiagnosticTimerForTesting::~PostgresDiagnosticTimerForTesting() {
+  const auto elapsed = std::chrono::steady_clock::now() - started_;
+  g_operation_diagnostics.elapsed_ms[static_cast<std::size_t>(phase_)] +=
+      std::chrono::duration<double, std::milli>(elapsed).count();
+}
+
+PostgresOperationDiagnostics TakePostgresOperationDiagnosticsForTesting() noexcept {
+  PostgresOperationDiagnostics diagnostics = g_operation_diagnostics;
+  g_operation_diagnostics = {};
+  return diagnostics;
 }
 #endif
 

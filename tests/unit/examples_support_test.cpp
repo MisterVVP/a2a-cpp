@@ -3,9 +3,17 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <barrier>
+#include <chrono>
+#include <condition_variable>
+#include <future>
 #include <memory>
+#include <mutex>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include "a2a/server/request_context.h"
@@ -76,6 +84,63 @@ class FailingGetTaskStore final : public a2a::server::TaskStore {
   int create_or_update_calls_ = 0;
 };
 
+class BlockingGetTaskStore final : public a2a::server::TaskStore {
+ public:
+  explicit BlockingGetTaskStore(std::string blocked_task_id) : blocked_task_id_(std::move(blocked_task_id)) {}
+
+  [[nodiscard]] a2a::core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override {
+    return store_.CreateOrUpdate(task);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override {
+    if (id == blocked_task_id_) {
+      std::unique_lock lock(mutex_);
+      blocked_ = true;
+      condition_.notify_all();
+      condition_.wait(lock, [&] { return released_; });
+    }
+    return store_.Get(id);
+  }
+
+  [[nodiscard]] a2a::core::Result<a2a::server::ListTasksResponse> List(
+      const a2a::server::ListTasksRequest& request) const override {
+    return store_.List(request);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override { return store_.Cancel(id); }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                       const lf::a2a::v1::Message& message,
+                                                                       HistoryAppendPolicy policy) override {
+    return store_.AppendTaskHistory(task_id, message, policy);
+  }
+
+  [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override {
+    return store_.GetHistoryTelemetrySnapshot();
+  }
+
+  void WaitUntilBlocked() const {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [&] { return blocked_; });
+  }
+
+  void Release() {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    condition_.notify_all();
+  }
+
+ private:
+  std::string blocked_task_id_;
+  a2a::server::InMemoryTaskStore store_;
+  mutable std::mutex mutex_;
+  mutable std::condition_variable condition_;
+  mutable bool blocked_ = false;
+  bool released_ = false;
+};
+
 [[nodiscard]] a2a::examples::ExampleExecutor MakeExecutorWithTaskId(std::string task_id) {
   a2a::examples::ExampleExecutorOptions options;
   options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::move(task_id));
@@ -87,6 +152,30 @@ class FailingGetTaskStore final : public a2a::server::TaskStore {
   send.mutable_message()->set_message_id(std::move(message_id));
   send.mutable_message()->add_parts()->set_text("hello");
   return send;
+}
+
+[[nodiscard]] std::array<bool, 2> RunConcurrentFollowUps(a2a::examples::ExampleExecutor& executor,
+                                                         std::string_view task_id,
+                                                         const std::array<std::string_view, 2>& message_ids) {
+  std::barrier start(2);
+  std::array<bool, 2> succeeded{};
+  const auto send_follow_up = [&](std::size_t index) {
+    lf::a2a::v1::SendMessageRequest request = MakeValidSendRequest(std::string(message_ids[index]));
+    request.mutable_message()->set_task_id(std::string(task_id));
+    a2a::server::RequestContext context;
+    start.arrive_and_wait();
+    succeeded[index] = executor.SendMessage(request, context).ok();
+  };
+  std::thread first(send_follow_up, 0U);
+  std::thread second(send_follow_up, 1U);
+  first.join();
+  second.join();
+  return succeeded;
+}
+
+[[nodiscard]] bool TaskContainsMessage(const lf::a2a::v1::Task& task, std::string_view message_id) {
+  return std::ranges::any_of(task.history(),
+                             [&](const lf::a2a::v1::Message& message) { return message.message_id() == message_id; });
 }
 
 TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
@@ -149,6 +238,51 @@ TEST(ExampleSupportTest, StreamingAndListTasksAreDeterministic) {
   const auto listed = executor.ListTasks({}, context);
   ASSERT_TRUE(listed.ok());
   ASSERT_FALSE(listed.value().tasks.empty());
+}
+
+TEST(ExampleSupportTest, IndependentPushReadProgressesWhileTaskStoreCallIsBlocked) {
+  constexpr std::string_view kBlockedTaskId = "blocked-task";
+  constexpr std::string_view kConfigId = "independent-config";
+  constexpr std::chrono::seconds kProgressTimeout{1};
+  BlockingGetTaskStore task_store{std::string(kBlockedTaskId)};
+  lf::a2a::v1::Task blocked_task;
+  blocked_task.set_id(std::string(kBlockedTaskId));
+  blocked_task.set_context_id("blocked-context");
+  ASSERT_TRUE(task_store.CreateOrUpdate(blocked_task).ok());
+  a2a::server::InMemoryPushNotificationStore push_store;
+  lf::a2a::v1::TaskPushNotificationConfig config;
+  config.set_task_id(std::string(kBlockedTaskId));
+  config.set_id(std::string(kConfigId));
+  config.set_url("https://example.test/callback");
+  ASSERT_TRUE(push_store.CreateOrUpdate(config).ok());
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.push_store = &push_store;
+  a2a::examples::ExampleExecutor executor(std::move(options));
+
+  auto blocked_create = std::async(std::launch::async, [&] {
+    a2a::server::RequestContext context;
+    lf::a2a::v1::TaskPushNotificationConfig request;
+    request.set_task_id(std::string(kBlockedTaskId));
+    request.set_id("blocked-create");
+    request.set_url("https://example.test/blocked");
+    return executor.CreateTaskPushNotificationConfig(request, context).ok();
+  });
+  task_store.WaitUntilBlocked();
+  auto push_read = std::async(std::launch::async, [&] {
+    a2a::server::RequestContext context;
+    lf::a2a::v1::GetTaskPushNotificationConfigRequest request;
+    request.set_task_id(std::string(kBlockedTaskId));
+    request.set_id(std::string(kConfigId));
+    return executor.GetTaskPushNotificationConfig(request, context).ok();
+  });
+
+  const bool progressed = push_read.wait_for(kProgressTimeout) == std::future_status::ready;
+  task_store.Release();
+
+  EXPECT_TRUE(progressed);
+  EXPECT_TRUE(push_read.get());
+  EXPECT_TRUE(blocked_create.get());
 }
 
 TEST(ExampleSupportTest, SendMessageRequiresAtLeastOnePart) {
@@ -215,6 +349,28 @@ TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
   const auto loaded = executor.GetTask(get, context);
   ASSERT_TRUE(loaded.ok());
   EXPECT_EQ(loaded.value().history_size(), 1);
+}
+
+TEST(ExampleSupportTest, ConcurrentSameTaskFollowUpsPreserveBothMessages) {
+  constexpr std::string_view kTaskId = "same-task-concurrency";
+  constexpr std::string_view kFirstMessageId = "same-task-first";
+  constexpr std::string_view kSecondMessageId = "same-task-second";
+  constexpr std::array<std::string_view, 2> kMessageIds = {kFirstMessageId, kSecondMessageId};
+  auto executor = MakeExecutorWithTaskId(std::string(kTaskId));
+  a2a::server::RequestContext create_context;
+  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest("same-task-create"), create_context).ok());
+  const auto succeeded = RunConcurrentFollowUps(executor, kTaskId, kMessageIds);
+
+  EXPECT_TRUE(succeeded[0]);
+  EXPECT_TRUE(succeeded[1]);
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  a2a::server::RequestContext get_context;
+  const auto task = executor.GetTask(get, get_context);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().id(), kTaskId);
+  EXPECT_TRUE(TaskContainsMessage(task.value(), kFirstMessageId));
+  EXPECT_TRUE(TaskContainsMessage(task.value(), kSecondMessageId));
 }
 
 TEST(ExampleSupportTest, MessageIdPrefixesDriveArtifactAndMessageResponse) {

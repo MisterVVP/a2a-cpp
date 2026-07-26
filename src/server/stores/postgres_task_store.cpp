@@ -26,6 +26,9 @@ namespace {
 
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
+#ifdef A2A_POSTGRES_STORE_TESTING
+  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskUpsert);
+#endif
   const std::string payload = task.SerializeAsString();
   const bool has_status_timestamp = task.status().has_timestamp();
   const std::string has_timestamp = has_status_timestamp ? "true" : "false";

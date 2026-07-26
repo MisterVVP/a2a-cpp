@@ -46,3 +46,20 @@ For the canonical wrapper and generated summary artifacts, prefer:
 ```bash
 ./scripts/run_performance_tests.sh --store-backends inmemory --requests 1000 --concurrency 1,4
 ```
+
+## PostgreSQL tail validation
+
+Run the issue #171 validation matrix against a local PostgreSQL instance with:
+
+```bash
+A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
+  ./scripts/run_performance_tests.sh --profile postgres-tail \
+  --report-dir perf-artifacts/postgres-tail
+```
+
+The command runs the five focused in-process scenarios five times at concurrency
+1, 4, and 8, using 2,000 requests and a one-second warmup. It writes per-run and
+median aggregate JSON, CSV, and Markdown reports under
+`perf-artifacts/postgres-tail/`. The report also records `EXPLAIN (ANALYZE, BUFFERS)`
+output and verifies the task primary key and push-config creation-order index are
+used by the relevant lookups.
