@@ -241,4 +241,6 @@ TEST(PerformanceDiagnosticsTest, SerializesPerPhasePostgresLatency) {
   EXPECT_DOUBLE_EQ(task_upsert.at("p95").number_value(), kDiagnosticTaskUpsertMs);
   EXPECT_DOUBLE_EQ(task_upsert.at("p99").number_value(), kDiagnosticTaskUpsertMs);
   EXPECT_DOUBLE_EQ(task_upsert.at("max").number_value(), kDiagnosticTaskUpsertMs);
+  EXPECT_DOUBLE_EQ(phases.at("executor_lock_wait").struct_value().fields().at("p95").number_value(), 0.0);
+  EXPECT_DOUBLE_EQ(phases.at("executor_lock_hold").struct_value().fields().at("p95").number_value(), 0.0);
 }

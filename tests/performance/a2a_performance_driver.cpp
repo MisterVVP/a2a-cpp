@@ -156,7 +156,7 @@ class ScenarioHarness final {
   static OperationOutcome FinishOperation(OperationOutcome outcome) {
 #ifdef A2A_ENABLE_POSTGRES_STORE
     const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
-    outcome.postgres_phase_latency_ms = diagnostics.elapsed_ms;
+    std::ranges::copy(diagnostics.elapsed_ms, outcome.postgres_phase_latency_ms.begin());
 #endif
     return outcome;
   }
