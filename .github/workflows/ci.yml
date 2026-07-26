@@ -133,15 +133,25 @@ jobs:
           A2A_PERF_REQUESTS: 2000
           A2A_PERF_CONCURRENCY: 1,4
           A2A_PERF_WARMUP_SECONDS: 0
-          A2A_PERF_REPORT_DIR: perf-artifacts
+          A2A_PERF_REPORT_DIR: perf-artifacts/normal
         run: ./scripts/run_performance_tests.sh
+      - name: Run PostgreSQL tail validation profile
+        run: >-
+          ./scripts/run_performance_tests.sh --profile postgres-tail
+          --report-dir perf-artifacts/postgres-tail
       - name: Validate performance reports
         run: |
-          test -s perf-artifacts/results.json
-          test -s perf-artifacts/results.csv
-          test -s perf-artifacts/summary.md
-          python3 -m json.tool perf-artifacts/results.json >/dev/null
-          cat perf-artifacts/summary.md >> "$GITHUB_STEP_SUMMARY"
+          test -s perf-artifacts/normal/results.json
+          test -s perf-artifacts/normal/results.csv
+          test -s perf-artifacts/normal/summary.md
+          test -s perf-artifacts/postgres-tail/results.json
+          test -s perf-artifacts/postgres-tail/results.csv
+          test -s perf-artifacts/postgres-tail/median-aggregates.csv
+          test -s perf-artifacts/postgres-tail/summary.md
+          python3 -m json.tool perf-artifacts/normal/results.json >/dev/null
+          python3 -m json.tool perf-artifacts/postgres-tail/results.json >/dev/null
+          cat perf-artifacts/normal/summary.md >> "$GITHUB_STEP_SUMMARY"
+          cat perf-artifacts/postgres-tail/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload performance artifacts
         if: always()
         uses: actions/upload-artifact@v6

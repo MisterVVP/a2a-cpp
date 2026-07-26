@@ -53,6 +53,7 @@ install_debian_dependencies() {
     libgrpc++-dev
     libcurl4-openssl-dev
     libpq-dev
+    postgresql-client
     libgtest-dev
     clang-format
     clang-tidy

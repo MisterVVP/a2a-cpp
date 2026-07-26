@@ -891,10 +891,6 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
   )
   add_test(
-    NAME postgres_tail_validation_script_test
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/postgres_tail_validation_test.py
-  )
-  add_test(
     NAME run_examples_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_examples_script_test.py
             ${CMAKE_SOURCE_DIR}/scripts/run_examples.sh

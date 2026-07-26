@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,7 +92,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             summary = (report_dir / "summary.md").read_text(encoding="utf-8")
             self.assertIn("A2A performance test summary", summary)
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
-            self.assertIn("| Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
+            self.assertIn("| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
 
     def test_wire_scenarios_include_streaming_for_http_transports(self):
         runner = load_runner_module()
@@ -162,6 +163,84 @@ class PerformanceRunnerTest(unittest.TestCase):
     def test_postgres_schema_name_is_matrix_scoped(self):
         runner = load_runner_module()
         self.assertEqual("a2a_perf_http_json_4_51081", runner.postgres_schema_name("http_json", 4, 51081))
+
+    def test_postgres_tail_profile_has_fixed_validation_matrix(self):
+        runner = load_runner_module()
+        config = runner.parse_args(["--profile", "postgres-tail"])
+        self.assertEqual(("grpc",), config.transports)
+        self.assertEqual(("postgres",), config.store_backends)
+        self.assertEqual(2_000, config.requests)
+        self.assertEqual((1, 4, 8), config.concurrency_levels)
+        self.assertEqual(5, config.repetitions)
+        self.assertEqual(1.0, config.warmup_seconds)
+        self.assertEqual(runner.POSTGRES_TAIL_SCENARIOS, config.scenarios)
+
+    def test_postgres_tail_aggregates_and_reports(self):
+        runner = load_runner_module()
+        rows = self.make_postgres_tail_rows(runner)
+        aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
+        self.assertEqual(15, len(aggregates))
+        self.assertEqual(5, aggregates[0]["repetitions"])
+        self.assertEqual(103.0, aggregates[0]["throughput_ops_per_sec"])
+        self.assertEqual(3.0, aggregates[0]["p95_ms"])
+        phase = runner.POSTGRES_DIAGNOSTIC_PHASES[0]
+        self.assertEqual(4.0, aggregates[0]["postgres_phase_latency_ms"][phase]["p99"])
+        config = runner.parse_args(["--profile", "postgres-tail"])
+        with tempfile.TemporaryDirectory() as directory:
+            config = runner.RunnerConfig(**{**config.__dict__, "report_dir": Path(directory)})
+            runner.write_reports(rows, config, aggregates, "Index Scan using a2a_tasks_pkey")
+            payload = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
+            summary = (Path(directory) / "summary.md").read_text(encoding="utf-8")
+            aggregate_csv = (Path(directory) / "median-aggregates.csv").read_text(encoding="utf-8")
+        self.assertEqual(75, len(payload["results"]))
+        self.assertEqual(15, len(payload["median_aggregates"]))
+        self.assertIn("Median PostgreSQL phases", summary)
+        self.assertIn("Query-plan review", summary)
+        self.assertIn("connection_acquire_wait_p99_ms", aggregate_csv)
+        self.assertNotIn("executor_lock_wait", aggregate_csv)
+
+    def test_postgres_tail_rejects_incomplete_aggregate(self):
+        runner = load_runner_module()
+        with self.assertRaisesRegex(ValueError, "4/5 repetitions"):
+            runner.median_aggregates(self.make_postgres_tail_rows(runner)[:-1], 5)
+
+    def test_query_plan_requires_task_and_push_indexes(self):
+        runner = load_runner_module()
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout="Index Scan using a2a_tasks_pkey\nIndex Scan using idx_a2a_push_configs_created_sequence",
+            stderr="",
+        )
+        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+            plans = runner.explain_postgres_queries("postgresql://test", "schema")
+        self.assertIn("idx_a2a_push_configs_created_sequence", plans)
+        completed.stdout = "Index Scan using a2a_tasks_pkey"
+        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "idx_a2a_push_configs_created_sequence"):
+                runner.explain_postgres_queries("postgresql://test", "schema")
+
+    @staticmethod
+    def make_postgres_tail_rows(runner):
+        rows = []
+        for concurrency in runner.POSTGRES_TAIL_CONCURRENCY:
+            for scenario in runner.POSTGRES_TAIL_SCENARIOS:
+                for repetition in range(1, runner.POSTGRES_TAIL_REPETITIONS + 1):
+                    phases = {
+                        phase: {"p95": float(repetition), "p99": float(repetition + 1),
+                                "max": float(repetition + 2)}
+                        for phase in runner.POSTGRES_DIAGNOSTIC_PHASES
+                    }
+                    rows.append({
+                        "repetition": repetition, "scenario": scenario, "transport": "grpc",
+                        "store_backend": "postgres", "driver_type": "cpp_sdk_in_process",
+                        "transport_path": "in_process", "concurrency": concurrency,
+                        "operations": runner.DEFAULT_REQUESTS, "success": runner.DEFAULT_REQUESTS,
+                        "errors": 0, "throughput_ops_per_sec": float(100 + repetition),
+                        "latency_ms": {"p50": 1.0, "p90": 2.0, "p95": float(repetition),
+                                       "p99": float(repetition + 1), "max": float(repetition + 2)},
+                        "postgres_phase_latency_ms": phases,
+                    })
+        return rows
 
 
 if __name__ == "__main__":
