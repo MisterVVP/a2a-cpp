@@ -4,11 +4,14 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -53,6 +56,7 @@ constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
 constexpr std::string_view kStreamingTaskIdPrefix = "task-stream-";
+constexpr std::size_t kTaskLockStripeCount = 64U;
 
 [[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
   return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
@@ -111,6 +115,7 @@ class ExampleExecutor final : public server::AgentExecutor {
       return task_id_result.error();
     }
     std::string task_id = task_id_result.value();
+    std::lock_guard task_lock(TaskMutex(task_id));
 
     auto existing = task_store_->Get(task_id);
     lf::a2a::v1::Task task;
@@ -301,6 +306,7 @@ class ExampleExecutor final : public server::AgentExecutor {
   core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                              server::RequestContext& context) override {
     (void)context;
+    std::lock_guard task_lock(TaskMutex(request.id()));
     auto task = lifecycle_.TransitionTaskStatus(request.id(), lf::a2a::v1::TASK_STATE_CANCELED);
     if (!task.ok()) {
       return task.error();
@@ -340,6 +346,11 @@ class ExampleExecutor final : public server::AgentExecutor {
   void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
 
  private:
+  [[nodiscard]] std::mutex& TaskMutex(std::string_view task_id) noexcept {
+    return task_mutexes_[std::hash<std::string_view>{}(task_id) % task_mutexes_.size()];
+  }
+
+  std::array<std::mutex, kTaskLockStripeCount> task_mutexes_;
   std::unique_ptr<server::InMemoryTaskStore> owned_task_store_;
   std::unique_ptr<server::InMemoryPushNotificationStore> owned_push_store_;
   std::unique_ptr<server::HttpPushNotificationDeliveryClient> owned_push_delivery_;

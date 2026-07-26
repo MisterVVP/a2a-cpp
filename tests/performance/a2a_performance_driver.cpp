@@ -156,7 +156,7 @@ class ScenarioHarness final {
   static OperationOutcome FinishOperation(OperationOutcome outcome) {
 #ifdef A2A_ENABLE_POSTGRES_STORE
     const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
-    std::ranges::copy(diagnostics.elapsed_ms, outcome.postgres_phase_latency_ms.begin());
+    outcome.postgres_phase_latency_ms = diagnostics.elapsed_ms;
 #endif
     return outcome;
   }
@@ -436,6 +436,10 @@ class ScenarioHarness final {
   }
 
   static std::string MakePostgresSchema() {
+    const char* configured_schema = std::getenv(kPostgresSchemaEnv);
+    if (configured_schema != nullptr && !std::string_view(configured_schema).empty()) {
+      return configured_schema;
+    }
     const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
     std::string schema;
     schema.reserve(kPerfSchemaPrefix.size() + kIdReserveSlack);

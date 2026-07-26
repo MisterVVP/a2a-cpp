@@ -3,13 +3,17 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include "a2a/server/request_context.h"
@@ -148,6 +152,30 @@ class BlockingGetTaskStore final : public a2a::server::TaskStore {
   send.mutable_message()->set_message_id(std::move(message_id));
   send.mutable_message()->add_parts()->set_text("hello");
   return send;
+}
+
+[[nodiscard]] std::array<bool, 2> RunConcurrentFollowUps(a2a::examples::ExampleExecutor& executor,
+                                                         std::string_view task_id,
+                                                         const std::array<std::string_view, 2>& message_ids) {
+  std::barrier start(2);
+  std::array<bool, 2> succeeded{};
+  const auto send_follow_up = [&](std::size_t index) {
+    lf::a2a::v1::SendMessageRequest request = MakeValidSendRequest(std::string(message_ids[index]));
+    request.mutable_message()->set_task_id(std::string(task_id));
+    a2a::server::RequestContext context;
+    start.arrive_and_wait();
+    succeeded[index] = executor.SendMessage(request, context).ok();
+  };
+  std::thread first(send_follow_up, 0U);
+  std::thread second(send_follow_up, 1U);
+  first.join();
+  second.join();
+  return succeeded;
+}
+
+[[nodiscard]] bool TaskContainsMessage(const lf::a2a::v1::Task& task, std::string_view message_id) {
+  return std::ranges::any_of(task.history(),
+                             [&](const lf::a2a::v1::Message& message) { return message.message_id() == message_id; });
 }
 
 TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
@@ -321,6 +349,28 @@ TEST(ExampleSupportTest, GetTaskWithHistoryLengthFiltersHistory) {
   const auto loaded = executor.GetTask(get, context);
   ASSERT_TRUE(loaded.ok());
   EXPECT_EQ(loaded.value().history_size(), 1);
+}
+
+TEST(ExampleSupportTest, ConcurrentSameTaskFollowUpsPreserveBothMessages) {
+  constexpr std::string_view kTaskId = "same-task-concurrency";
+  constexpr std::string_view kFirstMessageId = "same-task-first";
+  constexpr std::string_view kSecondMessageId = "same-task-second";
+  constexpr std::array<std::string_view, 2> kMessageIds = {kFirstMessageId, kSecondMessageId};
+  auto executor = MakeExecutorWithTaskId(std::string(kTaskId));
+  a2a::server::RequestContext create_context;
+  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest("same-task-create"), create_context).ok());
+  const auto succeeded = RunConcurrentFollowUps(executor, kTaskId, kMessageIds);
+
+  EXPECT_TRUE(succeeded[0]);
+  EXPECT_TRUE(succeeded[1]);
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  a2a::server::RequestContext get_context;
+  const auto task = executor.GetTask(get, get_context);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().id(), kTaskId);
+  EXPECT_TRUE(TaskContainsMessage(task.value(), kFirstMessageId));
+  EXPECT_TRUE(TaskContainsMessage(task.value(), kSecondMessageId));
 }
 
 TEST(ExampleSupportTest, MessageIdPrefixesDriveArtifactAndMessageResponse) {

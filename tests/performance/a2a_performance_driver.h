@@ -48,11 +48,12 @@ constexpr double kP90 = 90.0;
 constexpr double kP95 = 95.0;
 constexpr double kP99 = 99.0;
 constexpr std::size_t kIdReserveSlack = 16U;
-constexpr std::size_t kPostgresDiagnosticPhaseCount = 8U;
+constexpr std::size_t kPostgresDiagnosticPhaseCount = 6U;
 constexpr std::array<std::string_view, kPostgresDiagnosticPhaseCount> kPostgresDiagnosticPhaseNames = {
-    "connection_acquire_wait", "task_upsert",        "push_config_upsert", "push_config_list",
-    "transaction_begin",       "transaction_commit", "executor_lock_wait", "executor_lock_hold"};
+    "connection_acquire_wait", "task_upsert",       "push_config_upsert",
+    "push_config_list",        "transaction_begin", "transaction_commit"};
 constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
+constexpr char kPostgresSchemaEnv[] = "A2A_PERF_POSTGRES_SCHEMA";
 constexpr std::string_view kPerfSchemaPrefix = "a2a_perf_";
 constexpr std::string_view kMessageText = "hello";
 constexpr std::string_view kPushCallbackUrl = "http://127.0.0.1/fake-push-callback";

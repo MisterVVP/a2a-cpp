@@ -81,8 +81,6 @@ POSTGRES_DIAGNOSTIC_PHASES = (
     "push_config_list",
     "transaction_begin",
     "transaction_commit",
-    "executor_lock_wait",
-    "executor_lock_hold",
 )
 
 
