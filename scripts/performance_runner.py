@@ -644,12 +644,15 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
 
 
 def explain_postgres_queries(dsn: str, schema: str) -> str:
+    # Constant probe keys and disabled explicit sorts isolate whether each index can
+    # serve the production lookup shape, independently of the sampled table size.
     sql = f'''SET search_path TO "{schema}";
 SET enable_seqscan = off;
 EXPLAIN (ANALYZE, BUFFERS) SELECT task_proto FROM a2a_tasks
- WHERE id = (SELECT id FROM a2a_tasks LIMIT 1);
+ WHERE id = '';
+SET enable_sort = off;
 EXPLAIN (ANALYZE, BUFFERS) SELECT config_proto FROM a2a_push_notification_configs
- WHERE task_id = (SELECT task_id FROM a2a_push_notification_configs LIMIT 1)
+ WHERE task_id = ''
  ORDER BY created_sequence ASC;
 '''
     completed = subprocess.run(

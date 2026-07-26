@@ -211,9 +211,14 @@ class PerformanceRunnerTest(unittest.TestCase):
             stdout="Index Scan using a2a_tasks_pkey\nIndex Scan using idx_a2a_push_configs_created_sequence",
             stderr="",
         )
-        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+        with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
             plans = runner.explain_postgres_queries("postgresql://test", "schema")
         self.assertIn("idx_a2a_push_configs_created_sequence", plans)
+        command = run.call_args.args[0]
+        sql = command[-1]
+        self.assertIn("WHERE task_id = ''", sql)
+        self.assertIn("SET enable_sort = off", sql)
+        self.assertNotIn("SELECT task_id FROM", sql)
         completed.stdout = "Index Scan using a2a_tasks_pkey"
         with mock.patch.object(runner.subprocess, "run", return_value=completed):
             with self.assertRaisesRegex(ValueError, "idx_a2a_push_configs_created_sequence"):
