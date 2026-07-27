@@ -89,10 +89,7 @@ core::Result<ListTasksResponse> InMemoryTaskStore::ListUnfiltered(const ListTask
   response.tasks.reserve(result_size);
   const auto end = ordered_tasks_.begin() + static_cast<std::ptrdiff_t>(start + result_size);
   for (auto it = ordered_tasks_.begin() + static_cast<std::ptrdiff_t>(start); it != end; ++it) {
-    lf::a2a::v1::Task projected = *it;
-    ApplyArtifactProjection(&projected, request.include_artifacts);
-    ApplyHistoryRetention(&projected, request.history_length);
-    response.tasks.push_back(std::move(projected));
+    response.tasks.push_back(ProjectTaskForList(*it, request.include_artifacts, request.history_length));
   }
   response.page_size = result_size;
   response.total_size = ordered_tasks_.size();
@@ -117,10 +114,7 @@ core::Result<ListTasksResponse> InMemoryTaskStore::ListFiltered(const ListTasksR
   for (const auto& task : ordered_tasks_) {
     if (MatchesListFilters(task, request)) {
       if (matched_count >= start && (effective_page_size == 0 || response.tasks.size() < effective_page_size)) {
-        lf::a2a::v1::Task projected = task;
-        ApplyArtifactProjection(&projected, request.include_artifacts);
-        ApplyHistoryRetention(&projected, request.history_length);
-        response.tasks.push_back(std::move(projected));
+        response.tasks.push_back(ProjectTaskForList(task, request.include_artifacts, request.history_length));
       }
       ++matched_count;
     }

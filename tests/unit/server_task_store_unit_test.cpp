@@ -28,6 +28,7 @@ constexpr std::string_view kContextBeta = "context-beta";
 constexpr std::size_t kDefaultPageSize = 0;
 constexpr std::size_t kFirstPageSize = 1;
 constexpr std::size_t kTwoHistoryEntries = 2;
+constexpr std::size_t kThreeHistoryEntries = 3;
 constexpr int64_t kTimestampBaseSeconds = 100;
 constexpr int32_t kTimestampNanos = 1;
 constexpr int64_t kOrderOlderSeconds = 10;
@@ -36,6 +37,13 @@ constexpr int32_t kOrderOlderNanos = 2;
 constexpr int32_t kOrderNewestNanos = 1;
 constexpr int32_t kOrderTieHigherNanos = 9;
 constexpr std::string_view kTaskId = "task-append";
+constexpr std::string_view kProjectionTaskId = "task-projection";
+constexpr std::string_view kFirstTaskId = "task-1";
+constexpr std::string_view kSecondTaskId = "task-2";
+constexpr std::string_view kThirdTaskId = "task-3";
+constexpr std::string_view kLastHistoryMessageId = "message-2";
+constexpr std::string_view kFirstOffsetToken = "1";
+constexpr std::string_view kSecondOffsetToken = "2";
 
 class RecordingHistoryTelemetrySink final : public a2a::server::InMemoryTaskStore::HistoryTelemetrySink {
  public:
@@ -197,6 +205,73 @@ TEST(InMemoryTaskStoreUnitTest, UpdatingTaskPreservesItsListPosition) {
   EXPECT_EQ(result.value().tasks.front().context_id(), kContextBeta);
   EXPECT_EQ(result.value().tasks.front().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
   EXPECT_EQ(result.value().tasks.back().id(), "task-2");
+}
+
+TEST(InMemoryTaskStoreUnitTest, ProjectsArtifactsAndRequestedHistoryWithoutMutatingStoredTask) {
+  a2a::server::InMemoryTaskStore store;
+  const auto source = MakeTask(std::string(kProjectionTaskId), std::string(kContextAlpha),
+                               lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, true, kThreeHistoryEntries);
+  ASSERT_TRUE(store.CreateOrUpdate(source).ok());
+  const std::string serialized_source = source.SerializeAsString();
+
+  a2a::server::ListTasksRequest no_history_request;
+  no_history_request.history_length = std::size_t{0};
+  const auto no_history = store.List(no_history_request);
+  ASSERT_TRUE(no_history.ok());
+  ASSERT_EQ(no_history.value().tasks.size(), 1U);
+  EXPECT_EQ(no_history.value().tasks.front().artifacts_size(), 0);
+  EXPECT_EQ(no_history.value().tasks.front().history_size(), 0);
+
+  a2a::server::ListTasksRequest one_history_request;
+  one_history_request.history_length = std::size_t{1};
+  const auto one_history = store.List(one_history_request);
+  ASSERT_TRUE(one_history.ok());
+  ASSERT_EQ(one_history.value().tasks.size(), 1U);
+  EXPECT_EQ(one_history.value().tasks.front().history_size(), 1);
+  EXPECT_EQ(one_history.value().tasks.front().history(0).message_id(), kLastHistoryMessageId);
+
+  a2a::server::ListTasksRequest all_history_request;
+  all_history_request.include_artifacts = true;
+  const auto all_history = store.List(all_history_request);
+  ASSERT_TRUE(all_history.ok());
+  ASSERT_EQ(all_history.value().tasks.size(), 1U);
+  EXPECT_EQ(all_history.value().tasks.front().artifacts_size(), 1);
+  EXPECT_EQ(all_history.value().tasks.front().history_size(), static_cast<int>(kThreeHistoryEntries));
+
+  const auto stored = store.Get(kProjectionTaskId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().SerializeAsString(), serialized_source);
+}
+
+TEST(InMemoryTaskStoreUnitTest, PaginatesFilteredAndUnfilteredResultsInInsertionOrder) {
+  a2a::server::InMemoryTaskStore store;
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kFirstTaskId), std::string(kContextAlpha),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kSecondTaskId), std::string(kContextBeta),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kThirdTaskId), std::string(kContextAlpha),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
+                  .ok());
+
+  const auto unfiltered = store.List(a2a::server::ListTasksRequest{kFirstPageSize, std::string(kFirstOffsetToken)});
+  ASSERT_TRUE(unfiltered.ok());
+  ASSERT_EQ(unfiltered.value().tasks.size(), 1U);
+  EXPECT_EQ(unfiltered.value().tasks.front().id(), kSecondTaskId);
+  EXPECT_EQ(unfiltered.value().next_page_token, kSecondOffsetToken);
+
+  a2a::server::ListTasksRequest filtered_request{kFirstPageSize, std::string(kFirstOffsetToken)};
+  filtered_request.context_id = std::string(kContextAlpha);
+  const auto filtered = store.List(filtered_request);
+  ASSERT_TRUE(filtered.ok());
+  ASSERT_EQ(filtered.value().tasks.size(), 1U);
+  EXPECT_EQ(filtered.value().tasks.front().id(), kThirdTaskId);
+  EXPECT_TRUE(filtered.value().next_page_token.empty());
+  EXPECT_EQ(filtered.value().total_size, 2U);
 }
 
 TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreservesOrder) {
