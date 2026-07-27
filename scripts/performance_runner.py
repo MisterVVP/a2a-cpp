@@ -30,6 +30,7 @@ SCENARIOS = (
     "ListTasks_NoPagination",
     "ListTasks_WithPagination",
     "SendMessage_FollowUpExistingTask",
+    "SendMessage_FollowUpAtHistoryDepth/8",
     "GetTask_MissingTaskError",
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
@@ -73,6 +74,7 @@ WIRE_SCENARIOS = (
     "GetTask_ExistingTask",
     "CancelTask_WorkingTask",
     "SendMessage_FollowUpExistingTask",
+    "SendMessage_FollowUpAtHistoryDepth/8",
     "GetTask_MissingTaskError",
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
@@ -420,7 +422,7 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms"))
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:

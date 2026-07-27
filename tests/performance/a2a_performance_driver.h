@@ -39,6 +39,8 @@ constexpr int kDefaultRequests = 1000;
 constexpr int kDefaultConcurrency = 1;
 constexpr int kListPageSize = 10;
 constexpr int kPushConfigFanout = 8;
+constexpr int kFollowUpHistoryDepth = 1;
+constexpr int kDeepFollowUpHistoryDepth = 8;
 constexpr int kMultiSubscriberCount = 3;
 constexpr int kDisconnectSubscriberCount = 2;
 constexpr int kHttpStatusOk = 200;
@@ -64,6 +66,7 @@ constexpr std::string_view kScenarioCancelTaskWorkingTask = "CancelTask_WorkingT
 constexpr std::string_view kScenarioListTasksNoPagination = "ListTasks_NoPagination";
 constexpr std::string_view kScenarioListTasksWithPagination = "ListTasks_WithPagination";
 constexpr std::string_view kScenarioSendMessageFollowUpExistingTask = "SendMessage_FollowUpExistingTask";
+constexpr std::string_view kScenarioSendMessageFollowUpAtHistoryDepth = "SendMessage_FollowUpAtHistoryDepth/8";
 constexpr std::string_view kScenarioGetTaskMissingTaskError = "GetTask_MissingTaskError";
 constexpr std::string_view kScenarioSendStreamingMessageFiniteStream = "SendStreamingMessage_FiniteStream";
 constexpr std::string_view kScenarioSubscribeToTaskFirstEventLatency = "SubscribeToTask_FirstEventLatency";
@@ -81,13 +84,14 @@ constexpr std::string_view kScenarioPushDeliveryCallbackFanout = "PushDelivery_C
 constexpr std::string_view kScenarioPushConfigCreateMany = "PushConfig_CreateMany";
 constexpr std::string_view kScenarioPushDeliveryBuildPayload = "PushDelivery_BuildPayload";
 
-constexpr std::array<std::string_view, 21> kScenarios = {
+constexpr std::array<std::string_view, 22> kScenarios = {
     kScenarioSendMessageCreateTask,
     kScenarioGetTaskExistingTask,
     kScenarioCancelTaskWorkingTask,
     kScenarioListTasksNoPagination,
     kScenarioListTasksWithPagination,
     kScenarioSendMessageFollowUpExistingTask,
+    kScenarioSendMessageFollowUpAtHistoryDepth,
     kScenarioGetTaskMissingTaskError,
     kScenarioSendStreamingMessageFiniteStream,
     kScenarioSubscribeToTaskFirstEventLatency,
@@ -104,6 +108,16 @@ constexpr std::array<std::string_view, 21> kScenarios = {
     kScenarioPushConfigCreateMany,
     kScenarioPushDeliveryBuildPayload,
 };
+
+[[nodiscard]] constexpr int ScenarioHistoryDepth(std::string_view scenario) noexcept {
+  if (scenario == kScenarioSendMessageFollowUpExistingTask) {
+    return kFollowUpHistoryDepth;
+  }
+  if (scenario == kScenarioSendMessageFollowUpAtHistoryDepth) {
+    return kDeepFollowUpHistoryDepth;
+  }
+  return 0;
+}
 
 struct Options final {
   std::string transport = std::string(kGrpcTransport);

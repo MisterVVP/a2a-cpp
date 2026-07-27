@@ -301,7 +301,19 @@ bool ExecuteWirePushDelete(a2a::client::A2AClient* client, int index, const a2a:
 
 OperationOutcome MakeOutcome(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
 
-OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index) {
+std::string SeedTaskAtHistoryDepth(a2a::client::A2AClient* client, std::string_view fixture_id, int history_depth,
+                                   const a2a::client::CallOptions& call_options) {
+  std::string task_id = SeedTask(client, BuildId(fixture_id, 0), call_options);
+  for (int depth = 1; depth < history_depth && !task_id.empty(); ++depth) {
+    if (!client->SendMessage(MakeSendRequest(BuildId(fixture_id, depth), task_id), call_options).ok()) {
+      return {};
+    }
+  }
+  return task_id;
+}
+
+OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index,
+                                 std::string_view follow_up_task_id = {}) {
   const a2a::client::CallOptions call_options = MakeCallOptions();
   if (scenario == kScenarioSendMessageCreateTask) {
     return MakeOutcome(client->SendMessage(MakeSendRequest(BuildId("wire-create", index)), call_options).ok());
@@ -332,13 +344,12 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
     }
     return MakeOutcome(client->ListTasks(request, call_options).ok());
   }
-  if (scenario == kScenarioSendMessageFollowUpExistingTask) {
-    const std::string task_id = SeedTask(client, BuildId("wire-follow-seed", index), call_options);
-    if (task_id.empty()) {
+  if (ScenarioHistoryDepth(scenario) > 0) {
+    if (follow_up_task_id.empty()) {
       return {};
     }
     return MakeOutcome(
-        client->SendMessage(MakeSendRequest(BuildId("wire-follow-up", index), task_id), call_options).ok());
+        client->SendMessage(MakeSendRequest(BuildId("wire-follow-up", index), follow_up_task_id), call_options).ok());
   }
   if (scenario == kScenarioGetTaskMissingTaskError) {
     lf::a2a::v1::GetTaskRequest request;
@@ -371,7 +382,16 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
   int warmup_index = -1;
   auto warmup_client = MakeClient(options);
   while (std::chrono::steady_clock::now() < warmup_end) {
-    (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index--);
+    const int history_depth = ScenarioHistoryDepth(scenario);
+    if (history_depth > 0) {
+      const auto call_options = MakeCallOptions();
+      const std::string task_id = SeedTaskAtHistoryDepth(
+          warmup_client.get(), BuildId("wire-follow-warmup", warmup_index), history_depth, call_options);
+      (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index, task_id);
+    } else {
+      (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index);
+    }
+    --warmup_index;
   }
 
   const int worker_count = std::min(options.concurrency, options.requests);
@@ -391,11 +411,32 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  return RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
-                             [&clients, &scenario](int worker_index, int index) {
-                               return ExecuteScenario(clients[static_cast<std::size_t>(worker_index)].get(), scenario,
-                                                      index);
-                             });
+  std::vector<std::string> follow_up_task_ids;
+  const int history_depth = ScenarioHistoryDepth(scenario);
+  if (history_depth > 0) {
+    follow_up_task_ids.reserve(static_cast<std::size_t>(options.requests));
+    const a2a::client::CallOptions call_options = MakeCallOptions();
+    for (int index = 0; index < options.requests; ++index) {
+      std::string task_id = SeedTaskAtHistoryDepth(warmup_client.get(), BuildId("wire-follow-fixture", index),
+                                                   history_depth, call_options);
+      if (task_id.empty()) {
+        ScenarioResult failed;
+        failed.scenario = scenario;
+        failed.operations = options.requests;
+        failed.errors = options.requests;
+        return failed;
+      }
+      follow_up_task_ids.push_back(std::move(task_id));
+    }
+  }
+
+  return RunMeasuredScenario(
+      scenario, options.requests, options.concurrency, options.duration_seconds,
+      [&clients, &scenario, &follow_up_task_ids](int worker_index, int index) {
+        const std::string_view task_id =
+            follow_up_task_ids.empty() ? std::string_view{} : follow_up_task_ids[static_cast<std::size_t>(index)];
+        return ExecuteScenario(clients[static_cast<std::size_t>(worker_index)].get(), scenario, index, task_id);
+      });
 }
 
 bool IsPushConfigWireScenario(std::string_view scenario) {
@@ -409,11 +450,11 @@ bool IsStreamingWireScenario(std::string_view scenario) {
 
 bool IsWireScenario(std::string_view scenario, std::string_view transport) {
   (void)transport;
-  const bool supported_core =
-      scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
-      scenario == kScenarioCancelTaskWorkingTask || scenario == kScenarioListTasksNoPagination ||
-      scenario == kScenarioListTasksWithPagination || scenario == kScenarioSendMessageFollowUpExistingTask ||
-      scenario == kScenarioGetTaskMissingTaskError;
+  const bool supported_core = scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
+                              scenario == kScenarioCancelTaskWorkingTask ||
+                              scenario == kScenarioListTasksNoPagination ||
+                              scenario == kScenarioListTasksWithPagination || ScenarioHistoryDepth(scenario) > 0 ||
+                              scenario == kScenarioGetTaskMissingTaskError;
   if (supported_core) {
     return true;
   }
@@ -482,6 +523,7 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
                                         std::string(kScenarioGetTaskExistingTask),
                                         std::string(kScenarioCancelTaskWorkingTask),
                                         std::string(kScenarioSendMessageFollowUpExistingTask),
+                                        std::string(kScenarioSendMessageFollowUpAtHistoryDepth),
                                         std::string(kScenarioGetTaskMissingTaskError),
                                         std::string(kScenarioSendStreamingMessageFiniteStream),
                                         std::string(kScenarioSubscribeToTaskFirstEventLatency),
@@ -507,6 +549,10 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
                              result);
   SetIntegerField(&object, "configured_requests", options.requests);
+  const int history_depth = ScenarioHistoryDepth(result.scenario);
+  if (history_depth > 0) {
+    SetIntegerField(&object, "history_depth", history_depth);
+  }
   SetNumberField(&object, "configured_duration_seconds", options.duration_seconds);
   SetNumberField(&object, "measured_duration_seconds", result.measured_duration_seconds);
   SetStringField(&object, "driver_type", kWireDriverType);

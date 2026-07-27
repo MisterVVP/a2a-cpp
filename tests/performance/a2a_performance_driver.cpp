@@ -48,6 +48,7 @@ struct DeliveryStats final {
 
 struct ScenarioInstrumentation final {
   std::atomic<int> task_creates{0};
+  std::atomic<int> follow_up_seeds{0};
   std::atomic<int> config_creates{0};
   std::atomic<int> config_lists{0};
   std::atomic<int> payload_builds{0};
@@ -150,6 +151,46 @@ class ScenarioHarness final {
     return {};
   }
 
+  [[nodiscard]] bool PrepareMeasuredFixtures(std::string_view scenario, int requests) {
+    const int history_depth = ScenarioHistoryDepth(scenario);
+    if (history_depth == 0) {
+      return true;
+    }
+    follow_up_task_ids_.clear();
+    follow_up_task_ids_.reserve(static_cast<std::size_t>(requests));
+    for (int index = 0; index < requests; ++index) {
+      std::string task_id = SeedTaskAtHistoryDepth(BuildId("follow-fixture", index), history_depth);
+      if (task_id.empty()) {
+        return false;
+      }
+      follow_up_task_ids_.push_back(std::move(task_id));
+    }
+    return true;
+  }
+
+  [[nodiscard]] bool ExecuteFollowUpWarmup(std::string_view scenario, int index) {
+    const int history_depth = ScenarioHistoryDepth(scenario);
+    if (history_depth == 0) {
+      return Execute(scenario, 0, index).ok;
+    }
+    const std::string task_id = SeedTaskAtHistoryDepth(BuildId("follow-warmup", index), history_depth);
+    if (task_id.empty()) {
+      return false;
+    }
+    a2a::server::RequestContext context;
+    return executor_->SendMessage(MakeSendRequest(BuildId("follow-warmup-measured", index), task_id), context).ok();
+  }
+
+  [[nodiscard]] int TaskHistorySize(std::string_view task_id) {
+    lf::a2a::v1::GetTaskRequest request;
+    request.set_id(std::string(task_id));
+    a2a::server::RequestContext context;
+    const auto task = executor_->GetTask(request, context);
+    return task.ok() ? task.value().history_size() : -1;
+  }
+
+  [[nodiscard]] const std::vector<std::string>& follow_up_task_ids() const noexcept { return follow_up_task_ids_; }
+
  private:
   static OperationOutcome OperationSucceeded(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
 
@@ -207,8 +248,14 @@ class ScenarioHarness final {
     if (scenario == kScenarioListTasksWithPagination) {
       return ListTasks(/*use_pagination=*/true, context);
     }
-    if (scenario == kScenarioSendMessageFollowUpExistingTask) {
-      return executor_->SendMessage(MakeSendRequest(BuildId("follow", index), existing_task_id_), context).ok();
+    if (ScenarioHistoryDepth(scenario) > 0) {
+      if (index < 0 || static_cast<std::size_t>(index) >= follow_up_task_ids_.size()) {
+        return false;
+      }
+      return executor_
+          ->SendMessage(MakeSendRequest(BuildId("follow", index), follow_up_task_ids_[static_cast<std::size_t>(index)]),
+                        context)
+          .ok();
     }
     if (scenario == kScenarioGetTaskMissingTaskError) {
       lf::a2a::v1::GetTaskRequest request;
@@ -457,6 +504,19 @@ class ScenarioHarness final {
     }
     return {};
   }
+
+  std::string SeedTaskAtHistoryDepth(std::string_view fixture_id, int history_depth) {
+    std::string task_id = SeedTask(BuildId(fixture_id, 0));
+    a2a::server::RequestContext context;
+    for (int depth = 1; depth < history_depth && !task_id.empty(); ++depth) {
+      CountFollowUpSeed();
+      if (!executor_->SendMessage(MakeSendRequest(BuildId(fixture_id, depth), task_id), context).ok()) {
+        return {};
+      }
+    }
+    return task_id;
+  }
+
   void SeedPushConfig(std::string_view task_id, std::string_view config_id) {
     CountConfigCreate();
     a2a::server::RequestContext context;
@@ -502,6 +562,12 @@ class ScenarioHarness final {
   void CountConfigCreate() const {
     if (instrumentation_ != nullptr) {
       instrumentation_->config_creates.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  void CountFollowUpSeed() const {
+    if (instrumentation_ != nullptr) {
+      instrumentation_->follow_up_seeds.fetch_add(1, std::memory_order_relaxed);
     }
   }
 
@@ -581,6 +647,7 @@ class ScenarioHarness final {
   std::string fanout_task_id_;
   std::string create_many_task_id_;
   std::vector<lf::a2a::v1::TaskPushNotificationConfig> preloaded_configs_;
+  std::vector<std::string> follow_up_task_ids_;
   lf::a2a::v1::StreamResponse prebuilt_payload_;
   ScenarioInstrumentation* instrumentation_ = nullptr;
 };
@@ -600,7 +667,14 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
   int warmup_index = 0;
   while (std::chrono::steady_clock::now() < warmup_end) {
-    (void)harness.Execute(scenario, 0, warmup_index++);
+    (void)harness.ExecuteFollowUpWarmup(scenario, warmup_index++);
+  }
+  if (!harness.PrepareMeasuredFixtures(scenario, options.requests)) {
+    ScenarioResult failed;
+    failed.scenario = scenario;
+    failed.operations = options.requests;
+    failed.errors = options.requests;
+    return failed;
   }
 
   return RunMeasuredScenario(
@@ -678,6 +752,10 @@ google::protobuf::Struct BuildResultObject(const Options& options, const Scenari
                              result);
   SetNumberField(&object, "warmup_seconds", options.warmup_seconds);
   SetIntegerField(&object, "configured_requests", options.requests);
+  const int history_depth = ScenarioHistoryDepth(result.scenario);
+  if (history_depth > 0) {
+    SetIntegerField(&object, "history_depth", history_depth);
+  }
   SetNumberField(&object, "configured_duration_seconds", options.duration_seconds);
   SetNumberField(&object, "measured_duration_seconds", result.measured_duration_seconds);
   SetNumberField(&object, "duration_seconds", options.duration_seconds);

@@ -23,6 +23,22 @@ own counters and latency samples, then the driver aggregates those samples after
 workers finish. This avoids adding result-collection mutex contention to the
 measured operation latency.
 
+### Follow-up workloads
+
+Follow-up fixtures are fully created before the measured region. Each measured
+operation uses a distinct task, so request count and execution order do not alter
+the task's initial state:
+
+- `SendMessage_FollowUpExistingTask` starts with one history entry and measures
+  one follow-up, representing the common first-follow-up case.
+- `SendMessage_FollowUpAtHistoryDepth/8` starts with exactly eight history
+  entries and measures one follow-up, explicitly exercising deeper-history
+  processing without continually growing a shared hot task.
+
+Both the in-process and wire drivers use these semantics. Their JSON and CSV rows
+include the numeric `history_depth` field in addition to the depth-bearing stress
+scenario name, keeping the workload distinction machine-readable.
+
 ## Store backends
 
 By default, scenarios use the in-memory stores owned by the example executor. To
