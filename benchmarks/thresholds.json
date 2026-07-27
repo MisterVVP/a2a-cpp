@@ -119,6 +119,42 @@
   "BM_TaskLifecycle_UpdateStatus": {
     "max_time_ns": 2500
   },
+  "BM_TaskProjection_CopyComplete/0": {
+    "max_time_ns": 188
+  },
+  "BM_TaskProjection_CopyComplete/1": {
+    "max_time_ns": 452
+  },
+  "BM_TaskProjection_CopyComplete/10": {
+    "max_time_ns": 2739
+  },
+  "BM_TaskProjection_CopyComplete/100": {
+    "max_time_ns": 25096
+  },
+  "BM_TaskProjection_ExcludeArtifacts/0": {
+    "max_time_ns": 112
+  },
+  "BM_TaskProjection_ExcludeArtifacts/1": {
+    "max_time_ns": 366
+  },
+  "BM_TaskProjection_ExcludeArtifacts/10": {
+    "max_time_ns": 2622
+  },
+  "BM_TaskProjection_ExcludeArtifacts/100": {
+    "max_time_ns": 25182
+  },
+  "BM_TaskProjection_LimitHistory/0": {
+    "max_time_ns": 207
+  },
+  "BM_TaskProjection_LimitHistory/1": {
+    "max_time_ns": 471
+  },
+  "BM_TaskProjection_LimitHistory/10": {
+    "max_time_ns": 3011
+  },
+  "BM_TaskProjection_LimitHistory/100": {
+    "max_time_ns": 28868
+  },
   "BM_TaskStore_AppendTaskHistory_DuplicateFingerprint": {
     "max_time_ns": 1100
   },
@@ -148,6 +184,42 @@
   },
   "BM_TaskStore_List_ManyTasks_FirstPage": {
     "max_time_ns": 20000
+  },
+  "BM_TaskStore_List_PageAndHistory/0/0": {
+    "max_time_ns": 215188
+  },
+  "BM_TaskStore_List_PageAndHistory/0/1": {
+    "max_time_ns": 740895
+  },
+  "BM_TaskStore_List_PageAndHistory/0/10": {
+    "max_time_ns": 5559443
+  },
+  "BM_TaskStore_List_PageAndHistory/0/100": {
+    "max_time_ns": 53999675
+  },
+  "BM_TaskStore_List_PageAndHistory/10/0": {
+    "max_time_ns": 1854
+  },
+  "BM_TaskStore_List_PageAndHistory/10/1": {
+    "max_time_ns": 6902
+  },
+  "BM_TaskStore_List_PageAndHistory/10/10": {
+    "max_time_ns": 36162
+  },
+  "BM_TaskStore_List_PageAndHistory/10/100": {
+    "max_time_ns": 390479
+  },
+  "BM_TaskStore_List_PageAndHistory/100/0": {
+    "max_time_ns": 18570
+  },
+  "BM_TaskStore_List_PageAndHistory/100/1": {
+    "max_time_ns": 59211
+  },
+  "BM_TaskStore_List_PageAndHistory/100/10": {
+    "max_time_ns": 362723
+  },
+  "BM_TaskStore_List_PageAndHistory/100/100": {
+    "max_time_ns": 3807563
   },
   "BM_TransportMux_MethodMismatch": {
     "max_time_ns": 250
