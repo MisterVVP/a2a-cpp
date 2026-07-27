@@ -38,15 +38,27 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
-            self.assertEqual(34, len(payload["results"]))
+            self.assertEqual(36, len(payload["results"]))
             self.assertEqual({"cpp_sdk_in_process", "wire_tck_sut"}, {result["driver_type"] for result in payload["results"]})
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
-            self.assertEqual(13, len(wire_rows))
+            self.assertEqual(14, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
             self.assertEqual({"in_process"}, {result["transport_path"] for result in payload["results"] if result["driver_type"] == "cpp_sdk_in_process"})
             ordered = sorted(payload["results"], key=lambda result: (result["scenario"], result["store_backend"], result["driver_type"], result["transport_path"], result["transport"], result["concurrency"]))
             self.assertEqual(ordered, payload["results"])
             self.assertIn("configured_duration_seconds", payload["results"][0])
+            follow_up_rows = [
+                result for result in payload["results"]
+                if result["scenario"] == "SendMessage_FollowUpExistingTask"
+            ]
+            self.assertEqual(2, len(follow_up_rows))
+            self.assertEqual({1}, {result["history_depth"] for result in follow_up_rows})
+            deep_follow_up_rows = [
+                result for result in payload["results"]
+                if result["scenario"] == "SendMessage_FollowUpAtHistoryDepth/8"
+            ]
+            self.assertEqual(2, len(deep_follow_up_rows))
+            self.assertEqual({8}, {result["history_depth"] for result in deep_follow_up_rows})
             callback_rows = [
                 result for result in payload["results"]
                 if result["driver_type"] == "cpp_sdk_in_process"
@@ -84,6 +96,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertIn("fanout_per_operation", csv_header)
             self.assertIn("total_fanout_count", csv_header)
             self.assertIn("fanout_count", csv_header)
+            self.assertIn("history_depth", csv_header)
             self.assertIn("stream_completion_p50_ms", csv_header)
             self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
             self.assertIn("[perf] estimated_rows=", completed.stdout)

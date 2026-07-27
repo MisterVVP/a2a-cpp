@@ -88,6 +88,7 @@ Reports contain two clearly separated measurement paths:
 The current real wire-level scenario set covers core lifecycle operations, push notification config CRUD, finite streaming, and first-event task subscription for HTTP+JSON, JSON-RPC, and gRPC. The common wire scenarios are `ListTasks_NoPagination`,
 `ListTasks_WithPagination`, `SendMessage_CreateTask`, `GetTask_ExistingTask`,
 `CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`,
+`SendMessage_FollowUpAtHistoryDepth/8`,
 `GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
 `PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`, and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
 worker thread so measured operations do not recreate gRPC channels or HTTP

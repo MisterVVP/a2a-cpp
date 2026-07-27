@@ -23,6 +23,7 @@ constexpr int kPartialFailureCallbackCount = 8;
 constexpr int kPartialFailureEventCount = 7;
 constexpr int kConcurrentRequests = 16;
 constexpr int kConcurrentWorkers = 4;
+constexpr int kFollowUpFixtureCount = 3;
 constexpr double kDiagnosticTaskUpsertMs = 1.25;
 constexpr int kTwoDeliveryAttempts = 2;
 constexpr int kOneDeliveryAttempt = 1;
@@ -58,6 +59,25 @@ void ExpectConcurrentDeliveryCounts(const ScenarioResult& result) {
   EXPECT_EQ(kExpectedDeliveries, result.successful_deliveries);
   EXPECT_EQ(0, result.failed_deliveries);
   EXPECT_EQ(kExpectedDeliveries, result.total_fanout_count);
+}
+
+bool AllTasksHaveHistorySize(ScenarioHarness* harness, int expected_history_size) {
+  return std::ranges::all_of(harness->follow_up_task_ids(),
+                             [harness, expected_history_size](const std::string& task_id) {
+                               return harness->TaskHistorySize(task_id) == expected_history_size;
+                             });
+}
+
+bool ExecuteCommonFollowUpsAtExpectedDepth(ScenarioHarness* harness) {
+  for (int index = 0; index < kFollowUpFixtureCount; ++index) {
+    const std::string& task_id = harness->follow_up_task_ids()[static_cast<std::size_t>(index)];
+    if (harness->TaskHistorySize(task_id) != kFollowUpHistoryDepth ||
+        !harness->Execute(kScenarioSendMessageFollowUpExistingTask, 0, index).ok ||
+        harness->TaskHistorySize(task_id) != kFollowUpHistoryDepth + 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -145,6 +165,34 @@ TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   EXPECT_EQ(kPushConfigFanout, outcome.event_count);
   EXPECT_EQ(kPushConfigFanout, outcome.fanout_per_operation);
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
+}
+
+TEST(PerformanceFollowUpFixtureTest, CommonScenarioCreatesIndependentDepthOneTasks) {
+  ScenarioInstrumentation instrumentation;
+  ScenarioHarness harness(kInMemoryStore, &instrumentation);
+  ASSERT_TRUE(harness.ok());
+  instrumentation.task_creates.store(0, std::memory_order_relaxed);
+  instrumentation.follow_up_seeds.store(0, std::memory_order_relaxed);
+
+  ASSERT_TRUE(harness.PrepareMeasuredFixtures(kScenarioSendMessageFollowUpExistingTask, kFollowUpFixtureCount));
+  ASSERT_EQ(kFollowUpFixtureCount, harness.follow_up_task_ids().size());
+  EXPECT_EQ(kFollowUpFixtureCount, AtomicValue(instrumentation.task_creates));
+  EXPECT_EQ(0, AtomicValue(instrumentation.follow_up_seeds));
+  EXPECT_TRUE(ExecuteCommonFollowUpsAtExpectedDepth(&harness));
+}
+
+TEST(PerformanceFollowUpFixtureTest, DeepScenarioSeedsEveryTaskToTheNamedDepth) {
+  ScenarioInstrumentation instrumentation;
+  ScenarioHarness harness(kInMemoryStore, &instrumentation);
+  ASSERT_TRUE(harness.ok());
+  instrumentation.task_creates.store(0, std::memory_order_relaxed);
+  instrumentation.follow_up_seeds.store(0, std::memory_order_relaxed);
+
+  ASSERT_TRUE(harness.PrepareMeasuredFixtures(kScenarioSendMessageFollowUpAtHistoryDepth, kFollowUpFixtureCount));
+  ASSERT_EQ(kFollowUpFixtureCount, harness.follow_up_task_ids().size());
+  EXPECT_EQ(kFollowUpFixtureCount, AtomicValue(instrumentation.task_creates));
+  EXPECT_EQ(kFollowUpFixtureCount * (kDeepFollowUpHistoryDepth - 1), AtomicValue(instrumentation.follow_up_seeds));
+  EXPECT_TRUE(AllTasksHaveHistorySize(&harness, kDeepFollowUpHistoryDepth));
 }
 
 TEST(PerformanceScenarioIsolationTest, EndToEndUsesObservedPartialFailureDeliveryCounts) {
