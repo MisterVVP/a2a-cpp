@@ -13,6 +13,8 @@
 
 namespace {
 
+constexpr std::size_t kListFirstPageSize = 10;
+
 std::unique_ptr<a2a::server::InMemoryTaskStore> BuildStore(std::size_t count, std::size_t history_count = 1) {
   auto store = std::make_unique<a2a::server::InMemoryTaskStore>();
   for (std::size_t index = 0; index < count; ++index) {
@@ -55,6 +57,27 @@ void BM_TaskStore_List_ManyTasks(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_TaskStore_List_ManyTasks);
+
+void BM_TaskStore_List_ManyTasks_Filtered(benchmark::State& state) {
+  const auto store = BuildStore(a2a::bench::kTaskCount);
+  a2a::server::ListTasksRequest request;
+  request.context_id = std::string(a2a::bench::kContextId);
+  for (auto _ : state) {
+    auto result = store->List(request);
+    benchmark::DoNotOptimize(result);
+  }
+}
+BENCHMARK(BM_TaskStore_List_ManyTasks_Filtered);
+
+void BM_TaskStore_List_ManyTasks_FirstPage(benchmark::State& state) {
+  const auto store = BuildStore(a2a::bench::kTaskCount);
+  const a2a::server::ListTasksRequest request(kListFirstPageSize, "");
+  for (auto _ : state) {
+    auto result = store->List(request);
+    benchmark::DoNotOptimize(result);
+  }
+}
+BENCHMARK(BM_TaskStore_List_ManyTasks_FirstPage);
 
 void BM_TaskStore_AppendTaskHistory_NoDuplicate(benchmark::State& state) {
   std::size_t index = 0;

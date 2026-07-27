@@ -174,6 +174,31 @@ TEST(InMemoryTaskStoreUnitTest, CancelUpdatesStateAndRejectsTerminalTasks) {
   ASSERT_FALSE(second_cancel_result.ok());
 }
 
+TEST(InMemoryTaskStoreUnitTest, UpdatingTaskPreservesItsListPosition) {
+  a2a::server::InMemoryTaskStore store;
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-1", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                                           kTimestampBaseSeconds, false))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-2", std::string(kContextBeta), lf::a2a::v1::TASK_STATE_WORKING,
+                                           kTimestampBaseSeconds, false))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask("task-1", std::string(kContextBeta), lf::a2a::v1::TASK_STATE_COMPLETED,
+                                           kTimestampBaseSeconds, false))
+                  .ok());
+
+  const auto result = store.List(a2a::server::ListTasksRequest{});
+
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result.value().tasks.size(), 2U);
+  EXPECT_EQ(result.value().tasks.front().id(), "task-1");
+  EXPECT_EQ(result.value().tasks.front().context_id(), kContextBeta);
+  EXPECT_EQ(result.value().tasks.front().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
+  EXPECT_EQ(result.value().tasks.back().id(), "task-2");
+}
+
 TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreservesOrder) {
   a2a::server::InMemoryTaskStore store;
   ASSERT_TRUE(store

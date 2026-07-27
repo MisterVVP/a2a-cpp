@@ -3,6 +3,7 @@
 
 #include "a2a/server/tasks/in_memory_task_store.h"
 
+#include <algorithm>
 #include <charconv>
 #include <mutex>
 #include <shared_mutex>
@@ -25,11 +26,11 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
   }
 
   std::unique_lock<std::shared_mutex> lock(mutex_);
-  auto [it, inserted] = tasks_.try_emplace(task.id(), task);
+  auto [it, inserted] = task_indices_.try_emplace(task.id(), ordered_tasks_.size());
   if (inserted) {
-    ordered_ids_.push_back(it->first);
+    ordered_tasks_.push_back(task);
   } else {
-    it->second = task;
+    ordered_tasks_[it->second] = task;
   }
   return {};
 }
@@ -40,11 +41,11 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
   }
 
   std::shared_lock<std::shared_mutex> lock(mutex_);
-  const auto it = tasks_.find(id);
-  if (it == tasks_.end()) {
+  const auto it = task_indices_.find(id);
+  if (it == task_indices_.end()) {
     return core::protocol_errors::TaskNotFound("Task not found");
   }
-  return it->second;
+  return ordered_tasks_[it->second];
 }
 
 std::optional<std::size_t> InMemoryTaskStore::ParsePageToken(std::string_view token) {
@@ -69,22 +70,54 @@ core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& 
   }
 
   std::shared_lock<std::shared_mutex> lock(mutex_);
-
   const std::size_t start = offset.value();
+  const bool has_filters =
+      !request.context_id.empty() || request.status_filter.has_value() || request.status_timestamp_after.has_value();
+  return has_filters ? ListFiltered(request, start) : ListUnfiltered(request, start);
+}
+
+core::Result<ListTasksResponse> InMemoryTaskStore::ListUnfiltered(const ListTasksRequest& request,
+                                                                  std::size_t start) const {
+  const auto valid_offset = ValidateListPageOffset(start, ordered_tasks_.size());
+  if (!valid_offset.ok()) {
+    return valid_offset.error();
+  }
+
+  const std::size_t available = ordered_tasks_.size() - start;
+  const std::size_t result_size = request.page_size == 0 ? available : std::min(request.page_size, available);
+  ListTasksResponse response;
+  response.tasks.reserve(result_size);
+  const auto end = ordered_tasks_.begin() + static_cast<std::ptrdiff_t>(start + result_size);
+  for (auto it = ordered_tasks_.begin() + static_cast<std::ptrdiff_t>(start); it != end; ++it) {
+    lf::a2a::v1::Task projected = *it;
+    ApplyArtifactProjection(&projected, request.include_artifacts);
+    ApplyHistoryRetention(&projected, request.history_length);
+    response.tasks.push_back(std::move(projected));
+  }
+  response.page_size = result_size;
+  response.total_size = ordered_tasks_.size();
+  if (start + result_size < ordered_tasks_.size()) {
+    response.next_page_token = std::to_string(start + result_size);
+  }
+  return response;
+}
+
+core::Result<ListTasksResponse> InMemoryTaskStore::ListFiltered(const ListTasksRequest& request,
+                                                                std::size_t start) const {
   const std::size_t effective_page_size = request.page_size;
   ListTasksResponse response;
+
   if (effective_page_size == 0) {
-    response.tasks.reserve(start < ordered_ids_.size() ? ordered_ids_.size() - start : 0);
+    response.tasks.reserve(start < ordered_tasks_.size() ? ordered_tasks_.size() - start : 0);
   } else {
     response.tasks.reserve(effective_page_size);
   }
 
   std::size_t matched_count = 0;
-  for (const auto& id : ordered_ids_) {
-    const auto it = tasks_.find(id);
-    if (it != tasks_.end() && MatchesListFilters(it->second, request)) {
+  for (const auto& task : ordered_tasks_) {
+    if (MatchesListFilters(task, request)) {
       if (matched_count >= start && (effective_page_size == 0 || response.tasks.size() < effective_page_size)) {
-        lf::a2a::v1::Task projected = it->second;
+        lf::a2a::v1::Task projected = task;
         ApplyArtifactProjection(&projected, request.include_artifacts);
         ApplyHistoryRetention(&projected, request.history_length);
         response.tasks.push_back(std::move(projected));
@@ -116,17 +149,18 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   }
 
   std::unique_lock<std::shared_mutex> lock(mutex_);
-  const auto it = tasks_.find(id);
-  if (it == tasks_.end()) {
+  const auto it = task_indices_.find(id);
+  if (it == task_indices_.end()) {
     return core::protocol_errors::TaskNotFound("Task not found");
   }
-  if (core::IsTerminalTaskState(it->second.status().state())) {
+  auto& task = ordered_tasks_[it->second];
+  if (core::IsTerminalTaskState(task.status().state())) {
     return core::protocol_errors::TaskNotCancelable();
   }
 
-  auto* mutable_status = it->second.mutable_status();
+  auto* mutable_status = task.mutable_status();
   mutable_status->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
-  return it->second;
+  return task;
 }
 
 core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string_view task_id,
@@ -141,12 +175,13 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
   lf::a2a::v1::Task result;
   {
     std::unique_lock<std::shared_mutex> lock(mutex_);
-    const auto it = tasks_.find(task_id);
-    if (it == tasks_.end()) {
+    const auto it = task_indices_.find(task_id);
+    if (it == task_indices_.end()) {
       return core::protocol_errors::TaskNotFound("Task not found");
     }
 
-    const auto dedupe_reason = FindHistoryDedupeReason(it->second.history(), message, policy);
+    auto& task = ordered_tasks_[it->second];
+    const auto dedupe_reason = FindHistoryDedupeReason(task.history(), message, policy);
     if (dedupe_reason.has_value()) {
       UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
       telemetry_sink = telemetry_sink_;
@@ -156,10 +191,10 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
           .policy = policy,
           .reason = *dedupe_reason,
       };
-      result = it->second;
+      result = task;
     } else {
-      *it->second.add_history() = message;
-      result = it->second;
+      *task.add_history() = message;
+      result = task;
     }
   }
 

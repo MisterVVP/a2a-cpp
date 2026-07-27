@@ -60,12 +60,15 @@ class InMemoryTaskStore final : public TaskStore {
 
  private:
   static std::optional<std::size_t> ParsePageToken(std::string_view token);
+  [[nodiscard]] core::Result<ListTasksResponse> ListUnfiltered(const ListTasksRequest& request,
+                                                               std::size_t start) const;
+  [[nodiscard]] core::Result<ListTasksResponse> ListFiltered(const ListTasksRequest& request, std::size_t start) const;
 
   mutable std::shared_mutex mutex_;
   std::shared_ptr<HistoryTelemetrySink> telemetry_sink_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
-  std::vector<std::string> ordered_ids_;
-  std::unordered_map<std::string, lf::a2a::v1::Task, TaskStoreStringHash, TaskStoreStringEqual> tasks_;
+  std::vector<lf::a2a::v1::Task> ordered_tasks_;
+  std::unordered_map<std::string, std::size_t, TaskStoreStringHash, TaskStoreStringEqual> task_indices_;
 };
 
 }  // namespace a2a::server

@@ -141,7 +141,13 @@
     "max_time_ns": 500
   },
   "BM_TaskStore_List_ManyTasks": {
-    "max_time_ns": 1250000
+    "max_time_ns": 700000
+  },
+  "BM_TaskStore_List_ManyTasks_Filtered": {
+    "max_time_ns": 700000
+  },
+  "BM_TaskStore_List_ManyTasks_FirstPage": {
+    "max_time_ns": 20000
   },
   "BM_TransportMux_MethodMismatch": {
     "max_time_ns": 250
