@@ -8,6 +8,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
@@ -16,6 +17,27 @@
 #include "a2a/server/tasks/task_history.h"
 
 namespace a2a::server {
+namespace {
+
+class TaskAppendRollback final {
+ public:
+  explicit TaskAppendRollback(std::vector<lf::a2a::v1::Task>* tasks) : tasks_(tasks) {}
+  TaskAppendRollback(const TaskAppendRollback&) = delete;
+  TaskAppendRollback& operator=(const TaskAppendRollback&) = delete;
+
+  ~TaskAppendRollback() {
+    if (tasks_ != nullptr) {
+      tasks_->pop_back();
+    }
+  }
+
+  void Commit() noexcept { tasks_ = nullptr; }
+
+ private:
+  std::vector<lf::a2a::v1::Task>* tasks_;
+};
+
+}  // namespace
 
 InMemoryTaskStore::InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink)
     : telemetry_sink_(std::move(telemetry_sink)) {}
@@ -33,16 +55,13 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
   }
 
   ordered_tasks_.push_back(task);
-  try {
-    if (!task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second) {
-      ordered_tasks_.pop_back();
-      return core::Error::Internal("Task index insertion failed");
-    }
-  } catch (...) {
-    ordered_tasks_.pop_back();
-    throw;
+  TaskAppendRollback rollback(&ordered_tasks_);
+  const bool inserted = task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second;
+  if (!inserted) {
+    return core::Error::Internal("Task index insertion failed");
   }
 
+  rollback.Commit();
   return {};
 }
 

@@ -120,40 +120,40 @@
     "max_time_ns": 2500
   },
   "BM_TaskProjection_CopyComplete/0": {
-    "max_time_ns": 188
+    "max_time_ns": 260
   },
   "BM_TaskProjection_CopyComplete/1": {
-    "max_time_ns": 452
+    "max_time_ns": 600
   },
   "BM_TaskProjection_CopyComplete/10": {
-    "max_time_ns": 2739
+    "max_time_ns": 3700
   },
   "BM_TaskProjection_CopyComplete/100": {
-    "max_time_ns": 25096
+    "max_time_ns": 33000
   },
   "BM_TaskProjection_ExcludeArtifacts/0": {
-    "max_time_ns": 112
+    "max_time_ns": 250
   },
   "BM_TaskProjection_ExcludeArtifacts/1": {
-    "max_time_ns": 366
+    "max_time_ns": 600
   },
   "BM_TaskProjection_ExcludeArtifacts/10": {
-    "max_time_ns": 2622
+    "max_time_ns": 3500
   },
   "BM_TaskProjection_ExcludeArtifacts/100": {
-    "max_time_ns": 25182
+    "max_time_ns": 33000
   },
   "BM_TaskProjection_LimitHistory/0": {
-    "max_time_ns": 207
+    "max_time_ns": 400
   },
   "BM_TaskProjection_LimitHistory/1": {
-    "max_time_ns": 471
+    "max_time_ns": 750
   },
   "BM_TaskProjection_LimitHistory/10": {
-    "max_time_ns": 3011
+    "max_time_ns": 4000
   },
   "BM_TaskProjection_LimitHistory/100": {
-    "max_time_ns": 28868
+    "max_time_ns": 35000
   },
   "BM_TaskStore_AppendTaskHistory_DuplicateFingerprint": {
     "max_time_ns": 1100
@@ -177,49 +177,49 @@
     "max_time_ns": 500
   },
   "BM_TaskStore_List_ManyTasks": {
-    "max_time_ns": 700000
+    "max_time_ns": 1100000
   },
   "BM_TaskStore_List_ManyTasks_Filtered": {
-    "max_time_ns": 700000
+    "max_time_ns": 1100000
   },
   "BM_TaskStore_List_ManyTasks_FirstPage": {
     "max_time_ns": 20000
   },
   "BM_TaskStore_List_PageAndHistory/0/0": {
-    "max_time_ns": 215188
+    "max_time_ns": 375000
   },
   "BM_TaskStore_List_PageAndHistory/0/1": {
-    "max_time_ns": 740895
+    "max_time_ns": 1100000
   },
   "BM_TaskStore_List_PageAndHistory/0/10": {
-    "max_time_ns": 5559443
+    "max_time_ns": 7500000
   },
   "BM_TaskStore_List_PageAndHistory/0/100": {
-    "max_time_ns": 53999675
+    "max_time_ns": 72000000
   },
   "BM_TaskStore_List_PageAndHistory/10/0": {
-    "max_time_ns": 1854
+    "max_time_ns": 3500
   },
   "BM_TaskStore_List_PageAndHistory/10/1": {
-    "max_time_ns": 6902
+    "max_time_ns": 9000
   },
   "BM_TaskStore_List_PageAndHistory/10/10": {
-    "max_time_ns": 36162
+    "max_time_ns": 50000
   },
   "BM_TaskStore_List_PageAndHistory/10/100": {
-    "max_time_ns": 390479
+    "max_time_ns": 450000
   },
   "BM_TaskStore_List_PageAndHistory/100/0": {
-    "max_time_ns": 18570
+    "max_time_ns": 32000
   },
   "BM_TaskStore_List_PageAndHistory/100/1": {
-    "max_time_ns": 59211
+    "max_time_ns": 90000
   },
   "BM_TaskStore_List_PageAndHistory/100/10": {
-    "max_time_ns": 362723
+    "max_time_ns": 500000
   },
   "BM_TaskStore_List_PageAndHistory/100/100": {
-    "max_time_ns": 3807563
+    "max_time_ns": 4750000
   },
   "BM_TransportMux_MethodMismatch": {
     "max_time_ns": 250

@@ -21,6 +21,16 @@ bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf:
   return ts.seconds() > cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() >= cutoff.nanos());
 }
 
+void CopyUnknownFields(const lf::a2a::v1::Task& source, lf::a2a::v1::Task* destination) {
+  const auto* reflection = source.GetReflection();
+  const auto& unknown_fields = reflection->GetUnknownFields(source);
+  if (unknown_fields.empty()) {
+    return;
+  }
+
+  reflection->MutableUnknownFields(destination)->MergeFrom(unknown_fields);
+}
+
 }  // namespace
 
 bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
@@ -70,7 +80,7 @@ lf::a2a::v1::Task ProjectTaskForList(const lf::a2a::v1::Task& task, bool include
   }
 
   lf::a2a::v1::Task projected;
-  projected.GetReflection()->MutableUnknownFields(&projected)->MergeFrom(task.GetReflection()->GetUnknownFields(task));
+  CopyUnknownFields(task, &projected);
   projected.set_id(task.id());
   projected.set_context_id(task.context_id());
   if (task.has_status()) {
