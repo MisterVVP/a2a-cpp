@@ -22,7 +22,7 @@ bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf:
 }
 
 void CopyUnknownFields(const lf::a2a::v1::Task& source, lf::a2a::v1::Task* destination) {
-  const auto* reflection = source.GetReflection();
+  const auto* reflection = lf::a2a::v1::Task::GetReflection();
   const auto& unknown_fields = reflection->GetUnknownFields(source);
   if (unknown_fields.empty()) {
     return;
