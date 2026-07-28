@@ -22,8 +22,8 @@ namespace {
 class TaskAppendRollback final {
  public:
   explicit TaskAppendRollback(std::vector<lf::a2a::v1::Task>* tasks) : tasks_(tasks) {}
-  TaskAppendRollback(const TaskAppendRollback&) = delete;
-  TaskAppendRollback& operator=(const TaskAppendRollback&) = delete;
+  TaskAppendRollback(const TaskAppendRollback& other) = delete;
+  TaskAppendRollback& operator=(const TaskAppendRollback& other) = delete;
 
   ~TaskAppendRollback() {
     if (tasks_ != nullptr) {
