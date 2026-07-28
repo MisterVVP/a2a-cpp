@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
+#include <google/protobuf/unknown_field_set.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -44,6 +45,8 @@ constexpr std::string_view kThirdTaskId = "task-3";
 constexpr std::string_view kLastHistoryMessageId = "message-2";
 constexpr std::string_view kFirstOffsetToken = "1";
 constexpr std::string_view kSecondOffsetToken = "2";
+constexpr int kUnknownTaskFieldNumber = 1000;
+constexpr std::uint64_t kUnknownTaskFieldValue = 42;
 
 class RecordingHistoryTelemetrySink final : public a2a::server::InMemoryTaskStore::HistoryTelemetrySink {
  public:
@@ -185,32 +188,33 @@ TEST(InMemoryTaskStoreUnitTest, CancelUpdatesStateAndRejectsTerminalTasks) {
 TEST(InMemoryTaskStoreUnitTest, UpdatingTaskPreservesItsListPosition) {
   a2a::server::InMemoryTaskStore store;
   ASSERT_TRUE(store
-                  .CreateOrUpdate(MakeTask("task-1", std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
-                                           kTimestampBaseSeconds, false))
+                  .CreateOrUpdate(MakeTask(std::string(kFirstTaskId), std::string(kContextAlpha),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
                   .ok());
   ASSERT_TRUE(store
-                  .CreateOrUpdate(MakeTask("task-2", std::string(kContextBeta), lf::a2a::v1::TASK_STATE_WORKING,
-                                           kTimestampBaseSeconds, false))
+                  .CreateOrUpdate(MakeTask(std::string(kSecondTaskId), std::string(kContextBeta),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
                   .ok());
   ASSERT_TRUE(store
-                  .CreateOrUpdate(MakeTask("task-1", std::string(kContextBeta), lf::a2a::v1::TASK_STATE_COMPLETED,
-                                           kTimestampBaseSeconds, false))
+                  .CreateOrUpdate(MakeTask(std::string(kFirstTaskId), std::string(kContextBeta),
+                                           lf::a2a::v1::TASK_STATE_COMPLETED, kTimestampBaseSeconds, false))
                   .ok());
 
   const auto result = store.List(a2a::server::ListTasksRequest{});
 
   ASSERT_TRUE(result.ok());
   ASSERT_EQ(result.value().tasks.size(), 2U);
-  EXPECT_EQ(result.value().tasks.front().id(), "task-1");
+  EXPECT_EQ(result.value().tasks.front().id(), kFirstTaskId);
   EXPECT_EQ(result.value().tasks.front().context_id(), kContextBeta);
   EXPECT_EQ(result.value().tasks.front().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
-  EXPECT_EQ(result.value().tasks.back().id(), "task-2");
+  EXPECT_EQ(result.value().tasks.back().id(), kSecondTaskId);
 }
 
 TEST(InMemoryTaskStoreUnitTest, ProjectsArtifactsAndRequestedHistoryWithoutMutatingStoredTask) {
   a2a::server::InMemoryTaskStore store;
-  const auto source = MakeTask(std::string(kProjectionTaskId), std::string(kContextAlpha),
-                               lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, true, kThreeHistoryEntries);
+  auto source = MakeTask(std::string(kProjectionTaskId), std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                         kTimestampBaseSeconds, true, kThreeHistoryEntries);
+  source.GetReflection()->MutableUnknownFields(&source)->AddVarint(kUnknownTaskFieldNumber, kUnknownTaskFieldValue);
   ASSERT_TRUE(store.CreateOrUpdate(source).ok());
   const std::string serialized_source = source.SerializeAsString();
 
@@ -221,6 +225,12 @@ TEST(InMemoryTaskStoreUnitTest, ProjectsArtifactsAndRequestedHistoryWithoutMutat
   ASSERT_EQ(no_history.value().tasks.size(), 1U);
   EXPECT_EQ(no_history.value().tasks.front().artifacts_size(), 0);
   EXPECT_EQ(no_history.value().tasks.front().history_size(), 0);
+  const auto& projected_unknown_fields =
+      no_history.value().tasks.front().GetReflection()->GetUnknownFields(no_history.value().tasks.front());
+  ASSERT_EQ(projected_unknown_fields.field_count(), 1);
+  EXPECT_EQ(projected_unknown_fields.field(0).number(), kUnknownTaskFieldNumber);
+  EXPECT_EQ(projected_unknown_fields.field(0).type(), google::protobuf::UnknownField::TYPE_VARINT);
+  EXPECT_EQ(projected_unknown_fields.field(0).varint(), kUnknownTaskFieldValue);
 
   a2a::server::ListTasksRequest one_history_request;
   one_history_request.history_length = std::size_t{1};

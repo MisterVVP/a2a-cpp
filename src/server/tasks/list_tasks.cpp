@@ -3,6 +3,8 @@
 
 #include "a2a/server/tasks/list_tasks.h"
 
+#include <google/protobuf/unknown_field_set.h>
+
 #include <algorithm>
 #include <charconv>
 
@@ -68,6 +70,7 @@ lf::a2a::v1::Task ProjectTaskForList(const lf::a2a::v1::Task& task, bool include
   }
 
   lf::a2a::v1::Task projected;
+  projected.GetReflection()->MutableUnknownFields(&projected)->MergeFrom(task.GetReflection()->GetUnknownFields(task));
   projected.set_id(task.id());
   projected.set_context_id(task.context_id());
   if (task.has_status()) {

@@ -26,12 +26,23 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
   }
 
   std::unique_lock<std::shared_mutex> lock(mutex_);
-  auto [it, inserted] = task_indices_.try_emplace(task.id(), ordered_tasks_.size());
-  if (inserted) {
-    ordered_tasks_.push_back(task);
-  } else {
-    ordered_tasks_[it->second] = task;
+  const auto existing = task_indices_.find(task.id());
+  if (existing != task_indices_.end()) {
+    ordered_tasks_[existing->second] = task;
+    return {};
   }
+
+  ordered_tasks_.push_back(task);
+  try {
+    if (!task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second) {
+      ordered_tasks_.pop_back();
+      return core::Error::Internal("Task index insertion failed");
+    }
+  } catch (...) {
+    ordered_tasks_.pop_back();
+    throw;
+  }
+
   return {};
 }
 
