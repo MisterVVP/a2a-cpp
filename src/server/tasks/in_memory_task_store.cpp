@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
 #include "a2a/server/tasks/list_tasks.h"
@@ -19,12 +20,9 @@
 namespace a2a::server {
 namespace {
 
-class TaskAppendRollback final {
+class TaskAppendRollback final : private core::NonCopyableOrMovable {
  public:
   explicit TaskAppendRollback(std::vector<lf::a2a::v1::Task>* tasks) : tasks_(tasks) {}
-  TaskAppendRollback(const TaskAppendRollback& other) = delete;
-  TaskAppendRollback& operator=(const TaskAppendRollback& other) = delete;
-
   ~TaskAppendRollback() {
     if (tasks_ != nullptr) {
       tasks_->pop_back();

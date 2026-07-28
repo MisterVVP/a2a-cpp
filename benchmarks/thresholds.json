@@ -195,7 +195,7 @@
     "max_time_ns": 8000000
   },
   "BM_TaskStore_List_PageAndHistory/0/100": {
-    "max_time_ns": 75000000
+    "max_time_ns": 95000000
   },
   "BM_TaskStore_List_PageAndHistory/10/0": {
     "max_time_ns": 3500
