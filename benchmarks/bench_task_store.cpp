@@ -2,6 +2,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -12,6 +13,20 @@
 #include "bench_common.h"
 
 namespace {
+
+constexpr int64_t kListFirstPageSize = 10;
+constexpr int64_t kListMediumPageSize = 100;
+constexpr int64_t kNoLimit = 0;
+constexpr int64_t kOneHistoryEntry = 1;
+constexpr int64_t kTenHistoryEntries = 10;
+constexpr int64_t kHundredHistoryEntries = 100;
+constexpr std::string_view kBenchmarkArtifactId = "benchmark-artifact";
+
+lf::a2a::v1::Task BuildTaskWithArtifact(std::size_t history_count) {
+  auto task = a2a::bench::BuildTask(a2a::bench::kTaskId, history_count);
+  task.add_artifacts()->set_artifact_id(std::string(kBenchmarkArtifactId));
+  return task;
+}
 
 std::unique_ptr<a2a::server::InMemoryTaskStore> BuildStore(std::size_t count, std::size_t history_count = 1) {
   auto store = std::make_unique<a2a::server::InMemoryTaskStore>();
@@ -55,6 +70,82 @@ void BM_TaskStore_List_ManyTasks(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_TaskStore_List_ManyTasks);
+
+void BM_TaskStore_List_ManyTasks_Filtered(benchmark::State& state) {
+  const auto store = BuildStore(a2a::bench::kTaskCount);
+  a2a::server::ListTasksRequest request;
+  request.context_id = std::string(a2a::bench::kContextId);
+  for (auto _ : state) {
+    auto result = store->List(request);
+    benchmark::DoNotOptimize(result);
+  }
+}
+BENCHMARK(BM_TaskStore_List_ManyTasks_Filtered);
+
+void BM_TaskStore_List_ManyTasks_FirstPage(benchmark::State& state) {
+  const auto store = BuildStore(a2a::bench::kTaskCount);
+  const a2a::server::ListTasksRequest request(static_cast<std::size_t>(kListFirstPageSize), "");
+  for (auto _ : state) {
+    auto result = store->List(request);
+    benchmark::DoNotOptimize(result);
+  }
+}
+BENCHMARK(BM_TaskStore_List_ManyTasks_FirstPage);
+
+void BM_TaskProjection_CopyComplete(benchmark::State& state) {
+  const auto task = BuildTaskWithArtifact(static_cast<std::size_t>(state.range(0)));
+  for (auto _ : state) {
+    auto projected = a2a::server::ProjectTaskForList(task, true, std::nullopt);
+    benchmark::DoNotOptimize(projected);
+  }
+}
+BENCHMARK(BM_TaskProjection_CopyComplete)
+    ->Arg(kNoLimit)
+    ->Arg(kOneHistoryEntry)
+    ->Arg(kTenHistoryEntries)
+    ->Arg(kHundredHistoryEntries);
+
+void BM_TaskProjection_ExcludeArtifacts(benchmark::State& state) {
+  const auto task = BuildTaskWithArtifact(static_cast<std::size_t>(state.range(0)));
+  for (auto _ : state) {
+    auto projected = a2a::server::ProjectTaskForList(task, false, std::nullopt);
+    benchmark::DoNotOptimize(projected);
+  }
+}
+BENCHMARK(BM_TaskProjection_ExcludeArtifacts)
+    ->Arg(kNoLimit)
+    ->Arg(kOneHistoryEntry)
+    ->Arg(kTenHistoryEntries)
+    ->Arg(kHundredHistoryEntries);
+
+void BM_TaskProjection_LimitHistory(benchmark::State& state) {
+  const auto task = BuildTaskWithArtifact(a2a::bench::kLargeHistoryCount);
+  const auto history_length = static_cast<std::size_t>(state.range(0));
+  for (auto _ : state) {
+    auto projected = a2a::server::ProjectTaskForList(task, true, history_length);
+    benchmark::DoNotOptimize(projected);
+  }
+}
+BENCHMARK(BM_TaskProjection_LimitHistory)
+    ->Arg(kNoLimit)
+    ->Arg(kOneHistoryEntry)
+    ->Arg(kTenHistoryEntries)
+    ->Arg(kHundredHistoryEntries);
+
+void BM_TaskStore_List_PageAndHistory(benchmark::State& state) {
+  const auto history_size = static_cast<std::size_t>(state.range(1));
+  const auto store = BuildStore(a2a::bench::kTaskCount, history_size);
+  a2a::server::ListTasksRequest request;
+  request.page_size = static_cast<std::size_t>(state.range(0));
+  request.history_length = history_size;
+  for (auto _ : state) {
+    auto result = store->List(request);
+    benchmark::DoNotOptimize(result);
+  }
+}
+BENCHMARK(BM_TaskStore_List_PageAndHistory)
+    ->ArgsProduct({{kListFirstPageSize, kListMediumPageSize, kNoLimit},
+                   {kNoLimit, kOneHistoryEntry, kTenHistoryEntries, kHundredHistoryEntries}});
 
 void BM_TaskStore_AppendTaskHistory_NoDuplicate(benchmark::State& state) {
   std::size_t index = 0;

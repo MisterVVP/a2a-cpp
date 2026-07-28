@@ -92,5 +92,7 @@ struct ListTasksResponse final {
 [[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);
 [[nodiscard]] core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size);
 void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts);
+[[nodiscard]] lf::a2a::v1::Task ProjectTaskForList(const lf::a2a::v1::Task& task, bool include_artifacts,
+                                                   std::optional<std::size_t> history_length);
 
 }  // namespace a2a::server

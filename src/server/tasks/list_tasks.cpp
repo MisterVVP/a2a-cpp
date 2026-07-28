@@ -3,6 +3,9 @@
 
 #include "a2a/server/tasks/list_tasks.h"
 
+#include <google/protobuf/unknown_field_set.h>
+
+#include <algorithm>
 #include <charconv>
 
 #include "a2a/core/error.h"
@@ -16,6 +19,16 @@ bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf:
   }
   const auto& ts = task.status().timestamp();
   return ts.seconds() > cutoff.seconds() || (ts.seconds() == cutoff.seconds() && ts.nanos() >= cutoff.nanos());
+}
+
+void CopyUnknownFields(const lf::a2a::v1::Task& source, lf::a2a::v1::Task* destination) {
+  const auto* reflection = lf::a2a::v1::Task::GetReflection();
+  const auto& unknown_fields = reflection->GetUnknownFields(source);
+  if (unknown_fields.empty()) {
+    return;
+  }
+
+  reflection->MutableUnknownFields(destination)->MergeFrom(unknown_fields);
 }
 
 }  // namespace
@@ -58,6 +71,44 @@ void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts) {
   if (!include_artifacts) {
     task->clear_artifacts();
   }
+}
+
+lf::a2a::v1::Task ProjectTaskForList(const lf::a2a::v1::Task& task, bool include_artifacts,
+                                     std::optional<std::size_t> history_length) {
+  if (include_artifacts && !history_length.has_value()) {
+    return task;
+  }
+
+  lf::a2a::v1::Task projected;
+  CopyUnknownFields(task, &projected);
+  projected.set_id(task.id());
+  projected.set_context_id(task.context_id());
+  if (task.has_status()) {
+    *projected.mutable_status() = task.status();
+  }
+  if (include_artifacts) {
+    *projected.mutable_artifacts() = task.artifacts();
+  }
+
+  if (!history_length.has_value()) {
+    *projected.mutable_history() = task.history();
+    if (task.has_metadata()) {
+      *projected.mutable_metadata() = task.metadata();
+    }
+    return projected;
+  }
+
+  const auto history_size = static_cast<std::size_t>(task.history_size());
+  const std::size_t retained_history_size = std::min(*history_length, history_size);
+  projected.mutable_history()->Reserve(static_cast<int>(retained_history_size));
+  const std::size_t first_history_index = history_size - retained_history_size;
+  for (std::size_t index = first_history_index; index < history_size; ++index) {
+    *projected.add_history() = task.history(static_cast<int>(index));
+  }
+  if (task.has_metadata()) {
+    *projected.mutable_metadata() = task.metadata();
+  }
+  return projected;
 }
 
 }  // namespace a2a::server
