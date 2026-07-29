@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "a2a/core/error.h"
-#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_codes.h"
@@ -26,6 +25,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 #include "a2a/server/agent_card/agent_card_serializer.h"
+#include "a2a/server/http_server_response_builder.h"
 
 namespace a2a::server {
 namespace {
@@ -98,27 +98,23 @@ std::string ErrorBody(const ErrorBodySpec& spec) {
 }
 
 HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message, std::string_view reason) {
-  HttpServerResponse response;
-  response.status_code = status_code;
-  response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  response.body = ErrorBody({.status_code = status_code, .message = message, .reason = reason});
-  return response;
-}
-
-void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_extensions, HttpServerResponse* response) {
-  if (activated_extensions.empty() || response == nullptr) {
-    return;
-  }
-  response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
+  return HttpServerResponseBuilder()
+      .WithStatus(status_code)
+      .WithJsonContentType()
+      .WithA2aVersion()
+      .WithBody(ErrorBody({.status_code = status_code, .message = message, .reason = reason}))
+      .Build();
 }
 
 HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view message, std::string_view reason,
                                                const std::vector<std::string>& activated_extensions) {
-  auto response = BuildJsonErrorResponse(status_code, message, reason);
-  AddActivatedExtensionsHeader(activated_extensions, &response);
-  return response;
+  return HttpServerResponseBuilder()
+      .WithStatus(status_code)
+      .WithJsonContentType()
+      .WithA2aVersion()
+      .WithActivatedExtensions(activated_extensions)
+      .WithBody(ErrorBody({.status_code = status_code, .message = message, .reason = reason}))
+      .Build();
 }
 
 std::string_view ProtocolCodeToRestReason(std::string_view protocol_code) {
@@ -204,7 +200,7 @@ std::string BuildQuotedEtag(std::uint64_t hash_value) {
 void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::AgentCardCacheSettings>& settings,
                                 HttpServerResponse* response) {
   if (settings.has_value() && settings->cache_control.has_value()) {
-    response->headers["Cache-Control"] = *settings->cache_control;
+    response->headers[std::string(core::http::kCacheControlHeaderName)] = *settings->cache_control;
   }
   if (!settings.has_value() || !settings->last_modified.has_value()) {
     return;
@@ -473,14 +469,14 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
     return normalized.error();
   }
 
-  HttpServerResponse response;
-  response.status_code = core::http::kStatusOk;
-  response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
+  auto response = HttpServerResponseBuilder()
+                      .WithStatus(core::http::kStatusOk)
+                      .WithJsonContentType()
+                      .WithA2aVersion()
+                      .WithBody(normalized.value())
+                      .Build();
   ApplyAgentCardCacheHeaders(options_.agent_card_cache_settings, &response);
   response.headers["ETag"] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  response.body = normalized.value();
   return response;
 }
 
@@ -533,26 +529,21 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
     return normalized.error();
   }
 
-  HttpServerResponse response;
-  response.status_code = core::http::kStatusOk;
-  response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  AddActivatedExtensionsHeader(extensions.value(), &response);
-  response.body = normalized.value();
-  return response;
+  return HttpServerResponseBuilder()
+      .WithStatus(core::http::kStatusOk)
+      .WithJsonContentType()
+      .WithA2aVersion()
+      .WithActivatedExtensions(extensions.value())
+      .WithBody(normalized.value())
+      .Build();
 }
 
 HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response,
                                                        const std::vector<std::string>& activated_extensions) {
-  HttpServerResponse http_response;
-  http_response.status_code = response.http_status;
-  http_response.headers = response.headers;
-  http_response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  http_response.body = response.body;
-  http_response.stream_writer = response.stream_writer;
-  AddActivatedExtensionsHeader(activated_extensions, &http_response);
-  return http_response;
+  return HttpServerResponseBuilder::FromRestResponse(response)
+      .WithA2aVersion()
+      .WithActivatedExtensions(activated_extensions)
+      .Build();
 }
 
 std::string RestServerTransport::NormalizeBasePath(std::string_view path) {

@@ -75,6 +75,18 @@ target_link_libraries(response_builders_test
 
 gtest_discover_tests(response_builders_test)
 
+add_executable(http_server_response_builder_test
+  unit/http_server_response_builder_test.cpp
+)
+
+target_link_libraries(http_server_response_builder_test
+  PRIVATE
+    a2a::server
+    GTest::gtest_main
+)
+
+gtest_discover_tests(http_server_response_builder_test)
+
 add_executable(url_utils_test
   unit/url_utils_test.cpp
 )

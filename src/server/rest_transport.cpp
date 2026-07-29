@@ -356,7 +356,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.http_status = core::http::kStatusOk;
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
-  response.headers["Cache-Control"] = "no-cache";
+  response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
 
   auto next = session->Next();
   for (; next.ok(); next = session->Next()) {
@@ -382,7 +382,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
   response.http_status = core::http::kStatusOk;
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
-  response.headers["Cache-Control"] = "no-cache";
+  response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
   response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
                                HttpByteTransport& transport) -> core::Result<void> {
     if (*session == nullptr) {

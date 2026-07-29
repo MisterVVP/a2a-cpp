@@ -101,6 +101,7 @@ add_library(a2a_server STATIC
   server/grpc_server_transport.cpp
   server/stream_cancellation_watcher.cpp
   server/http_adapter.cpp
+  server/http_server_response_builder.cpp
   server/rest_server_transport.cpp
   server/required_extensions_validator.cpp
   server/version_header_validator.cpp

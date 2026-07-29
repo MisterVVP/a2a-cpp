@@ -39,6 +39,8 @@ inline constexpr std::string_view kConnectionCloseHeaderName = "Connection";
 inline constexpr std::string_view kConnectionCloseHeaderValue = "close";
 inline constexpr std::string_view kHostHeaderName = "Host";
 inline constexpr std::string_view kContentTypeHeaderName = "Content-Type";
+inline constexpr std::string_view kCacheControlHeaderName = "Cache-Control";
+inline constexpr std::string_view kCacheControlNoCache = "no-cache";
 inline constexpr std::string_view kAuthorizationHeaderName = "Authorization";
 
 inline constexpr int kDefaultHttpPort = 80;
