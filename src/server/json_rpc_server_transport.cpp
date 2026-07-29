@@ -8,7 +8,9 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,7 +49,6 @@ constexpr int kJsonRpcInternalError = -32603;
 constexpr int kJsonRpcVersionNotSupported = -32009;
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
-constexpr std::size_t kMinListTasksPageSize = 1;
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 
@@ -239,23 +240,27 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> ParseCreatePushConfigPaylo
   return payload.value();
 }
 
-core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params,
-                                          const JsonRpcServerTransportOptions& options, ListTasksRequest* payload) {
+core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params, ListTasksRequest* payload) {
   const auto& fields = params.fields();
   const auto it = fields.find("pageSize");
   if (it == fields.end()) {
+    payload->page_size = NormalizeListTasksPageSize(std::nullopt).value();
     return {};
   }
   if (it->second.kind_case() != ::google::protobuf::Value::kNumberValue) {
     return core::Error::Validation("ListTasksRequest.pageSize must be a number");
   }
   const double page_size = it->second.number_value();
-  if (page_size < static_cast<double>(kMinListTasksPageSize) ||
-      page_size > static_cast<double>(options.max_list_tasks_page_size)) {
-    return core::Error::Validation("ListTasksRequest.pageSize must be between 1 and " +
-                                   std::to_string(options.max_list_tasks_page_size));
+  if (!std::isfinite(page_size) || std::trunc(page_size) != page_size ||
+      page_size < static_cast<double>(std::numeric_limits<std::int64_t>::min()) ||
+      page_size > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return core::Error::Validation("ListTasksRequest.pageSize must be an integer between 1 and 100");
   }
-  payload->page_size = static_cast<std::size_t>(page_size);
+  const auto normalized = NormalizeListTasksPageSize(static_cast<std::int64_t>(page_size));
+  if (!normalized.ok()) {
+    return normalized.error();
+  }
+  payload->page_size = normalized.value();
   return {};
 }
 
@@ -367,9 +372,8 @@ core::Result<void> ParseListTasksIncludeArtifacts(const google::protobuf::Struct
   return {};
 }
 
-core::Result<void> ApplyListTasksParsers(const google::protobuf::Struct& params,
-                                         const JsonRpcServerTransportOptions& options, ListTasksRequest* payload) {
-  const auto page_size = ParseListTasksPageSize(params, options, payload);
+core::Result<void> ApplyListTasksParsers(const google::protobuf::Struct& params, ListTasksRequest* payload) {
+  const auto page_size = ParseListTasksPageSize(params, payload);
   if (!page_size.ok()) {
     return page_size.error();
   }
@@ -396,26 +400,17 @@ core::Result<void> ApplyListTasksParsers(const google::protobuf::Struct& params,
   return ParseListTasksIncludeArtifacts(params, payload);
 }
 
-core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params,
-                                                     const JsonRpcServerTransportOptions& options) {
-  if (options.max_list_tasks_page_size < kMinListTasksPageSize) {
-    return core::Error::Internal("JSON-RPC max_list_tasks_page_size must be at least 1");
-  }
-
+core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params) {
   ListTasksRequest payload;
-  const auto parsed = ApplyListTasksParsers(params, options, &payload);
+  const auto parsed = ApplyListTasksParsers(params, &payload);
   if (!parsed.ok()) {
     return parsed.error();
-  }
-  if (payload.page_size == 0) {
-    payload.page_size = options.default_list_tasks_page_size;
   }
   return payload;
 }
 
 core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view method_name,
-                                                             const google::protobuf::Struct& params,
-                                                             const JsonRpcServerTransportOptions& options) {
+                                                             const google::protobuf::Struct& params) {
   if (IsGetExtendedAgentCardMethod(method_name)) {
     auto payload = ParseProtoPayload<lf::a2a::v1::GetExtendedAgentCardRequest>(params);
     if (!payload.ok()) {
@@ -494,7 +489,7 @@ core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view me
       return dispatch_request;
     }
     case DispatcherOperation::kListTasks: {
-      auto payload = ParseListTasksPayload(params, options);
+      auto payload = ParseListTasksPayload(params);
       if (!payload.ok()) {
         return payload.error();
       }
@@ -824,7 +819,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     return response;
   };
 
-  const auto parsed = ParseRequest(envelope.value(), options_);
+  const auto parsed = ParseRequest(envelope.value());
   if (!parsed.ok()) {
     return build_validated_error_response(ParseErrorCodeForRequestParsing(parsed.error()), parsed.error().message(),
                                           envelope.value().id, parsed.error(), core::http::kStatusOk);
@@ -926,8 +921,8 @@ core::Result<JsonRpcServerTransport::JsonRpcEnvelope> JsonRpcServerTransport::Pa
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
-    const JsonRpcEnvelope& envelope, const JsonRpcServerTransportOptions& options) {
-  const auto dispatch = BuildDispatchRequestFromMethod(envelope.method, envelope.params, options);
+    const JsonRpcEnvelope& envelope) {
+  const auto dispatch = BuildDispatchRequestFromMethod(envelope.method, envelope.params);
   if (!dispatch.ok()) {
     return dispatch.error();
   }

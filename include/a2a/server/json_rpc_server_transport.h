@@ -23,8 +23,6 @@ namespace a2a::server {
 struct JsonRpcServerTransportOptions final {
   std::string rpc_path = "/";
   bool require_version_header = true;
-  std::size_t default_list_tasks_page_size = 50;
-  std::size_t max_list_tasks_page_size = 100;
   std::vector<std::string> required_extensions = {};
 };
 
@@ -58,8 +56,7 @@ class JsonRpcServerTransport final {
   };
 
   [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
-  [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(const JsonRpcEnvelope& envelope,
-                                                                 const JsonRpcServerTransportOptions& options);
+  [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(const JsonRpcEnvelope& envelope);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
                                                                                      const DispatchResponse& response);
   [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,

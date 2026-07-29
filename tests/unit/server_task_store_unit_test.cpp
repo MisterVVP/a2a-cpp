@@ -214,7 +214,7 @@ TEST(InMemoryTaskStoreUnitTest, ProjectsArtifactsAndRequestedHistoryWithoutMutat
   a2a::server::InMemoryTaskStore store;
   auto source = MakeTask(std::string(kProjectionTaskId), std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
                          kTimestampBaseSeconds, true, kThreeHistoryEntries);
-  const auto* source_reflection = source.GetReflection();
+  const auto* source_reflection = lf::a2a::v1::Task::GetReflection();
   source_reflection->MutableUnknownFields(&source)->AddVarint(kUnknownTaskFieldNumber, kUnknownTaskFieldValue);
   ASSERT_TRUE(store.CreateOrUpdate(source).ok());
   const std::string serialized_source = source.SerializeAsString();
@@ -227,7 +227,7 @@ TEST(InMemoryTaskStoreUnitTest, ProjectsArtifactsAndRequestedHistoryWithoutMutat
   EXPECT_EQ(no_history.value().tasks.front().artifacts_size(), 0);
   EXPECT_EQ(no_history.value().tasks.front().history_size(), 0);
   const auto& projected_task = no_history.value().tasks.front();
-  const auto* projected_reflection = projected_task.GetReflection();
+  const auto* projected_reflection = lf::a2a::v1::Task::GetReflection();
   const auto& projected_unknown_fields = projected_reflection->GetUnknownFields(projected_task);
   ASSERT_EQ(projected_unknown_fields.field_count(), 1);
   EXPECT_EQ(projected_unknown_fields.field(0).number(), kUnknownTaskFieldNumber);

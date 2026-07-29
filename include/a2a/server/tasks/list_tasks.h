@@ -6,6 +6,7 @@
 #include <google/protobuf/timestamp.pb.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,7 +18,12 @@
 
 namespace a2a::server {
 
+inline constexpr std::size_t kDefaultListTasksPageSize = 50;
+inline constexpr std::size_t kMaxListTasksPageSize = 100;
+
 struct ListTasksRequest final {
+  // An internal store-only sentinel for an unbounded result. Valid protocol
+  // requests are normalized to a value in [1, kMaxListTasksPageSize].
   std::size_t page_size = 0;
   std::string page_token;
   std::string context_id;
@@ -80,6 +86,10 @@ struct ListTasksRequest final {
     return *this;
   }
 };
+
+// Resolves an omitted protocol page size to the schema default and rejects
+// explicit values outside the schema's inclusive range.
+[[nodiscard]] core::Result<std::size_t> NormalizeListTasksPageSize(std::optional<std::int64_t> page_size);
 
 struct ListTasksResponse final {
   std::vector<lf::a2a::v1::Task> tasks;

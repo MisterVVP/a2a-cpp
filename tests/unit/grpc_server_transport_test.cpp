@@ -332,6 +332,22 @@ TEST(GrpcServerTransportTest, ListTasksValidatesPageSizeAndHistoryLength) {
             grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+TEST(GrpcServerTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::GrpcServerTransport transport(&dispatcher);
+
+  grpc::ServerContext context;
+  grpc::testing::ServerContextTestSpouse spouse(&context);
+  AddValidVersionHeader(spouse);
+  lf::a2a::v1::ListTasksRequest request;
+  lf::a2a::v1::ListTasksResponse response;
+
+  const auto status = transport.ListTasks(&context, &request, &response);
+  EXPECT_TRUE(status.ok());
+  EXPECT_EQ(executor.observed_list_request.page_size, a2a::server::kDefaultListTasksPageSize);
+}
+
 TEST(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);

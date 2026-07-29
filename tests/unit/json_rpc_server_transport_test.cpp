@@ -56,7 +56,6 @@ constexpr std::string_view kApplicationJsonWithCharset = "Application/JSON; char
 constexpr std::string_view kTaskPushId = "push-task";
 constexpr std::string_view kPushConfigId = "push-config";
 constexpr std::string_view kWebhookUrl = "https://example.test/push";
-constexpr std::size_t kDefaultListTasksPageSize = 50U;
 
 class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -428,9 +427,7 @@ TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
 TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(
-      &dispatcher,
-      {.rpc_path = "/rpc", .default_list_tasks_page_size = kDefaultListTasksPageSize, .required_extensions = {}});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",

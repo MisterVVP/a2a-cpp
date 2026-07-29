@@ -174,7 +174,6 @@ int GrpcStatusCodeNumber(::grpc::StatusCode code) {
 constexpr std::uint64_t kVarintContinuationBit = 0x80U;
 constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
 constexpr std::uint32_t kVarintShiftBits = 7U;
-constexpr int32_t kMaxListTasksPageSize = 100;
 constexpr std::string_view kExtensionsMetadataKey = "a2a-extensions";
 
 void AppendVarint(std::string& out, std::uint64_t value) {
@@ -420,14 +419,12 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   ListTasksRequest list_request;
-  if (request->has_page_size()) {
-    const int32_t page_size = request->page_size();
-    if (page_size <= 0 || page_size > kMaxListTasksPageSize) {
-      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100"), context,
-                          request_context.value().activated_extensions);
-    }
-    list_request.page_size = static_cast<std::size_t>(page_size);
+  const auto page_size = NormalizeListTasksPageSize(
+      request->has_page_size() ? std::optional<std::int64_t>{request->page_size()} : std::nullopt);
+  if (!page_size.ok()) {
+    return ToGrpcStatus(page_size.error(), context, request_context.value().activated_extensions);
   }
+  list_request.page_size = page_size.value();
   list_request.page_token = request->page_token();
   list_request.context_id = request->context_id();
   if (request->status() != lf::a2a::v1::TASK_STATE_UNSPECIFIED) {
