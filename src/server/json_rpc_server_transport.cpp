@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "a2a/core/error.h"
-#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
@@ -31,6 +30,7 @@
 #include "a2a/core/version.h"
 #include "a2a/server/agent_card/agent_card_serializer.h"
 #include "a2a/server/http_adapter.h"
+#include "a2a/server/http_server_response_builder.h"
 
 namespace a2a::server {
 namespace {
@@ -54,13 +54,6 @@ constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationC
 bool HasJsonContentType(const HttpServerRequest& request) {
   const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
   return !content_type.has_value() || core::http::IsJsonContentType(*content_type);
-}
-
-void AddActivatedExtensionsHeader(const std::vector<std::string>& activated_extensions, HttpServerResponse* response) {
-  if (activated_extensions.empty() || response == nullptr) {
-    return;
-  }
-  response->headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(activated_extensions);
 }
 
 bool IsValidIdType(const google::protobuf::Value& value) {
@@ -738,11 +731,12 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
 
-  HttpServerResponse response;
-  response.status_code = core::http::kStatusOk;
-  response.headers["Content-Type"] = "text/event-stream";
-  response.headers["Cache-Control"] = "no-cache";
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  auto response = HttpServerResponseBuilder()
+                      .WithStatus(core::http::kStatusOk)
+                      .WithSseContentType()
+                      .WithCacheControlNoCache()
+                      .WithA2aVersion()
+                      .Build();
 
   if (session->IsLive()) {
     auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
@@ -809,8 +803,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       [&activated_extensions](int json_rpc_code, std::string_view message, const ResponseId& id,
                               const std::optional<core::Error>& error, int http_status) -> HttpServerResponse {
     auto response = BuildErrorResponse(json_rpc_code, message, id, error, http_status);
-    AddActivatedExtensionsHeader(activated_extensions, &response);
-    return response;
+    return HttpServerResponseBuilder::FromHttpResponse(std::move(response))
+        .WithActivatedExtensions(activated_extensions)
+        .Build();
   };
 
   const auto parsed = ParseRequest(envelope.value());
@@ -850,9 +845,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                             HttpStatusFromError(error));
     }
-    auto response = sse.value();
-    AddActivatedExtensionsHeader(activated_extensions, &response);
-    return response;
+    return HttpServerResponseBuilder::FromHttpResponse(sse.value())
+        .WithActivatedExtensions(activated_extensions)
+        .Build();
   }
 
   if (is_subscribe) {
@@ -870,9 +865,9 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
       return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
                                             HttpStatusFromError(error));
     }
-    auto response = sse.value();
-    AddActivatedExtensionsHeader(activated_extensions, &response);
-    return response;
+    return HttpServerResponseBuilder::FromHttpResponse(sse.value())
+        .WithActivatedExtensions(activated_extensions)
+        .Build();
   }
 
   const auto result = SerializeDispatchResult(parsed.value().dispatch, dispatch.value());
@@ -999,12 +994,12 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
   (*fields)["id"] = id.value();
   (*fields)["result"] = result;
 
-  HttpServerResponse response;
-  response.status_code = core::http::kStatusOk;
-  response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  AddActivatedExtensionsHeader(activated_extensions, &response);
+  auto response = HttpServerResponseBuilder()
+                      .WithStatus(core::http::kStatusOk)
+                      .WithJsonContentType()
+                      .WithA2aVersion()
+                      .WithActivatedExtensions(activated_extensions)
+                      .Build();
 
   const auto body = core::MessageToJson(envelope);
   if (body.ok()) {
@@ -1059,11 +1054,7 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
 
   (*fields)["error"] = std::move(error_value);
 
-  HttpServerResponse response;
-  response.status_code = http_status;
-  response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  response.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
+  auto response = HttpServerResponseBuilder().WithStatus(http_status).WithJsonContentType().WithA2aVersion().Build();
 
   const auto body = core::MessageToJson(envelope);
   if (body.ok()) {
