@@ -6,6 +6,7 @@
 #include <google/protobuf/struct.pb.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -56,7 +57,17 @@ constexpr std::string_view kApplicationJsonWithCharset = "Application/JSON; char
 constexpr std::string_view kTaskPushId = "push-task";
 constexpr std::string_view kPushConfigId = "push-config";
 constexpr std::string_view kWebhookUrl = "https://example.test/push";
-constexpr std::size_t kDefaultListTasksPageSize = 50U;
+constexpr std::array<std::string_view, 4> kInvalidListTasksPageSizeRequests = {
+    R"({"jsonrpc":"2.0","id":"negative","method":"tasks/list","params":{"pageSize":-1}})",
+    R"({"jsonrpc":"2.0","id":"too-large","method":"tasks/list","params":{"pageSize":101}})",
+    R"({"jsonrpc":"2.0","id":"fractional","method":"tasks/list","params":{"pageSize":1.5}})",
+    R"({"jsonrpc":"2.0","id":"int64-overflow","method":"tasks/list","params":{"pageSize":9223372036854775808}})"};
+constexpr std::array<std::string_view, 3> kValidListTasksPageSizeRequests = {
+    R"({"jsonrpc":"2.0","id":"minimum","method":"tasks/list","params":{"pageSize":1}})",
+    R"({"jsonrpc":"2.0","id":"default","method":"tasks/list","params":{"pageSize":50}})",
+    R"({"jsonrpc":"2.0","id":"maximum","method":"tasks/list","params":{"pageSize":100}})"};
+constexpr std::array<std::string_view, 3> kValidListTasksPageSizeTokens = {
+    R"("nextPageToken":"1")", R"("nextPageToken":"50")", R"("nextPageToken":"100")"};
 
 class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -428,9 +439,7 @@ TEST(JsonRpcServerTransportTest, SupportsLegacyTasksListMethodAlias) {
 TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
-  a2a::server::JsonRpcServerTransport server(
-      &dispatcher,
-      {.rpc_path = "/rpc", .default_list_tasks_page_size = kDefaultListTasksPageSize, .required_extensions = {}});
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
 
   const auto response =
       server.Handle({.method = "POST",
@@ -476,6 +485,42 @@ TEST(JsonRpcServerTransportTest, ListTasksInvalidPageSizeReturnsInvalidParams) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("-32602"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, ListTasksRejectsEveryOutOfRangeOrNonIntegerPageSize) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
+
+  for (const auto request_body : kInvalidListTasksPageSizeRequests) {
+    const auto response = server.Handle({.method = "POST",
+                                         .target = "/rpc",
+                                         .headers = {{"A2A-Version", "1.0"}},
+                                         .body = std::string(request_body),
+                                         .remote_address = {}});
+
+    ASSERT_TRUE(response.ok());
+    EXPECT_EQ(response.value().status_code, kHttpOk);
+    EXPECT_NE(response.value().body.find("-32602"), std::string::npos);
+  }
+}
+
+TEST(JsonRpcServerTransportTest, ListTasksAcceptsProtocolPageSizeBoundariesAndDefault) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
+
+  for (std::size_t index = 0; index < kValidListTasksPageSizeRequests.size(); ++index) {
+    const auto response = server.Handle({.method = "POST",
+                                         .target = "/rpc",
+                                         .headers = {{"A2A-Version", "1.0"}},
+                                         .body = std::string(kValidListTasksPageSizeRequests[index]),
+                                         .remote_address = {}});
+
+    ASSERT_TRUE(response.ok());
+    EXPECT_EQ(response.value().status_code, kHttpOk);
+    EXPECT_NE(response.value().body.find(kValidListTasksPageSizeTokens[index]), std::string::npos);
+  }
 }
 
 TEST(JsonRpcServerTransportTest, RejectsUnsupportedContentType) {

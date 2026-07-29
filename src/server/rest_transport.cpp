@@ -444,13 +444,19 @@ std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& 
   }
 
   ListTasksRequest payload;
+  std::optional<std::int64_t> requested_page_size;
   if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
     const int parsed_page_size = ParsePageSize(*raw_page_size);
     if (parsed_page_size < 0) {
       return std::nullopt;
     }
-    payload.page_size = static_cast<std::size_t>(parsed_page_size);
+    requested_page_size = parsed_page_size;
   }
+  const auto normalized_page_size = NormalizeListTasksPageSize(requested_page_size);
+  if (!normalized_page_size.ok()) {
+    return std::nullopt;
+  }
+  payload.page_size = normalized_page_size.value();
 
   if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
     payload.page_token = *raw_page_token;
@@ -741,6 +747,9 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
 
   const auto dispatch_request = BuildDispatchRequest(request);
   if (!dispatch_request.has_value()) {
+    if (request.method == core::http::kMethodGet && request.path == RestEndpointPaths::kTaskCollection) {
+      return BuildErrorResponse(core::Error::Validation("ListTasks request parameters are invalid"));
+    }
     return BuildErrorResponse(core::Error::Validation("No matching route or request was malformed")
                                   .WithHttpStatus(core::http::kStatusNotFound));
   }

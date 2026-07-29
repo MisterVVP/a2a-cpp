@@ -293,6 +293,38 @@ TEST(RestTransportTest, DispatchesListTasksUsingQuery) {
   EXPECT_EQ(executor.observed_page_token, "page-2");
 }
 
+TEST(RestTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  a2a::server::RestRequest request;
+  request.method = "GET";
+  request.path = "/tasks";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, 200);
+  EXPECT_EQ(executor.observed_page_size, a2a::server::kDefaultListTasksPageSize);
+}
+
+TEST(RestTransportTest, ListTasksRejectsPageSizesOutsideProtocolRange) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+
+  for (const std::string_view page_size : {"0", "101", "-1"}) {
+    a2a::server::RestRequest request;
+    request.method = "GET";
+    request.path = "/tasks";
+    request.query_params["pageSize"] = page_size;
+
+    const auto response = transport.Handle(request);
+    ASSERT_TRUE(response.ok());
+    EXPECT_EQ(response.value().http_status, 400);
+  }
+}
+
 TEST(RestTransportTest, DispatchesCancelTaskFromPath) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -338,7 +370,7 @@ TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {
   EXPECT_EQ(response.value().http_status, 404);
 }
 
-TEST(RestTransportTest, RejectsMalformedQueryParameters) {
+TEST(RestTransportTest, RejectsMalformedListQueryWithBadRequest) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestTransport transport(&dispatcher);
@@ -350,7 +382,7 @@ TEST(RestTransportTest, RejectsMalformedQueryParameters) {
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().http_status, 404);
+  EXPECT_EQ(response.value().http_status, 400);
 }
 
 TEST(RestTransportTest, RejectsUnsupportedPushNotificationEndpoints) {

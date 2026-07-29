@@ -59,7 +59,7 @@ TEST(RestServerTransportFunctionalTest, SupportsCoreTaskLifecycleOverHttpTargetM
   EXPECT_EQ(cancel_response.value().status_code, 404);
 }
 
-TEST(RestServerTransportFunctionalTest, ReturnsStructuredNotFoundForMalformedInput) {
+TEST(RestServerTransportFunctionalTest, ReturnsStructuredBadRequestForMalformedListInput) {
   a2a::server::InMemoryTaskStore store;
   a2a::tests::support::StoreExecutor executor(&store);
   a2a::server::Dispatcher dispatcher(&executor);
@@ -71,7 +71,7 @@ TEST(RestServerTransportFunctionalTest, ReturnsStructuredNotFoundForMalformedInp
       server.Handle(a2a::tests::support::MakeHttpRequest("GET", "/api/tasks?pageSize=abc", {{"A2A-Version", "1.0"}}));
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 404);
+  EXPECT_EQ(response.value().status_code, 400);
   EXPECT_FALSE(response.value().body.empty());
 }
 

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdint>
 
 #include "a2a/core/error.h"
 
@@ -32,6 +33,16 @@ void CopyUnknownFields(const lf::a2a::v1::Task& source, lf::a2a::v1::Task* desti
 }
 
 }  // namespace
+
+core::Result<std::size_t> NormalizeListTasksPageSize(std::optional<std::int64_t> page_size) {
+  if (!page_size.has_value()) {
+    return kDefaultListTasksPageSize;
+  }
+  if (*page_size < 1 || std::cmp_greater(*page_size, kMaxListTasksPageSize)) {
+    return core::Error::Validation("ListTasksRequest.page_size must be between 1 and 100");
+  }
+  return static_cast<std::size_t>(*page_size);
+}
 
 bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request) {
   if (!request.context_id.empty() && task.context_id() != request.context_id) {
