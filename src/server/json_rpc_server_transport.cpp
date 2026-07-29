@@ -10,7 +10,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -251,16 +250,11 @@ core::Result<void> ParseListTasksPageSize(const google::protobuf::Struct& params
     return core::Error::Validation("ListTasksRequest.pageSize must be a number");
   }
   const double page_size = it->second.number_value();
-  if (!std::isfinite(page_size) || std::trunc(page_size) != page_size ||
-      page_size < static_cast<double>(std::numeric_limits<std::int64_t>::min()) ||
-      page_size > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+  if (!std::isfinite(page_size) || std::trunc(page_size) != page_size || page_size < 1.0 ||
+      page_size > static_cast<double>(kMaxListTasksPageSize)) {
     return core::Error::Validation("ListTasksRequest.pageSize must be an integer between 1 and 100");
   }
-  const auto normalized = NormalizeListTasksPageSize(static_cast<std::int64_t>(page_size));
-  if (!normalized.ok()) {
-    return normalized.error();
-  }
-  payload->page_size = normalized.value();
+  payload->page_size = static_cast<std::size_t>(page_size);
   return {};
 }
 
