@@ -89,6 +89,7 @@ jobs:
       - name: Start deterministic SUT with PostgreSQL store
         env:
           A2A_TCK_STORE_BACKEND: postgres
+          A2A_TCK_POSTGRES_POOL_SIZE: "64"
           SUT_LOG_FILE: build-tck/tck-sut-postgres.log
         run: ./scripts/run_tck_sut.sh
 

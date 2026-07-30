@@ -116,11 +116,18 @@ entries.
 The runner passes each selected size to both the in-process driver and wire SUT.
 Every PostgreSQL result row records `postgres_pool_size` in JSON and CSV, and
 the Markdown detail and diagnostic tables include a pool-size column. Multiple
-comma-separated sizes create a comparison matrix without source changes.
+comma-separated sizes create a comparison matrix without source changes. The
+`postgres-tail` profile defaults to pool sizes `4,16,64` at concurrency levels
+`4,16,64`; an explicit `--postgres-pool-sizes` value or
+`A2A_PERF_POSTGRES_POOL_SIZES` overrides that profile default.
 
 ## CI behavior
 
-The performance job remains report-only and uses a smoke-sized CI matrix covering three transports, two stores, streaming, subscription, push CRUD, and callback delivery with concurrency levels 1 and 4.
+The performance job remains report-only and uses a smoke-sized CI matrix covering
+three transports, two stores, streaming, subscription, push CRUD, and callback
+delivery with concurrency levels 1 and 4. Normal PostgreSQL rows run with a
+64-connection pool. The focused PostgreSQL tail profile compares pool sizes
+`4,16,64` at concurrency levels `4,16,64`.
 The in-process SDK/service/store rows do not exercise a transport, so the runner
 executes them once per store/concurrency pair instead of repeating identical
 in-process work under every selected transport. It uploads `perf-artifacts`,
@@ -141,6 +148,7 @@ are included in the failure message when available.
 A2A_PERF_TRANSPORTS=grpc,jsonrpc,http_json \
 A2A_PERF_STORE_BACKENDS=inmemory,postgres \
 A2A_PERF_REQUESTS=2000 \
+A2A_PERF_POSTGRES_POOL_SIZES=4,16,64 \
 A2A_PERF_CONCURRENCY=1,4,16,64 \
 A2A_PERF_WARMUP_SECONDS=5 \
 A2A_PERF_REPORT_DIR=perf-artifacts \
@@ -169,7 +177,9 @@ Endpoint layout is the same as the TCK flow:
 The SUT supports `A2A_TCK_STORE_BACKEND=inmemory|postgres`,
 `A2A_TCK_POSTGRES_DSN`, `A2A_TCK_POSTGRES_SCHEMA`,
 `A2A_TCK_POSTGRES_POOL_SIZE` (default `4`), and the existing extended
-agent-card mode environment variable. Run it manually with:
+agent-card mode environment variable. The TCK conformance workflow explicitly
+starts the PostgreSQL-backed SUT with a pool size of `64`, while the SDK-facing
+default remains `4` for compatibility. Run it manually with:
 
 ```bash
 cmake --build build-tck --target tck_sut

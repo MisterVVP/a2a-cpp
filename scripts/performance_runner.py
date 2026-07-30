@@ -64,11 +64,10 @@ POSTGRES_TAIL_SCENARIOS = (
     "SendMessage_FollowUpExistingTask",
     "SendMessage_CreateTask",
 )
-POSTGRES_TAIL_CONCURRENCY = (1, 4, 8)
+POSTGRES_TAIL_CONCURRENCY = (4, 16, 64)
 POSTGRES_TAIL_REPETITIONS = 5
 DEFAULT_POSTGRES_POOL_SIZE = 4
-POSTGRES_TAIL_POOL_SIZES = (4, 8)
-POSTGRES_TAIL_EXPECTED_ROWS = 150
+POSTGRES_TAIL_POOL_SIZES = (4, 16, 64)
 WIRE_SCENARIOS = (
     "ListTasks_NoPagination",
     "ListTasks_WithPagination",
@@ -379,8 +378,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--warmup-seconds", type=float, default=float(env_or_default("A2A_PERF_WARMUP_SECONDS", str(DEFAULT_WARMUP_SECONDS))))
     parser.add_argument("--duration-seconds", type=float, default=float(env_or_default("A2A_PERF_DURATION_SECONDS", str(DEFAULT_DURATION_SECONDS))))
     parser.add_argument("--report-dir", default=env_or_default("A2A_PERF_REPORT_DIR", DEFAULT_REPORT_DIR))
-    parser.add_argument("--postgres-pool-sizes", default=env_or_default(
-        "A2A_PERF_POSTGRES_POOL_SIZES", str(DEFAULT_POSTGRES_POOL_SIZE)))
+    parser.add_argument("--postgres-pool-sizes", default=os.environ.get("A2A_PERF_POSTGRES_POOL_SIZES"))
     parser.add_argument("--driver-timeout-seconds", type=float, default=float(env_or_default("A2A_PERF_DRIVER_TIMEOUT_SECONDS", str(DEFAULT_DRIVER_TIMEOUT_SECONDS))))
     parser.add_argument("--wire-driver-timeout-seconds", type=float, default=float(env_or_default("A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS", str(DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS))))
     args = parser.parse_args(argv)
@@ -391,6 +389,12 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     if args.driver_timeout_seconds <= 0 or args.wire_driver_timeout_seconds <= 0:
         raise ValueError("driver timeouts must be positive")
     profile = args.profile
+    if args.postgres_pool_sizes is not None:
+        postgres_pool_sizes = parse_positive_int_csv(args.postgres_pool_sizes)
+    elif profile == POSTGRES_TAIL_PROFILE:
+        postgres_pool_sizes = POSTGRES_TAIL_POOL_SIZES
+    else:
+        postgres_pool_sizes = (DEFAULT_POSTGRES_POOL_SIZE,)
     return RunnerConfig(
         profile=profile,
         transports=("grpc",) if profile == POSTGRES_TAIL_PROFILE else split_csv(args.transports, TRANSPORTS),
@@ -404,8 +408,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
         repetitions=POSTGRES_TAIL_REPETITIONS if profile == POSTGRES_TAIL_PROFILE else 1,
         scenarios=POSTGRES_TAIL_SCENARIOS if profile == POSTGRES_TAIL_PROFILE else None,
-        postgres_pool_sizes=POSTGRES_TAIL_POOL_SIZES if profile == POSTGRES_TAIL_PROFILE else
-        parse_positive_int_csv(args.postgres_pool_sizes),
+        postgres_pool_sizes=postgres_pool_sizes,
     )
 
 
@@ -691,10 +694,14 @@ def log_progress(message: str) -> None:
     print(f"[perf] {message}", flush=True)
 
 
+def postgres_tail_expected_rows(config: RunnerConfig) -> int:
+    return (len(POSTGRES_TAIL_SCENARIOS) * len(config.concurrency_levels) *
+            len(config.postgres_pool_sizes) * config.repetitions)
+
+
 def log_workload_estimate(config: RunnerConfig) -> None:
     if config.profile == POSTGRES_TAIL_PROFILE:
-        estimated_rows = (len(POSTGRES_TAIL_SCENARIOS) * len(config.concurrency_levels) *
-                          len(config.postgres_pool_sizes) * config.repetitions)
+        estimated_rows = postgres_tail_expected_rows(config)
         log_progress(
             f"profile={config.profile} estimated_rows={estimated_rows} "
             f"estimated_operations={estimated_rows * config.requests}"
@@ -799,9 +806,10 @@ def main(argv: list[str]) -> int:
         query_plans = None
         if config.profile == POSTGRES_TAIL_PROFILE:
             errors = sum(result_error_count(result) for result in results)
-            if len(results) != POSTGRES_TAIL_EXPECTED_ROWS or errors:
+            expected_rows = postgres_tail_expected_rows(config)
+            if len(results) != expected_rows or errors:
                 raise ValueError(
-                    f"postgres-tail produced {len(results)}/{POSTGRES_TAIL_EXPECTED_ROWS} rows and {errors} errors"
+                    f"postgres-tail produced {len(results)}/{expected_rows} rows and {errors} errors"
                 )
             aggregates = median_aggregates(results, config.repetitions)
             dsn = os.environ.get("A2A_TEST_POSTGRES_DSN", "")
