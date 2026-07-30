@@ -80,6 +80,7 @@ a2a::server::stores::PostgresStoreFactory factory({
     .connection_string = "postgresql://a2a:a2a@127.0.0.1:5432/a2a",
     .schema = "public",
     .auto_create_schema = true,
+    .connection_pool_size = 8,
 });
 auto stores = factory.CreateStoreBundle();
 
@@ -88,6 +89,14 @@ a2a::examples::ExampleExecutor executor({
     .push_store = stores.value().push_store.get(),
 });
 ```
+
+`connection_pool_size` controls the number of synchronous libpq connections
+available to PostgreSQL store operations. It defaults to `4` for backward
+compatibility and must be greater than zero. Size it for the expected number of
+concurrent database operations while staying within PostgreSQL's connection
+limit (including connections used by other application instances and tools).
+Task and push-notification stores returned by `CreateStoreBundle()` share this
+single configured pool; separately created stores each own a separate pool.
 
 ## Sensitive push notification data
 

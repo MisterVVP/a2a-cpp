@@ -16,6 +16,7 @@
 #endif
 
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -58,6 +59,7 @@ constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 constexpr std::string_view kMissingPostgresDsnMessage =
     "A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres";
 constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TCK_STORE_BACKEND: ";
+constexpr std::string_view kInvalidPostgresPoolSizeMessage = "A2A_TCK_POSTGRES_POOL_SIZE must be a positive integer";
 volatile std::sig_atomic_t kKeepRunning = 1;
 
 void SignalHandler(int signal_number) {
@@ -71,6 +73,19 @@ void SignalHandler(int signal_number) {
     return {};
   }
   return value;
+}
+
+[[nodiscard]] a2a::core::Result<std::size_t> GetPostgresPoolSize() {
+  const std::string_view value = GetEnvironmentValue(kPostgresPoolSizeEnv);
+  if (value.empty()) {
+    return a2a::server::stores::kDefaultPostgresConnectionPoolSize;
+  }
+  std::size_t size = 0U;
+  const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), size);
+  if (error != std::errc{} || end != value.data() + value.size() || size == 0U) {
+    return a2a::core::Error::Validation(std::string{kInvalidPostgresPoolSizeMessage});
+  }
+  return size;
 }
 
 [[nodiscard]] a2a::core::Result<a2a::server::stores::StoreBundle> CreateStoreBundleFromEnvironment() {
@@ -93,10 +108,15 @@ void SignalHandler(int signal_number) {
   }
 
   const std::string_view schema = GetEnvironmentValue(kPostgresSchemaEnv);
+  const auto pool_size = GetPostgresPoolSize();
+  if (!pool_size.ok()) {
+    return pool_size.error();
+  }
   a2a::server::stores::PostgresStoreOptions options{
       .connection_string = std::string{dsn},
       .schema = std::string{schema.empty() ? kDefaultPostgresSchema : schema},
-      .auto_create_schema = true};
+      .auto_create_schema = true,
+      .connection_pool_size = pool_size.value()};
   const a2a::server::stores::PostgresStoreFactory factory(std::move(options));
   return factory.CreateStoreBundle();
 }

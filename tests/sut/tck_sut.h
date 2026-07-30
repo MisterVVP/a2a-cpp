@@ -23,6 +23,7 @@ constexpr std::string_view kExtendedCardModeDisabled = "disabled";
 constexpr char kStoreBackendEnv[] = "A2A_TCK_STORE_BACKEND";
 constexpr char kPostgresDsnEnv[] = "A2A_TCK_POSTGRES_DSN";
 constexpr char kPostgresSchemaEnv[] = "A2A_TCK_POSTGRES_SCHEMA";
+constexpr char kPostgresPoolSizeEnv[] = "A2A_TCK_POSTGRES_POOL_SIZE";
 constexpr char kExtendedCardModeEnv[] = "A2A_TCK_EXTENDED_AGENT_CARD_MODE";
 
 struct SutConfig final {

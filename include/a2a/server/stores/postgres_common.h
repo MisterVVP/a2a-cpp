@@ -53,7 +53,6 @@ void ResetPostgresOperationDiagnosticsForTesting() noexcept;
 [[nodiscard]] PostgresOperationDiagnostics TakePostgresOperationDiagnosticsForTesting() noexcept;
 #endif
 
-constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4;
 constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";
@@ -100,12 +99,14 @@ class PostgresConnectionPool final {
   };
 
   [[nodiscard]] core::Result<Lease> Acquire();
+  [[nodiscard]] std::size_t capacity() const noexcept;
 
  private:
   [[nodiscard]] core::Result<PgConnection> OpenConnection() const;
   void Return(PgConnection connection);
 
   std::string connection_string_;
+  std::size_t capacity_;
   std::mutex mutex_;
   std::condition_variable condition_;
   std::vector<PgConnection> connections_;

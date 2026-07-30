@@ -105,7 +105,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             summary = (report_dir / "summary.md").read_text(encoding="utf-8")
             self.assertIn("A2A performance test summary", summary)
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
-            self.assertIn("| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
+            self.assertIn("| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
 
     def test_wire_scenarios_include_streaming_for_http_transports(self):
         runner = load_runner_module()
@@ -192,7 +192,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         rows = self.make_postgres_tail_rows(runner)
         aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
-        self.assertEqual(15, len(aggregates))
+        self.assertEqual(30, len(aggregates))
         self.assertEqual(5, aggregates[0]["repetitions"])
         self.assertEqual(103.0, aggregates[0]["throughput_ops_per_sec"])
         self.assertEqual(3.0, aggregates[0]["p95_ms"])
@@ -205,8 +205,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             payload = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
             summary = (Path(directory) / "summary.md").read_text(encoding="utf-8")
             aggregate_csv = (Path(directory) / "median-aggregates.csv").read_text(encoding="utf-8")
-        self.assertEqual(75, len(payload["results"]))
-        self.assertEqual(15, len(payload["median_aggregates"]))
+        self.assertEqual(150, len(payload["results"]))
+        self.assertEqual(30, len(payload["median_aggregates"]))
         self.assertIn("Median PostgreSQL phases", summary)
         self.assertIn("Query-plan review", summary)
         self.assertIn("connection_acquire_wait_p99_ms", aggregate_csv)
@@ -240,24 +240,26 @@ class PerformanceRunnerTest(unittest.TestCase):
     @staticmethod
     def make_postgres_tail_rows(runner):
         rows = []
-        for concurrency in runner.POSTGRES_TAIL_CONCURRENCY:
-            for scenario in runner.POSTGRES_TAIL_SCENARIOS:
-                for repetition in range(1, runner.POSTGRES_TAIL_REPETITIONS + 1):
-                    phases = {
-                        phase: {"p95": float(repetition), "p99": float(repetition + 1),
-                                "max": float(repetition + 2)}
-                        for phase in runner.POSTGRES_DIAGNOSTIC_PHASES
-                    }
-                    rows.append({
-                        "repetition": repetition, "scenario": scenario, "transport": "grpc",
-                        "store_backend": "postgres", "driver_type": "cpp_sdk_in_process",
-                        "transport_path": "in_process", "concurrency": concurrency,
-                        "operations": runner.DEFAULT_REQUESTS, "success": runner.DEFAULT_REQUESTS,
-                        "errors": 0, "throughput_ops_per_sec": float(100 + repetition),
-                        "latency_ms": {"p50": 1.0, "p90": 2.0, "p95": float(repetition),
-                                       "p99": float(repetition + 1), "max": float(repetition + 2)},
-                        "postgres_phase_latency_ms": phases,
-                    })
+        for pool_size in runner.POSTGRES_TAIL_POOL_SIZES:
+            for concurrency in runner.POSTGRES_TAIL_CONCURRENCY:
+                for scenario in runner.POSTGRES_TAIL_SCENARIOS:
+                    for repetition in range(1, runner.POSTGRES_TAIL_REPETITIONS + 1):
+                        phases = {
+                            phase: {"p95": float(repetition), "p99": float(repetition + 1),
+                                    "max": float(repetition + 2)}
+                            for phase in runner.POSTGRES_DIAGNOSTIC_PHASES
+                        }
+                        rows.append({
+                            "repetition": repetition, "scenario": scenario, "transport": "grpc",
+                            "store_backend": "postgres", "driver_type": "cpp_sdk_in_process",
+                            "transport_path": "in_process", "concurrency": concurrency,
+                            "postgres_pool_size": pool_size,
+                            "operations": runner.DEFAULT_REQUESTS, "success": runner.DEFAULT_REQUESTS,
+                            "errors": 0, "throughput_ops_per_sec": float(100 + repetition),
+                            "latency_ms": {"p50": 1.0, "p90": 2.0, "p95": float(repetition),
+                                           "p99": float(repetition + 1), "max": float(repetition + 2)},
+                            "postgres_phase_latency_ms": phases,
+                        })
         return rows
 
 

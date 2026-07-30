@@ -66,7 +66,9 @@ POSTGRES_TAIL_SCENARIOS = (
 )
 POSTGRES_TAIL_CONCURRENCY = (1, 4, 8)
 POSTGRES_TAIL_REPETITIONS = 5
-POSTGRES_TAIL_EXPECTED_ROWS = 75
+DEFAULT_POSTGRES_POOL_SIZE = 4
+POSTGRES_TAIL_POOL_SIZES = (4, 8)
+POSTGRES_TAIL_EXPECTED_ROWS = 150
 WIRE_SCENARIOS = (
     "ListTasks_NoPagination",
     "ListTasks_WithPagination",
@@ -112,6 +114,7 @@ class RunnerConfig:
     wire_driver_timeout_seconds: float
     repetitions: int
     scenarios: tuple[str, ...] | None
+    postgres_pool_sizes: tuple[int, ...]
 
 
 
@@ -205,7 +208,8 @@ def postgres_schema_name(transport: str, concurrency: int, port: int) -> str:
 
 
 class SutProcess:
-    def __init__(self, config: RunnerConfig, store_backend: str, port: int, transport: str, concurrency: int) -> None:
+    def __init__(self, config: RunnerConfig, store_backend: str, port: int, transport: str,
+                 concurrency: int, postgres_pool_size: int) -> None:
         self.host = "127.0.0.1"
         self.port = port
         self.grpc_port = port + 1
@@ -215,6 +219,7 @@ class SutProcess:
         self.store_backend = store_backend
         self.transport = transport
         self.concurrency = concurrency
+        self.postgres_pool_size = postgres_pool_size
 
     def __enter__(self) -> "SutProcess":
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +229,7 @@ class SutProcess:
             if "A2A_TCK_POSTGRES_DSN" not in env and "A2A_TEST_POSTGRES_DSN" in env:
                 env["A2A_TCK_POSTGRES_DSN"] = env["A2A_TEST_POSTGRES_DSN"]
             env["A2A_TCK_POSTGRES_SCHEMA"] = postgres_schema_name(self.transport, self.concurrency, self.port)
+            env["A2A_TCK_POSTGRES_POOL_SIZE"] = str(self.postgres_pool_size)
         log_file = self.log_path.open("w", encoding="utf-8")
         self.process = subprocess.Popen([str(self.sut), f"{self.host}:{self.port}"], cwd=Path(__file__).resolve().parents[1], env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True)
         log_file.close()
@@ -278,7 +284,8 @@ def run_command_json(command: list[str], timeout_seconds: float, error_context: 
 
 
 def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int,
-               scenarios: tuple[str, ...] | None = None, schema: str | None = None) -> list[dict[str, object]]:
+               postgres_pool_size: int, scenarios: tuple[str, ...] | None = None,
+               schema: str | None = None) -> list[dict[str, object]]:
     driver = ensure_driver(config)
     command = [
         str(driver),
@@ -292,18 +299,23 @@ def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurr
     if scenarios is not None:
         command.extend(["--scenarios", ",".join(scenarios)])
     env = os.environ.copy()
+    env["A2A_PERF_POSTGRES_POOL_SIZE"] = str(postgres_pool_size)
     if schema is not None:
         env["A2A_PERF_POSTGRES_SCHEMA"] = schema
-    return run_command_json(command, config.driver_timeout_seconds,
-                            f"performance driver for {transport}/{store_backend}/c{concurrency}", env=env)
+    payload = run_command_json(command, config.driver_timeout_seconds,
+                               f"performance driver for {transport}/{store_backend}/c{concurrency}", env=env)
+    for result in payload:
+        result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
+    return payload
 
 
 
-def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int, port: int) -> list[dict[str, object]]:
+def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int,
+                    postgres_pool_size: int, port: int) -> list[dict[str, object]]:
     if transport not in WIRE_TRANSPORT_PATHS:
         raise ValueError(f"unsupported wire transport: {transport}")
     wire_driver = ensure_wire_driver(config)
-    with SutProcess(config, store_backend, port, transport, concurrency) as sut:
+    with SutProcess(config, store_backend, port, transport, concurrency, postgres_pool_size) as sut:
         command = [
             str(wire_driver),
             "--transport", transport,
@@ -323,6 +335,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
     for result in payload:
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
+        result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
     return payload
 
 
@@ -366,6 +379,8 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--warmup-seconds", type=float, default=float(env_or_default("A2A_PERF_WARMUP_SECONDS", str(DEFAULT_WARMUP_SECONDS))))
     parser.add_argument("--duration-seconds", type=float, default=float(env_or_default("A2A_PERF_DURATION_SECONDS", str(DEFAULT_DURATION_SECONDS))))
     parser.add_argument("--report-dir", default=env_or_default("A2A_PERF_REPORT_DIR", DEFAULT_REPORT_DIR))
+    parser.add_argument("--postgres-pool-sizes", default=env_or_default(
+        "A2A_PERF_POSTGRES_POOL_SIZES", str(DEFAULT_POSTGRES_POOL_SIZE)))
     parser.add_argument("--driver-timeout-seconds", type=float, default=float(env_or_default("A2A_PERF_DRIVER_TIMEOUT_SECONDS", str(DEFAULT_DRIVER_TIMEOUT_SECONDS))))
     parser.add_argument("--wire-driver-timeout-seconds", type=float, default=float(env_or_default("A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS", str(DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS))))
     args = parser.parse_args(argv)
@@ -389,6 +404,8 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
         repetitions=POSTGRES_TAIL_REPETITIONS if profile == POSTGRES_TAIL_PROFILE else 1,
         scenarios=POSTGRES_TAIL_SCENARIOS if profile == POSTGRES_TAIL_PROFILE else None,
+        postgres_pool_sizes=POSTGRES_TAIL_POOL_SIZES if profile == POSTGRES_TAIL_PROFILE else
+        parse_positive_int_csv(args.postgres_pool_sizes),
     )
 
 
@@ -422,7 +439,7 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms"))
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
@@ -487,14 +504,14 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
         "",
         "## Detailed matrix results",
         "",
-        "| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |",
-        "| ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |",
+        "| ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ])
     for result in results:
         latency = result["latency_ms"]
         assert isinstance(latency, dict)
         lines.append(
-            f"| {result.get('repetition', '')} | {result['scenario']} | {result['driver_type']} | {result['transport_path']} | {result['transport']} | {result['store_backend']} | {result['concurrency']} | "
+            f"| {result.get('repetition', '')} | {result['scenario']} | {result['driver_type']} | {result['transport_path']} | {result['transport']} | {result['store_backend']} | {result['concurrency']} | {result.get('postgres_pool_size') or ''} | "
             f"{result['success']} | {result['errors']} | {float(result['throughput_ops_per_sec']):.2f} | "
             f"{float(latency['p50']):.4f} | {float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} |"
         )
@@ -504,8 +521,8 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
             "",
             "## PostgreSQL phase diagnostics",
             "",
-            "| Scenario | Transport | Concurrency | Phase | p95 ms | p99 ms | Max ms |",
-            "| --- | --- | ---: | --- | ---: | ---: | ---: |",
+            "| Scenario | Transport | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms |",
+            "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: |",
         ])
         for result in diagnostic_results:
             phases = result["postgres_phase_latency_ms"]
@@ -514,7 +531,7 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
                 values = phases[phase]
                 assert isinstance(values, dict)
                 lines.append(
-                    f"| {result['scenario']} | {result['transport']} | {result['concurrency']} | {phase} | "
+                    f"| {result['scenario']} | {result['transport']} | {result['concurrency']} | {result['postgres_pool_size']} | {phase} | "
                     f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} |"
                 )
     if aggregates is not None:
@@ -569,10 +586,11 @@ def scenario_rollups(results: list[dict[str, object]]) -> list[dict[str, object]
 
 def median_aggregates(results: list[dict[str, object]], repetitions: int) -> list[dict[str, object]]:
     aggregates = []
-    keys = sorted({(str(row["scenario"]), int(row["concurrency"])) for row in results})
-    for scenario, concurrency in keys:
+    keys = sorted({(str(row["scenario"]), int(row["concurrency"]), int(row["postgres_pool_size"])) for row in results})
+    for scenario, concurrency, pool_size in keys:
         selected = [row for row in results
-                    if row["scenario"] == scenario and int(row["concurrency"]) == concurrency]
+                    if row["scenario"] == scenario and int(row["concurrency"]) == concurrency
+                    and int(row["postgres_pool_size"]) == pool_size]
         if len(selected) != repetitions:
             raise ValueError(
                 f"aggregate {scenario}/c{concurrency} contains {len(selected)}/{repetitions} repetitions"
@@ -580,6 +598,7 @@ def median_aggregates(results: list[dict[str, object]], repetitions: int) -> lis
         aggregate: dict[str, object] = {
             "scenario": scenario,
             "concurrency": concurrency,
+            "postgres_pool_size": pool_size,
             "repetitions": len(selected),
             "throughput_ops_per_sec": statistics.median(
                 float(row["throughput_ops_per_sec"]) for row in selected
@@ -604,7 +623,7 @@ def median_aggregates(results: list[dict[str, object]], repetitions: int) -> lis
 
 
 def write_aggregate_csv(aggregates: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["scenario", "concurrency", "repetitions", "throughput_ops_per_sec",
+    fieldnames = ["scenario", "concurrency", "postgres_pool_size", "repetitions", "throughput_ops_per_sec",
                   "p95_ms", "p99_ms", "max_ms"]
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend(f"{phase}_{metric}_ms" for metric in ("p95", "p99", "max"))
@@ -623,24 +642,24 @@ def write_aggregate_csv(aggregates: list[dict[str, object]], csv_path: Path) -> 
 
 def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, object]]) -> None:
     lines.extend(["", "## Median aggregates", "",
-                  "| Scenario | Concurrency | Repetitions | Ops/sec | p95 ms | p99 ms | Max ms |",
-                  "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"])
+                  "| Scenario | Concurrency | Pool size | Repetitions | Ops/sec | p95 ms | p99 ms | Max ms |",
+                  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for row in aggregates:
         lines.append(
-            f"| {row['scenario']} | {row['concurrency']} | {row['repetitions']} | "
+            f"| {row['scenario']} | {row['concurrency']} | {row['postgres_pool_size']} | {row['repetitions']} | "
             f"{float(row['throughput_ops_per_sec']):.2f} | {float(row['p95_ms']):.4f} | "
             f"{float(row['p99_ms']):.4f} | {float(row['max_ms']):.4f} |"
         )
     lines.extend(["", "## Median PostgreSQL phases", "",
-                  "| Scenario | Concurrency | Phase | p95 ms | p99 ms | Max ms |",
-                  "| --- | ---: | --- | ---: | ---: | ---: |"])
+                  "| Scenario | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms |",
+                  "| --- | ---: | ---: | --- | ---: | ---: | ---: |"])
     for row in aggregates:
         phases = row["postgres_phase_latency_ms"]
         assert isinstance(phases, dict)
         for phase in POSTGRES_DIAGNOSTIC_PHASES:
             values = phases[phase]
             lines.append(
-                f"| {row['scenario']} | {row['concurrency']} | {phase} | "
+                f"| {row['scenario']} | {row['concurrency']} | {row['postgres_pool_size']} | {phase} | "
                 f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} |"
             )
 
@@ -674,7 +693,8 @@ def log_progress(message: str) -> None:
 
 def log_workload_estimate(config: RunnerConfig) -> None:
     if config.profile == POSTGRES_TAIL_PROFILE:
-        estimated_rows = len(POSTGRES_TAIL_SCENARIOS) * len(config.concurrency_levels) * config.repetitions
+        estimated_rows = (len(POSTGRES_TAIL_SCENARIOS) * len(config.concurrency_levels) *
+                          len(config.postgres_pool_sizes) * config.repetitions)
         log_progress(
             f"profile={config.profile} estimated_rows={estimated_rows} "
             f"estimated_operations={estimated_rows * config.requests}"
@@ -738,38 +758,43 @@ def main(argv: list[str]) -> int:
         in_process_transport = config.transports[0]
         last_schema = None
         for store_backend in config.store_backends:
-            for concurrency in config.concurrency_levels:
-                for repetition in range(1, config.repetitions + 1):
-                    schema = None
-                    if config.profile == POSTGRES_TAIL_PROFILE:
-                        schema = f"a2a_tail_c{concurrency}_r{repetition}_{os.getpid()}"
-                    run_results = run_with_progress(
-                        "in-process",
-                        lambda schema=schema: run_driver(
-                            config, in_process_transport, store_backend, concurrency,
-                            config.scenarios, schema,
-                        ),
-                        in_process_transport, store_backend, concurrency, config.requests,
-                    )
-                    if config.profile == POSTGRES_TAIL_PROFILE:
-                        for result in run_results:
-                            result["repetition"] = repetition
-                        last_schema = schema
-                    results.extend(run_results)
+            pool_sizes = config.postgres_pool_sizes if store_backend == "postgres" else (DEFAULT_POSTGRES_POOL_SIZE,)
+            for postgres_pool_size in pool_sizes:
+                for concurrency in config.concurrency_levels:
+                    for repetition in range(1, config.repetitions + 1):
+                        schema = None
+                        if config.profile == POSTGRES_TAIL_PROFILE:
+                            schema = f"a2a_tail_p{postgres_pool_size}_c{concurrency}_r{repetition}_{os.getpid()}"
+                        run_results = run_with_progress(
+                            "in-process",
+                            lambda schema=schema: run_driver(
+                                config, in_process_transport, store_backend, concurrency,
+                                postgres_pool_size, config.scenarios, schema,
+                            ),
+                            in_process_transport, store_backend, concurrency, config.requests,
+                        )
+                        if config.profile == POSTGRES_TAIL_PROFILE:
+                            for result in run_results:
+                                result["repetition"] = repetition
+                            last_schema = schema
+                        results.extend(run_results)
         if config.profile != POSTGRES_TAIL_PROFILE:
             for transport in config.transports:
                 for store_backend in config.store_backends:
-                    for concurrency in config.concurrency_levels:
-                        results.extend(
-                            run_with_progress(
-                                "wire",
-                                lambda: run_wire_driver(
-                                    config, transport, store_backend, concurrency, find_available_sut_port()
-                                ),
-                                transport, store_backend, concurrency, config.requests,
+                    pool_sizes = config.postgres_pool_sizes if store_backend == "postgres" else (DEFAULT_POSTGRES_POOL_SIZE,)
+                    for postgres_pool_size in pool_sizes:
+                        for concurrency in config.concurrency_levels:
+                            results.extend(
+                                run_with_progress(
+                                    "wire",
+                                    lambda: run_wire_driver(
+                                        config, transport, store_backend, concurrency, postgres_pool_size,
+                                        find_available_sut_port()
+                                    ),
+                                    transport, store_backend, concurrency, config.requests,
+                                )
                             )
-                        )
-        results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"]), int(result.get("repetition", 0))))
+        results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"]), int(result.get("postgres_pool_size") or 0), int(result.get("repetition", 0))))
         aggregates = None
         query_plans = None
         if config.profile == POSTGRES_TAIL_PROFILE:

@@ -39,6 +39,7 @@ matching environment variables.
 | In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
+| PostgreSQL pool sizes | `A2A_PERF_POSTGRES_POOL_SIZES` | `4` |
 
 ## Workload modes
 
@@ -112,6 +113,10 @@ the performance job. For wire-level PostgreSQL rows, the runner maps
 matrix-scoped schema named `a2a_perf_<transport>_<concurrency>_<port>` so rows
 do not share the default `public` schema or accumulate data across matrix
 entries.
+The runner passes each selected size to both the in-process driver and wire SUT.
+Every PostgreSQL result row records `postgres_pool_size` in JSON and CSV, and
+the Markdown detail and diagnostic tables include a pool-size column. Multiple
+comma-separated sizes create a comparison matrix without source changes.
 
 ## CI behavior
 
@@ -162,7 +167,8 @@ Endpoint layout is the same as the TCK flow:
 * gRPC: `<host>:<port + 1>`
 
 The SUT supports `A2A_TCK_STORE_BACKEND=inmemory|postgres`,
-`A2A_TCK_POSTGRES_DSN`, `A2A_TCK_POSTGRES_SCHEMA`, and the existing extended
+`A2A_TCK_POSTGRES_DSN`, `A2A_TCK_POSTGRES_SCHEMA`,
+`A2A_TCK_POSTGRES_POOL_SIZE` (default `4`), and the existing extended
 agent-card mode environment variable. Run it manually with:
 
 ```bash
