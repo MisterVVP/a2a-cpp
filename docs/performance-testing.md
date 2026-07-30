@@ -29,7 +29,7 @@ matching environment variables.
 | Transports (`grpc`, `jsonrpc`, `http_json`, or `all`) | `A2A_PERF_TRANSPORTS` | `grpc,jsonrpc,http_json` |
 | Store backends (`inmemory`, `postgres`, or `all`) | `A2A_PERF_STORE_BACKENDS` | `inmemory,postgres` |
 | Operations per result row | `A2A_PERF_REQUESTS` | `2000` |
-| Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4,16,64` |
+| Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4` |
 | Warmup seconds | `A2A_PERF_WARMUP_SECONDS` | `1` |
 | Duration seconds limit | `A2A_PERF_DURATION_SECONDS` | `0` |
 | Report directory | `A2A_PERF_REPORT_DIR` | `perf-artifacts` |

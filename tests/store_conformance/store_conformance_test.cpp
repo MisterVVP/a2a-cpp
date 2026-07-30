@@ -24,6 +24,7 @@
 #include "store_conformance/task_store_conformance.h"
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
+#include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
 #endif
@@ -216,7 +217,6 @@ TEST(StoreConformanceTest, PostgresOptionsDefaultToFourConnections) {
 
 TEST(StoreConformanceTest, PostgresFactoryRejectsZeroPoolSizeBeforeConnecting) {
   constexpr std::string_view kInvalidConnectionString = "postgresql://invalid-host.invalid/a2a";
-  constexpr std::string_view kPoolSizeValidationMessage = "PostgreSQL connection_pool_size must be greater than zero";
   const a2a::server::stores::PostgresStoreFactory factory(
       {.connection_string = std::string(kInvalidConnectionString), .connection_pool_size = 0U});
 
@@ -224,7 +224,7 @@ TEST(StoreConformanceTest, PostgresFactoryRejectsZeroPoolSizeBeforeConnecting) {
 
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_EQ(result.error().message(), kPoolSizeValidationMessage);
+  EXPECT_EQ(result.error().message(), a2a::server::stores::kPostgresConnectionPoolSizeValidationMessage);
 }
 
 TEST(StoreConformanceTest, PostgresBundleSharesConfiguredConnectionPool) {

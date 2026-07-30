@@ -357,10 +357,12 @@ def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ..
     return items
 
 
-def parse_positive_int_csv(value: str) -> tuple[int, ...]:
+def parse_positive_int_csv(value: str, selection_name: str) -> tuple[int, ...]:
     levels = tuple(int(item.strip()) for item in value.split(",") if item.strip())
     if not levels or any(level <= 0 for level in levels):
-        raise ValueError("concurrency levels must be positive integers")
+        raise ValueError(f"{selection_name} must be positive integers")
+    if len(levels) != len(set(levels)):
+        raise ValueError(f"{selection_name} must not contain duplicates")
     return levels
 
 
@@ -390,7 +392,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         raise ValueError("driver timeouts must be positive")
     profile = args.profile
     if args.postgres_pool_sizes is not None:
-        postgres_pool_sizes = parse_positive_int_csv(args.postgres_pool_sizes)
+        postgres_pool_sizes = parse_positive_int_csv(args.postgres_pool_sizes, "PostgreSQL pool sizes")
     elif profile == POSTGRES_TAIL_PROFILE:
         postgres_pool_sizes = POSTGRES_TAIL_POOL_SIZES
     else:
@@ -400,7 +402,11 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         transports=("grpc",) if profile == POSTGRES_TAIL_PROFILE else split_csv(args.transports, TRANSPORTS),
         store_backends=("postgres",) if profile == POSTGRES_TAIL_PROFILE else split_csv(args.store_backends, STORE_BACKENDS),
         requests=DEFAULT_REQUESTS if profile == POSTGRES_TAIL_PROFILE else args.requests,
-        concurrency_levels=POSTGRES_TAIL_CONCURRENCY if profile == POSTGRES_TAIL_PROFILE else parse_positive_int_csv(args.concurrency),
+        concurrency_levels=(
+            POSTGRES_TAIL_CONCURRENCY
+            if profile == POSTGRES_TAIL_PROFILE
+            else parse_positive_int_csv(args.concurrency, "concurrency levels")
+        ),
         warmup_seconds=DEFAULT_WARMUP_SECONDS if profile == POSTGRES_TAIL_PROFILE else args.warmup_seconds,
         duration_seconds=DEFAULT_DURATION_SECONDS if profile == POSTGRES_TAIL_PROFILE else args.duration_seconds,
         report_dir=Path(args.report_dir),
@@ -707,7 +713,11 @@ def log_workload_estimate(config: RunnerConfig) -> None:
             f"estimated_operations={estimated_rows * config.requests}"
         )
         return
-    store_concurrency_rows = len(config.store_backends) * len(config.concurrency_levels)
+    store_pool_count = sum(
+        len(config.postgres_pool_sizes) if store_backend == "postgres" else 1
+        for store_backend in config.store_backends
+    )
+    store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
     in_process_rows = store_concurrency_rows * len(SCENARIOS)
     wire_rows = sum(len(wire_scenarios_for_transport(transport)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows

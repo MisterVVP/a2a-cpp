@@ -53,6 +53,8 @@ void ResetPostgresOperationDiagnosticsForTesting() noexcept;
 [[nodiscard]] PostgresOperationDiagnostics TakePostgresOperationDiagnosticsForTesting() noexcept;
 #endif
 
+constexpr std::string_view kPostgresConnectionPoolSizeValidationMessage =
+    "PostgreSQL connection_pool_size must be greater than zero";
 constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";

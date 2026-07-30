@@ -201,6 +201,43 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual((16, 64), cli_config.postgres_pool_sizes)
         self.assertEqual(150, runner.postgres_tail_expected_rows(cli_config))
 
+    def test_rejects_duplicate_postgres_pool_sizes(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "PostgreSQL pool sizes must not contain duplicates"):
+                runner.parse_args(["--postgres-pool-sizes", "4,4"])
+
+    def test_normal_workload_estimate_counts_postgres_pool_sizes(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args([
+                "--transports", "grpc",
+                "--store-backends", "inmemory,postgres",
+                "--requests", "10",
+                "--concurrency", "1,4",
+                "--postgres-pool-sizes", "4,16,64",
+            ])
+
+        non_postgres_stores = [
+            store_backend for store_backend in config.store_backends
+            if store_backend != "postgres"
+        ]
+        store_pool_count = len(config.postgres_pool_sizes) + len(non_postgres_stores)
+        matrix_entries = store_pool_count * len(config.concurrency_levels)
+        expected_rows = matrix_entries * (
+            len(runner.SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
+        )
+        expected_message = (
+            f"estimated_rows={expected_rows} "
+            f"estimated_operations={expected_rows * config.requests} "
+            "transports=1 stores=2 concurrency_levels=2 requests=10"
+        )
+
+        with mock.patch.object(runner, "log_progress") as log_progress:
+            runner.log_workload_estimate(config)
+
+        log_progress.assert_called_once_with(expected_message)
+
     def test_postgres_tail_aggregates_and_reports(self):
         runner = load_runner_module()
         rows = self.make_postgres_tail_rows(runner)

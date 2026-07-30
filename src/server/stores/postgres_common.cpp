@@ -97,7 +97,7 @@ std::string PushTable(std::string_view schema) { return QualifiedSqlIdentifier(s
 
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
   if (options.connection_pool_size == 0U) {
-    return core::Error::Validation("PostgreSQL connection_pool_size must be greater than zero");
+    return core::Error::Validation(std::string(kPostgresConnectionPoolSizeValidationMessage));
   }
   if (!IsValidSqlIdentifier(options.schema)) {
     return core::Error::Validation("PostgreSQL schema must be a simple SQL identifier");
@@ -172,7 +172,7 @@ Transaction::~Transaction() {
 PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, std::size_t size)
     : connection_string_(std::move(connection_string)), capacity_(size) {
   if (size == 0U) {
-    throw std::invalid_argument("Postgres connection pool size must be greater than zero");
+    throw std::invalid_argument(std::string(kPostgresConnectionPoolSizeValidationMessage));
   }
   connections_.reserve(size);
   for (std::size_t index = 0; index < size; ++index) {
