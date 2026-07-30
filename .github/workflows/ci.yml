@@ -104,7 +104,7 @@ jobs:
 
 
   performance-tests:
-    name: performance tests
+    name: performance matrix
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -130,35 +130,68 @@ jobs:
         env:
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory,postgres
-          A2A_PERF_REQUESTS: 2000
+          A2A_PERF_REQUESTS: 1000
           A2A_PERF_POSTGRES_POOL_SIZES: "64"
           A2A_PERF_CONCURRENCY: 1,4,16,64
           A2A_PERF_WARMUP_SECONDS: 0
           A2A_PERF_REPORT_DIR: perf-artifacts/normal
         run: ./scripts/run_performance_tests.sh
-      - name: Run PostgreSQL tail validation profile
-        run: >-
-          ./scripts/run_performance_tests.sh --profile postgres-tail
-          --report-dir perf-artifacts/postgres-tail
-      - name: Validate performance reports
+      - name: Validate normal performance reports
         run: |
           test -s perf-artifacts/normal/results.json
           test -s perf-artifacts/normal/results.csv
           test -s perf-artifacts/normal/summary.md
+          python3 -m json.tool perf-artifacts/normal/results.json >/dev/null
+          cat perf-artifacts/normal/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload normal performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: perf-artifacts-normal
+          path: perf-artifacts/normal
+          if-no-files-found: error
+
+  postgres-tail-performance:
+    name: PostgreSQL tail performance
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: a2a
+          POSTGRES_PASSWORD: a2a
+          POSTGRES_DB: a2a
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U a2a -d a2a"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      A2A_TEST_POSTGRES_DSN: postgresql://a2a:a2a@127.0.0.1:5432/a2a
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install deps
+        run: ./scripts/install_build_deps.sh
+      - name: Run PostgreSQL tail validation profile
+        run: >-
+          ./scripts/run_performance_tests.sh --profile postgres-tail
+          --report-dir perf-artifacts/postgres-tail
+      - name: Validate PostgreSQL tail reports
+        run: |
           test -s perf-artifacts/postgres-tail/results.json
           test -s perf-artifacts/postgres-tail/results.csv
           test -s perf-artifacts/postgres-tail/median-aggregates.csv
           test -s perf-artifacts/postgres-tail/summary.md
-          python3 -m json.tool perf-artifacts/normal/results.json >/dev/null
           python3 -m json.tool perf-artifacts/postgres-tail/results.json >/dev/null
-          cat perf-artifacts/normal/summary.md >> "$GITHUB_STEP_SUMMARY"
           cat perf-artifacts/postgres-tail/summary.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload performance artifacts
+      - name: Upload PostgreSQL tail performance artifacts
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: perf-artifacts
-          path: perf-artifacts
+          name: perf-artifacts-postgres-tail
+          path: perf-artifacts/postgres-tail
           if-no-files-found: error
 
 

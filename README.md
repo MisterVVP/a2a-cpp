@@ -1,14 +1,54 @@
 # a2a-cpp: C++20 Agent2Agent (A2A) SDK
 
-[![TCK conformance (main)](https://img.shields.io/github/actions/workflow/status/mistervvp/a2a-cpp/tck.yml?branch=main&label=TCK%20conformance%20%28main%29)](https://github.com/mistervvp/a2a-cpp/actions/workflows/tck.yml?query=branch%3Amain+job%3Amandatory-conformance)
+[![CI](https://img.shields.io/github/actions/workflow/status/MisterVVP/a2a-cpp/ci.yml?branch=main&label=CI)](https://github.com/MisterVVP/a2a-cpp/actions/workflows/ci.yml?query=branch%3Amain)
+[![TCK conformance](https://img.shields.io/github/actions/workflow/status/MisterVVP/a2a-cpp/tck.yml?branch=main&label=TCK%20conformance)](https://github.com/MisterVVP/a2a-cpp/actions/workflows/tck.yml?query=branch%3Amain)
+[![Documentation](https://img.shields.io/github/actions/workflow/status/MisterVVP/a2a-cpp/docs.yml?branch=main&label=docs)](https://github.com/MisterVVP/a2a-cpp/actions/workflows/docs.yml?query=branch%3Amain)
+[![License](https://img.shields.io/github/license/MisterVVP/a2a-cpp)](LICENSE)
 
-**a2a-cpp** is a modern C++ SDK for building Agent2Agent protocol clients and servers.
+**a2a-cpp** is a C++20 SDK for building Agent2Agent (A2A) clients and servers.
 
-It supports core A2A workflows including client/server APIs, discovery, REST/JSON-RPC/gRPC transports, streaming, authentication hooks, and CMake/vcpkg build integration.
+It provides Agent Card discovery, task lifecycle operations, streaming, push
+notifications, authentication hooks, and HTTP+JSON, JSON-RPC, and gRPC transports.
 
-## Use With CMake FetchContent
+## Highlights
 
-For application projects, the simplest integration path is to fetch `a2a-cpp` from GitHub and link the exported CMake targets:
+- Client APIs for messaging, task management, streaming, subscriptions, and push
+  notification configuration.
+- Server-side executor and transport abstractions for HTTP+JSON, JSON-RPC, and gRPC.
+- Agent Card discovery, preferred-interface resolution, and extended-card support.
+- Cancellable streaming with built-in SSE support for HTTP transports.
+- Authentication metadata, interceptors, and required-extension validation.
+- In-memory stores and optional PostgreSQL-backed stores.
+- Installable CMake targets under the `a2a::` namespace.
+- Continuous Linux, macOS, Windows, interoperability, benchmark, and
+  [A2A TCK](https://github.com/MisterVVP/a2a-cpp/actions/workflows/tck.yml) validation.
+
+## Requirements
+
+- CMake 3.25 or newer.
+- A C++20 compiler: GCC, Clang, AppleClang, or Visual Studio 2022.
+- Protobuf and gRPC C++.
+- libcurl for built-in HTTP+JSON, JSON-RPC, and SSE clients.
+- PostgreSQL client libraries only when PostgreSQL stores are enabled.
+
+See the platform-specific [installation guide](book/src/getting-started/installation.md).
+
+## Quick start
+
+On Debian, Ubuntu, or Windows Git Bash:
+
+```bash
+git clone https://github.com/MisterVVP/a2a-cpp.git
+cd a2a-cpp
+./scripts/install_build_deps.sh
+./scripts/run_examples.sh build-example hello_agent
+```
+
+`hello_agent` runs a deterministic in-process client/server flow. The
+[quickstart](book/src/getting-started/quickstart.md) covers macOS, Windows,
+transport, streaming, push-notification, and authentication examples.
+
+## Use with CMake FetchContent
 
 ```cmake
 include(FetchContent)
@@ -27,11 +67,17 @@ FetchContent_MakeAvailable(a2a_cpp)
 target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-Pin `GIT_TAG` to a release tag or commit for reproducible builds. See [`examples/fetch_content_consumer/`](examples/fetch_content_consumer/) for a minimal consumer project.
+Pin `GIT_TAG` to a [release](https://github.com/MisterVVP/a2a-cpp/releases) or
+reviewed commit for reproducible builds. See the complete
+[`FetchContent` consumer](examples/fetch_content_consumer/).
 
-## Use Installed CMake Package
+## Use an installed CMake package
 
-When `a2a-cpp` is installed by CMake or a package manager, downstream projects can consume it with `find_package`:
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --parallel
+cmake --install build --prefix /tmp/a2a-cpp-install
+```
 
 ```cmake
 find_package(a2a_cpp CONFIG REQUIRED)
@@ -39,73 +85,48 @@ find_package(a2a_cpp CONFIG REQUIRED)
 target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-## Documentation
-
-- Documentation website (GitHub Pages): `https://mistervvp.github.io/a2a-cpp/`
-- Documentation home source: [`book/src/README.md`](book/src/README.md)
-- Project docs and engineering notes: [`docs/`](docs/)
-- Build and validation guide: [`docs/build.md`](docs/build.md)
-
-## Repository layout
-
-- `include/` public headers
-- `src/` library implementation
-- `tests/` unit and integration tests
-- `proto/` protocol definitions
-- `scripts/` local tooling and CI helpers
-- `benchmarks/` optional Google Benchmark performance suite
-- `tools/bench_runner/` Go benchmark threshold/report utility
-- `examples/` curated consumer apps for FetchContent and installed-package CMake flows
-
-## Performance benchmarks
-
-The SDK includes C++ microbenchmarks for core hot paths. Benchmarks are run in CI with threshold checks to catch performance regressions.
-
-Google Benchmark measures SDK internals directly, including proto/JSON serialization, task store operations, task lifecycle logic, transport routing, server transport handling, UUIDv7 task ID generation, Agent Card generation, and HTTP adapter parsing/serialization. A Go-based benchmark runner parses Google Benchmark JSON output, compares fixed thresholds from `benchmarks/thresholds.json`, and generates CI summaries.
-
-Benchmarks are optional and should be run in Release mode:
-
-```bash
-cmake -S . -B build-bench \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DA2A_BUILD_BENCHMARKS=ON
-cmake --build build-bench --target a2a_benchmarks -j"$(nproc)"
-./build-bench/benchmarks/a2a_benchmarks
-```
-
-To run the CI-style threshold check locally:
-
-```bash
-./build-bench/benchmarks/a2a_benchmarks \
-  --benchmark_out=benchmark-results.json \
-  --benchmark_out_format=json \
-  --benchmark_repetitions=5 \
-  --benchmark_report_aggregates_only=true
-
-go run ./tools/bench_runner/cmd/a2a-bench-runner \
-  --results benchmark-results.json \
-  --thresholds benchmarks/thresholds.json \
-  --summary benchmark-summary.md
-```
-
-See [`benchmarks/README.md`](benchmarks/README.md) for threshold strategy, Release-mode guidance, and instructions for adding benchmarks.
+See the [CMake integration](book/src/build/cmake.md) and
+[vcpkg](book/src/build/vcpkg.md) guides for additional workflows.
 
 ## Examples
 
-The [`examples/`](examples/) directory contains curated SDK consumer apps. Build `hello_agent` with `FetchContent`:
+The [`examples/`](examples/) directory includes client/server, transport,
+streaming, push-notification, and authentication examples.
 
 ```bash
-cmake -S examples/fetch_content_consumer -B build-example -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-example --parallel
-./build-example/a2a_example
+./scripts/run_examples.sh build-example   hello_agent streaming_client streaming_server push_notifications
 ```
 
-Or build the same app source against an installed package with `find_package(a2a_cpp CONFIG REQUIRED)`:
+## Documentation
+
+- [Documentation website](https://mistervvp.github.io/a2a-cpp/)
+- [Installation and quickstart](book/src/getting-started/installation.md)
+- [Client and server APIs](book/src/client/overview.md)
+- [Transports and streaming](book/src/transports/rest.md)
+- [Authentication](book/src/auth/overview.md)
+- [Storage](docs/storage.md)
+- [Performance testing](docs/performance-testing.md)
+- [API reference](book/src/api-reference.md)
+- [Releases and versioning](book/src/releases.md)
+
+## Development
 
 ```bash
-cmake -S examples/installed_package_consumer -B build-installed-example \
-  -DCMAKE_PREFIX_PATH=<install-prefix> \
-  -DA2A_EXAMPLE_APP=hello_agent
-cmake --build build-installed-example --parallel
-./build-installed-example/a2a_example
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
+
+Contributors should read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+[`AGENTS.md`](AGENTS.md), then run:
+
+```bash
+./scripts/verify_changes.sh
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for microbenchmarks and
+[`docs/performance-testing.md`](docs/performance-testing.md) for workload tests.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
