@@ -29,7 +29,7 @@ matching environment variables.
 | Transports (`grpc`, `jsonrpc`, `http_json`, or `all`) | `A2A_PERF_TRANSPORTS` | `grpc,jsonrpc,http_json` |
 | Store backends (`inmemory`, `postgres`, or `all`) | `A2A_PERF_STORE_BACKENDS` | `inmemory,postgres` |
 | Operations per result row | `A2A_PERF_REQUESTS` | `2000` |
-| Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4` |
+| Concurrency levels | `A2A_PERF_CONCURRENCY` | `1,4,16,64` |
 | Warmup seconds | `A2A_PERF_WARMUP_SECONDS` | `1` |
 | Duration seconds limit | `A2A_PERF_DURATION_SECONDS` | `0` |
 | Report directory | `A2A_PERF_REPORT_DIR` | `perf-artifacts` |
@@ -125,9 +125,9 @@ comma-separated sizes create a comparison matrix without source changes. The
 
 The performance job remains report-only and uses a smoke-sized CI matrix covering
 three transports, two stores, streaming, subscription, push CRUD, and callback
-delivery with concurrency levels 1 and 4. Normal PostgreSQL rows run with a
-64-connection pool. The focused PostgreSQL tail profile compares pool sizes
-`4,16,64` at concurrency levels `4,16,64`.
+delivery with concurrency levels 1, 4, 16, and 64. Normal PostgreSQL rows run
+with a 64-connection pool. The focused PostgreSQL tail profile compares pool
+sizes `4,16,64` at concurrency levels `4,16,64`.
 The in-process SDK/service/store rows do not exercise a transport, so the runner
 executes them once per store/concurrency pair instead of repeating identical
 in-process work under every selected transport. It uploads `perf-artifacts`,
