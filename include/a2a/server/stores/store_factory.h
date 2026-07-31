@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 
@@ -13,6 +14,8 @@
 
 namespace a2a::server::stores {
 
+constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4U;
+
 enum class StoreBackendKind {
   kInMemory,
   kPostgres,
@@ -22,6 +25,7 @@ struct PostgresStoreOptions final {
   std::string connection_string;
   std::string schema = "public";
   bool auto_create_schema = true;
+  std::size_t connection_pool_size = kDefaultPostgresConnectionPoolSize;
 };
 
 struct StoreBundle final {

@@ -96,6 +96,9 @@ std::string TaskTable(std::string_view schema) { return QualifiedSqlIdentifier(s
 std::string PushTable(std::string_view schema) { return QualifiedSqlIdentifier(schema, kPushTableName); }
 
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
+  if (options.connection_pool_size == 0U) {
+    return core::Error::Validation(std::string(kPostgresConnectionPoolSizeValidationMessage));
+  }
   if (!IsValidSqlIdentifier(options.schema)) {
     return core::Error::Validation("PostgreSQL schema must be a simple SQL identifier");
   }
@@ -167,9 +170,9 @@ Transaction::~Transaction() {
 }
 
 PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, std::size_t size)
-    : connection_string_(std::move(connection_string)) {
+    : connection_string_(std::move(connection_string)), capacity_(size) {
   if (size == 0U) {
-    throw std::invalid_argument("Postgres connection pool size must be greater than zero");
+    throw std::invalid_argument(std::string(kPostgresConnectionPoolSizeValidationMessage));
   }
   connections_.reserve(size);
   for (std::size_t index = 0; index < size; ++index) {
@@ -223,6 +226,8 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
   }
   return Lease(this, std::move(connection));
 }
+
+std::size_t PostgresConnectionPool::capacity() const noexcept { return capacity_; }
 
 core::Result<PgConnection> PostgresConnectionPool::OpenConnection() const {
   PgConnection connection(PQconnectdb(connection_string_.c_str()));
@@ -313,7 +318,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
 
 std::shared_ptr<PostgresConnectionPool> MakePool(const PostgresStoreOptions& options) {
   ValidatePostgresStoreOptionsOrThrow(options);
-  return std::make_shared<PostgresConnectionPool>(options.connection_string);
+  return std::make_shared<PostgresConnectionPool>(options.connection_string, options.connection_pool_size);
 }
 
 PostgresConnectionPool::Lease AcquireOrThrow(PostgresConnectionPool& pool) {

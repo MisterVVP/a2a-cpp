@@ -105,7 +105,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             summary = (report_dir / "summary.md").read_text(encoding="utf-8")
             self.assertIn("A2A performance test summary", summary)
             self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
-            self.assertIn("| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
+            self.assertIn("| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
 
     def test_wire_scenarios_include_streaming_for_http_transports(self):
         runner = load_runner_module()
@@ -177,22 +177,72 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         self.assertEqual("a2a_perf_http_json_4_51081", runner.postgres_schema_name("http_json", 4, 51081))
 
-    def test_postgres_tail_profile_has_fixed_validation_matrix(self):
+    def test_postgres_tail_profile_has_larger_default_validation_matrix(self):
         runner = load_runner_module()
-        config = runner.parse_args(["--profile", "postgres-tail"])
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args(["--profile", "postgres-tail"])
         self.assertEqual(("grpc",), config.transports)
         self.assertEqual(("postgres",), config.store_backends)
         self.assertEqual(2_000, config.requests)
-        self.assertEqual((1, 4, 8), config.concurrency_levels)
+        self.assertEqual((4, 16, 64), config.concurrency_levels)
+        self.assertEqual((4, 16, 64), config.postgres_pool_sizes)
         self.assertEqual(5, config.repetitions)
         self.assertEqual(1.0, config.warmup_seconds)
         self.assertEqual(runner.POSTGRES_TAIL_SCENARIOS, config.scenarios)
+
+    def test_postgres_tail_profile_allows_pool_size_override(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {"A2A_PERF_POSTGRES_POOL_SIZES": "8,32"}, clear=True):
+            config = runner.parse_args(["--profile", "postgres-tail"])
+            cli_config = runner.parse_args([
+                "--profile", "postgres-tail", "--postgres-pool-sizes", "16,64",
+            ])
+        self.assertEqual((8, 32), config.postgres_pool_sizes)
+        self.assertEqual((16, 64), cli_config.postgres_pool_sizes)
+        self.assertEqual(150, runner.postgres_tail_expected_rows(cli_config))
+
+    def test_rejects_duplicate_postgres_pool_sizes(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "PostgreSQL pool sizes must not contain duplicates"):
+                runner.parse_args(["--postgres-pool-sizes", "4,4"])
+
+    def test_normal_workload_estimate_counts_postgres_pool_sizes(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args([
+                "--transports", "grpc",
+                "--store-backends", "inmemory,postgres",
+                "--requests", "10",
+                "--concurrency", "1,4",
+                "--postgres-pool-sizes", "4,16,64",
+            ])
+
+        non_postgres_stores = [
+            store_backend for store_backend in config.store_backends
+            if store_backend != "postgres"
+        ]
+        store_pool_count = len(config.postgres_pool_sizes) + len(non_postgres_stores)
+        matrix_entries = store_pool_count * len(config.concurrency_levels)
+        expected_rows = matrix_entries * (
+            len(runner.SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
+        )
+        expected_message = (
+            f"estimated_rows={expected_rows} "
+            f"estimated_operations={expected_rows * config.requests} "
+            "transports=1 stores=2 concurrency_levels=2 requests=10"
+        )
+
+        with mock.patch.object(runner, "log_progress") as log_progress:
+            runner.log_workload_estimate(config)
+
+        log_progress.assert_called_once_with(expected_message)
 
     def test_postgres_tail_aggregates_and_reports(self):
         runner = load_runner_module()
         rows = self.make_postgres_tail_rows(runner)
         aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
-        self.assertEqual(15, len(aggregates))
+        self.assertEqual(45, len(aggregates))
         self.assertEqual(5, aggregates[0]["repetitions"])
         self.assertEqual(103.0, aggregates[0]["throughput_ops_per_sec"])
         self.assertEqual(3.0, aggregates[0]["p95_ms"])
@@ -205,8 +255,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             payload = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
             summary = (Path(directory) / "summary.md").read_text(encoding="utf-8")
             aggregate_csv = (Path(directory) / "median-aggregates.csv").read_text(encoding="utf-8")
-        self.assertEqual(75, len(payload["results"]))
-        self.assertEqual(15, len(payload["median_aggregates"]))
+        self.assertEqual(225, len(payload["results"]))
+        self.assertEqual(45, len(payload["median_aggregates"]))
         self.assertIn("Median PostgreSQL phases", summary)
         self.assertIn("Query-plan review", summary)
         self.assertIn("connection_acquire_wait_p99_ms", aggregate_csv)
@@ -240,24 +290,26 @@ class PerformanceRunnerTest(unittest.TestCase):
     @staticmethod
     def make_postgres_tail_rows(runner):
         rows = []
-        for concurrency in runner.POSTGRES_TAIL_CONCURRENCY:
-            for scenario in runner.POSTGRES_TAIL_SCENARIOS:
-                for repetition in range(1, runner.POSTGRES_TAIL_REPETITIONS + 1):
-                    phases = {
-                        phase: {"p95": float(repetition), "p99": float(repetition + 1),
-                                "max": float(repetition + 2)}
-                        for phase in runner.POSTGRES_DIAGNOSTIC_PHASES
-                    }
-                    rows.append({
-                        "repetition": repetition, "scenario": scenario, "transport": "grpc",
-                        "store_backend": "postgres", "driver_type": "cpp_sdk_in_process",
-                        "transport_path": "in_process", "concurrency": concurrency,
-                        "operations": runner.DEFAULT_REQUESTS, "success": runner.DEFAULT_REQUESTS,
-                        "errors": 0, "throughput_ops_per_sec": float(100 + repetition),
-                        "latency_ms": {"p50": 1.0, "p90": 2.0, "p95": float(repetition),
-                                       "p99": float(repetition + 1), "max": float(repetition + 2)},
-                        "postgres_phase_latency_ms": phases,
-                    })
+        for pool_size in runner.POSTGRES_TAIL_POOL_SIZES:
+            for concurrency in runner.POSTGRES_TAIL_CONCURRENCY:
+                for scenario in runner.POSTGRES_TAIL_SCENARIOS:
+                    for repetition in range(1, runner.POSTGRES_TAIL_REPETITIONS + 1):
+                        phases = {
+                            phase: {"p95": float(repetition), "p99": float(repetition + 1),
+                                    "max": float(repetition + 2)}
+                            for phase in runner.POSTGRES_DIAGNOSTIC_PHASES
+                        }
+                        rows.append({
+                            "repetition": repetition, "scenario": scenario, "transport": "grpc",
+                            "store_backend": "postgres", "driver_type": "cpp_sdk_in_process",
+                            "transport_path": "in_process", "concurrency": concurrency,
+                            "postgres_pool_size": pool_size,
+                            "operations": runner.DEFAULT_REQUESTS, "success": runner.DEFAULT_REQUESTS,
+                            "errors": 0, "throughput_ops_per_sec": float(100 + repetition),
+                            "latency_ms": {"p50": 1.0, "p90": 2.0, "p95": float(repetition),
+                                           "p99": float(repetition + 1), "max": float(repetition + 2)},
+                            "postgres_phase_latency_ms": phases,
+                        })
         return rows
 
 

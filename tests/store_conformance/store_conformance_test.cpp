@@ -24,6 +24,7 @@
 #include "store_conformance/task_store_conformance.h"
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
+#include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
 #endif
@@ -205,6 +206,47 @@ TEST(StoreConformanceTest, PostgresConnectionPoolRejectsZeroSizeBeforeConnecting
 
   EXPECT_THROW((void)a2a::server::stores::PostgresConnectionPool(std::string(kInvalidConnectionString), 0),
                std::invalid_argument);
+}
+
+TEST(StoreConformanceTest, PostgresOptionsDefaultToFourConnections) {
+  const a2a::server::stores::PostgresStoreOptions options;
+
+  EXPECT_EQ(options.connection_pool_size, a2a::server::stores::kDefaultPostgresConnectionPoolSize);
+  EXPECT_EQ(options.connection_pool_size, 4U);
+}
+
+TEST(StoreConformanceTest, PostgresFactoryRejectsZeroPoolSizeBeforeConnecting) {
+  constexpr std::string_view kInvalidConnectionString = "postgresql://invalid-host.invalid/a2a";
+  const a2a::server::stores::PostgresStoreFactory factory(
+      {.connection_string = std::string(kInvalidConnectionString), .connection_pool_size = 0U});
+
+  const auto result = factory.CreateStoreBundle();
+
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(result.error().message(), a2a::server::stores::kPostgresConnectionPoolSizeValidationMessage);
+}
+
+TEST(StoreConformanceTest, PostgresBundleSharesConfiguredConnectionPool) {
+  constexpr std::size_t kCustomPoolSize = 2U;
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const a2a::server::stores::PostgresStoreFactory factory({.connection_string = dsn_value,
+                                                           .schema = MakePostgresTestSchema("shared_pool"),
+                                                           .connection_pool_size = kCustomPoolSize});
+
+  auto bundle = factory.CreateStoreBundle();
+
+  ASSERT_TRUE(bundle.ok());
+  const auto* task_store = dynamic_cast<a2a::server::stores::PostgresTaskStore*>(bundle.value().task_store.get());
+  const auto* push_store =
+      dynamic_cast<a2a::server::stores::PostgresPushNotificationStore*>(bundle.value().push_store.get());
+  ASSERT_NE(task_store, nullptr);
+  ASSERT_NE(push_store, nullptr);
+  ASSERT_EQ(task_store->connection_pool_for_testing(), push_store->connection_pool_for_testing());
+  EXPECT_EQ(task_store->connection_pool_for_testing()->capacity(), kCustomPoolSize);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStore) {

@@ -33,6 +33,9 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
                                                                   const lf::a2a::v1::Message& message,
                                                                   HistoryAppendPolicy policy) override;
   [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
+#endif
 
  private:
   std::shared_ptr<PostgresConnectionPool> pool_;

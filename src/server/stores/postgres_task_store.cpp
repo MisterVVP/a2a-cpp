@@ -167,6 +167,10 @@ PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> poo
 
 PostgresTaskStore::~PostgresTaskStore() = default;
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+const PostgresConnectionPool* PostgresTaskStore::connection_pool_for_testing() const noexcept { return pool_.get(); }
+#endif
+
 core::Result<void> PostgresTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& task) {
   if (task.id().empty()) {
     return core::Error::Validation(std::string(kTaskIdFieldRequiredMessage));

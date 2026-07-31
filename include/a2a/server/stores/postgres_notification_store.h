@@ -39,6 +39,9 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(
       std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const override;
   [[nodiscard]] core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
+#endif
 
  private:
   std::shared_ptr<PostgresConnectionPool> pool_;

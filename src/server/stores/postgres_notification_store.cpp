@@ -95,6 +95,12 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
 
 PostgresPushNotificationStore::~PostgresPushNotificationStore() = default;
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+const PostgresConnectionPool* PostgresPushNotificationStore::connection_pool_for_testing() const noexcept {
+  return pool_.get();
+}
+#endif
+
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {
   const auto validation = ValidatePushConfig(config);

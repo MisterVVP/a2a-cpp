@@ -56,6 +56,7 @@ constexpr std::array<std::string_view, kPostgresDiagnosticPhaseCount> kPostgresD
     "push_config_list",        "transaction_begin", "transaction_commit"};
 constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
 constexpr char kPostgresSchemaEnv[] = "A2A_PERF_POSTGRES_SCHEMA";
+constexpr char kPostgresPoolSizeEnv[] = "A2A_PERF_POSTGRES_POOL_SIZE";
 constexpr std::string_view kPerfSchemaPrefix = "a2a_perf_";
 constexpr std::string_view kMessageText = "hello";
 constexpr std::string_view kPushCallbackUrl = "http://127.0.0.1/fake-push-callback";

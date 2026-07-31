@@ -39,6 +39,7 @@ matching environment variables.
 | In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
+| PostgreSQL pool sizes | `A2A_PERF_POSTGRES_POOL_SIZES` | `4` |
 
 ## Workload modes
 
@@ -112,21 +113,34 @@ the performance job. For wire-level PostgreSQL rows, the runner maps
 matrix-scoped schema named `a2a_perf_<transport>_<concurrency>_<port>` so rows
 do not share the default `public` schema or accumulate data across matrix
 entries.
+The runner passes each selected size to both the in-process driver and wire SUT.
+Every PostgreSQL result row records `postgres_pool_size` in JSON and CSV, and
+the Markdown detail and diagnostic tables include a pool-size column. Multiple
+comma-separated sizes create a comparison matrix without source changes. The
+`postgres-tail` profile defaults to pool sizes `4,16,64` at concurrency levels
+`4,16,64`; an explicit `--postgres-pool-sizes` value or
+`A2A_PERF_POSTGRES_POOL_SIZES` overrides that profile default.
 
 ## CI behavior
 
-The performance job remains report-only and uses a smoke-sized CI matrix covering three transports, two stores, streaming, subscription, push CRUD, and callback delivery with concurrency levels 1 and 4.
+CI runs the broad performance matrix and focused PostgreSQL tail profile as
+independent jobs so they execute in parallel. The normal job uses 1,000 requests
+per row across three transports, two stores, and concurrency levels 1, 4, 16,
+and 64; its PostgreSQL rows use a 64-connection pool. The tail job retains 2,000
+requests, five repetitions, pool sizes `4,16,64`, and concurrency levels
+`4,16,64`.
+
 The in-process SDK/service/store rows do not exercise a transport, so the runner
 executes them once per store/concurrency pair instead of repeating identical
-in-process work under every selected transport. It uploads `perf-artifacts`,
-appends `summary.md` to the GitHub Actions step
-summary, and fails only on crashes, functional operation errors, malformed
-output, missing artifacts, or driver timeouts. It does not enforce latency or
-throughput thresholds. The runner prints a workload estimate at startup and
-flushes `[perf] start ...` / `[perf] done ...` progress lines for every
-in-process and wire matrix row so GitHub Actions logs show forward progress.
-Both driver subprocesses have explicit timeouts controlled by
-`A2A_PERF_DRIVER_TIMEOUT_SECONDS` and
+in-process work under every selected transport. The jobs upload
+`perf-artifacts-normal` and `perf-artifacts-postgres-tail`, append their own
+summaries to the GitHub Actions step summary, and fail only on crashes,
+functional operation errors, malformed output, missing artifacts, or driver
+timeouts. They do not enforce latency or throughput thresholds. The runner
+prints a workload estimate at startup and flushes `[perf] start ...` /
+`[perf] done ...` progress lines for every in-process and wire matrix row so
+GitHub Actions logs show forward progress. Both driver subprocesses have
+explicit timeouts controlled by `A2A_PERF_DRIVER_TIMEOUT_SECONDS` and
 `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS`; on a wire timeout, recent `tck_sut` logs
 are included in the failure message when available.
 
@@ -136,6 +150,7 @@ are included in the failure message when available.
 A2A_PERF_TRANSPORTS=grpc,jsonrpc,http_json \
 A2A_PERF_STORE_BACKENDS=inmemory,postgres \
 A2A_PERF_REQUESTS=2000 \
+A2A_PERF_POSTGRES_POOL_SIZES=4,16,64 \
 A2A_PERF_CONCURRENCY=1,4,16,64 \
 A2A_PERF_WARMUP_SECONDS=5 \
 A2A_PERF_REPORT_DIR=perf-artifacts \
@@ -162,8 +177,11 @@ Endpoint layout is the same as the TCK flow:
 * gRPC: `<host>:<port + 1>`
 
 The SUT supports `A2A_TCK_STORE_BACKEND=inmemory|postgres`,
-`A2A_TCK_POSTGRES_DSN`, `A2A_TCK_POSTGRES_SCHEMA`, and the existing extended
-agent-card mode environment variable. Run it manually with:
+`A2A_TCK_POSTGRES_DSN`, `A2A_TCK_POSTGRES_SCHEMA`,
+`A2A_TCK_POSTGRES_POOL_SIZE` (default `4`), and the existing extended
+agent-card mode environment variable. The TCK conformance workflow explicitly
+starts the PostgreSQL-backed SUT with a pool size of `64`, while the SDK-facing
+default remains `4` for compatibility. Run it manually with:
 
 ```bash
 cmake --build build-tck --target tck_sut

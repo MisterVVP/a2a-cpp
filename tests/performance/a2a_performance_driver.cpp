@@ -5,6 +5,7 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -215,7 +216,17 @@ class ScenarioHarness final {
       std::cerr << kPostgresDsnEnv << " must be set for postgres performance scenarios\n";
       return false;
     }
-    a2a::server::stores::PostgresStoreFactory factory({.connection_string = dsn, .schema = MakePostgresSchema()});
+    std::size_t pool_size = a2a::server::stores::kDefaultPostgresConnectionPoolSize;
+    if (const char* value = std::getenv(kPostgresPoolSizeEnv); value != nullptr) {
+      const std::string_view text(value);
+      const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), pool_size);
+      if (error != std::errc{} || end != text.data() + text.size() || pool_size == 0U) {
+        std::cerr << kPostgresPoolSizeEnv << " must be a positive integer\n";
+        return false;
+      }
+    }
+    a2a::server::stores::PostgresStoreFactory factory(
+        {.connection_string = dsn, .schema = MakePostgresSchema(), .connection_pool_size = pool_size});
     auto bundle = factory.CreateStoreBundle();
     if (!bundle.ok()) {
       std::cerr << "failed to create postgres performance stores: " << bundle.error().message() << '\n';
