@@ -511,6 +511,14 @@ def transport_label(result: dict[str, object]) -> str:
     )
 
 
+def append_collapsible_start(lines: list[str], summary: str) -> None:
+    lines.extend(["", "<details>", f"<summary>{summary}</summary>"])
+
+
+def append_collapsible_end(lines: list[str]) -> None:
+    lines.extend(["", "</details>"])
+
+
 def result_groups(results: list[dict[str, object]]) -> list[tuple[tuple[str, str, str, int | None], list[dict[str, object]]]]:
     groups: dict[tuple[str, str, str, int | None], list[dict[str, object]]] = {}
     for result in results:
@@ -551,7 +559,9 @@ def append_grouped_result_sections(lines: list[str], results: list[dict[str, obj
         if store == "postgres" and pool_size is not None:
             title += f" — pool {pool_size}"
         lines.extend(["", f"## {title}"])
+        append_collapsible_start(lines, f"Show {title}")
         append_pivot_table(lines, selected)
+        append_collapsible_end(lines)
 
 
 def safe_ratio(high: float, low: float) -> float | None:
@@ -600,7 +610,9 @@ def format_ratio(value: object) -> str:
 
 def append_cross_backend_markdown(lines: list[str], signals: list[dict[str, object]]) -> None:
     lines.extend(["", "## Cross-backend scaling signals", "",
-                  "Relative scaling between the lowest and highest shared concurrency; this is diagnostic, not a pass/fail verdict.", "",
+                  "Relative scaling between the lowest and highest shared concurrency; this is diagnostic, not a pass/fail verdict."])
+    append_collapsible_start(lines, "Show cross-backend scaling signals")
+    lines.extend(["",
                   "| Scenario | Path | Transport | PostgreSQL pool | Concurrency range | In-memory p95 growth | PostgreSQL p95 growth | In-memory throughput scaling | PostgreSQL throughput scaling |",
                   "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |"])
     if not signals:
@@ -615,6 +627,7 @@ def append_cross_backend_markdown(lines: list[str], signals: list[dict[str, obje
             f"{format_ratio(row['postgres_p95_growth'])} | {format_ratio(row['memory_throughput_scaling'])} | "
             f"{format_ratio(row['postgres_throughput_scaling'])} |"
         )
+    append_collapsible_end(lines)
 
 
 def append_detailed_matrix(lines: list[str], results: list[dict[str, object]]) -> None:
@@ -670,6 +683,9 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
         lines.extend([
             "",
             "## PostgreSQL phase diagnostics",
+        ])
+        append_collapsible_start(lines, "Show PostgreSQL phase diagnostics")
+        lines.extend([
             "",
             "| Scenario | Transport | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms | Calls | Calls/op |",
             "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
@@ -689,6 +705,7 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
                     f"{call_count} | "
                     f"{float(result.get('postgres_phase_calls_per_operation', {}).get(phase, 0)):.4f} |"
                 )
+        append_collapsible_end(lines)
     if aggregates is not None:
         append_aggregate_markdown(lines, aggregates)
     if query_plans is not None:
@@ -782,7 +799,9 @@ def write_aggregate_csv(aggregates: list[dict[str, object]], csv_path: Path) -> 
 
 
 def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, object]]) -> None:
-    lines.extend(["", "## Median aggregates", "",
+    lines.extend(["", "## Median aggregates"])
+    append_collapsible_start(lines, "Show median aggregates")
+    lines.extend(["",
                   "| Scenario | Concurrency | Pool size | Repetitions | Ops/sec | p95 ms | p99 ms | Max ms |",
                   "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for row in aggregates:
@@ -791,7 +810,10 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
             f"{float(row['throughput_ops_per_sec']):.2f} | {float(row['p95_ms']):.4f} | "
             f"{float(row['p99_ms']):.4f} | {float(row['max_ms']):.4f} |"
         )
-    lines.extend(["", "## Median PostgreSQL phases", "",
+    append_collapsible_end(lines)
+    lines.extend(["", "## Median PostgreSQL phases"])
+    append_collapsible_start(lines, "Show median PostgreSQL phases")
+    lines.extend(["",
                   "| Scenario | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms | Calls | Calls/op |",
                   "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |"])
     for row in aggregates:
@@ -805,6 +827,7 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
                 f"{float(row['postgres_phase_call_count'][phase]):.1f} | "
                 f"{float(row['postgres_phase_calls_per_operation'][phase]):.4f} |"
             )
+    append_collapsible_end(lines)
 
 
 def explain_postgres_queries(dsn: str, schema: str) -> str:

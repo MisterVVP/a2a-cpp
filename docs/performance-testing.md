@@ -34,7 +34,9 @@ store/path/transport/pool coordinate scales; columns are generated from the
 levels actually present, including single-level runs. In-process rows exercise
 SDK service and store code without a transport, so Markdown renders their
 transport as `—` rather than attributing them to the transport selected to
-launch the driver.
+launch the driver. These coordinate tables are collapsed by default so the
+execution summary remains easy to scan; expand the named section to inspect its
+scaling results.
 
 The **Cross-backend scaling signals** table uses only scenario, path, transport,
 and concurrency coordinates present in both stores, with each PostgreSQL pool
@@ -49,6 +51,8 @@ The detailed matrix remains available in a collapsible section. Its
 profile, such as `postgres-tail`. `results.csv` and `results.json` retain every
 raw row and field and are the authoritative outputs for further analysis; the
 Markdown restructuring does not transform those measurements.
+The cross-backend signals, PostgreSQL diagnostics, and `postgres-tail` median
+tables are also collapsible because they can contain many rows.
 
 If `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_TCK_SUT` are not set, the runner configures and builds the needed binaries in `build/performance`. Set `A2A_PERF_BUILD_DIR` to reuse another CMake build tree.
 

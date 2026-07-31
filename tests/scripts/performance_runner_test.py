@@ -126,6 +126,9 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("## In-process results — PostgreSQL — pool 4", summary)
         self.assertIn("## In-process results — PostgreSQL — pool 16", summary)
         self.assertIn("## Wire results — In-memory — HTTP+JSON", summary)
+        self.assertIn("<summary>Show In-process results — In-memory</summary>", summary)
+        self.assertIn("<summary>Show Wire results — PostgreSQL — gRPC — pool 4</summary>", summary)
+        self.assertIn("<summary>Show cross-backend scaling signals</summary>", summary)
         self.assertIn("| Scenario | c2 ops/s | c2 p95 ms | c8 ops/s | c8 p95 ms |", summary)
         self.assertIn("| scenario | In-process | — | 4 | c2–c8 | 4.00× | 4.00× | 4.00× | 4.00× |", summary)
         self.assertNotIn("| in_process | grpc |", summary)
@@ -156,6 +159,16 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner.append_detailed_matrix(lines, [row])
         self.assertIn("Repetition", "\n".join(lines))
         self.assertIn("| — | In-memory |", "\n".join(lines))
+
+    def test_postgres_tail_large_tables_are_collapsible(self):
+        runner = load_runner_module()
+        rows = self.make_postgres_tail_rows(runner)
+        aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"}}
+        summary = runner.render_markdown_summary(rows, metadata, aggregates)
+        self.assertIn("<summary>Show PostgreSQL phase diagnostics</summary>", summary)
+        self.assertIn("<summary>Show median aggregates</summary>", summary)
+        self.assertIn("<summary>Show median PostgreSQL phases</summary>", summary)
 
     @staticmethod
     def make_result(store, pool, path, transport, concurrency, throughput, p95):
