@@ -27,9 +27,13 @@ void FailNextPostgresAcquireForTesting(core::Error error);
 
 enum class PostgresDiagnosticPhase : std::size_t {
   kConnectionAcquireWait,
+  kTaskGet,
   kTaskUpsert,
   kPushConfigUpsert,
-  kPushConfigList,
+  kPushConfigGet,
+  kPushConfigDelete,
+  kPushConfigListCount,
+  kPushConfigListSelect,
   kTransactionBegin,
   kTransactionCommit,
   kCount,
@@ -37,6 +41,7 @@ enum class PostgresDiagnosticPhase : std::size_t {
 
 struct PostgresOperationDiagnostics final {
   std::array<double, static_cast<std::size_t>(PostgresDiagnosticPhase::kCount)> elapsed_ms{};
+  std::array<std::size_t, static_cast<std::size_t>(PostgresDiagnosticPhase::kCount)> call_count{};
 };
 
 class PostgresDiagnosticTimerForTesting final {

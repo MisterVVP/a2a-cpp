@@ -26,9 +26,6 @@ namespace {
 
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
-#ifdef A2A_POSTGRES_STORE_TESTING
-  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskUpsert);
-#endif
   const std::string payload = task.SerializeAsString();
   const bool has_status_timestamp = task.status().has_timestamp();
   const std::string has_timestamp = has_status_timestamp ? "true" : "false";
@@ -49,8 +46,16 @@ namespace {
                                                                      payload.data()};
   const std::array<int, kTaskUpsertParameterCount> lengths = {0, 0, 0, 0, 0, 0, static_cast<int>(payload.size())};
   const std::array<int, kTaskUpsertParameterCount> formats = {0, 0, 0, 0, 0, 0, 1};
-  PgResult result(PQexecParams(connection, sql.c_str(), kTaskUpsertParameterCount, nullptr, values.data(),
-                               lengths.data(), formats.data(), 0));
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskUpsert);
+#endif
+    result.reset(PQexecParams(connection, sql.c_str(), kTaskUpsertParameterCount, nullptr, values.data(),
+                              lengths.data(), formats.data(), 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   return CheckCommand(connection, result.get(), "upsert postgres task");
 }
 
@@ -193,7 +198,15 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Get(std::string_view id) cons
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskGet);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres task");
   if (!checked.ok()) {
     return checked.error();

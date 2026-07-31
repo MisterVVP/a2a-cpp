@@ -128,6 +128,8 @@ void AddLatencyField(google::protobuf::Struct* object, const ScenarioResult& res
 
 void AddPostgresDiagnosticFields(google::protobuf::Struct* object, const ScenarioResult& result) {
   google::protobuf::Struct phases;
+  google::protobuf::Struct call_counts;
+  google::protobuf::Struct calls_per_operation;
   for (std::size_t phase = 0; phase < result.postgres_phase_latencies.size(); ++phase) {
     const auto& values = result.postgres_phase_latencies[phase];
     google::protobuf::Struct latency;
@@ -137,8 +139,16 @@ void AddPostgresDiagnosticFields(google::protobuf::Struct* object, const Scenari
     SetNumberField(&latency, "max", values.empty() ? 0.0 : values.back());
     (*phases.mutable_fields())[std::string(kPostgresDiagnosticPhaseNames[phase])].mutable_struct_value()->Swap(
         &latency);
+    const auto phase_name = std::string(kPostgresDiagnosticPhaseNames[phase]);
+    SetNumberField(&call_counts, phase_name, static_cast<double>(result.postgres_phase_call_count[phase]));
+    const double per_operation = result.operations == 0 ? 0.0
+                                                        : static_cast<double>(result.postgres_phase_call_count[phase]) /
+                                                              static_cast<double>(result.operations);
+    SetNumberField(&calls_per_operation, phase_name, per_operation);
   }
   (*object->mutable_fields())["postgres_phase_latency_ms"].mutable_struct_value()->Swap(&phases);
+  (*object->mutable_fields())["postgres_phase_call_count"].mutable_struct_value()->Swap(&call_counts);
+  (*object->mutable_fields())["postgres_phase_calls_per_operation"].mutable_struct_value()->Swap(&calls_per_operation);
 }
 
 }  // namespace a2a::tests::performance

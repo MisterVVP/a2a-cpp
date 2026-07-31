@@ -50,10 +50,18 @@ constexpr double kP90 = 90.0;
 constexpr double kP95 = 95.0;
 constexpr double kP99 = 99.0;
 constexpr std::size_t kIdReserveSlack = 16U;
-constexpr std::size_t kPostgresDiagnosticPhaseCount = 6U;
+constexpr std::size_t kPostgresDiagnosticPhaseCount = 10U;
 constexpr std::array<std::string_view, kPostgresDiagnosticPhaseCount> kPostgresDiagnosticPhaseNames = {
-    "connection_acquire_wait", "task_upsert",       "push_config_upsert",
-    "push_config_list",        "transaction_begin", "transaction_commit"};
+    "connection_acquire_wait",
+    "task_get",
+    "task_upsert",
+    "push_config_upsert",
+    "push_config_get",
+    "push_config_delete",
+    "push_config_list_count",
+    "push_config_list_select",
+    "transaction_begin",
+    "transaction_commit"};
 constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
 constexpr char kPostgresSchemaEnv[] = "A2A_PERF_POSTGRES_SCHEMA";
 constexpr char kPostgresPoolSizeEnv[] = "A2A_PERF_POSTGRES_POOL_SIZE";
@@ -147,6 +155,7 @@ struct ScenarioResult final {
   std::vector<double> first_event_latencies;
   std::vector<double> completion_latencies;
   std::array<std::vector<double>, kPostgresDiagnosticPhaseCount> postgres_phase_latencies;
+  std::array<std::size_t, kPostgresDiagnosticPhaseCount> postgres_phase_call_count{};
 };
 
 struct OperationOutcome final {
@@ -160,6 +169,7 @@ struct OperationOutcome final {
   int fanout_per_operation = 0;
   int total_fanout_count = 0;
   std::array<double, kPostgresDiagnosticPhaseCount> postgres_phase_latency_ms{};
+  std::array<std::size_t, kPostgresDiagnosticPhaseCount> postgres_phase_call_count{};
 };
 
 [[nodiscard]] lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id,
@@ -194,6 +204,7 @@ template <typename ExecuteOperation>
     std::vector<double> first_event_latencies;
     std::vector<double> completion_latencies;
     std::array<std::vector<double>, kPostgresDiagnosticPhaseCount> postgres_phase_latencies;
+    std::array<std::size_t, kPostgresDiagnosticPhaseCount> postgres_phase_call_count{};
   };
 
   const int worker_count = std::min(concurrency, requests);
@@ -251,6 +262,7 @@ template <typename ExecuteOperation>
               }
               for (std::size_t phase = 0; phase < outcome.postgres_phase_latency_ms.size(); ++phase) {
                 thread_result.postgres_phase_latencies[phase].push_back(outcome.postgres_phase_latency_ms[phase]);
+                thread_result.postgres_phase_call_count[phase] += outcome.postgres_phase_call_count[phase];
               }
             } else {
               ++thread_result.errors;
@@ -298,6 +310,7 @@ template <typename ExecuteOperation>
       auto& source = thread_result.postgres_phase_latencies[phase];
       destination.insert(destination.end(), std::make_move_iterator(source.begin()),
                          std::make_move_iterator(source.end()));
+      result.postgres_phase_call_count[phase] += thread_result.postgres_phase_call_count[phase];
     }
   }
   result.operations = result.success + result.errors;

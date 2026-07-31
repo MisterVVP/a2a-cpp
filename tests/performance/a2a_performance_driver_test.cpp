@@ -278,7 +278,10 @@ TEST(PerformanceDiagnosticsTest, SerializesPerPhasePostgresLatency) {
   const ScenarioResult result = RunMeasuredScenario(std::string(kScenarioPushNotifyEndToEndManyConfigs), kSingleRequest,
                                                     kSingleConcurrency, kNoDurationLimitSeconds, [](int, int) {
                                                       OperationOutcome outcome{.ok = true};
-                                                      outcome.postgres_phase_latency_ms[1] = kDiagnosticTaskUpsertMs;
+                                                      constexpr std::size_t kTaskUpsertPhaseIndex = 2U;
+                                                      outcome.postgres_phase_latency_ms[kTaskUpsertPhaseIndex] =
+                                                          kDiagnosticTaskUpsertMs;
+                                                      outcome.postgres_phase_call_count[kTaskUpsertPhaseIndex] = 1U;
                                                       return outcome;
                                                     });
   google::protobuf::Struct object;
@@ -289,4 +292,8 @@ TEST(PerformanceDiagnosticsTest, SerializesPerPhasePostgresLatency) {
   EXPECT_DOUBLE_EQ(task_upsert.at("p95").number_value(), kDiagnosticTaskUpsertMs);
   EXPECT_DOUBLE_EQ(task_upsert.at("p99").number_value(), kDiagnosticTaskUpsertMs);
   EXPECT_DOUBLE_EQ(task_upsert.at("max").number_value(), kDiagnosticTaskUpsertMs);
+  const auto& call_counts = object.fields().at("postgres_phase_call_count").struct_value().fields();
+  const auto& calls_per_operation = object.fields().at("postgres_phase_calls_per_operation").struct_value().fields();
+  EXPECT_DOUBLE_EQ(call_counts.at("task_upsert").number_value(), 1.0);
+  EXPECT_DOUBLE_EQ(calls_per_operation.at("task_upsert").number_value(), 1.0);
 }

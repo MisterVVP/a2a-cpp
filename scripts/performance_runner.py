@@ -91,9 +91,13 @@ DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
+    "task_get",
     "task_upsert",
     "push_config_upsert",
-    "push_config_list",
+    "push_config_get",
+    "push_config_delete",
+    "push_config_list_count",
+    "push_config_list_select",
     "transaction_begin",
     "transaction_commit",
 )
@@ -450,7 +454,8 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
     fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
-        fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms"))
+        fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms",
+                           f"{phase}_call_count", f"{phase}_calls_per_operation"))
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
@@ -472,6 +477,8 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
                 "stream_completion_p95_ms": completion_latency.get("p95", 0),
             })
             phase_latencies = result.get("postgres_phase_latency_ms", {})
+            phase_call_counts = result.get("postgres_phase_call_count", {})
+            phase_calls_per_operation = result.get("postgres_phase_calls_per_operation", {})
             if not isinstance(phase_latencies, dict):
                 phase_latencies = {}
             for phase in POSTGRES_DIAGNOSTIC_PHASES:
@@ -482,6 +489,8 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
                     f"{phase}_p95_ms": phase_values.get("p95", 0),
                     f"{phase}_p99_ms": phase_values.get("p99", 0),
                     f"{phase}_max_ms": phase_values.get("max", 0),
+                    f"{phase}_call_count": phase_call_counts.get(phase, 0),
+                    f"{phase}_calls_per_operation": phase_calls_per_operation.get(phase, 0),
                 })
             writer.writerow(row)
 
@@ -530,8 +539,8 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
             "",
             "## PostgreSQL phase diagnostics",
             "",
-            "| Scenario | Transport | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms |",
-            "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: |",
+            "| Scenario | Transport | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms | Calls | Calls/op |",
+            "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
         ])
         for result in diagnostic_results:
             phases = result["postgres_phase_latency_ms"]
@@ -541,7 +550,9 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
                 assert isinstance(values, dict)
                 lines.append(
                     f"| {result['scenario']} | {result['transport']} | {result['concurrency']} | {result['postgres_pool_size']} | {phase} | "
-                    f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} |"
+                    f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} | "
+                    f"{int(result.get('postgres_phase_call_count', {}).get(phase, 0))} | "
+                    f"{float(result.get('postgres_phase_calls_per_operation', {}).get(phase, 0)):.4f} |"
                 )
     if aggregates is not None:
         append_aggregate_markdown(lines, aggregates)
@@ -627,6 +638,18 @@ def median_aggregates(results: list[dict[str, object]], repetitions: int) -> lis
                 for metric in ("p95", "p99", "max")
             }
         aggregate["postgres_phase_latency_ms"] = phase_medians
+        aggregate["postgres_phase_call_count"] = {
+            phase: statistics.median(
+                float(row.get("postgres_phase_call_count", {}).get(phase, 0)) for row in selected
+            )
+            for phase in POSTGRES_DIAGNOSTIC_PHASES
+        }
+        aggregate["postgres_phase_calls_per_operation"] = {
+            phase: statistics.median(
+                float(row.get("postgres_phase_calls_per_operation", {}).get(phase, 0)) for row in selected
+            )
+            for phase in POSTGRES_DIAGNOSTIC_PHASES
+        }
         aggregates.append(aggregate)
     return aggregates
 
@@ -636,6 +659,7 @@ def write_aggregate_csv(aggregates: list[dict[str, object]], csv_path: Path) -> 
                   "p95_ms", "p99_ms", "max_ms"]
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend(f"{phase}_{metric}_ms" for metric in ("p95", "p99", "max"))
+        fieldnames.extend((f"{phase}_call_count", f"{phase}_calls_per_operation"))
     with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
@@ -646,6 +670,8 @@ def write_aggregate_csv(aggregates: list[dict[str, object]], csv_path: Path) -> 
             for phase in POSTGRES_DIAGNOSTIC_PHASES:
                 for metric in ("p95", "p99", "max"):
                     row[f"{phase}_{metric}_ms"] = phases[phase][metric]
+                row[f"{phase}_call_count"] = aggregate["postgres_phase_call_count"][phase]
+                row[f"{phase}_calls_per_operation"] = aggregate["postgres_phase_calls_per_operation"][phase]
             writer.writerow(row)
 
 
@@ -660,8 +686,8 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
             f"{float(row['p99_ms']):.4f} | {float(row['max_ms']):.4f} |"
         )
     lines.extend(["", "## Median PostgreSQL phases", "",
-                  "| Scenario | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms |",
-                  "| --- | ---: | ---: | --- | ---: | ---: | ---: |"])
+                  "| Scenario | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms | Calls | Calls/op |",
+                  "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |"])
     for row in aggregates:
         phases = row["postgres_phase_latency_ms"]
         assert isinstance(phases, dict)
@@ -669,7 +695,9 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
             values = phases[phase]
             lines.append(
                 f"| {row['scenario']} | {row['concurrency']} | {row['postgres_pool_size']} | {phase} | "
-                f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} |"
+                f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} | "
+                f"{float(row['postgres_phase_call_count'][phase]):.1f} | "
+                f"{float(row['postgres_phase_calls_per_operation'][phase]):.4f} |"
             )
 
 

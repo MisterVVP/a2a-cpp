@@ -199,6 +199,7 @@ class ScenarioHarness final {
 #ifdef A2A_ENABLE_POSTGRES_STORE
     const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
     outcome.postgres_phase_latency_ms = diagnostics.elapsed_ms;
+    outcome.postgres_phase_call_count = diagnostics.call_count;
 #endif
     return outcome;
   }

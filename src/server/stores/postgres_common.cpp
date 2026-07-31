@@ -344,6 +344,7 @@ PostgresDiagnosticTimerForTesting::~PostgresDiagnosticTimerForTesting() {
   const auto elapsed = std::chrono::steady_clock::now() - started_;
   g_operation_diagnostics.elapsed_ms[static_cast<std::size_t>(phase_)] +=
       std::chrono::duration<double, std::milli>(elapsed).count();
+  ++g_operation_diagnostics.call_count[static_cast<std::size_t>(phase_)];
 }
 
 PostgresOperationDiagnostics TakePostgresOperationDiagnosticsForTesting() noexcept {

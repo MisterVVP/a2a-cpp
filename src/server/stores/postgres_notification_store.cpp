@@ -121,11 +121,16 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!lease.ok()) {
     return lease.error();
   }
+  PgResult result;
 #ifdef A2A_POSTGRES_STORE_TESTING
-  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
 #endif
-  PgResult result(
-      PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
+    result.reset(
+        PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   const auto checked = CheckCommand(lease.value().get(), result.get(), "upsert postgres push notification config");
   if (!checked.ok()) {
     return checked.error();
@@ -148,15 +153,31 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 1));
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigGet);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 1));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres push notification config");
   if (!checked.ok()) {
     return checked.error();
   }
   if (PQntuples(result.get()) == 0) {
     const std::string exists_sql = "SELECT 1 FROM " + PushTable(options_.schema) + " WHERE task_id = $1 LIMIT 1";
-    PgResult exists(
-        PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 0));
+    PgResult exists;
+#ifdef A2A_POSTGRES_STORE_TESTING
+    {
+      const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigGet);
+#endif
+      exists.reset(
+          PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+    }
+#endif
     const auto exists_checked =
         CheckTuples(lease.value().get(), exists.get(), "check postgres push notification task configs");
     if (!exists_checked.ok()) {
@@ -192,13 +213,17 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   if (!lease.ok()) {
     return lease.error();
   }
-#ifdef A2A_POSTGRES_STORE_TESTING
-  const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigList);
-#endif
-
   const std::string count_sql = "SELECT count(*) FROM " + PushTable(options_.schema) + " WHERE task_id = $1";
-  PgResult count_result(
-      PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values.data(), nullptr, nullptr, 0));
+  PgResult count_result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigListCount);
+#endif
+    count_result.reset(
+        PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values.data(), nullptr, nullptr, 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   const auto count_checked =
       CheckTuples(lease.value().get(), count_result.get(), "count postgres push notification configs");
   if (!count_checked.ok()) {
@@ -230,8 +255,16 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     values.push_back(offset_value.c_str());
   }
 
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(values.size()), nullptr,
-                               values.data(), nullptr, nullptr, 1));
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigListSelect);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
+                              nullptr, nullptr, 1));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   const auto checked = CheckTuples(lease.value().get(), result.get(), "list postgres push notification configs");
   if (!checked.ok()) {
     return checked.error();
@@ -267,7 +300,15 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   if (!lease.ok()) {
     return lease.error();
   }
-  PgResult result(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 0));
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigDelete);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
   return CheckCommand(lease.value().get(), result.get(), "delete postgres push notification config");
 }
 

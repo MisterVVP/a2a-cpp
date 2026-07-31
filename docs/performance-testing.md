@@ -193,3 +193,35 @@ transport-level coverage. In-process rows use
 `driver_type=cpp_sdk_in_process` and `transport_path=in_process`. Wire rows use
 `driver_type=wire_tck_sut` and one of `wire_http_json`, `wire_jsonrpc`, or
 `wire_grpc`. Wire coverage includes bounded list with and without pagination, send/create, get existing, cancel working, follow-up send, missing-task get errors, finite streaming, first-event subscription, and push config create/get/list/delete across gRPC, JSON-RPC, and HTTP+JSON. Streaming rows record event counts plus first-event and completion latency histograms. Known limitation: multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and local HTTP callback fan-out are currently not full wire rows.
+
+## PostgreSQL command attribution
+
+PostgreSQL result rows expose `postgres_phase_latency_ms`,
+`postgres_phase_call_count`, and `postgres_phase_calls_per_operation`. The phase
+names are stable: `connection_acquire_wait`, `task_get`, `task_upsert`,
+`push_config_upsert`, `push_config_get`, `push_config_delete`,
+`push_config_list_count`, `push_config_list_select`, `transaction_begin`, and
+`transaction_commit`. A command phase counts one invocation per `PQexecParams`
+call. Latency timers surround the database command only, rather than result
+parsing or service work. JSON retains the nested maps, while CSV and Markdown
+provide the same totals and calls per measured operation.
+
+Focused scenario fixture preparation must occur before the measured window; setup commands must not be attributed to the named operation.
+
+
+The current successful PostgreSQL paths intentionally use one `task_get` for task
+get; `task_get` plus `push_config_upsert` for create-config; one
+`push_config_get` for a present config; `task_get`, `push_config_list_count`, and
+`push_config_list_select` for list; and one `push_config_delete` for delete.
+Create-many fan-out eight represents eight independent public API calls, not a
+batch SDK call.
+
+Round-trip reductions require a separate SQL-design change. Create could replace
+its preliminary lookup with an atomic task-aware insert, but must preserve
+`TaskNotFound` under concurrent deletion. List could combine existence, count,
+and rows, but empty/out-of-range pages and a consistent count need careful
+snapshot semantics. Get currently uses a second `push_config_get` only after a
+miss to distinguish a missing task from a missing config; a join or tagged query
+could preserve that distinction in one command. Whether count-plus-select is
+material depends on controlled page-size measurements, so diagnostics alone do
+not justify changing it.
