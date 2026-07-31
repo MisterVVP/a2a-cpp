@@ -1,6 +1,6 @@
 {
   "name": "a2a-cpp",
-  "version-semver": "0.3.0",
+  "version-semver": "0.4.0",
   "description": "C++20 SDK for building Agent2Agent protocol clients and servers.",
   "homepage": "https://mistervvp.github.io/a2a-cpp/",
   "license": "Apache-2.0",
