@@ -25,6 +25,8 @@ constexpr int kConcurrentRequests = 16;
 constexpr int kConcurrentWorkers = 4;
 constexpr int kFollowUpFixtureCount = 3;
 constexpr double kDiagnosticTaskUpsertMs = 1.25;
+constexpr std::size_t kTaskUpsertPhaseIndex = 2U;
+constexpr std::size_t kFailedDiagnosticCallCount = 2U;
 constexpr int kTwoDeliveryAttempts = 2;
 constexpr int kOneDeliveryAttempt = 1;
 constexpr std::string_view kAggregationScenario = "aggregation-test";
@@ -100,6 +102,24 @@ TEST(PerformanceOutcomeAggregationTest, FailedOutcomePreservesPartialDeliveryCou
   EXPECT_EQ(kPartialFailureCallbackCount, result.callback_count);
   EXPECT_EQ(kPushConfigFanout, result.fanout_per_operation);
   EXPECT_EQ(kPartialFailureCallbackCount, result.total_fanout_count);
+}
+
+TEST(PerformanceOutcomeAggregationTest, FailedOutcomePreservesPostgresDiagnosticCallCounts) {
+  OperationOutcome outcome{.ok = false};
+  outcome.postgres_phase_call_count[kTaskUpsertPhaseIndex] = kFailedDiagnosticCallCount;
+
+  const ScenarioResult result = RunSingleOutcome(outcome);
+
+  ASSERT_EQ(1, result.operations);
+  EXPECT_EQ(kFailedDiagnosticCallCount, result.postgres_phase_call_count[kTaskUpsertPhaseIndex]);
+
+  google::protobuf::Struct object;
+  AddPostgresDiagnosticFields(&object, result);
+  const auto& call_counts = object.fields().at("postgres_phase_call_count").struct_value().fields();
+  const auto& calls_per_operation = object.fields().at("postgres_phase_calls_per_operation").struct_value().fields();
+  EXPECT_DOUBLE_EQ(call_counts.at("task_upsert").number_value(), static_cast<double>(kFailedDiagnosticCallCount));
+  EXPECT_DOUBLE_EQ(calls_per_operation.at("task_upsert").number_value(),
+                   static_cast<double>(kFailedDiagnosticCallCount));
 }
 
 TEST(PerformanceScenarioIsolationTest, CallbackFanoutUsesOnlyPreloadedCallbacks) {
@@ -278,7 +298,6 @@ TEST(PerformanceDiagnosticsTest, SerializesPerPhasePostgresLatency) {
   const ScenarioResult result = RunMeasuredScenario(std::string(kScenarioPushNotifyEndToEndManyConfigs), kSingleRequest,
                                                     kSingleConcurrency, kNoDurationLimitSeconds, [](int, int) {
                                                       OperationOutcome outcome{.ok = true};
-                                                      constexpr std::size_t kTaskUpsertPhaseIndex = 2U;
                                                       outcome.postgres_phase_latency_ms[kTaskUpsertPhaseIndex] =
                                                           kDiagnosticTaskUpsertMs;
                                                       outcome.postgres_phase_call_count[kTaskUpsertPhaseIndex] = 1U;

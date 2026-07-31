@@ -203,8 +203,13 @@ names are stable: `connection_acquire_wait`, `task_get`, `task_upsert`,
 `push_config_list_count`, `push_config_list_select`, `transaction_begin`, and
 `transaction_commit`. A command phase counts one invocation per `PQexecParams`
 call. Latency timers surround the database command only, rather than result
-parsing or service work. JSON retains the nested maps, while CSV and Markdown
-provide the same totals and calls per measured operation.
+parsing or service work. When one phase executes multiple commands during one
+operation, its latency sample is the cumulative command time for that phase
+within the operation; reported percentiles therefore describe per-operation
+phase totals, not individual command latency. Phase latency histograms include
+successful operations, while call counts include both successful and failed
+operations so failures do not hide database work. JSON retains the nested maps,
+while CSV and Markdown provide the same totals and calls per measured operation.
 
 Focused scenario fixture preparation must occur before the measured window; setup commands must not be attributed to the named operation.
 

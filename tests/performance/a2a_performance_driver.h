@@ -251,6 +251,9 @@ template <typename ExecuteOperation>
             thread_result.fanout_per_operation =
                 std::max(thread_result.fanout_per_operation, outcome.fanout_per_operation);
             thread_result.total_fanout_count += outcome.total_fanout_count;
+            for (std::size_t phase = 0; phase < outcome.postgres_phase_call_count.size(); ++phase) {
+              thread_result.postgres_phase_call_count[phase] += outcome.postgres_phase_call_count[phase];
+            }
             if (outcome.ok) {
               ++thread_result.success;
               thread_result.latencies.push_back(latency);
@@ -262,7 +265,6 @@ template <typename ExecuteOperation>
               }
               for (std::size_t phase = 0; phase < outcome.postgres_phase_latency_ms.size(); ++phase) {
                 thread_result.postgres_phase_latencies[phase].push_back(outcome.postgres_phase_latency_ms[phase]);
-                thread_result.postgres_phase_call_count[phase] += outcome.postgres_phase_call_count[phase];
               }
             } else {
               ++thread_result.errors;
