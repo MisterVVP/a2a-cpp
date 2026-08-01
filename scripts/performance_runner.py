@@ -495,6 +495,162 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
             writer.writerow(row)
 
 
+def store_label(store: str) -> str:
+    return {"inmemory": "In-memory", "postgres": "PostgreSQL"}.get(store, store)
+
+
+def path_label(path: str) -> str:
+    return "In-process" if path == "in_process" else "Wire"
+
+
+def transport_label(result: dict[str, object]) -> str:
+    if result["transport_path"] == "in_process":
+        return "—"
+    return {"grpc": "gRPC", "http_json": "HTTP+JSON", "jsonrpc": "JSON-RPC"}.get(
+        str(result["transport"]), str(result["transport"])
+    )
+
+
+def append_collapsible_start(lines: list[str], summary: str) -> None:
+    lines.extend(["", "<details>", f"<summary>{summary}</summary>"])
+
+
+def append_collapsible_end(lines: list[str]) -> None:
+    lines.extend(["", "</details>"])
+
+
+def result_groups(results: list[dict[str, object]]) -> list[tuple[tuple[str, str, str, int | None], list[dict[str, object]]]]:
+    groups: dict[tuple[str, str, str, int | None], list[dict[str, object]]] = {}
+    for result in results:
+        path = "in_process" if result["transport_path"] == "in_process" else "wire"
+        transport = "" if path == "in_process" else str(result["transport"])
+        pool_size = int(result["postgres_pool_size"]) if result.get("postgres_pool_size") is not None else None
+        key = (str(result["store_backend"]), path, transport, pool_size)
+        groups.setdefault(key, []).append(result)
+    return [(key, groups[key]) for key in sorted(groups, key=lambda item: tuple(str(value) for value in item))]
+
+
+def append_pivot_table(lines: list[str], results: list[dict[str, object]]) -> None:
+    concurrency_levels = sorted({int(result["concurrency"]) for result in results})
+    header = "| Scenario | " + " | ".join(
+        value for concurrency in concurrency_levels
+        for value in (f"c{concurrency} ops/s", f"c{concurrency} p95 ms")
+    ) + " |"
+    lines.extend(["", header, "| --- | " + " | ".join("---:" for _ in range(2 * len(concurrency_levels))) + " |"])
+    by_coordinate = {(str(result["scenario"]), int(result["concurrency"])): result for result in results}
+    for scenario in sorted({str(result["scenario"]) for result in results}):
+        values = []
+        for concurrency in concurrency_levels:
+            result = by_coordinate.get((scenario, concurrency))
+            if result is None:
+                values.extend(("—", "—"))
+                continue
+            latency = result["latency_ms"]
+            assert isinstance(latency, dict)
+            values.extend((f"{float(result['throughput_ops_per_sec']):.2f}", f"{float(latency['p95']):.4f}"))
+        lines.append(f"| {scenario} | " + " | ".join(values) + " |")
+
+
+def append_grouped_result_sections(lines: list[str], results: list[dict[str, object]]) -> None:
+    for (store, path, transport, pool_size), selected in result_groups(results):
+        title = f"{path_label(path)} results — {store_label(store)}"
+        if path == "wire":
+            title += f" — {transport_label(selected[0])}"
+        if store == "postgres" and pool_size is not None:
+            title += f" — pool {pool_size}"
+        lines.extend(["", f"## {title}"])
+        append_collapsible_start(lines, f"Show {title}")
+        append_pivot_table(lines, selected)
+        append_collapsible_end(lines)
+
+
+def safe_ratio(high: float, low: float) -> float | None:
+    return None if low == 0 else high / low
+
+
+def cross_backend_scaling(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    coordinates: dict[tuple[str, str, str, int | None], dict[int, dict[str, object]]] = {}
+    for result in results:
+        path = "in_process" if result["transport_path"] == "in_process" else "wire"
+        transport = "" if path == "in_process" else str(result["transport"])
+        pool = int(result["postgres_pool_size"]) if result.get("postgres_pool_size") is not None else None
+        key = (str(result["scenario"]), path, transport, pool)
+        coordinates.setdefault(key, {})[int(result["concurrency"])] = result
+    signals = []
+    postgres_keys = [key for key in coordinates if key[3] is not None]
+    for scenario, path, transport, pool in sorted(postgres_keys):
+        postgres_rows = coordinates[(scenario, path, transport, pool)]
+        memory_rows = coordinates.get((scenario, path, transport, None), {})
+        levels = sorted(set(postgres_rows) & set(memory_rows))
+        if len(levels) < 2:
+            continue
+        low, high = levels[0], levels[-1]
+        memory_low, memory_high = memory_rows[low], memory_rows[high]
+        postgres_low, postgres_high = postgres_rows[low], postgres_rows[high]
+        signals.append({
+            "scenario": scenario, "path": path, "transport": transport, "pool_size": pool,
+            "low": low, "high": high,
+            "memory_p95_growth": metric_ratio(memory_low, memory_high, "p95"),
+            "postgres_p95_growth": metric_ratio(postgres_low, postgres_high, "p95"),
+            "memory_throughput_scaling": safe_ratio(float(memory_high["throughput_ops_per_sec"]), float(memory_low["throughput_ops_per_sec"])),
+            "postgres_throughput_scaling": safe_ratio(float(postgres_high["throughput_ops_per_sec"]), float(postgres_low["throughput_ops_per_sec"])),
+        })
+    return signals
+
+
+def metric_ratio(low: dict[str, object], high: dict[str, object], metric: str) -> float | None:
+    low_latency, high_latency = low["latency_ms"], high["latency_ms"]
+    assert isinstance(low_latency, dict) and isinstance(high_latency, dict)
+    return safe_ratio(float(high_latency[metric]), float(low_latency[metric]))
+
+
+def format_ratio(value: object) -> str:
+    return "n/a" if value is None else f"{float(value):.2f}×"
+
+
+def append_cross_backend_markdown(lines: list[str], signals: list[dict[str, object]]) -> None:
+    lines.extend(["", "## Cross-backend scaling signals", "",
+                  "Relative scaling between the lowest and highest shared concurrency; this is diagnostic, not a pass/fail verdict."])
+    append_collapsible_start(lines, "Show cross-backend scaling signals")
+    lines.extend(["",
+                  "| Scenario | Path | Transport | PostgreSQL pool | Concurrency range | In-memory p95 growth | PostgreSQL p95 growth | In-memory throughput scaling | PostgreSQL throughput scaling |",
+                  "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |"])
+    if not signals:
+        lines.append("| _No comparable coordinates_ | — | — | — | — | n/a | n/a | n/a | n/a |")
+    for row in signals:
+        transport = "—" if row["path"] == "in_process" else transport_label(
+            {"transport_path": "wire", "transport": row["transport"]}
+        )
+        lines.append(
+            f"| {row['scenario']} | {path_label(str(row['path']))} | {transport} | {row['pool_size']} | "
+            f"c{row['low']}–c{row['high']} | {format_ratio(row['memory_p95_growth'])} | "
+            f"{format_ratio(row['postgres_p95_growth'])} | {format_ratio(row['memory_throughput_scaling'])} | "
+            f"{format_ratio(row['postgres_throughput_scaling'])} |"
+        )
+    append_collapsible_end(lines)
+
+
+def append_detailed_matrix(lines: list[str], results: list[dict[str, object]]) -> None:
+    repeated = any(result.get("repetition") is not None for result in results)
+    repetition_header = " Repetition |" if repeated else ""
+    repetition_rule = " ---: |" if repeated else ""
+    lines.extend(["", "## Detailed matrix results", "", "<details>", "<summary>Show all raw result rows</summary>", "",
+                  f"|{repetition_header} Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |",
+                  f"|{repetition_rule} --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
+    for result in results:
+        latency = result["latency_ms"]
+        assert isinstance(latency, dict)
+        repetition = f" {result['repetition']} |" if repeated else ""
+        lines.append(
+            f"|{repetition} {result['scenario']} | {result['driver_type']} | {path_label(str(result['transport_path']))} | "
+            f"{transport_label(result)} | {store_label(str(result['store_backend']))} | {result['concurrency']} | "
+            f"{result.get('postgres_pool_size') or ''} | {result['success']} | {result['errors']} | "
+            f"{float(result['throughput_ops_per_sec']):.2f} | {float(latency['p50']):.4f} | "
+            f"{float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} |"
+        )
+    lines.extend(["", "</details>"])
+
+
 def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str, object],
                             aggregates: list[dict[str, object]] | None = None,
                             query_plans: str | None = None) -> str:
@@ -508,36 +664,28 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
         f"* Result rows: {len(results)}",
         "* Mode: report-only; no performance thresholds are enforced.",
         "",
-        "## Scenario rollup",
+        "## Execution summary",
         "",
-        "| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Store | Path | Rows | Operations | Success | Errors |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
     ]
-    for row in scenario_rollups(results):
+    for row in execution_rollups(results):
         lines.append(
-            f"| {row['scenario']} | {row['rows']} | {row['operations']} | {row['success']} | {row['errors']} | "
-            f"{row['avg_throughput_ops_per_sec']:.2f} | {row['worst_p95_ms']:.4f} | {row['worst_max_ms']:.4f} |"
+            f"| {store_label(str(row['store']))} | {path_label(str(row['path']))} | {row['rows']} | "
+            f"{row['operations']} | {row['success']} | {row['errors']} |"
         )
-    lines.extend([
-        "",
-        "## Detailed matrix results",
-        "",
-        "| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |",
-        "| ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ])
-    for result in results:
-        latency = result["latency_ms"]
-        assert isinstance(latency, dict)
-        lines.append(
-            f"| {result.get('repetition', '')} | {result['scenario']} | {result['driver_type']} | {result['transport_path']} | {result['transport']} | {result['store_backend']} | {result['concurrency']} | {result.get('postgres_pool_size') or ''} | "
-            f"{result['success']} | {result['errors']} | {float(result['throughput_ops_per_sec']):.2f} | "
-            f"{float(latency['p50']):.4f} | {float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} |"
-        )
+    if aggregates is None:
+        append_grouped_result_sections(lines, results)
+        append_cross_backend_markdown(lines, cross_backend_scaling(results))
+    append_detailed_matrix(lines, results)
     diagnostic_results = [result for result in results if "postgres_phase_latency_ms" in result]
     if diagnostic_results:
         lines.extend([
             "",
             "## PostgreSQL phase diagnostics",
+        ])
+        append_collapsible_start(lines, "Show PostgreSQL phase diagnostics")
+        lines.extend([
             "",
             "| Scenario | Transport | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms | Calls | Calls/op |",
             "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
@@ -548,12 +696,16 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
             for phase in POSTGRES_DIAGNOSTIC_PHASES:
                 values = phases[phase]
                 assert isinstance(values, dict)
+                call_count = int(result.get('postgres_phase_call_count', {}).get(phase, 0))
+                if "postgres_phase_call_count" in result and call_count == 0:
+                    continue
                 lines.append(
-                    f"| {result['scenario']} | {result['transport']} | {result['concurrency']} | {result['postgres_pool_size']} | {phase} | "
+                    f"| {result['scenario']} | {transport_label(result)} | {result['concurrency']} | {result['postgres_pool_size']} | {phase} | "
                     f"{float(values['p95']):.4f} | {float(values['p99']):.4f} | {float(values['max']):.4f} | "
-                    f"{int(result.get('postgres_phase_call_count', {}).get(phase, 0))} | "
+                    f"{call_count} | "
                     f"{float(result.get('postgres_phase_calls_per_operation', {}).get(phase, 0)):.4f} |"
                 )
+        append_collapsible_end(lines)
     if aggregates is not None:
         append_aggregate_markdown(lines, aggregates)
     if query_plans is not None:
@@ -561,47 +713,18 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
     return "\n".join(lines)
 
 
-def scenario_rollups(results: list[dict[str, object]]) -> list[dict[str, object]]:
-    rollups: dict[str, dict[str, float | int | str]] = {}
+def execution_rollups(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    rollups: dict[tuple[str, str], dict[str, object]] = {}
     for result in results:
-        scenario = str(result["scenario"])
-        latency = result["latency_ms"]
-        assert isinstance(latency, dict)
-        rollup = rollups.setdefault(
-            scenario,
-            {
-                "scenario": scenario,
-                "rows": 0,
-                "operations": 0,
-                "success": 0,
-                "errors": 0,
-                "throughput_total": 0.0,
-                "worst_p95_ms": 0.0,
-                "worst_max_ms": 0.0,
-            },
-        )
+        path = "in_process" if result["transport_path"] == "in_process" else "wire"
+        key = (str(result["store_backend"]), path)
+        rollup = rollups.setdefault(key, {"store": key[0], "path": key[1], "rows": 0,
+                                          "operations": 0, "success": 0, "errors": 0})
         rollup["rows"] = int(rollup["rows"]) + 1
         rollup["operations"] = int(rollup["operations"]) + int(result["operations"])
         rollup["success"] = int(rollup["success"]) + int(result["success"])
         rollup["errors"] = int(rollup["errors"]) + int(result["errors"])
-        rollup["throughput_total"] = float(rollup["throughput_total"]) + float(result["throughput_ops_per_sec"])
-        rollup["worst_p95_ms"] = max(float(rollup["worst_p95_ms"]), float(latency["p95"]))
-        rollup["worst_max_ms"] = max(float(rollup["worst_max_ms"]), float(latency["max"]))
-    rows = []
-    for rollup in rollups.values():
-        rows.append(
-            {
-                "scenario": str(rollup["scenario"]),
-                "rows": int(rollup["rows"]),
-                "operations": int(rollup["operations"]),
-                "success": int(rollup["success"]),
-                "errors": int(rollup["errors"]),
-                "avg_throughput_ops_per_sec": float(rollup["throughput_total"]) / max(int(rollup["rows"]), 1),
-                "worst_p95_ms": float(rollup["worst_p95_ms"]),
-                "worst_max_ms": float(rollup["worst_max_ms"]),
-            }
-        )
-    return sorted(rows, key=lambda row: str(row["scenario"]))
+    return [rollups[key] for key in sorted(rollups)]
 
 
 def median_aggregates(results: list[dict[str, object]], repetitions: int) -> list[dict[str, object]]:
@@ -676,7 +799,9 @@ def write_aggregate_csv(aggregates: list[dict[str, object]], csv_path: Path) -> 
 
 
 def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, object]]) -> None:
-    lines.extend(["", "## Median aggregates", "",
+    lines.extend(["", "## Median aggregates"])
+    append_collapsible_start(lines, "Show median aggregates")
+    lines.extend(["",
                   "| Scenario | Concurrency | Pool size | Repetitions | Ops/sec | p95 ms | p99 ms | Max ms |",
                   "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for row in aggregates:
@@ -685,7 +810,10 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
             f"{float(row['throughput_ops_per_sec']):.2f} | {float(row['p95_ms']):.4f} | "
             f"{float(row['p99_ms']):.4f} | {float(row['max_ms']):.4f} |"
         )
-    lines.extend(["", "## Median PostgreSQL phases", "",
+    append_collapsible_end(lines)
+    lines.extend(["", "## Median PostgreSQL phases"])
+    append_collapsible_start(lines, "Show median PostgreSQL phases")
+    lines.extend(["",
                   "| Scenario | Concurrency | Pool size | Phase | p95 ms | p99 ms | Max ms | Calls | Calls/op |",
                   "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |"])
     for row in aggregates:
@@ -699,6 +827,7 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
                 f"{float(row['postgres_phase_call_count'][phase]):.1f} | "
                 f"{float(row['postgres_phase_calls_per_operation'][phase]):.4f} |"
             )
+    append_collapsible_end(lines)
 
 
 def explain_postgres_queries(dsn: str, schema: str) -> str:

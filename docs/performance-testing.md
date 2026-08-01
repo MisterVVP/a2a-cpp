@@ -17,6 +17,43 @@ The runner writes:
 - `perf-artifacts/results.csv`
 - `perf-artifacts/summary.md`
 
+### Reading the reports
+
+The Markdown summary keeps fundamentally different workloads separate. Its
+execution summary groups counts by store and measurement path for compact
+coverage and correctness checking, but deliberately contains no combined
+throughput or latency statistic. Subsequent tables separate in-memory from
+PostgreSQL, in-process from wire measurements, and each wire transport from the
+others. PostgreSQL pool sizes also have distinct tables. This prevents a faster
+in-memory row, a wire round trip, or a different pool configuration from being
+averaged into a number that describes no concrete workload.
+
+Each result table pivots the configured concurrency levels into `cN ops/s` and
+`cN p95 ms` column pairs. Read horizontally to see how one scenario at one
+store/path/transport/pool coordinate scales; columns are generated from the
+levels actually present, including single-level runs. In-process rows exercise
+SDK service and store code without a transport, so Markdown renders their
+transport as `—` rather than attributing them to the transport selected to
+launch the driver. These coordinate tables are collapsed by default so the
+execution summary remains easy to scan; expand the named section to inspect its
+scaling results.
+
+The **Cross-backend scaling signals** table uses only scenario, path, transport,
+and concurrency coordinates present in both stores, with each PostgreSQL pool
+kept separate. For each coordinate it divides the highest shared-concurrency
+p95 and throughput by their respective lowest shared-concurrency values. A zero
+denominator is reported as `n/a`. These relative ratios help expose scaling
+patterns shared by both backends; they do not compare absolute PostgreSQL speed
+with in-memory speed and are not an automatic bottleneck verdict.
+
+The detailed matrix remains available in a collapsible section. Its
+`Repetition` column appears only when at least one row belongs to a repeated
+profile, such as `postgres-tail`. `results.csv` and `results.json` retain every
+raw row and field and are the authoritative outputs for further analysis; the
+Markdown restructuring does not transform those measurements.
+The cross-backend signals, PostgreSQL diagnostics, and `postgres-tail` median
+tables are also collapsible because they can contain many rows.
+
 If `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_TCK_SUT` are not set, the runner configures and builds the needed binaries in `build/performance`. Set `A2A_PERF_BUILD_DIR` to reuse another CMake build tree.
 
 ## Configuration

@@ -104,8 +104,96 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertIn("[perf] done  wire transport=grpc store=inmemory concurrency=1", completed.stdout)
             summary = (report_dir / "summary.md").read_text(encoding="utf-8")
             self.assertIn("A2A performance test summary", summary)
-            self.assertIn("| Scenario | Rows | Operations | Success | Errors | Avg ops/sec | Worst p95 ms | Worst max ms |", summary)
-            self.assertIn("| Rep | Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |", summary)
+            self.assertIn("| Store | Path | Rows | Operations | Success | Errors |", summary)
+            self.assertIn("## In-process results — In-memory", summary)
+            self.assertIn("## Wire results — In-memory — gRPC", summary)
+            self.assertNotIn("Repetition", summary)
+            self.assertIn("<summary>Show all raw result rows</summary>", summary)
+
+    def test_report_groups_coordinates_and_calculates_cross_backend_scaling(self):
+        runner = load_runner_module()
+        rows = []
+        for store, pool, multiplier in (("inmemory", None, 1.0), ("postgres", 4, 2.0),
+                                        ("postgres", 16, 3.0)):
+            for path, transport in (("in_process", "grpc"), ("wire_grpc", "grpc"),
+                                    ("wire_http_json", "http_json")):
+                for concurrency in (2, 8):
+                    rows.append(self.make_result(store, pool, path, transport, concurrency,
+                                                 multiplier * concurrency,
+                                                 multiplier * concurrency))
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"}}
+        summary = runner.render_markdown_summary(rows, metadata)
+        self.assertIn("## In-process results — PostgreSQL — pool 4", summary)
+        self.assertIn("## In-process results — PostgreSQL — pool 16", summary)
+        self.assertIn("## Wire results — In-memory — HTTP+JSON", summary)
+        self.assertIn("<summary>Show In-process results — In-memory</summary>", summary)
+        self.assertIn("<summary>Show Wire results — PostgreSQL — gRPC — pool 4</summary>", summary)
+        self.assertIn("<summary>Show cross-backend scaling signals</summary>", summary)
+        self.assertIn("| Scenario | c2 ops/s | c2 p95 ms | c8 ops/s | c8 p95 ms |", summary)
+        self.assertIn("| scenario | In-process | — | 4 | c2–c8 | 4.00× | 4.00× | 4.00× | 4.00× |", summary)
+        self.assertNotIn("| in_process | grpc |", summary)
+        self.assertEqual(4, len(runner.execution_rollups(rows)))
+
+    def test_cross_backend_scaling_excludes_unmatched_and_handles_zero(self):
+        runner = load_runner_module()
+        rows = [
+            self.make_result("inmemory", None, "wire_grpc", "grpc", 1, 0.0, 0.0),
+            self.make_result("inmemory", None, "wire_grpc", "grpc", 4, 4.0, 4.0),
+            self.make_result("postgres", 4, "wire_grpc", "grpc", 1, 0.0, 0.0),
+            self.make_result("postgres", 4, "wire_grpc", "grpc", 4, 8.0, 8.0),
+            self.make_result("postgres", 4, "wire_jsonrpc", "jsonrpc", 4, 8.0, 8.0),
+        ]
+        signals = runner.cross_backend_scaling(rows)
+        self.assertEqual(1, len(signals))
+        self.assertIsNone(signals[0]["memory_p95_growth"])
+        self.assertIsNone(signals[0]["postgres_throughput_scaling"])
+
+    def test_cross_backend_scaling_requires_two_shared_concurrency_levels(self):
+        runner = load_runner_module()
+        rows = [
+            self.make_result("inmemory", None, "wire_grpc", "grpc", 1, 10.0, 1.0),
+            self.make_result("postgres", 4, "wire_grpc", "grpc", 1, 5.0, 2.0),
+        ]
+
+        self.assertEqual([], runner.cross_backend_scaling(rows))
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"}}
+        summary = runner.render_markdown_summary(rows, metadata)
+        self.assertIn("| _No comparable coordinates_ |", summary)
+        self.assertNotIn("c1–c1", summary)
+
+    def test_detailed_matrix_conditionally_includes_repetition(self):
+        runner = load_runner_module()
+        row = self.make_result("inmemory", None, "in_process", "grpc", 1, 1.0, 1.0)
+        lines = []
+        runner.append_detailed_matrix(lines, [row])
+        self.assertNotIn("Repetition", "\n".join(lines))
+        row["repetition"] = 1
+        lines = []
+        runner.append_detailed_matrix(lines, [row])
+        self.assertIn("Repetition", "\n".join(lines))
+        self.assertIn("| — | In-memory |", "\n".join(lines))
+
+    def test_postgres_tail_large_tables_are_collapsible(self):
+        runner = load_runner_module()
+        rows = self.make_postgres_tail_rows(runner)
+        aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"}}
+        summary = runner.render_markdown_summary(rows, metadata, aggregates)
+        self.assertIn("<summary>Show PostgreSQL phase diagnostics</summary>", summary)
+        self.assertIn("<summary>Show median aggregates</summary>", summary)
+        self.assertIn("<summary>Show median PostgreSQL phases</summary>", summary)
+
+    @staticmethod
+    def make_result(store, pool, path, transport, concurrency, throughput, p95):
+        return {
+            "scenario": "scenario", "transport": transport, "store_backend": store,
+            "driver_type": "cpp_sdk_in_process" if path == "in_process" else "wire_tck_sut",
+            "transport_path": path, "concurrency": concurrency, "postgres_pool_size": pool,
+            "operations": 10, "success": 10, "errors": 0,
+            "throughput_ops_per_sec": throughput,
+            "latency_ms": {"p50": p95 / 2, "p90": p95, "p95": p95,
+                           "p99": p95, "max": p95},
+        }
 
     def test_wire_scenarios_include_streaming_for_http_transports(self):
         runner = load_runner_module()
