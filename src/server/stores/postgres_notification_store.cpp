@@ -210,7 +210,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   const std::string limit_value = page_size == 0 ? std::string{} : std::to_string(page_size);
   const std::string offset_value = std::to_string(offset.value());
   const std::string sql = "WITH task AS MATERIALIZED (SELECT 1 FROM " + TaskTable(options_.schema) +
-                          " WHERE task_id = $1), config_count AS MATERIALIZED (SELECT count(*) AS total FROM " +
+                          " WHERE id = $1), config_count AS MATERIALIZED (SELECT count(*) AS total FROM " +
                           PushTable(options_.schema) +
                           " WHERE task_id = $1) SELECT page.config_proto, config_count.total::text FROM task "
                           "CROSS JOIN config_count LEFT JOIN LATERAL (SELECT config_proto FROM " +

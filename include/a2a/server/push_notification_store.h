@@ -27,7 +27,6 @@ class PushNotificationStore {
       std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const = 0;
   [[nodiscard]] virtual core::Result<void> Delete(std::string_view task_id, std::string_view config_id) = 0;
 
-  // Stores backed by the task database can fold task existence into List().
   [[nodiscard]] virtual bool ListValidatesTaskExistence() const noexcept { return false; }
 };
 
