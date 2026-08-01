@@ -49,9 +49,11 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificat
   if (task_store_ == nullptr || push_store_ == nullptr) {
     return core::Error::Internal("push notification service is not configured");
   }
-  const auto task = task_store_->Get(request.task_id());
-  if (!task.ok()) {
-    return task.error();
+  if (!push_store_->ListValidatesTaskExistence()) {
+    const auto task = task_store_->Get(request.task_id());
+    if (!task.ok()) {
+      return task.error();
+    }
   }
   return push_store_->List(request.task_id(), request.page_size(), request.page_token());
 }

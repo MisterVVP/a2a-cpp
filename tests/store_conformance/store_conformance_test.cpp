@@ -166,6 +166,32 @@ void SeedPostgresFilteredPaginationTasks(a2a::server::stores::PostgresTaskStore&
                   kCompletedTargetTaskTimestampSeconds);
 }
 
+void SeedPushConfigTasks(a2a::server::stores::PostgresTaskStore& store) {
+  AddPostgresTask(store, a2a::tests::store_conformance::kPushTask, "push-context", lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(store, a2a::tests::store_conformance::kOrderedPushTask, "push-context",
+                  lf::a2a::v1::TASK_STATE_WORKING, kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(store, "shared-postgres-task", "push-context", lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+}
+
+void ExpectSinglePushConfigListCommand(a2a::server::stores::PostgresPushNotificationStore& store) {
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  const auto listed = store.List("shared-postgres-task");
+  ASSERT_TRUE(listed.ok());
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListCount)],
+      0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListSelect)],
+      1U);
+}
+
 void ExpectFilteredPostgresListPage(const a2a::server::ListTasksResponse& page, std::string_view expected_task_id,
                                     bool expect_next_page) {
   EXPECT_EQ(page.total_size, kFilteredTaskCount);
@@ -327,6 +353,12 @@ TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcr
   const std::string dsn = dsn_value;
   const std::string schema = MakePostgresTestSchema("push_concurrent_order");
   const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  ASSERT_TRUE(task_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("concurrent-push-task", "concurrent-context",
+                                                                          lf::a2a::v1::TASK_STATE_WORKING,
+                                                                          kOldTargetTaskTimestampSeconds))
+                  .ok());
   std::array<a2a::server::stores::PostgresPushNotificationStore, 2> stores = {
       a2a::server::stores::PostgresPushNotificationStore(options),
       a2a::server::stores::PostgresPushNotificationStore(options)};
@@ -448,12 +480,12 @@ TEST(StoreConformanceTest, PostgresPushNotificationStore) {
   }
   const std::string dsn = dsn_value;
   const std::string schema = MakePostgresTestSchema("push");
-  a2a::tests::store_conformance::RunPushNotificationStoreConformance([&] {
-    return std::make_unique<a2a::server::stores::PostgresPushNotificationStore>(
-        a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
-  });
-
   a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  SeedPushConfigTasks(task_store);
+  a2a::tests::store_conformance::RunPushNotificationStoreConformance(
+      [&] { return std::make_unique<a2a::server::stores::PostgresPushNotificationStore>(options); });
+
   a2a::server::stores::PostgresPushNotificationStore first(options);
   a2a::server::stores::PostgresPushNotificationStore second(options);
   ASSERT_TRUE(
@@ -462,6 +494,8 @@ TEST(StoreConformanceTest, PostgresPushNotificationStore) {
   const auto shared = second.Get("shared-postgres-task", "shared-postgres-config");
   ASSERT_TRUE(shared.ok());
   EXPECT_EQ(shared.value().id(), "shared-postgres-config");
+
+  ExpectSinglePushConfigListCommand(first);
 }
 #endif
 

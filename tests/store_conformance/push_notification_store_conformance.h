@@ -107,7 +107,13 @@ void RunPushNotificationStoreConformance(Factory&& factory) {
   EXPECT_FALSE(store->CreateOrUpdate(MakeConfig("", std::string(kPushConfig))).ok());
   EXPECT_FALSE(store->CreateOrUpdate(MakeConfig(std::string(kPushTask), "")).ok());
   EXPECT_FALSE(store->CreateOrUpdate(MakeConfig(std::string(kPushTask), std::string(kPushConfig), "")).ok());
-  EXPECT_TRUE(store->List("missing-task").value().configs().empty());
+  const auto missing_task = store->List("missing-task");
+  if (store->ListValidatesTaskExistence()) {
+    EXPECT_FALSE(missing_task.ok());
+  } else {
+    ASSERT_TRUE(missing_task.ok());
+    EXPECT_TRUE(missing_task.value().configs().empty());
+  }
 }
 
 }  // namespace a2a::tests::store_conformance
