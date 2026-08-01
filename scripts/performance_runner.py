@@ -582,7 +582,7 @@ def cross_backend_scaling(results: list[dict[str, object]]) -> list[dict[str, ob
         postgres_rows = coordinates[(scenario, path, transport, pool)]
         memory_rows = coordinates.get((scenario, path, transport, None), {})
         levels = sorted(set(postgres_rows) & set(memory_rows))
-        if not levels:
+        if len(levels) < 2:
             continue
         low, high = levels[0], levels[-1]
         memory_low, memory_high = memory_rows[low], memory_rows[high]

@@ -148,6 +148,19 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIsNone(signals[0]["memory_p95_growth"])
         self.assertIsNone(signals[0]["postgres_throughput_scaling"])
 
+    def test_cross_backend_scaling_requires_two_shared_concurrency_levels(self):
+        runner = load_runner_module()
+        rows = [
+            self.make_result("inmemory", None, "wire_grpc", "grpc", 1, 10.0, 1.0),
+            self.make_result("postgres", 4, "wire_grpc", "grpc", 1, 5.0, 2.0),
+        ]
+
+        self.assertEqual([], runner.cross_backend_scaling(rows))
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"}}
+        summary = runner.render_markdown_summary(rows, metadata)
+        self.assertIn("| _No comparable coordinates_ |", summary)
+        self.assertNotIn("c1–c1", summary)
+
     def test_detailed_matrix_conditionally_includes_repetition(self):
         runner = load_runner_module()
         row = self.make_result("inmemory", None, "in_process", "grpc", 1, 1.0, 1.0)
