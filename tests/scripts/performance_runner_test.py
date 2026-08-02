@@ -272,7 +272,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(("grpc",), config.transports)
         self.assertEqual(("postgres",), config.store_backends)
         self.assertEqual(2_000, config.requests)
-        self.assertEqual((4, 16, 64), config.concurrency_levels)
+        self.assertEqual((1, 4, 16, 64), config.concurrency_levels)
         self.assertEqual((4, 16, 64), config.postgres_pool_sizes)
         self.assertEqual(5, config.repetitions)
         self.assertEqual(1.0, config.warmup_seconds)
@@ -287,7 +287,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             ])
         self.assertEqual((8, 32), config.postgres_pool_sizes)
         self.assertEqual((16, 64), cli_config.postgres_pool_sizes)
-        self.assertEqual(150, runner.postgres_tail_expected_rows(cli_config))
+        self.assertEqual(200, runner.postgres_tail_expected_rows(cli_config))
 
     def test_rejects_duplicate_postgres_pool_sizes(self):
         runner = load_runner_module()
