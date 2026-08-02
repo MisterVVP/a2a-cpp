@@ -25,6 +25,12 @@ class PushNotificationStore {
                                                                                   std::string_view config_id) const = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(
       std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const = 0;
+  // The caller must validate task existence against its authoritative task
+  // store before using this method.
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListForExistingTask(
+      std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const {
+    return List(task_id, page_size, page_token);
+  }
   [[nodiscard]] virtual core::Result<void> Delete(std::string_view task_id, std::string_view config_id) = 0;
 
   [[nodiscard]] virtual bool ListValidatesTaskExistence() const noexcept { return false; }

@@ -49,13 +49,11 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificat
   if (task_store_ == nullptr || push_store_ == nullptr) {
     return core::Error::Internal("push notification service is not configured");
   }
-  if (!push_store_->ListValidatesTaskExistence()) {
-    const auto task = task_store_->Get(request.task_id());
-    if (!task.ok()) {
-      return task.error();
-    }
+  const auto task = task_store_->Get(request.task_id());
+  if (!task.ok()) {
+    return task.error();
   }
-  return push_store_->List(request.task_id(), request.page_size(), request.page_token());
+  return push_store_->ListForExistingTask(request.task_id(), request.page_size(), request.page_token());
 }
 
 core::Result<void> PushNotificationService::DeleteConfig(
@@ -84,7 +82,7 @@ core::Result<void> PushNotificationService::NotifyTaskUpdated(const lf::a2a::v1:
   if (push_store_ == nullptr || delivery_client_ == nullptr) {
     return core::Error::Internal("push notification delivery is not configured");
   }
-  auto configs = push_store_->List(task.id());
+  auto configs = push_store_->ListForExistingTask(task.id());
   if (!configs.ok()) {
     return configs.error();
   }

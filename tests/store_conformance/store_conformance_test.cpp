@@ -82,6 +82,7 @@ constexpr std::string_view kSecondListConfigId = "push-list-second-config";
 constexpr std::string_view kPushListContextId = "push-list-context";
 constexpr std::string_view kTotalConfigCountToken = "2";
 constexpr std::string_view kOutOfRangeConfigToken = "3";
+constexpr std::string_view kBeyondPostgresBigintToken = "9223372036854775808";
 constexpr std::string_view kFirstPageToken = "1";
 constexpr int kBoundedPushListPageSize = 1;
 constexpr int kPushListConfigCount = 2;
@@ -201,6 +202,20 @@ void ExpectSinglePushConfigListCommand() {
       1U);
 }
 
+void ExpectNoPushConfigListCommand() {
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListCount)],
+      0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListSelect)],
+      0U);
+}
+
 void ResetPushConfigListDiagnostics() { a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting(); }
 
 void SeedPushConfigListEdgeCases(a2a::server::stores::PostgresTaskStore& task_store,
@@ -263,6 +278,15 @@ void ExpectPushConfigOutOfRangePage(a2a::server::stores::PostgresPushNotificatio
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
   ExpectSinglePushConfigListCommand();
+}
+
+void ExpectPushConfigTokenBeyondPostgresBigint(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kListEdgeTaskId, kBoundedPushListPageSize, kBeyondPostgresBigintToken);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(result.error().message(), a2a::server::stores::kPageTokenOutOfRangeMessage);
+  ExpectNoPushConfigListCommand();
 }
 
 void ExpectMissingPushConfigTask(a2a::server::stores::PostgresPushNotificationStore& store) {
@@ -596,6 +620,7 @@ TEST(StoreConformanceTest, PostgresPushConfigListEdgeCasesUseOneCommand) {
   ExpectBoundedPushConfigList(push_store);
   ExpectPushConfigEndPage(push_store);
   ExpectPushConfigOutOfRangePage(push_store);
+  ExpectPushConfigTokenBeyondPostgresBigint(push_store);
   ExpectMissingPushConfigTask(push_store);
 }
 #endif

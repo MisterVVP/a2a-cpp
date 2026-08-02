@@ -64,7 +64,7 @@ POSTGRES_TAIL_SCENARIOS = (
     "SendMessage_FollowUpExistingTask",
     "SendMessage_CreateTask",
 )
-POSTGRES_TAIL_CONCURRENCY = (4, 16, 64)
+POSTGRES_TAIL_CONCURRENCY = (1, 4, 16, 64)
 POSTGRES_TAIL_REPETITIONS = 5
 DEFAULT_POSTGRES_POOL_SIZE = 4
 POSTGRES_TAIL_POOL_SIZES = (4, 16, 64)
@@ -842,7 +842,8 @@ SELECT page.config_proto, config_count.total::text
 FROM task CROSS JOIN config_count
 LEFT JOIN LATERAL (
  SELECT config_proto FROM a2a_push_notification_configs
- WHERE task_id = '' ORDER BY created_sequence ASC LIMIT 1 OFFSET 0
+ WHERE task_id = '' AND 0 <= config_count.total
+ ORDER BY created_sequence ASC LIMIT 1 OFFSET 0
 ) AS page ON true;
 EXPLAIN (ANALYZE, BUFFERS) SELECT task_proto FROM a2a_tasks
  WHERE id = '';
