@@ -272,11 +272,25 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(("grpc",), config.transports)
         self.assertEqual(("postgres",), config.store_backends)
         self.assertEqual(2_000, config.requests)
-        self.assertEqual((1, 4, 16, 64), config.concurrency_levels)
+        self.assertEqual((4, 16, 64), config.concurrency_levels)
         self.assertEqual((4, 16, 64), config.postgres_pool_sizes)
         self.assertEqual(5, config.repetitions)
         self.assertEqual(1.0, config.warmup_seconds)
         self.assertEqual(runner.POSTGRES_TAIL_SCENARIOS, config.scenarios)
+        self.assertEqual(225, runner.postgres_tail_expected_rows(config))
+
+    def test_postgres_tail_c1_profile_is_focused(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args(["--profile", "postgres-tail-c1"])
+        self.assertEqual(("grpc",), config.transports)
+        self.assertEqual(("postgres",), config.store_backends)
+        self.assertEqual(2_000, config.requests)
+        self.assertEqual((1,), config.concurrency_levels)
+        self.assertEqual((64,), config.postgres_pool_sizes)
+        self.assertEqual(5, config.repetitions)
+        self.assertEqual(runner.POSTGRES_TAIL_C1_SCENARIOS, config.scenarios)
+        self.assertEqual(5, runner.postgres_tail_expected_rows(config))
 
     def test_postgres_tail_profile_allows_pool_size_override(self):
         runner = load_runner_module()
@@ -287,7 +301,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             ])
         self.assertEqual((8, 32), config.postgres_pool_sizes)
         self.assertEqual((16, 64), cli_config.postgres_pool_sizes)
-        self.assertEqual(200, runner.postgres_tail_expected_rows(cli_config))
+        self.assertEqual(150, runner.postgres_tail_expected_rows(config))
+        self.assertEqual(150, runner.postgres_tail_expected_rows(cli_config))
 
     def test_rejects_duplicate_postgres_pool_sizes(self):
         runner = load_runner_module()
@@ -330,8 +345,8 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         rows = self.make_postgres_tail_rows(runner)
         aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
-        self.assertEqual((1, 4, 16, 64), runner.POSTGRES_TAIL_CONCURRENCY)
-        self.assertEqual(60, len(aggregates))
+        self.assertEqual((4, 16, 64), runner.POSTGRES_TAIL_CONCURRENCY)
+        self.assertEqual(45, len(aggregates))
         self.assertEqual(5, aggregates[0]["repetitions"])
         self.assertEqual(103.0, aggregates[0]["throughput_ops_per_sec"])
         self.assertEqual(3.0, aggregates[0]["p95_ms"])
@@ -344,8 +359,8 @@ class PerformanceRunnerTest(unittest.TestCase):
             payload = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
             summary = (Path(directory) / "summary.md").read_text(encoding="utf-8")
             aggregate_csv = (Path(directory) / "median-aggregates.csv").read_text(encoding="utf-8")
-        self.assertEqual(300, len(payload["results"]))
-        self.assertEqual(60, len(payload["median_aggregates"]))
+        self.assertEqual(225, len(payload["results"]))
+        self.assertEqual(45, len(payload["median_aggregates"]))
         self.assertIn("Median PostgreSQL phases", summary)
         self.assertIn("Query-plan review", summary)
         self.assertIn("connection_acquire_wait_p99_ms", aggregate_csv)

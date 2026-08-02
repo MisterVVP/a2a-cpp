@@ -57,6 +57,8 @@ DEFAULT_WARMUP_SECONDS = 1.0
 DEFAULT_DURATION_SECONDS = 0.0
 DEFAULT_REPORT_DIR = "perf-artifacts"
 POSTGRES_TAIL_PROFILE = "postgres-tail"
+POSTGRES_TAIL_C1_PROFILE = "postgres-tail-c1"
+POSTGRES_TAIL_PROFILES = (POSTGRES_TAIL_PROFILE, POSTGRES_TAIL_C1_PROFILE)
 POSTGRES_TAIL_SCENARIOS = (
     "PushNotify_EndToEndManyConfigs",
     "PushConfig_CreateMany",
@@ -64,10 +66,13 @@ POSTGRES_TAIL_SCENARIOS = (
     "SendMessage_FollowUpExistingTask",
     "SendMessage_CreateTask",
 )
-POSTGRES_TAIL_CONCURRENCY = (1, 4, 16, 64)
+POSTGRES_TAIL_C1_SCENARIOS = ("PushConfig_ListManyConfigs",)
+POSTGRES_TAIL_CONCURRENCY = (4, 16, 64)
+POSTGRES_TAIL_C1_CONCURRENCY = (1,)
 POSTGRES_TAIL_REPETITIONS = 5
 DEFAULT_POSTGRES_POOL_SIZE = 4
 POSTGRES_TAIL_POOL_SIZES = (4, 16, 64)
+POSTGRES_TAIL_C1_POOL_SIZES = (64,)
 WIRE_SCENARIOS = (
     "ListTasks_NoPagination",
     "ListTasks_WithPagination",
@@ -376,7 +381,7 @@ def env_or_default(name: str, default: str) -> str:
 
 def parse_args(argv: list[str]) -> RunnerConfig:
     parser = argparse.ArgumentParser(description="Run report-only A2A performance scenarios.")
-    parser.add_argument("--profile", choices=(POSTGRES_TAIL_PROFILE,))
+    parser.add_argument("--profile", choices=POSTGRES_TAIL_PROFILES)
     parser.add_argument("--transports", default=env_or_default("A2A_PERF_TRANSPORTS", ",".join(TRANSPORTS)))
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
@@ -395,29 +400,37 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     if args.driver_timeout_seconds <= 0 or args.wire_driver_timeout_seconds <= 0:
         raise ValueError("driver timeouts must be positive")
     profile = args.profile
+    is_postgres_tail = profile in POSTGRES_TAIL_PROFILES
     if args.postgres_pool_sizes is not None:
         postgres_pool_sizes = parse_positive_int_csv(args.postgres_pool_sizes, "PostgreSQL pool sizes")
     elif profile == POSTGRES_TAIL_PROFILE:
         postgres_pool_sizes = POSTGRES_TAIL_POOL_SIZES
+    elif profile == POSTGRES_TAIL_C1_PROFILE:
+        postgres_pool_sizes = POSTGRES_TAIL_C1_POOL_SIZES
     else:
         postgres_pool_sizes = (DEFAULT_POSTGRES_POOL_SIZE,)
+    if profile == POSTGRES_TAIL_PROFILE:
+        concurrency_levels = POSTGRES_TAIL_CONCURRENCY
+        scenarios = POSTGRES_TAIL_SCENARIOS
+    elif profile == POSTGRES_TAIL_C1_PROFILE:
+        concurrency_levels = POSTGRES_TAIL_C1_CONCURRENCY
+        scenarios = POSTGRES_TAIL_C1_SCENARIOS
+    else:
+        concurrency_levels = parse_positive_int_csv(args.concurrency, "concurrency levels")
+        scenarios = None
     return RunnerConfig(
         profile=profile,
-        transports=("grpc",) if profile == POSTGRES_TAIL_PROFILE else split_csv(args.transports, TRANSPORTS),
-        store_backends=("postgres",) if profile == POSTGRES_TAIL_PROFILE else split_csv(args.store_backends, STORE_BACKENDS),
-        requests=DEFAULT_REQUESTS if profile == POSTGRES_TAIL_PROFILE else args.requests,
-        concurrency_levels=(
-            POSTGRES_TAIL_CONCURRENCY
-            if profile == POSTGRES_TAIL_PROFILE
-            else parse_positive_int_csv(args.concurrency, "concurrency levels")
-        ),
-        warmup_seconds=DEFAULT_WARMUP_SECONDS if profile == POSTGRES_TAIL_PROFILE else args.warmup_seconds,
-        duration_seconds=DEFAULT_DURATION_SECONDS if profile == POSTGRES_TAIL_PROFILE else args.duration_seconds,
+        transports=("grpc",) if is_postgres_tail else split_csv(args.transports, TRANSPORTS),
+        store_backends=("postgres",) if is_postgres_tail else split_csv(args.store_backends, STORE_BACKENDS),
+        requests=DEFAULT_REQUESTS if is_postgres_tail else args.requests,
+        concurrency_levels=concurrency_levels,
+        warmup_seconds=DEFAULT_WARMUP_SECONDS if is_postgres_tail else args.warmup_seconds,
+        duration_seconds=DEFAULT_DURATION_SECONDS if is_postgres_tail else args.duration_seconds,
         report_dir=Path(args.report_dir),
         driver_timeout_seconds=args.driver_timeout_seconds,
         wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
-        repetitions=POSTGRES_TAIL_REPETITIONS if profile == POSTGRES_TAIL_PROFILE else 1,
-        scenarios=POSTGRES_TAIL_SCENARIOS if profile == POSTGRES_TAIL_PROFILE else None,
+        repetitions=POSTGRES_TAIL_REPETITIONS if is_postgres_tail else 1,
+        scenarios=scenarios,
         postgres_pool_sizes=postgres_pool_sizes,
     )
 
@@ -871,12 +884,12 @@ def log_progress(message: str) -> None:
 
 
 def postgres_tail_expected_rows(config: RunnerConfig) -> int:
-    return (len(POSTGRES_TAIL_SCENARIOS) * len(config.concurrency_levels) *
+    return (len(config.scenarios or ()) * len(config.concurrency_levels) *
             len(config.postgres_pool_sizes) * config.repetitions)
 
 
 def log_workload_estimate(config: RunnerConfig) -> None:
-    if config.profile == POSTGRES_TAIL_PROFILE:
+    if config.profile in POSTGRES_TAIL_PROFILES:
         estimated_rows = postgres_tail_expected_rows(config)
         log_progress(
             f"profile={config.profile} estimated_rows={estimated_rows} "
@@ -950,7 +963,7 @@ def main(argv: list[str]) -> int:
                 for concurrency in config.concurrency_levels:
                     for repetition in range(1, config.repetitions + 1):
                         schema = None
-                        if config.profile == POSTGRES_TAIL_PROFILE:
+                        if config.profile in POSTGRES_TAIL_PROFILES:
                             schema = f"a2a_tail_p{postgres_pool_size}_c{concurrency}_r{repetition}_{os.getpid()}"
                         run_results = run_with_progress(
                             "in-process",
@@ -960,12 +973,12 @@ def main(argv: list[str]) -> int:
                             ),
                             in_process_transport, store_backend, concurrency, config.requests,
                         )
-                        if config.profile == POSTGRES_TAIL_PROFILE:
+                        if config.profile in POSTGRES_TAIL_PROFILES:
                             for result in run_results:
                                 result["repetition"] = repetition
                             last_schema = schema
                         results.extend(run_results)
-        if config.profile != POSTGRES_TAIL_PROFILE:
+        if config.profile not in POSTGRES_TAIL_PROFILES:
             for transport in config.transports:
                 for store_backend in config.store_backends:
                     pool_sizes = config.postgres_pool_sizes if store_backend == "postgres" else (DEFAULT_POSTGRES_POOL_SIZE,)
@@ -984,7 +997,7 @@ def main(argv: list[str]) -> int:
         results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"]), int(result.get("postgres_pool_size") or 0), int(result.get("repetition", 0))))
         aggregates = None
         query_plans = None
-        if config.profile == POSTGRES_TAIL_PROFILE:
+        if config.profile in POSTGRES_TAIL_PROFILES:
             errors = sum(result_error_count(result) for result in results)
             expected_rows = postgres_tail_expected_rows(config)
             if len(results) != expected_rows or errors:

@@ -589,7 +589,8 @@ TEST(StoreConformanceTest, PostgresPushNotificationStore) {
   a2a::server::stores::PostgresTaskStore task_store(options);
   SeedPushConfigTasks(task_store);
   a2a::tests::store_conformance::RunPushNotificationStoreConformance(
-      [&] { return std::make_unique<a2a::server::stores::PostgresPushNotificationStore>(options); });
+      [&] { return std::make_unique<a2a::server::stores::PostgresPushNotificationStore>(options); },
+      a2a::tests::store_conformance::MissingTaskListBehavior::kReturnsTaskNotFound);
 
   a2a::server::stores::PostgresPushNotificationStore first(options);
   a2a::server::stores::PostgresPushNotificationStore second(options);

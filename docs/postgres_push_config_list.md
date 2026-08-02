@@ -41,9 +41,12 @@ operation and reported operation p95 `12.10 ms`, task-get p95 `5.01 ms`, count
 p95 `4.79 ms`, select p95 `4.87 ms`, and effectively zero connection-acquire
 p95 at pool size and concurrency 64. The proposed statement's observed call
 count is covered by the PostgreSQL store test. Latency comparisons require a
-configured PostgreSQL performance environment. The PostgreSQL-tail profile
-runs five repetitions at concurrency 1, 4, 16, and 64 across pool sizes 4, 16,
-and 64 with fixed fan-out/page-size fixtures and requires zero operation errors.
+configured PostgreSQL performance environment. The `postgres-tail` profile
+runs five repetitions at concurrency 4, 16, and 64 across pool sizes 4, 16,
+and 64. The separate `postgres-tail-c1` profile runs five repetitions of
+`PushConfig_ListManyConfigs` at concurrency 1 and pool size 64. This retains
+the focused single-client regression signal without repeating every scenario
+and pool-size coordinate serially. Both profiles require zero operation errors.
 
 `PushConfig_ListManyConfigs` remains the focused performance scenario because
 it exercises the optimized unbounded list over a fixed fan-out and isolates the

@@ -83,8 +83,6 @@ class TaskAwareRecordingPushStore final : public a2a::server::PushNotificationSt
     return store_.Delete(task_id, config_id);
   }
 
-  [[nodiscard]] bool ListValidatesTaskExistence() const noexcept override { return true; }
-
   mutable int list_calls = 0;
   mutable int existing_task_list_calls = 0;
 

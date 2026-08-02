@@ -32,8 +32,6 @@ class PushNotificationStore {
     return List(task_id, page_size, page_token);
   }
   [[nodiscard]] virtual core::Result<void> Delete(std::string_view task_id, std::string_view config_id) = 0;
-
-  [[nodiscard]] virtual bool ListValidatesTaskExistence() const noexcept { return false; }
 };
 
 struct TransparentStringHash final {

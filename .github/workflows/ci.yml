@@ -178,20 +178,28 @@ jobs:
         run: >-
           ./scripts/run_performance_tests.sh --profile postgres-tail
           --report-dir perf-artifacts/postgres-tail
+      - name: Run focused PostgreSQL concurrency-1 profile
+        run: >-
+          ./scripts/run_performance_tests.sh --profile postgres-tail-c1
+          --report-dir perf-artifacts/postgres-tail-c1
       - name: Validate PostgreSQL tail reports
         run: |
-          test -s perf-artifacts/postgres-tail/results.json
-          test -s perf-artifacts/postgres-tail/results.csv
-          test -s perf-artifacts/postgres-tail/median-aggregates.csv
-          test -s perf-artifacts/postgres-tail/summary.md
-          python3 -m json.tool perf-artifacts/postgres-tail/results.json >/dev/null
-          cat perf-artifacts/postgres-tail/summary.md >> "$GITHUB_STEP_SUMMARY"
+          for report_dir in perf-artifacts/postgres-tail perf-artifacts/postgres-tail-c1; do
+            test -s "$report_dir/results.json"
+            test -s "$report_dir/results.csv"
+            test -s "$report_dir/median-aggregates.csv"
+            test -s "$report_dir/summary.md"
+            python3 -m json.tool "$report_dir/results.json" >/dev/null
+            cat "$report_dir/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          done
       - name: Upload PostgreSQL tail performance artifacts
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: perf-artifacts-postgres-tail
-          path: perf-artifacts/postgres-tail
+          path: |
+            perf-artifacts/postgres-tail
+            perf-artifacts/postgres-tail-c1
           if-no-files-found: error
 
 
