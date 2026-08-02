@@ -831,12 +831,23 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
 
 
 def explain_postgres_queries(dsn: str, schema: str) -> str:
-    # Constant probe keys and disabled explicit sorts isolate whether each index can
-    # serve the production lookup shape, independently of the sampled table size.
     sql = f'''SET search_path TO "{schema}";
 SET enable_seqscan = off;
+EXPLAIN (ANALYZE, BUFFERS)
+WITH task AS MATERIALIZED (SELECT 1 FROM a2a_tasks WHERE id = ''),
+config_count AS MATERIALIZED (
+ SELECT count(*) AS total FROM a2a_push_notification_configs WHERE task_id = ''
+)
+SELECT page.config_proto, config_count.total::text
+FROM task CROSS JOIN config_count
+LEFT JOIN LATERAL (
+ SELECT config_proto FROM a2a_push_notification_configs
+ WHERE task_id = '' ORDER BY created_sequence ASC LIMIT 1 OFFSET 0
+) AS page ON true;
 EXPLAIN (ANALYZE, BUFFERS) SELECT task_proto FROM a2a_tasks
  WHERE id = '';
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM a2a_push_notification_configs
+ WHERE task_id = '';
 SET enable_sort = off;
 EXPLAIN (ANALYZE, BUFFERS) SELECT config_proto FROM a2a_push_notification_configs
  WHERE task_id = ''
@@ -846,7 +857,8 @@ EXPLAIN (ANALYZE, BUFFERS) SELECT config_proto FROM a2a_push_notification_config
         ["psql", dsn, "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--command", sql],
         check=True, capture_output=True, text=True,
     )
-    required_indexes = ("a2a_tasks_pkey", "idx_a2a_push_configs_created_sequence")
+    required_indexes = ("a2a_tasks_pkey", "idx_a2a_push_configs_task",
+                        "idx_a2a_push_configs_created_sequence")
     missing = [index for index in required_indexes if index not in completed.stdout]
     if missing:
         raise ValueError(f"query-plan review did not use required indexes: {', '.join(missing)}")

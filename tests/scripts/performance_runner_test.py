@@ -359,7 +359,9 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         completed = subprocess.CompletedProcess(
             args=[], returncode=0,
-            stdout="Index Scan using a2a_tasks_pkey\nIndex Scan using idx_a2a_push_configs_created_sequence",
+            stdout=("Index Scan using a2a_tasks_pkey\n"
+                    "Index Scan using idx_a2a_push_configs_task\n"
+                    "Index Scan using idx_a2a_push_configs_created_sequence"),
             stderr="",
         )
         with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
@@ -367,13 +369,26 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("idx_a2a_push_configs_created_sequence", plans)
         command = run.call_args.args[0]
         sql = command[-1]
+        self.assertIn("WITH task AS MATERIALIZED", sql)
+        self.assertIn("config_count AS MATERIALIZED", sql)
+        self.assertIn("LEFT JOIN LATERAL", sql)
+        self.assertIn("ORDER BY created_sequence ASC LIMIT 1 OFFSET 0", sql)
         self.assertIn("WHERE task_id = ''", sql)
         self.assertIn("SET enable_sort = off", sql)
         self.assertNotIn("SELECT task_id FROM", sql)
-        completed.stdout = "Index Scan using a2a_tasks_pkey"
+        completed.stdout = ("Index Scan using a2a_tasks_pkey\n"
+                            "Index Scan using idx_a2a_push_configs_created_sequence")
         with mock.patch.object(runner.subprocess, "run", return_value=completed):
-            with self.assertRaisesRegex(ValueError, "idx_a2a_push_configs_created_sequence"):
+            with self.assertRaisesRegex(ValueError, "idx_a2a_push_configs_task"):
                 runner.explain_postgres_queries("postgresql://test", "schema")
+
+        for missing_index in ("a2a_tasks_pkey", "idx_a2a_push_configs_created_sequence"):
+            completed.stdout = "\n".join(index for index in (
+                "a2a_tasks_pkey", "idx_a2a_push_configs_task", "idx_a2a_push_configs_created_sequence"
+            ) if index != missing_index)
+            with mock.patch.object(runner.subprocess, "run", return_value=completed):
+                with self.assertRaisesRegex(ValueError, missing_index):
+                    runner.explain_postgres_queries("postgresql://test", "schema")
 
     @staticmethod
     def make_postgres_tail_rows(runner):
