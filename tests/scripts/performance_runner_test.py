@@ -376,7 +376,6 @@ class PerformanceRunnerTest(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             args=[], returncode=0,
             stdout=("Index Scan using a2a_tasks_pkey\n"
-                    "Index Scan using idx_a2a_push_configs_task\n"
                     "Index Scan using idx_a2a_push_configs_created_sequence"),
             stderr="",
         )
@@ -393,15 +392,10 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("WHERE task_id = ''", sql)
         self.assertIn("SET enable_sort = off", sql)
         self.assertNotIn("SELECT task_id FROM", sql)
-        completed.stdout = ("Index Scan using a2a_tasks_pkey\n"
-                            "Index Scan using idx_a2a_push_configs_created_sequence")
-        with mock.patch.object(runner.subprocess, "run", return_value=completed):
-            with self.assertRaisesRegex(ValueError, "idx_a2a_push_configs_task"):
-                runner.explain_postgres_queries("postgresql://test", "schema")
 
         for missing_index in ("a2a_tasks_pkey", "idx_a2a_push_configs_created_sequence"):
             completed.stdout = "\n".join(index for index in (
-                "a2a_tasks_pkey", "idx_a2a_push_configs_task", "idx_a2a_push_configs_created_sequence"
+                "a2a_tasks_pkey", "idx_a2a_push_configs_created_sequence"
             ) if index != missing_index)
             with mock.patch.object(runner.subprocess, "run", return_value=completed):
                 with self.assertRaisesRegex(ValueError, missing_index):

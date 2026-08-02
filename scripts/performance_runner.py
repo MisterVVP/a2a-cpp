@@ -871,8 +871,11 @@ EXPLAIN (ANALYZE, BUFFERS) SELECT config_proto FROM a2a_push_notification_config
         ["psql", dsn, "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--command", sql],
         check=True, capture_output=True, text=True,
     )
-    required_indexes = ("a2a_tasks_pkey", "idx_a2a_push_configs_task",
-                        "idx_a2a_push_configs_created_sequence")
+    # The composite index starts with task_id, so PostgreSQL may use it for
+    # both the count predicate and the ordered page instead of selecting the
+    # narrower task-only index. Require the index-backed paths, not one
+    # specific valid planner choice.
+    required_indexes = ("a2a_tasks_pkey", "idx_a2a_push_configs_created_sequence")
     missing = [index for index in required_indexes if index not in completed.stdout]
     if missing:
         raise ValueError(f"query-plan review did not use required indexes: {', '.join(missing)}")
