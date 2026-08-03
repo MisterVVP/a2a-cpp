@@ -55,6 +55,41 @@ class RecordingDeliveryClient final : public a2a::server::PushNotificationDelive
   std::vector<a2a::server::PushDeliveryRequest> requests;
 };
 
+class TaskAwareRecordingPushStore final : public a2a::server::PushNotificationStore {
+ public:
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdate(
+      const lf::a2a::v1::TaskPushNotificationConfig& config) override {
+    return store_.CreateOrUpdate(config);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> Get(
+      std::string_view task_id, std::string_view config_id) const override {
+    return store_.Get(task_id, config_id);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(
+      std::string_view task_id, int page_size, std::string_view page_token) const override {
+    ++list_calls;
+    return store_.List(task_id, page_size, page_token);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListForExistingTask(
+      std::string_view task_id, int page_size, std::string_view page_token) const override {
+    ++existing_task_list_calls;
+    return store_.List(task_id, page_size, page_token);
+  }
+
+  [[nodiscard]] a2a::core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override {
+    return store_.Delete(task_id, config_id);
+  }
+
+  mutable int list_calls = 0;
+  mutable int existing_task_list_calls = 0;
+
+ private:
+  a2a::server::InMemoryPushNotificationStore store_;
+};
+
 lf::a2a::v1::Task BuildTask() {
   lf::a2a::v1::Task task;
   task.set_id(std::string(kTaskId));
@@ -177,6 +212,30 @@ TEST(PushNotificationServiceTest, ListConfigRequiresExistingTask) {
   EXPECT_EQ(listed.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
   ASSERT_TRUE(listed.error().protocol_code().has_value());
   EXPECT_EQ(listed.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+}
+
+TEST(PushNotificationServiceTest, ListConfigUsesConfiguredTaskStoreForTaskValidation) {
+  a2a::server::InMemoryTaskStore task_store;
+  TaskAwareRecordingPushStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  ASSERT_TRUE(push_store.CreateOrUpdate(BuildConfig(kConfigId)).ok());
+
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
+  request.set_task_id(std::string(kTaskId));
+
+  const auto missing = service.ListConfigs(request);
+  ASSERT_FALSE(missing.ok());
+  EXPECT_EQ(missing.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  EXPECT_EQ(push_store.list_calls, 0);
+  EXPECT_EQ(push_store.existing_task_list_calls, 0);
+
+  ASSERT_TRUE(task_store.CreateOrUpdate(BuildTask()).ok());
+  const auto listed = service.ListConfigs(request);
+  ASSERT_TRUE(listed.ok());
+  EXPECT_EQ(listed.value().configs_size(), kSinglePageConfigCount);
+  EXPECT_EQ(push_store.list_calls, 0);
+  EXPECT_EQ(push_store.existing_task_list_calls, 1);
 }
 
 TEST(PushNotificationServiceTest, ListConfigPassesPaginationToStore) {

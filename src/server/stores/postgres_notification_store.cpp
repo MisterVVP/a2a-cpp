@@ -5,15 +5,15 @@
 
 #include <libpq-fe.h>
 
-#include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
@@ -21,31 +21,64 @@
 namespace a2a::server::stores {
 namespace {
 
+constexpr std::uint64_t kPostgresBigintMaximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+constexpr std::size_t kPushListSqlReserveSlack = 512U;
+constexpr std::string_view kPushListMissingCountMessage =
+    "list postgres push notification configs: query returned no count row";
+
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
     return std::size_t{0};
   }
-  std::size_t parsed = 0;
+  std::uint64_t parsed = 0;
   const auto* begin = page_token.data();
   const auto* end = begin + page_token.size();
   const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec == std::errc::result_out_of_range) {
+    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
+  }
   if (result.ec != std::errc() || result.ptr != end) {
     return core::Error::Validation(std::string(kPageTokenInvalidMessage));
   }
-  return parsed;
+  if (parsed > kPostgresBigintMaximum || parsed > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
+  }
+  return static_cast<std::size_t>(parsed);
 }
 
 [[nodiscard]] core::Result<std::size_t> ParsePushConfigCount(PGresult* result) {
-  if (PQntuples(result) != 1) {
-    return core::Error::Internal("count postgres push notification configs: expected exactly one count row");
-  }
   std::size_t parsed = 0;
-  const std::string_view raw_count(PQgetvalue(result, 0, 0));
+  const std::string_view raw_count(PQgetvalue(result, 0, 1));
   const auto parsed_result = std::from_chars(raw_count.data(), raw_count.data() + raw_count.size(), parsed);
   if (parsed_result.ec != std::errc() || parsed_result.ptr != raw_count.data() + raw_count.size()) {
     return core::Error::Internal("count postgres push notification configs: failed to parse count");
   }
   return parsed;
+}
+
+[[nodiscard]] std::string BuildPushListSql(std::string_view schema, bool validate_task_existence) {
+  const std::string task_table = TaskTable(schema);
+  const std::string push_table = PushTable(schema);
+  std::string sql;
+  sql.reserve(task_table.size() + push_table.size() + push_table.size() + kPushListSqlReserveSlack);
+  sql.append("WITH ");
+  if (validate_task_existence) {
+    sql.append("task AS MATERIALIZED (SELECT 1 FROM ");
+    sql.append(task_table);
+    sql.append(" WHERE id = $1), ");
+  }
+  sql.append("config_count AS MATERIALIZED (SELECT count(*) AS total FROM ");
+  sql.append(push_table);
+  sql.append(" WHERE task_id = $1) SELECT page.config_proto, config_count.total::text FROM ");
+  if (validate_task_existence) {
+    sql.append("task CROSS JOIN ");
+  }
+  sql.append("config_count LEFT JOIN LATERAL (SELECT config_proto FROM ");
+  sql.append(push_table);
+  sql.append(
+      " WHERE task_id = $1 AND $3::bigint <= config_count.total "
+      "ORDER BY created_sequence ASC LIMIT $2::bigint OFFSET $3::bigint) AS page ON true");
+  return sql;
 }
 
 [[nodiscard]] core::Result<void> ValidatePushConfig(const lf::a2a::v1::TaskPushNotificationConfig& config) {
@@ -197,6 +230,16 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::List(
     std::string_view task_id, int page_size, std::string_view page_token) const {
+  return ListInternal(task_id, page_size, page_token, true);
+}
+
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListForExistingTask(
+    std::string_view task_id, int page_size, std::string_view page_token) const {
+  return ListInternal(task_id, page_size, page_token, false);
+}
+
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListInternal(
+    std::string_view task_id, int page_size, std::string_view page_token, bool validate_task_existence) const {
   if (task_id.empty()) {
     return core::Error::Validation(std::string(kPushTaskIdRequiredMessage));
   }
@@ -208,52 +251,15 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     return offset.error();
   }
   const std::string task_id_value(task_id);
-  const std::array<const char*, 1> count_values = {task_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-  const std::string count_sql = "SELECT count(*) FROM " + PushTable(options_.schema) + " WHERE task_id = $1";
-  PgResult count_result;
-#ifdef A2A_POSTGRES_STORE_TESTING
-  {
-    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigListCount);
-#endif
-    count_result.reset(
-        PQexecParams(lease.value().get(), count_sql.c_str(), 1, nullptr, count_values.data(), nullptr, nullptr, 0));
-#ifdef A2A_POSTGRES_STORE_TESTING
-  }
-#endif
-  const auto count_checked =
-      CheckTuples(lease.value().get(), count_result.get(), "count postgres push notification configs");
-  if (!count_checked.ok()) {
-    return count_checked.error();
-  }
-  const auto count = ParsePushConfigCount(count_result.get());
-  if (!count.ok()) {
-    return count.error();
-  }
-  if (offset.value() > count.value()) {
-    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
-  }
-
-  const std::size_t remaining = count.value() - offset.value();
-  const std::size_t effective_page_size = page_size == 0 ? remaining : static_cast<std::size_t>(page_size);
-  const std::size_t requested_rows = std::min(effective_page_size, remaining);
-  const std::string limit_value = std::to_string(requested_rows);
+  const std::string limit_value = page_size == 0 ? std::string{} : std::to_string(page_size);
   const std::string offset_value = std::to_string(offset.value());
-  std::string sql =
-      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 ORDER BY created_sequence ASC";
-  std::vector<const char*> values;
-  values.push_back(task_id_value.c_str());
-  if (page_size != 0) {
-    sql += " LIMIT $2 OFFSET $3";
-    values.push_back(limit_value.c_str());
-    values.push_back(offset_value.c_str());
-  } else if (offset.value() != 0U) {
-    sql += " OFFSET $2";
-    values.push_back(offset_value.c_str());
-  }
+  const std::string sql = BuildPushListSql(options_.schema, validate_task_existence);
+  const std::array<const char*, 3> values = {task_id_value.c_str(), page_size == 0 ? nullptr : limit_value.c_str(),
+                                             offset_value.c_str()};
 
   PgResult result;
 #ifdef A2A_POSTGRES_STORE_TESTING
@@ -270,7 +276,21 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     return checked.error();
   }
 
-  const auto row_count = static_cast<std::size_t>(PQntuples(result.get()));
+  const auto result_rows = static_cast<std::size_t>(PQntuples(result.get()));
+  if (result_rows == 0U) {
+    if (validate_task_existence) {
+      return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
+    }
+    return core::Error::Internal(std::string(kPushListMissingCountMessage));
+  }
+  const auto count = ParsePushConfigCount(result.get());
+  if (!count.ok()) {
+    return count.error();
+  }
+  if (offset.value() > count.value()) {
+    return core::Error::Validation(std::string(kPageTokenOutOfRangeMessage));
+  }
+  const std::size_t row_count = PQgetisnull(result.get(), 0, 0) != 0 ? 0U : result_rows;
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
   response.mutable_configs()->Reserve(static_cast<int>(row_count));
   for (std::size_t index = 0; index < row_count; ++index) {
@@ -281,7 +301,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     }
     *response.add_configs() = std::move(config);
   }
-  if (offset.value() + row_count < count.value()) {
+  if (row_count < count.value() - offset.value()) {
     response.set_next_page_token(std::to_string(offset.value() + row_count));
   }
   return response;

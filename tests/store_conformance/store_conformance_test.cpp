@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/server/push_notification_store.h"
 #include "a2a/server/stores/store_factory.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
@@ -73,6 +74,18 @@ constexpr int kCompletedTargetTaskTimestampSeconds = 5000;
 constexpr std::size_t kConcurrentPageSize = 1;
 constexpr std::array<std::string_view, 4> kConcurrentIds = {"connection-a-first", "connection-b-first",
                                                             "connection-a-second", "connection-b-second"};
+constexpr std::string_view kListEdgeTaskId = "push-list-edge-task";
+constexpr std::string_view kEmptyListTaskId = "push-list-empty-task";
+constexpr std::string_view kMissingListTaskId = "push-list-missing-task";
+constexpr std::string_view kFirstListConfigId = "push-list-first-config";
+constexpr std::string_view kSecondListConfigId = "push-list-second-config";
+constexpr std::string_view kPushListContextId = "push-list-context";
+constexpr std::string_view kTotalConfigCountToken = "2";
+constexpr std::string_view kOutOfRangeConfigToken = "3";
+constexpr std::string_view kBeyondPostgresBigintToken = "9223372036854775808";
+constexpr std::string_view kFirstPageToken = "1";
+constexpr int kBoundedPushListPageSize = 1;
+constexpr int kPushListConfigCount = 2;
 
 template <typename Insert>
 [[nodiscard]] bool RunDeterministicallyInterleavedInserts(Insert insert) {
@@ -164,6 +177,124 @@ void SeedPostgresFilteredPaginationTasks(a2a::server::stores::PostgresTaskStore&
                   kOtherContextTaskTimestampSeconds);
   AddPostgresTask(store, kCompletedTargetTaskId, kTargetContext, lf::a2a::v1::TASK_STATE_COMPLETED,
                   kCompletedTargetTaskTimestampSeconds);
+}
+
+void SeedPushConfigTasks(a2a::server::stores::PostgresTaskStore& store) {
+  AddPostgresTask(store, a2a::tests::store_conformance::kPushTask, "push-context", lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(store, a2a::tests::store_conformance::kOrderedPushTask, "push-context",
+                  lf::a2a::v1::TASK_STATE_WORKING, kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(store, "shared-postgres-task", "push-context", lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+}
+
+void ExpectSinglePushConfigListCommand() {
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListCount)],
+      0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListSelect)],
+      1U);
+}
+
+void ExpectNoPushConfigListCommand() {
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListCount)],
+      0U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListSelect)],
+      0U);
+}
+
+void ResetPushConfigListDiagnostics() { a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting(); }
+
+void SeedPushConfigListEdgeCases(a2a::server::stores::PostgresTaskStore& task_store,
+                                 a2a::server::stores::PostgresPushNotificationStore& push_store) {
+  AddPostgresTask(task_store, kEmptyListTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(task_store, kListEdgeTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kListEdgeTaskId),
+                                                                            std::string(kFirstListConfigId)))
+                  .ok());
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kListEdgeTaskId),
+                                                                            std::string(kSecondListConfigId)))
+                  .ok());
+}
+
+void ExpectEmptyPushConfigList(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kEmptyListTaskId);
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result.value().configs().empty());
+  ExpectSinglePushConfigListCommand();
+}
+
+void ExpectUnboundedPushConfigList(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kListEdgeTaskId);
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result.value().configs_size(), kPushListConfigCount);
+  EXPECT_EQ(result.value().configs(0).id(), kFirstListConfigId);
+  EXPECT_EQ(result.value().configs(1).id(), kSecondListConfigId);
+  EXPECT_TRUE(result.value().next_page_token().empty());
+  ExpectSinglePushConfigListCommand();
+}
+
+void ExpectBoundedPushConfigList(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kListEdgeTaskId, kBoundedPushListPageSize);
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result.value().configs_size(), kBoundedPushListPageSize);
+  EXPECT_EQ(result.value().configs(0).id(), kFirstListConfigId);
+  EXPECT_EQ(result.value().next_page_token(), kFirstPageToken);
+  ExpectSinglePushConfigListCommand();
+}
+
+void ExpectPushConfigEndPage(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kListEdgeTaskId, kBoundedPushListPageSize, kTotalConfigCountToken);
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result.value().configs().empty());
+  EXPECT_TRUE(result.value().next_page_token().empty());
+  ExpectSinglePushConfigListCommand();
+}
+
+void ExpectPushConfigOutOfRangePage(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kListEdgeTaskId, kBoundedPushListPageSize, kOutOfRangeConfigToken);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  ExpectSinglePushConfigListCommand();
+}
+
+void ExpectPushConfigTokenBeyondPostgresBigint(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kListEdgeTaskId, kBoundedPushListPageSize, kBeyondPostgresBigintToken);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(result.error().message(), a2a::server::stores::kPageTokenOutOfRangeMessage);
+  ExpectNoPushConfigListCommand();
+}
+
+void ExpectMissingPushConfigTask(a2a::server::stores::PostgresPushNotificationStore& store) {
+  ResetPushConfigListDiagnostics();
+  const auto result = store.List(kMissingListTaskId);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  ExpectSinglePushConfigListCommand();
 }
 
 void ExpectFilteredPostgresListPage(const a2a::server::ListTasksResponse& page, std::string_view expected_task_id,
@@ -327,6 +458,12 @@ TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcr
   const std::string dsn = dsn_value;
   const std::string schema = MakePostgresTestSchema("push_concurrent_order");
   const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  ASSERT_TRUE(task_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask("concurrent-push-task", "concurrent-context",
+                                                                          lf::a2a::v1::TASK_STATE_WORKING,
+                                                                          kOldTargetTaskTimestampSeconds))
+                  .ok());
   std::array<a2a::server::stores::PostgresPushNotificationStore, 2> stores = {
       a2a::server::stores::PostgresPushNotificationStore(options),
       a2a::server::stores::PostgresPushNotificationStore(options)};
@@ -448,12 +585,13 @@ TEST(StoreConformanceTest, PostgresPushNotificationStore) {
   }
   const std::string dsn = dsn_value;
   const std::string schema = MakePostgresTestSchema("push");
-  a2a::tests::store_conformance::RunPushNotificationStoreConformance([&] {
-    return std::make_unique<a2a::server::stores::PostgresPushNotificationStore>(
-        a2a::server::stores::PostgresStoreOptions{.connection_string = dsn, .schema = schema});
-  });
-
   a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  SeedPushConfigTasks(task_store);
+  a2a::tests::store_conformance::RunPushNotificationStoreConformance(
+      [&] { return std::make_unique<a2a::server::stores::PostgresPushNotificationStore>(options); },
+      a2a::tests::store_conformance::MissingTaskListBehavior::kReturnsTaskNotFound);
+
   a2a::server::stores::PostgresPushNotificationStore first(options);
   a2a::server::stores::PostgresPushNotificationStore second(options);
   ASSERT_TRUE(
@@ -462,6 +600,29 @@ TEST(StoreConformanceTest, PostgresPushNotificationStore) {
   const auto shared = second.Get("shared-postgres-task", "shared-postgres-config");
   ASSERT_TRUE(shared.ok());
   EXPECT_EQ(shared.value().id(), "shared-postgres-config");
+
+  ResetPushConfigListDiagnostics();
+  ASSERT_TRUE(first.List("shared-postgres-task").ok());
+  ExpectSinglePushConfigListCommand();
+}
+
+TEST(StoreConformanceTest, PostgresPushConfigListEdgeCasesUseOneCommand) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value,
+                                                          .schema = MakePostgresTestSchema("push_list_edges")};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  SeedPushConfigListEdgeCases(task_store, push_store);
+  ExpectEmptyPushConfigList(push_store);
+  ExpectUnboundedPushConfigList(push_store);
+  ExpectBoundedPushConfigList(push_store);
+  ExpectPushConfigEndPage(push_store);
+  ExpectPushConfigOutOfRangePage(push_store);
+  ExpectPushConfigTokenBeyondPostgresBigint(push_store);
+  ExpectMissingPushConfigTask(push_store);
 }
 #endif
 

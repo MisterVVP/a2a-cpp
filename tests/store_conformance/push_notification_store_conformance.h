@@ -23,6 +23,11 @@ constexpr std::string_view kOrderedPushConfigThird = "conformance-push-config-c"
 constexpr std::string_view kPushUrl = "https://example.test/webhook";
 constexpr std::string_view kUpdatedPushUrl = "https://example.test/updated";
 
+enum class MissingTaskListBehavior {
+  kReturnsEmptyList,
+  kReturnsTaskNotFound,
+};
+
 [[nodiscard]] inline lf::a2a::v1::TaskPushNotificationConfig MakeConfig(std::string task_id, std::string config_id,
                                                                         std::string url = std::string(kPushUrl)) {
   lf::a2a::v1::TaskPushNotificationConfig config;
@@ -33,7 +38,8 @@ constexpr std::string_view kUpdatedPushUrl = "https://example.test/updated";
 }
 
 template <typename Factory>
-void RunPushNotificationStoreConformance(Factory&& factory) {
+void RunPushNotificationStoreConformance(
+    Factory&& factory, MissingTaskListBehavior missing_task_behavior = MissingTaskListBehavior::kReturnsEmptyList) {
   auto store = factory();
   const auto created = store->CreateOrUpdate(MakeConfig(std::string(kPushTask), std::string(kPushConfig)));
   ASSERT_TRUE(created.ok());
@@ -107,7 +113,13 @@ void RunPushNotificationStoreConformance(Factory&& factory) {
   EXPECT_FALSE(store->CreateOrUpdate(MakeConfig("", std::string(kPushConfig))).ok());
   EXPECT_FALSE(store->CreateOrUpdate(MakeConfig(std::string(kPushTask), "")).ok());
   EXPECT_FALSE(store->CreateOrUpdate(MakeConfig(std::string(kPushTask), std::string(kPushConfig), "")).ok());
-  EXPECT_TRUE(store->List("missing-task").value().configs().empty());
+  const auto missing_task = store->List("missing-task");
+  if (missing_task_behavior == MissingTaskListBehavior::kReturnsTaskNotFound) {
+    EXPECT_FALSE(missing_task.ok());
+  } else {
+    ASSERT_TRUE(missing_task.ok());
+    EXPECT_TRUE(missing_task.value().configs().empty());
+  }
 }
 
 }  // namespace a2a::tests::store_conformance

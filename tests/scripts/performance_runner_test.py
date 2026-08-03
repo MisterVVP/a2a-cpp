@@ -277,6 +277,20 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(5, config.repetitions)
         self.assertEqual(1.0, config.warmup_seconds)
         self.assertEqual(runner.POSTGRES_TAIL_SCENARIOS, config.scenarios)
+        self.assertEqual(225, runner.postgres_tail_expected_rows(config))
+
+    def test_postgres_tail_c1_profile_is_focused(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args(["--profile", "postgres-tail-c1"])
+        self.assertEqual(("grpc",), config.transports)
+        self.assertEqual(("postgres",), config.store_backends)
+        self.assertEqual(2_000, config.requests)
+        self.assertEqual((1,), config.concurrency_levels)
+        self.assertEqual((64,), config.postgres_pool_sizes)
+        self.assertEqual(5, config.repetitions)
+        self.assertEqual(runner.POSTGRES_TAIL_C1_SCENARIOS, config.scenarios)
+        self.assertEqual(5, runner.postgres_tail_expected_rows(config))
 
     def test_postgres_tail_profile_allows_pool_size_override(self):
         runner = load_runner_module()
@@ -287,6 +301,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             ])
         self.assertEqual((8, 32), config.postgres_pool_sizes)
         self.assertEqual((16, 64), cli_config.postgres_pool_sizes)
+        self.assertEqual(150, runner.postgres_tail_expected_rows(config))
         self.assertEqual(150, runner.postgres_tail_expected_rows(cli_config))
 
     def test_rejects_duplicate_postgres_pool_sizes(self):
@@ -330,6 +345,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         rows = self.make_postgres_tail_rows(runner)
         aggregates = runner.median_aggregates(rows, runner.POSTGRES_TAIL_REPETITIONS)
+        self.assertEqual((4, 16, 64), runner.POSTGRES_TAIL_CONCURRENCY)
         self.assertEqual(45, len(aggregates))
         self.assertEqual(5, aggregates[0]["repetitions"])
         self.assertEqual(103.0, aggregates[0]["throughput_ops_per_sec"])
@@ -357,22 +373,78 @@ class PerformanceRunnerTest(unittest.TestCase):
 
     def test_query_plan_requires_task_and_push_indexes(self):
         runner = load_runner_module()
+        valid_stdout = (
+            f"{runner.POSTGRES_COMBINED_PLAN_START}\n"
+            f"Index Scan using {runner.POSTGRES_TASK_PRIMARY_INDEX}\n"
+            f"Index Only Scan using {runner.POSTGRES_PUSH_TASK_INDEX}\n"
+            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
+            f"{runner.POSTGRES_COMBINED_PLAN_END}\n"
+        )
         completed = subprocess.CompletedProcess(
             args=[], returncode=0,
-            stdout="Index Scan using a2a_tasks_pkey\nIndex Scan using idx_a2a_push_configs_created_sequence",
+            stdout=valid_stdout,
             stderr="",
         )
         with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
             plans = runner.explain_postgres_queries("postgresql://test", "schema")
-        self.assertIn("idx_a2a_push_configs_created_sequence", plans)
+        self.assertIn(runner.POSTGRES_PUSH_ORDER_INDEX, plans)
         command = run.call_args.args[0]
         sql = command[-1]
-        self.assertIn("WHERE task_id = ''", sql)
+        self.assertIn("BEGIN;", sql)
+        self.assertIn("INSERT INTO a2a_tasks", sql)
+        self.assertIn("INSERT INTO a2a_push_notification_configs", sql)
+        self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_START}'", sql)
+        self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_END}'", sql)
+        self.assertIn("WITH task AS MATERIALIZED", sql)
+        self.assertIn("config_count AS MATERIALIZED", sql)
+        self.assertIn("LEFT JOIN LATERAL", sql)
+        self.assertIn("AND 0 <= config_count.total", sql)
+        self.assertIn("ORDER BY created_sequence ASC LIMIT 1 OFFSET 0", sql)
+        self.assertIn(
+            f"WHERE task_id = '{runner.POSTGRES_QUERY_PLAN_TASK_ID}'",
+            sql,
+        )
         self.assertIn("SET enable_sort = off", sql)
         self.assertNotIn("SELECT task_id FROM", sql)
-        completed.stdout = "Index Scan using a2a_tasks_pkey"
+        self.assertNotIn("WHERE task_id = ''", sql)
+        self.assertIn("ROLLBACK;", sql)
+
+        completed.stdout = (
+            f"{runner.POSTGRES_COMBINED_PLAN_START}\n"
+            f"Index Scan using {runner.POSTGRES_TASK_PRIMARY_INDEX}\n"
+            f"Index Only Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
+            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
+            f"{runner.POSTGRES_COMBINED_PLAN_END}\n"
+        )
         with mock.patch.object(runner.subprocess, "run", return_value=completed):
-            with self.assertRaisesRegex(ValueError, "idx_a2a_push_configs_created_sequence"):
+            runner.explain_postgres_queries("postgresql://test", "schema")
+
+        for missing_index in (
+            runner.POSTGRES_TASK_PRIMARY_INDEX,
+            runner.POSTGRES_PUSH_ORDER_INDEX,
+        ):
+            completed.stdout = valid_stdout.replace(
+                f"Index Scan using {missing_index}\n", ""
+            ).replace(
+                f"Index Only Scan using {missing_index}\n", ""
+            )
+            with mock.patch.object(runner.subprocess, "run", return_value=completed):
+                with self.assertRaisesRegex(ValueError, missing_index):
+                    runner.explain_postgres_queries("postgresql://test", "schema")
+
+        completed.stdout = (
+            f"{runner.POSTGRES_COMBINED_PLAN_START}\n"
+            f"Index Scan using {runner.POSTGRES_TASK_PRIMARY_INDEX}\n"
+            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
+            f"{runner.POSTGRES_COMBINED_PLAN_END}\n"
+        )
+        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "count and page branches"):
+                runner.explain_postgres_queries("postgresql://test", "schema")
+
+        completed.stdout = "standalone plans only"
+        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "combined query plan"):
                 runner.explain_postgres_queries("postgresql://test", "schema")
 
     @staticmethod
