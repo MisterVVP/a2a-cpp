@@ -106,6 +106,14 @@ POSTGRES_DIAGNOSTIC_PHASES = (
     "transaction_begin",
     "transaction_commit",
 )
+POSTGRES_QUERY_PLAN_TASK_ID = "a2a-query-plan-probe-task"
+POSTGRES_QUERY_PLAN_CONFIG_ID = "a2a-query-plan-probe-config"
+POSTGRES_QUERY_PLAN_URL = "https://example.invalid/a2a-query-plan"
+POSTGRES_COMBINED_PLAN_START = "A2A_COMBINED_PLAN_START"
+POSTGRES_COMBINED_PLAN_END = "A2A_COMBINED_PLAN_END"
+POSTGRES_TASK_PRIMARY_INDEX = "a2a_tasks_pkey"
+POSTGRES_PUSH_TASK_INDEX = "idx_a2a_push_configs_task"
+POSTGRES_PUSH_ORDER_INDEX = "idx_a2a_push_configs_created_sequence"
 
 
 @dataclass(frozen=True)
@@ -846,37 +854,57 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
 def explain_postgres_queries(dsn: str, schema: str) -> str:
     sql = f'''SET search_path TO "{schema}";
 SET enable_seqscan = off;
+SET enable_sort = off;
+BEGIN;
+INSERT INTO a2a_tasks (id, context_id, state, task_proto)
+VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_TASK_ID}', 0, decode('', 'hex'))
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO a2a_push_notification_configs (task_id, config_id, url, config_proto)
+VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_CONFIG_ID}',
+        '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex'))
+ON CONFLICT (task_id, config_id) DO NOTHING;
+SELECT '{POSTGRES_COMBINED_PLAN_START}';
 EXPLAIN (ANALYZE, BUFFERS)
-WITH task AS MATERIALIZED (SELECT 1 FROM a2a_tasks WHERE id = ''),
+WITH task AS MATERIALIZED (
+ SELECT 1 FROM a2a_tasks WHERE id = '{POSTGRES_QUERY_PLAN_TASK_ID}'
+),
 config_count AS MATERIALIZED (
- SELECT count(*) AS total FROM a2a_push_notification_configs WHERE task_id = ''
+ SELECT count(*) AS total FROM a2a_push_notification_configs
+ WHERE task_id = '{POSTGRES_QUERY_PLAN_TASK_ID}'
 )
 SELECT page.config_proto, config_count.total::text
 FROM task CROSS JOIN config_count
 LEFT JOIN LATERAL (
  SELECT config_proto FROM a2a_push_notification_configs
- WHERE task_id = '' AND 0 <= config_count.total
+ WHERE task_id = '{POSTGRES_QUERY_PLAN_TASK_ID}' AND 0 <= config_count.total
  ORDER BY created_sequence ASC LIMIT 1 OFFSET 0
 ) AS page ON true;
-EXPLAIN (ANALYZE, BUFFERS) SELECT task_proto FROM a2a_tasks
- WHERE id = '';
-EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM a2a_push_notification_configs
- WHERE task_id = '';
-SET enable_sort = off;
-EXPLAIN (ANALYZE, BUFFERS) SELECT config_proto FROM a2a_push_notification_configs
- WHERE task_id = ''
- ORDER BY created_sequence ASC;
+SELECT '{POSTGRES_COMBINED_PLAN_END}';
+ROLLBACK;
 '''
     completed = subprocess.run(
         ["psql", dsn, "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--command", sql],
         check=True, capture_output=True, text=True,
     )
-    # The composite index starts with task_id, so PostgreSQL may use it for
-    # both the count predicate and the ordered page instead of selecting the
-    # narrower task-only index. Require the index-backed paths, not one
-    # specific valid planner choice.
-    required_indexes = ("a2a_tasks_pkey", "idx_a2a_push_configs_created_sequence")
-    missing = [index for index in required_indexes if index not in completed.stdout]
+    try:
+        combined_plan = completed.stdout.split(POSTGRES_COMBINED_PLAN_START, 1)[1].split(
+            POSTGRES_COMBINED_PLAN_END, 1
+        )[0]
+    except IndexError as error:
+        raise ValueError("query-plan review did not capture the combined query plan") from error
+
+    required_indexes = (POSTGRES_TASK_PRIMARY_INDEX, POSTGRES_PUSH_ORDER_INDEX)
+    missing = [index for index in required_indexes if index not in combined_plan]
+
+    # Both the count and ordered-page branches must execute an index-backed
+    # push-config scan. The task-only or composite index may serve the count,
+    # while the ordered page must use the composite index.
+    push_index_uses = sum(
+        combined_plan.count(index)
+        for index in (POSTGRES_PUSH_TASK_INDEX, POSTGRES_PUSH_ORDER_INDEX)
+    )
+    if push_index_uses < 2:
+        missing.append("index-backed push-config count and page branches")
     if missing:
         raise ValueError(f"query-plan review did not use required indexes: {', '.join(missing)}")
     return completed.stdout
