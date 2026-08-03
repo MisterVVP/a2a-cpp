@@ -57,6 +57,9 @@ constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
 constexpr std::string_view kStreamingTaskIdPrefix = "task-stream-";
 constexpr std::size_t kTaskLockStripeCount = 64U;
+constexpr std::size_t kConditionalWriteRetryLimit = 8U;
+constexpr std::string_view kConditionalWriteRetryExhaustedMessage = "conditional task persistence retry limit exceeded";
+constexpr std::string_view kExampleTaskNotFoundMessage = "Task not found";
 
 [[nodiscard]] bool IsTaskNotFoundError(const core::Error& error) {
   return error.code() == core::ErrorCode::kRemoteProtocol && error.protocol_code().has_value() &&
@@ -117,117 +120,145 @@ class ExampleExecutor final : public server::AgentExecutor {
     std::string task_id = task_id_result.value();
     std::lock_guard task_lock(TaskMutex(task_id));
 
-    auto existing = task_store_->Get(task_id);
-    lf::a2a::v1::Task task;
-    if (existing.ok()) {
-      task = existing.value();
-    } else {
-      if (!IsTaskNotFoundError(existing.error())) {
-        return existing.error();
-      }
-    }
-    task.set_id(task_id);
-    if (task.context_id().empty()) {
-      if (!request.message().context_id().empty()) {
-        task.set_context_id(request.message().context_id());
+    const bool supports_conditional_writes = task_store_->SupportsConditionalWrites();
+    for (std::size_t attempt = 0; attempt < kConditionalWriteRetryLimit; ++attempt) {
+      std::uint64_t expected_revision = 0;
+      core::Result<lf::a2a::v1::Task> existing =
+          core::protocol_errors::TaskNotFound(std::string(kExampleTaskNotFoundMessage));
+      if (supports_conditional_writes) {
+        auto snapshot = task_store_->GetSnapshot(task_id);
+        if (snapshot.ok()) {
+          expected_revision = snapshot.value().revision;
+          existing = std::move(snapshot.value().task);
+        } else {
+          existing = snapshot.error();
+        }
       } else {
-        task.set_context_id("ctx-" + task_id);
+        existing = task_store_->Get(task_id);
       }
-    }
-    task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
-    task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
-    task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
-    const std::uint64_t status_timestamp = status_timestamp_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
-    task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp));
-
-    task.clear_artifacts();
-    const ExampleIntent interop_intent = ExtractExampleIntent(request, task_id);
-
-    if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_COMPLETED) {
-      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
-    } else if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_INPUT_REQUIRED) {
-      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
-    }
-
-    google::protobuf::Value structured_data;
-    auto* data_fields = structured_data.mutable_struct_value()->mutable_fields();
-    (*data_fields)[std::string{kStructuredDataKey}].set_string_value(std::string{kStructuredDataValue});
-    (*data_fields)[std::string{kStructuredDataCountKey}].set_number_value(kStructuredDataCount);
-
-    const auto text_artifact = core::ResponseBuilders::TextArtifact(
-        constants::kGeneratedTextContent, {.artifact_id = "artifact-text-" + task_id, .name = "text-artifact"});
-    const auto file_artifact =
-        core::ResponseBuilders::RawFileArtifact(kGeneratedFileContent,
-                                                {.filename = std::string(constants::kOutputFilename),
-                                                 .media_type = std::string(constants::kTextPlainMediaType)},
-                                                {.artifact_id = "artifact-file-" + task_id, .name = "file-artifact"});
-    const auto file_url_artifact = core::ResponseBuilders::FileUrlArtifact(
-        kOutputFileUrl,
-        {.filename = std::string(constants::kOutputFilename),
-         .media_type = std::string(constants::kTextPlainMediaType)},
-        {.artifact_id = "artifact-file-url-" + task_id, .name = "file-url-artifact"});
-    const auto data_artifact = core::ResponseBuilders::StructuredDataArtifact(
-        structured_data, {.artifact_id = "artifact-data-" + task_id, .name = "data-artifact"});
-
-    if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFileUrl) {
-      core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_url_artifact,
-                                                      {text_artifact, file_artifact, data_artifact});
-    } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFile) {
-      core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_artifact,
-                                                      {text_artifact, file_url_artifact, data_artifact});
-    } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kData) {
-      core::ResponseBuilders::AddArtifactsWithPrimary(&task, data_artifact,
-                                                      {text_artifact, file_artifact, file_url_artifact});
-    } else {
-      core::ResponseBuilders::AddArtifactsWithPrimary(&task, text_artifact,
-                                                      {file_artifact, file_url_artifact, data_artifact});
-    }
-
-    constexpr auto kHistoryPolicy = server::TaskStore::HistoryAppendPolicy::kDedupByMessageId;
-    const bool duplicate_history =
-        server::FindHistoryDedupeReason(task.history(), request.message(), kHistoryPolicy).has_value();
-    if (!duplicate_history) {
-      *task.add_history() = request.message();
-    }
-    const auto stored = task_store_->CreateOrUpdate(task);
-    if (!stored.ok()) {
-      return stored.error();
-    }
-    const auto register_push = push_notifications_.RegisterInlineConfigIfPresent(request, task_id);
-    if (!register_push.ok()) {
-      return register_push.error();
-    }
-    if (duplicate_history) {
-      const auto append = task_store_->AppendTaskHistory(task_id, request.message(), kHistoryPolicy);
-      if (!append.ok()) {
-        return append.error();
+      lf::a2a::v1::Task task;
+      if (existing.ok()) {
+        task = existing.value();
+      } else {
+        if (!IsTaskNotFoundError(existing.error())) {
+          return existing.error();
+        }
       }
-    }
-    const auto notify = push_notifications_.NotifyTaskUpdated(task);
-    if (!notify.ok()) {
-      return notify.error();
-    }
-    subscriptions_.PublishTaskUpdated(task);
-
-    lf::a2a::v1::SendMessageResponse response;
-    response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
-    response.mutable_message()->set_message_id("response-" + task_id);
-    response.mutable_message()->set_task_id(task_id);
-    response.mutable_message()->set_context_id(task.context_id());
-    const bool wants_message_response = interop_intent.response_mode == ExampleResponseMode::kMessage;
-    response.mutable_message()->add_parts()->set_text(wants_message_response ? "Direct message response" : "ack");
-    if (wants_message_response) {
-      // Keep message payload set.
-    } else {
-      if (request.has_configuration() && request.configuration().has_history_length()) {
-        const int keep = request.configuration().history_length();
-        server::ApplyHistoryRetention(&task, keep <= 0 ? std::optional<std::size_t>{0}
-                                                       : std::optional<std::size_t>{static_cast<std::size_t>(keep)});
+      task.set_id(task_id);
+      if (task.context_id().empty()) {
+        if (!request.message().context_id().empty()) {
+          task.set_context_id(request.message().context_id());
+        } else {
+          task.set_context_id("ctx-" + task_id);
+        }
       }
-      *response.mutable_task() = task;
+      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+      task.mutable_status()->mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+      task.mutable_status()->mutable_message()->set_message_id("status-" + task_id);
+      task.mutable_status()->mutable_message()->add_parts()->set_text("ack");
+      const std::uint64_t status_timestamp = status_timestamp_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+      task.mutable_status()->mutable_timestamp()->set_seconds(static_cast<int64_t>(status_timestamp));
+
+      task.clear_artifacts();
+      const ExampleIntent interop_intent = ExtractExampleIntent(request, task_id);
+
+      if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_COMPLETED) {
+        task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_COMPLETED);
+      } else if (interop_intent.terminal_state == lf::a2a::v1::TASK_STATE_INPUT_REQUIRED) {
+        task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+      }
+
+      google::protobuf::Value structured_data;
+      auto* data_fields = structured_data.mutable_struct_value()->mutable_fields();
+      (*data_fields)[std::string{kStructuredDataKey}].set_string_value(std::string{kStructuredDataValue});
+      (*data_fields)[std::string{kStructuredDataCountKey}].set_number_value(kStructuredDataCount);
+
+      const auto text_artifact = core::ResponseBuilders::TextArtifact(
+          constants::kGeneratedTextContent, {.artifact_id = "artifact-text-" + task_id, .name = "text-artifact"});
+      const auto file_artifact =
+          core::ResponseBuilders::RawFileArtifact(kGeneratedFileContent,
+                                                  {.filename = std::string(constants::kOutputFilename),
+                                                   .media_type = std::string(constants::kTextPlainMediaType)},
+                                                  {.artifact_id = "artifact-file-" + task_id, .name = "file-artifact"});
+      const auto file_url_artifact = core::ResponseBuilders::FileUrlArtifact(
+          kOutputFileUrl,
+          {.filename = std::string(constants::kOutputFilename),
+           .media_type = std::string(constants::kTextPlainMediaType)},
+          {.artifact_id = "artifact-file-url-" + task_id, .name = "file-url-artifact"});
+      const auto data_artifact = core::ResponseBuilders::StructuredDataArtifact(
+          structured_data, {.artifact_id = "artifact-data-" + task_id, .name = "data-artifact"});
+
+      if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFileUrl) {
+        core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_url_artifact,
+                                                        {text_artifact, file_artifact, data_artifact});
+      } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kFile) {
+        core::ResponseBuilders::AddArtifactsWithPrimary(&task, file_artifact,
+                                                        {text_artifact, file_url_artifact, data_artifact});
+      } else if (interop_intent.primary_artifact == ExamplePrimaryArtifactType::kData) {
+        core::ResponseBuilders::AddArtifactsWithPrimary(&task, data_artifact,
+                                                        {text_artifact, file_artifact, file_url_artifact});
+      } else {
+        core::ResponseBuilders::AddArtifactsWithPrimary(&task, text_artifact,
+                                                        {file_artifact, file_url_artifact, data_artifact});
+      }
+
+      constexpr auto kHistoryPolicy = server::TaskStore::HistoryAppendPolicy::kDedupByMessageId;
+      const bool duplicate_history =
+          server::FindHistoryDedupeReason(task.history(), request.message(), kHistoryPolicy).has_value();
+      if (supports_conditional_writes && !duplicate_history) {
+        *task.add_history() = request.message();
+      }
+      if (supports_conditional_writes) {
+        const auto stored = task_store_->CreateOrUpdateIfRevision(task, expected_revision);
+        if (!stored.ok()) {
+          return stored.error();
+        }
+        if (stored.value() == server::TaskStore::ConditionalWriteResult::kConflict) {
+          continue;
+        }
+      } else {
+        const auto stored = task_store_->CreateOrUpdate(task);
+        if (!stored.ok()) {
+          return stored.error();
+        }
+      }
+      const auto register_push = push_notifications_.RegisterInlineConfigIfPresent(request, task_id);
+      if (!register_push.ok()) {
+        return register_push.error();
+      }
+      if (duplicate_history || !supports_conditional_writes) {
+        const auto append = task_store_->AppendTaskHistory(task_id, request.message(), kHistoryPolicy);
+        if (!append.ok()) {
+          return append.error();
+        }
+        task = append.value();
+      }
+      const auto notify = push_notifications_.NotifyTaskUpdated(task);
+      if (!notify.ok()) {
+        return notify.error();
+      }
+      subscriptions_.PublishTaskUpdated(task);
+
+      lf::a2a::v1::SendMessageResponse response;
+      response.mutable_message()->set_role(lf::a2a::v1::ROLE_AGENT);
+      response.mutable_message()->set_message_id("response-" + task_id);
+      response.mutable_message()->set_task_id(task_id);
+      response.mutable_message()->set_context_id(task.context_id());
+      const bool wants_message_response = interop_intent.response_mode == ExampleResponseMode::kMessage;
+      response.mutable_message()->add_parts()->set_text(wants_message_response ? "Direct message response" : "ack");
+      if (wants_message_response) {
+        // Keep message payload set.
+      } else {
+        if (request.has_configuration() && request.configuration().has_history_length()) {
+          const int keep = request.configuration().history_length();
+          server::ApplyHistoryRetention(&task, keep <= 0 ? std::optional<std::size_t>{0}
+                                                         : std::optional<std::size_t>{static_cast<std::size_t>(keep)});
+        }
+        *response.mutable_task() = task;
+      }
+      return response;
     }
-    return response;
+    return core::Error::Internal(std::string(kConditionalWriteRetryExhaustedMessage));
   }
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(

@@ -22,6 +22,8 @@
 namespace a2a::server::stores {
 namespace {
 
+constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
+
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
 std::optional<core::Error> g_test_acquire_failure;
@@ -273,6 +275,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                    " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
                                    "has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE, "
                                    "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
+                                   "revision BIGINT NOT NULL DEFAULT 1, "
                                    "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
                                    task_created_sequence_regclass +
                                    "), "
@@ -282,6 +285,10 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       task_created_sequence_regclass + ");";
   const std::string add_tasks_has_status_timestamp =
       "ALTER TABLE " + tasks + " ADD COLUMN IF NOT EXISTS has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE;";
+  std::string add_tasks_revision = "ALTER TABLE ";
+  add_tasks_revision.reserve(add_tasks_revision.size() + tasks.size() + kAlterTaskRevisionSqlReserve);
+  add_tasks_revision.append(tasks);
+  add_tasks_revision.append(" ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1;");
   const std::string create_tasks_created_sequence_index =
       CreateIndexStatement(kTasksCreatedSequenceIndex, tasks, kTasksCreatedSequenceIndexColumns);
   const std::string create_tasks_context_index =
@@ -302,11 +309,19 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string create_push_configs_created_sequence_index =
       CreateIndexStatement(kPushConfigsCreatedSequenceIndex, push_configs, kPushConfigsCreatedSequenceIndexColumns);
 
-  const std::vector<std::string> schema_statements = {
-      create_task_created_sequence,      create_push_created_sequence,   create_tasks,
-      add_tasks_created_sequence,        add_tasks_has_status_timestamp, create_tasks_created_sequence_index,
-      create_tasks_context_index,        create_tasks_state_index,       create_push_configs,
-      add_push_configs_created_sequence, create_push_configs_task_index, create_push_configs_created_sequence_index};
+  const std::vector<std::string> schema_statements = {create_task_created_sequence,
+                                                      create_push_created_sequence,
+                                                      create_tasks,
+                                                      add_tasks_created_sequence,
+                                                      add_tasks_has_status_timestamp,
+                                                      add_tasks_revision,
+                                                      create_tasks_created_sequence_index,
+                                                      create_tasks_context_index,
+                                                      create_tasks_state_index,
+                                                      create_push_configs,
+                                                      add_push_configs_created_sequence,
+                                                      create_push_configs_task_index,
+                                                      create_push_configs_created_sequence_index};
   for (const auto& statement : schema_statements) {
     const auto executed = Exec(connection, statement, "initialize postgres store schema");
     if (!executed.ok()) {

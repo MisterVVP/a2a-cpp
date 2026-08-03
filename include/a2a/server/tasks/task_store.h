@@ -8,14 +8,28 @@
 #include <string>
 #include <string_view>
 
+#include "a2a/core/error.h"
 #include "a2a/core/result.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
 
+inline constexpr std::string_view kConditionalTaskPersistenceUnsupportedMessage =
+    "conditional task persistence is not supported";
+
 class TaskStore {
  public:
+  struct TaskSnapshot final {
+    lf::a2a::v1::Task task;
+    std::uint64_t revision = 0;
+  };
+
+  enum class ConditionalWriteResult : std::uint8_t {
+    kUpdated,
+    kConflict,
+  };
+
   enum class HistoryAppendPolicy {
     // Appends every request in arrival order (no dedupe).
     kNoDedup,
@@ -46,6 +60,17 @@ class TaskStore {
   virtual ~TaskStore() = default;
 
   [[nodiscard]] virtual core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) = 0;
+  [[nodiscard]] virtual bool SupportsConditionalWrites() const noexcept { return false; }
+  [[nodiscard]] virtual core::Result<TaskSnapshot> GetSnapshot(std::string_view id) const {
+    (void)id;
+    return core::Error::Internal(std::string(kConditionalTaskPersistenceUnsupportedMessage));
+  }
+  [[nodiscard]] virtual core::Result<ConditionalWriteResult> CreateOrUpdateIfRevision(const lf::a2a::v1::Task& task,
+                                                                                      std::uint64_t expected_revision) {
+    (void)task;
+    (void)expected_revision;
+    return core::Error::Internal(std::string(kConditionalTaskPersistenceUnsupportedMessage));
+  }
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Get(std::string_view id) const = 0;
   [[nodiscard]] virtual core::Result<ListTasksResponse> List(const ListTasksRequest& request) const = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) = 0;

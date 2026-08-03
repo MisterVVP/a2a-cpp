@@ -20,12 +20,16 @@
 namespace a2a::server {
 namespace {
 
+constexpr std::uint64_t kInitialTaskRevision = 1;
+
 class TaskAppendRollback final : private core::NonCopyableOrMovable {
  public:
-  explicit TaskAppendRollback(std::vector<lf::a2a::v1::Task>* tasks) : tasks_(tasks) {}
+  TaskAppendRollback(std::vector<lf::a2a::v1::Task>* tasks, std::vector<std::uint64_t>* revisions)
+      : tasks_(tasks), revisions_(revisions) {}
   ~TaskAppendRollback() {
     if (tasks_ != nullptr) {
       tasks_->pop_back();
+      revisions_->pop_back();
     }
   }
 
@@ -33,6 +37,7 @@ class TaskAppendRollback final : private core::NonCopyableOrMovable {
 
  private:
   std::vector<lf::a2a::v1::Task>* tasks_;
+  std::vector<std::uint64_t>* revisions_;
 };
 
 }  // namespace
@@ -49,11 +54,13 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
   const auto existing = task_indices_.find(task.id());
   if (existing != task_indices_.end()) {
     ordered_tasks_[existing->second] = task;
+    ++revisions_[existing->second];
     return {};
   }
 
   ordered_tasks_.push_back(task);
-  TaskAppendRollback rollback(&ordered_tasks_);
+  revisions_.push_back(kInitialTaskRevision);
+  TaskAppendRollback rollback(&ordered_tasks_, &revisions_);
   const bool inserted = task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second;
   if (!inserted) {
     return core::Error::Internal("Task index insertion failed");
@@ -61,6 +68,46 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
 
   rollback.Commit();
   return {};
+}
+
+core::Result<TaskStore::TaskSnapshot> InMemoryTaskStore::GetSnapshot(std::string_view id) const {
+  if (id.empty()) {
+    return core::Error::Validation("Task id is required");
+  }
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  const auto it = task_indices_.find(id);
+  if (it == task_indices_.end()) {
+    return core::protocol_errors::TaskNotFound("Task not found");
+  }
+  return TaskSnapshot{.task = ordered_tasks_[it->second], .revision = revisions_[it->second]};
+}
+
+core::Result<TaskStore::ConditionalWriteResult> InMemoryTaskStore::CreateOrUpdateIfRevision(
+    const lf::a2a::v1::Task& task, std::uint64_t expected_revision) {
+  if (task.id().empty()) {
+    return core::Error::Validation("Task.id is required");
+  }
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  const auto existing = task_indices_.find(task.id());
+  if (existing == task_indices_.end()) {
+    if (expected_revision != 0) {
+      return ConditionalWriteResult::kConflict;
+    }
+    ordered_tasks_.push_back(task);
+    revisions_.push_back(kInitialTaskRevision);
+    TaskAppendRollback rollback(&ordered_tasks_, &revisions_);
+    if (!task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second) {
+      return core::Error::Internal("Task index insertion failed");
+    }
+    rollback.Commit();
+    return ConditionalWriteResult::kUpdated;
+  }
+  if (revisions_[existing->second] != expected_revision) {
+    return ConditionalWriteResult::kConflict;
+  }
+  ordered_tasks_[existing->second] = task;
+  ++revisions_[existing->second];
+  return ConditionalWriteResult::kUpdated;
 }
 
 core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) const {
@@ -182,6 +229,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
 
   auto* mutable_status = task.mutable_status();
   mutable_status->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
+  ++revisions_[it->second];
   return task;
 }
 
@@ -216,6 +264,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
       result = task;
     } else {
       *task.add_history() = message;
+      ++revisions_[it->second];
       result = task;
     }
   }

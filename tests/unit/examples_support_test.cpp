@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <barrier>
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +25,22 @@
 #include "example_support.h"
 
 namespace {
+
+constexpr std::string_view kSingleUpsertTaskId = "single-upsert-task";
+constexpr std::string_view kSingleUpsertMessageId = "single-upsert-message";
+constexpr std::string_view kDuplicateTaskId = "duplicate-task";
+constexpr std::string_view kDuplicateCreateMessageId = "duplicate-create";
+constexpr std::string_view kDuplicateMessageId = "duplicate-message";
+constexpr std::string_view kCrossExecutorTaskId = "cross-executor-task";
+constexpr std::string_view kCrossExecutorCreateMessageId = "cross-executor-create";
+constexpr std::string_view kCrossExecutorFirstMessageId = "cross-executor-first";
+constexpr std::string_view kCrossExecutorSecondMessageId = "cross-executor-second";
+constexpr std::size_t kSingleHistoryEntry = 1U;
+constexpr std::size_t kDuplicateHistorySize = 2U;
+constexpr std::size_t kCrossExecutorHistorySize = 3U;
+constexpr int kSingleUpsertCallCount = 1;
+constexpr int kDuplicateTotalUpsertCount = 3;
+constexpr std::string_view kCrossExecutorResultNotPopulated = "cross-executor result not populated";
 
 class FixedTaskIdGenerator final : public a2a::server::TaskIdGenerator {
  public:
@@ -149,6 +166,20 @@ class CountingTaskStore final : public a2a::server::TaskStore {
     return store_.CreateOrUpdate(task);
   }
 
+  [[nodiscard]] bool SupportsConditionalWrites() const noexcept override { return true; }
+
+  [[nodiscard]] a2a::core::Result<TaskSnapshot> GetSnapshot(std::string_view id) const override {
+    ++get_calls_;
+    return store_.GetSnapshot(id);
+  }
+
+  [[nodiscard]] a2a::core::Result<ConditionalWriteResult> CreateOrUpdateIfRevision(
+      const lf::a2a::v1::Task& task, std::uint64_t expected_revision) override {
+    ++upsert_calls_;
+    last_upsert_ = task;
+    return store_.CreateOrUpdateIfRevision(task, expected_revision);
+  }
+
   [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override {
     ++get_calls_;
     return store_.Get(id);
@@ -183,6 +214,49 @@ class CountingTaskStore final : public a2a::server::TaskStore {
   int upsert_calls_ = 0;
   int append_calls_ = 0;
   lf::a2a::v1::Task last_upsert_;
+};
+
+class CoordinatedConditionalTaskStore final : public a2a::server::TaskStore {
+ public:
+  [[nodiscard]] a2a::core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override {
+    return store_.CreateOrUpdate(task);
+  }
+  [[nodiscard]] bool SupportsConditionalWrites() const noexcept override { return true; }
+  [[nodiscard]] a2a::core::Result<TaskSnapshot> GetSnapshot(std::string_view id) const override {
+    auto snapshot = store_.GetSnapshot(id);
+    if (coordinate_snapshots_ && coordinated_snapshot_count_.fetch_add(1) < 2) {
+      snapshot_barrier_.arrive_and_wait();
+    }
+    return snapshot;
+  }
+  [[nodiscard]] a2a::core::Result<ConditionalWriteResult> CreateOrUpdateIfRevision(
+      const lf::a2a::v1::Task& task, std::uint64_t expected_revision) override {
+    return store_.CreateOrUpdateIfRevision(task, expected_revision);
+  }
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override { return store_.Get(id); }
+  [[nodiscard]] a2a::core::Result<a2a::server::ListTasksResponse> List(
+      const a2a::server::ListTasksRequest& request) const override {
+    return store_.List(request);
+  }
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override { return store_.Cancel(id); }
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                       const lf::a2a::v1::Message& message,
+                                                                       HistoryAppendPolicy policy) override {
+    ++append_calls_;
+    return store_.AppendTaskHistory(task_id, message, policy);
+  }
+  [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override {
+    return store_.GetHistoryTelemetrySnapshot();
+  }
+  void CoordinateNextTwoSnapshots() noexcept { coordinate_snapshots_ = true; }
+  [[nodiscard]] int append_calls() const noexcept { return append_calls_; }
+
+ private:
+  a2a::server::InMemoryTaskStore store_;
+  mutable std::barrier<> snapshot_barrier_{2};
+  mutable std::atomic<int> coordinated_snapshot_count_ = 0;
+  mutable bool coordinate_snapshots_ = false;
+  int append_calls_ = 0;
 };
 
 [[nodiscard]] a2a::examples::ExampleExecutor MakeExecutorWithTaskId(std::string task_id) {
@@ -220,6 +294,45 @@ class CountingTaskStore final : public a2a::server::TaskStore {
 [[nodiscard]] bool TaskContainsMessage(const lf::a2a::v1::Task& task, std::string_view message_id) {
   return std::ranges::any_of(task.history(),
                              [&](const lf::a2a::v1::Message& message) { return message.message_id() == message_id; });
+}
+
+struct CrossExecutorResult final {
+  std::array<bool, 2> succeeded{};
+  a2a::core::Result<lf::a2a::v1::Task> stored_task =
+      a2a::core::Error::Internal(std::string(kCrossExecutorResultNotPopulated));
+  int append_calls = 0;
+};
+
+[[nodiscard]] CrossExecutorResult RunCrossExecutorConflictScenario() {
+  CoordinatedConditionalTaskStore task_store;
+  a2a::examples::ExampleExecutorOptions first_options;
+  first_options.task_store = &task_store;
+  first_options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kCrossExecutorTaskId));
+  a2a::examples::ExampleExecutor first_executor(std::move(first_options));
+  a2a::examples::ExampleExecutorOptions second_options;
+  second_options.task_store = &task_store;
+  second_options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kCrossExecutorTaskId));
+  a2a::examples::ExampleExecutor second_executor(std::move(second_options));
+  a2a::server::RequestContext create_context;
+  if (!first_executor.SendMessage(MakeValidSendRequest(std::string(kCrossExecutorCreateMessageId)), create_context)
+           .ok()) {
+    return {};
+  }
+  task_store.CoordinateNextTwoSnapshots();
+  CrossExecutorResult result;
+  const auto send = [&](a2a::examples::ExampleExecutor* executor, std::string_view message_id, std::size_t index) {
+    auto request = MakeValidSendRequest(std::string(message_id));
+    request.mutable_message()->set_task_id(std::string(kCrossExecutorTaskId));
+    a2a::server::RequestContext context;
+    result.succeeded[index] = executor->SendMessage(request, context).ok();
+  };
+  std::thread first(send, &first_executor, kCrossExecutorFirstMessageId, 0U);
+  std::thread second(send, &second_executor, kCrossExecutorSecondMessageId, 1U);
+  first.join();
+  second.join();
+  result.stored_task = task_store.Get(kCrossExecutorTaskId);
+  result.append_calls = task_store.append_calls();
+  return result;
 }
 
 TEST(ExampleSupportTest, UrlToTargetExtractsNormalizedPathOnly) {
@@ -355,50 +468,59 @@ TEST(ExampleSupportTest, SendMessagePropagatesInjectedStoreReadErrors) {
 }
 
 TEST(ExampleSupportTest, SendMessagePersistsCompleteTaskWithOneUpsert) {
-  constexpr std::string_view kTaskId = "single-upsert-task";
   CountingTaskStore task_store;
   a2a::examples::ExampleExecutorOptions options;
   options.task_store = &task_store;
-  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kTaskId));
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kSingleUpsertTaskId));
   a2a::examples::ExampleExecutor executor(std::move(options));
   a2a::server::RequestContext context;
 
-  const auto result = executor.SendMessage(MakeValidSendRequest("single-upsert-message"), context);
+  const auto result = executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(task_store.get_calls(), 1);
-  EXPECT_EQ(task_store.upsert_calls(), 1);
+  EXPECT_EQ(task_store.get_calls(), kSingleUpsertCallCount);
+  EXPECT_EQ(task_store.upsert_calls(), kSingleUpsertCallCount);
   EXPECT_EQ(task_store.append_calls(), 0);
   EXPECT_EQ(task_store.last_upsert().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
   EXPECT_FALSE(task_store.last_upsert().artifacts().empty());
-  ASSERT_EQ(task_store.last_upsert().history_size(), 1);
-  EXPECT_EQ(task_store.last_upsert().history(0).message_id(), "single-upsert-message");
+  ASSERT_EQ(task_store.last_upsert().history_size(), kSingleHistoryEntry);
+  EXPECT_EQ(task_store.last_upsert().history(0).message_id(), kSingleUpsertMessageId);
 }
 
 TEST(ExampleSupportTest, DuplicateSendUsesAppendOnlyForDedupeTelemetry) {
-  constexpr std::string_view kTaskId = "duplicate-task";
-  constexpr std::string_view kMessageId = "duplicate-message";
   CountingTaskStore task_store;
   a2a::examples::ExampleExecutorOptions options;
   options.task_store = &task_store;
-  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kTaskId));
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kDuplicateTaskId));
   a2a::examples::ExampleExecutor executor(std::move(options));
   a2a::server::RequestContext context;
-  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest("duplicate-create"), context).ok());
-  auto duplicate = MakeValidSendRequest(std::string(kMessageId));
-  duplicate.mutable_message()->set_task_id(std::string(kTaskId));
+  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest(std::string(kDuplicateCreateMessageId)), context).ok());
+  auto duplicate = MakeValidSendRequest(std::string(kDuplicateMessageId));
+  duplicate.mutable_message()->set_task_id(std::string(kDuplicateTaskId));
   ASSERT_TRUE(executor.SendMessage(duplicate, context).ok());
 
   const auto result = executor.SendMessage(duplicate, context);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(task_store.upsert_calls(), 3);
-  EXPECT_EQ(task_store.append_calls(), 1);
-  ASSERT_EQ(result.value().task().history_size(), 2);
+  EXPECT_EQ(task_store.upsert_calls(), kDuplicateTotalUpsertCount);
+  EXPECT_EQ(task_store.append_calls(), kSingleUpsertCallCount);
+  ASSERT_EQ(result.value().task().history_size(), kDuplicateHistorySize);
   const auto telemetry = task_store.GetHistoryTelemetrySnapshot();
   EXPECT_EQ(telemetry.dedupe_dropped_total, 1U);
   EXPECT_EQ(telemetry.dedupe_dropped_by_message_id_and_fingerprint, 1U);
   EXPECT_EQ(telemetry.dedupe_dropped_by_fingerprint_without_message_id, 0U);
+}
+
+TEST(ExampleSupportTest, ConcurrentExecutorsRetryConflictsWithoutLockingHistoryAppend) {
+  const auto result = RunCrossExecutorConflictScenario();
+
+  EXPECT_TRUE(result.succeeded[0]);
+  EXPECT_TRUE(result.succeeded[1]);
+  ASSERT_TRUE(result.stored_task.ok());
+  EXPECT_EQ(result.stored_task.value().history_size(), kCrossExecutorHistorySize);
+  EXPECT_TRUE(TaskContainsMessage(result.stored_task.value(), kCrossExecutorFirstMessageId));
+  EXPECT_TRUE(TaskContainsMessage(result.stored_task.value(), kCrossExecutorSecondMessageId));
+  EXPECT_EQ(result.append_calls, 0);
 }
 
 TEST(ExampleSupportTest, StreamingPropagatesInjectedStoreReadErrors) {
