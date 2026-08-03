@@ -184,7 +184,13 @@ class ExampleExecutor final : public server::AgentExecutor {
                                                       {file_artifact, file_url_artifact, data_artifact});
     }
 
-    const auto stored = lifecycle_.CreateOrUpdateTask(task);
+    constexpr auto kHistoryPolicy = server::TaskStore::HistoryAppendPolicy::kDedupByMessageId;
+    const bool duplicate_history =
+        server::FindHistoryDedupeReason(task.history(), request.message(), kHistoryPolicy).has_value();
+    if (!duplicate_history) {
+      *task.add_history() = request.message();
+    }
+    const auto stored = task_store_->CreateOrUpdate(task);
     if (!stored.ok()) {
       return stored.error();
     }
@@ -192,12 +198,12 @@ class ExampleExecutor final : public server::AgentExecutor {
     if (!register_push.ok()) {
       return register_push.error();
     }
-    const auto append =
-        lifecycle_.AppendHistory(task_id, request.message(), server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
-    if (!append.ok()) {
-      return append.error();
+    if (duplicate_history) {
+      const auto append = task_store_->AppendTaskHistory(task_id, request.message(), kHistoryPolicy);
+      if (!append.ok()) {
+        return append.error();
+      }
     }
-    task = append.value();
     const auto notify = push_notifications_.NotifyTaskUpdated(task);
     if (!notify.ok()) {
       return notify.error();

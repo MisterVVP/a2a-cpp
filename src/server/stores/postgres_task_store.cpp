@@ -333,7 +333,14 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
   if (!begun.ok()) {
     return begun.error();
   }
+#ifdef A2A_POSTGRES_STORE_TESTING
+  auto task = [&]() {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskHistoryLockRead);
+    return SelectTaskForUpdate(lease.value().get(), options_, task_id);
+  }();
+#else
   auto task = SelectTaskForUpdate(lease.value().get(), options_, task_id);
+#endif
   if (!task.ok()) {
     return task.error();
   }

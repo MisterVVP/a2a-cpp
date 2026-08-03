@@ -98,6 +98,7 @@ POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
     "task_get",
     "task_upsert",
+    "task_history_lock_read",
     "push_config_upsert",
     "push_config_get",
     "push_config_delete",

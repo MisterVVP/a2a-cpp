@@ -50,18 +50,11 @@ constexpr double kP90 = 90.0;
 constexpr double kP95 = 95.0;
 constexpr double kP99 = 99.0;
 constexpr std::size_t kIdReserveSlack = 16U;
-constexpr std::size_t kPostgresDiagnosticPhaseCount = 10U;
+constexpr std::size_t kPostgresDiagnosticPhaseCount = 11U;
 constexpr std::array<std::string_view, kPostgresDiagnosticPhaseCount> kPostgresDiagnosticPhaseNames = {
-    "connection_acquire_wait",
-    "task_get",
-    "task_upsert",
-    "push_config_upsert",
-    "push_config_get",
-    "push_config_delete",
-    "push_config_list_count",
-    "push_config_list_select",
-    "transaction_begin",
-    "transaction_commit"};
+    "connection_acquire_wait", "task_get",          "task_upsert",        "task_history_lock_read",
+    "push_config_upsert",      "push_config_get",   "push_config_delete", "push_config_list_count",
+    "push_config_list_select", "transaction_begin", "transaction_commit"};
 constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
 constexpr char kPostgresSchemaEnv[] = "A2A_PERF_POSTGRES_SCHEMA";
 constexpr char kPostgresPoolSizeEnv[] = "A2A_PERF_POSTGRES_POOL_SIZE";

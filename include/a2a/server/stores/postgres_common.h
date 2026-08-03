@@ -29,6 +29,7 @@ enum class PostgresDiagnosticPhase : std::size_t {
   kConnectionAcquireWait,
   kTaskGet,
   kTaskUpsert,
+  kTaskHistoryLockRead,
   kPushConfigUpsert,
   kPushConfigGet,
   kPushConfigDelete,

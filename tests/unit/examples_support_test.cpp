@@ -141,6 +141,50 @@ class BlockingGetTaskStore final : public a2a::server::TaskStore {
   bool released_ = false;
 };
 
+class CountingTaskStore final : public a2a::server::TaskStore {
+ public:
+  [[nodiscard]] a2a::core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override {
+    ++upsert_calls_;
+    last_upsert_ = task;
+    return store_.CreateOrUpdate(task);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override {
+    ++get_calls_;
+    return store_.Get(id);
+  }
+
+  [[nodiscard]] a2a::core::Result<a2a::server::ListTasksResponse> List(
+      const a2a::server::ListTasksRequest& request) const override {
+    return store_.List(request);
+  }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override { return store_.Cancel(id); }
+
+  [[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendTaskHistory(std::string_view task_id,
+                                                                       const lf::a2a::v1::Message& message,
+                                                                       HistoryAppendPolicy policy) override {
+    ++append_calls_;
+    return store_.AppendTaskHistory(task_id, message, policy);
+  }
+
+  [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override {
+    return store_.GetHistoryTelemetrySnapshot();
+  }
+
+  [[nodiscard]] int get_calls() const noexcept { return get_calls_; }
+  [[nodiscard]] int upsert_calls() const noexcept { return upsert_calls_; }
+  [[nodiscard]] int append_calls() const noexcept { return append_calls_; }
+  [[nodiscard]] const lf::a2a::v1::Task& last_upsert() const noexcept { return last_upsert_; }
+
+ private:
+  a2a::server::InMemoryTaskStore store_;
+  mutable int get_calls_ = 0;
+  int upsert_calls_ = 0;
+  int append_calls_ = 0;
+  lf::a2a::v1::Task last_upsert_;
+};
+
 [[nodiscard]] a2a::examples::ExampleExecutor MakeExecutorWithTaskId(std::string task_id) {
   a2a::examples::ExampleExecutorOptions options;
   options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::move(task_id));
@@ -308,6 +352,53 @@ TEST(ExampleSupportTest, SendMessagePropagatesInjectedStoreReadErrors) {
   EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
   EXPECT_EQ(result.error().message(), "read failed");
   EXPECT_EQ(task_store.create_or_update_calls(), 0);
+}
+
+TEST(ExampleSupportTest, SendMessagePersistsCompleteTaskWithOneUpsert) {
+  constexpr std::string_view kTaskId = "single-upsert-task";
+  CountingTaskStore task_store;
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kTaskId));
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+
+  const auto result = executor.SendMessage(MakeValidSendRequest("single-upsert-message"), context);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(task_store.get_calls(), 1);
+  EXPECT_EQ(task_store.upsert_calls(), 1);
+  EXPECT_EQ(task_store.append_calls(), 0);
+  EXPECT_EQ(task_store.last_upsert().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  EXPECT_FALSE(task_store.last_upsert().artifacts().empty());
+  ASSERT_EQ(task_store.last_upsert().history_size(), 1);
+  EXPECT_EQ(task_store.last_upsert().history(0).message_id(), "single-upsert-message");
+}
+
+TEST(ExampleSupportTest, DuplicateSendUsesAppendOnlyForDedupeTelemetry) {
+  constexpr std::string_view kTaskId = "duplicate-task";
+  constexpr std::string_view kMessageId = "duplicate-message";
+  CountingTaskStore task_store;
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kTaskId));
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest("duplicate-create"), context).ok());
+  auto duplicate = MakeValidSendRequest(std::string(kMessageId));
+  duplicate.mutable_message()->set_task_id(std::string(kTaskId));
+  ASSERT_TRUE(executor.SendMessage(duplicate, context).ok());
+
+  const auto result = executor.SendMessage(duplicate, context);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(task_store.upsert_calls(), 3);
+  EXPECT_EQ(task_store.append_calls(), 1);
+  ASSERT_EQ(result.value().task().history_size(), 2);
+  const auto telemetry = task_store.GetHistoryTelemetrySnapshot();
+  EXPECT_EQ(telemetry.dedupe_dropped_total, 1U);
+  EXPECT_EQ(telemetry.dedupe_dropped_by_message_id_and_fingerprint, 1U);
+  EXPECT_EQ(telemetry.dedupe_dropped_by_fingerprint_without_message_id, 0U);
 }
 
 TEST(ExampleSupportTest, StreamingPropagatesInjectedStoreReadErrors) {

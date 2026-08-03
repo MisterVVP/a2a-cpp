@@ -517,6 +517,32 @@ TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
   ExpectPostgresAcquireFailure(append.error());
 }
 
+TEST(StoreConformanceTest, PostgresAppendHistoryReportsLockingReadDiagnostic) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema("history_lock_read_diagnostic");
+  a2a::server::stores::PostgresTaskStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
+  AddPostgresTask(store, "history-diagnostic-task", "history-diagnostic-context", lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+
+  const auto append = store.AppendTaskHistory(
+      "history-diagnostic-task", a2a::tests::store_conformance::MakeMessage("history-diagnostic-message", "entry"),
+      a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+
+  ASSERT_TRUE(append.ok());
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistoryLockRead)],
+      1U);
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+}
+
 TEST(StoreConformanceTest, PostgresPushNotificationStorePropagatesAcquireFailures) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
