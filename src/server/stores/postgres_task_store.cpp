@@ -24,21 +24,30 @@
 namespace a2a::server::stores {
 namespace {
 
+constexpr std::size_t kTaskUpsertSqlReserve = 520U;
+constexpr std::size_t kTaskSnapshotSqlReserve = 15U;
+constexpr std::size_t kConditionalTaskWriteSqlReserve = 300U;
+
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
+  const std::string table = TaskTable(options.schema);
   const std::string payload = task.SerializeAsString();
   const bool has_status_timestamp = task.status().has_timestamp();
   const std::string has_timestamp = has_status_timestamp ? "true" : "false";
   const std::string state = std::to_string(static_cast<int>(task.status().state()));
   const std::string seconds = std::to_string(has_status_timestamp ? task.status().timestamp().seconds() : 0);
   const std::string nanos = std::to_string(has_status_timestamp ? task.status().timestamp().nanos() : 0);
-  const std::string sql =
-      "INSERT INTO " + TaskTable(options.schema) +
+  std::string sql = "INSERT INTO ";
+  sql.reserve(sql.size() + table.size() + kTaskUpsertSqlReserve);
+  sql.append(table);
+  sql.append(
+      " AS target"
       " (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto, updated_at) "
       "VALUES ($1, $2, $3, $4, $5, $6, $7, now()) "
       "ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDED.state, "
       "has_status_timestamp = EXCLUDED.has_status_timestamp, status_seconds = EXCLUDED.status_seconds, "
-      "status_nanos = EXCLUDED.status_nanos, task_proto = EXCLUDED.task_proto, updated_at = now()";
+      "status_nanos = EXCLUDED.status_nanos, task_proto = EXCLUDED.task_proto, "
+      "revision = target.revision + 1, updated_at = now()");
   constexpr int kTaskUpsertParameterCount = 7;
   const std::array<const char*, kTaskUpsertParameterCount> values = {task.id().c_str(), task.context_id().c_str(),
                                                                      state.c_str(),     has_timestamp.c_str(),
@@ -71,11 +80,22 @@ namespace {
 
 [[nodiscard]] core::Result<lf::a2a::v1::Task> SelectTaskForUpdate(PGconn* connection,
                                                                   const PostgresStoreOptions& options,
-                                                                  std::string_view id) {
+                                                                  std::string_view id, bool record_history_diagnostic) {
   const std::string id_value(id);
   const std::string sql = "SELECT task_proto FROM " + TaskTable(options.schema) + " WHERE id = $1 FOR UPDATE";
   const std::array<const char*, 1> values = {id_value.c_str()};
-  PgResult result(PQexecParams(connection, sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  if (record_history_diagnostic) {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskHistoryLockRead);
+    result.reset(PQexecParams(connection, sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+  } else {
+    result.reset(PQexecParams(connection, sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+  }
+#else
+  (void)record_history_diagnostic;
+  result.reset(PQexecParams(connection, sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+#endif
   const auto checked = CheckTuples(connection, result.get(), "select postgres task for update");
   if (!checked.ok()) {
     return checked.error();
@@ -185,6 +205,110 @@ core::Result<void> PostgresTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
     return lease.error();
   }
   return UpsertTask(lease.value().get(), options_, task);
+}
+
+core::Result<TaskStore::TaskSnapshot> PostgresTaskStore::GetSnapshot(std::string_view id) const {
+  if (id.empty()) {
+    return core::Error::Validation(std::string(kTaskIdRequiredMessage));
+  }
+  const std::string id_value(id);
+  std::string sql = "SELECT task_proto, revision::text FROM ";
+  const std::string table = TaskTable(options_.schema);
+  sql.reserve(sql.size() + table.size() + kTaskSnapshotSqlReserve);
+  sql.append(table);
+  sql.append(" WHERE id = $1");
+  const std::array<const char*, 1> values = {id_value.c_str()};
+  auto lease = pool_->Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskGet);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres task snapshot");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) == 0) {
+    return core::protocol_errors::TaskNotFound(std::string(kTaskNotFoundMessage));
+  }
+  auto task = ParseTaskRow(result.get(), 0);
+  if (!task.ok()) {
+    return task.error();
+  }
+  std::uint64_t revision = 0;
+  const std::string_view raw_revision(PQgetvalue(result.get(), 0, 1));
+  const auto parsed = std::from_chars(raw_revision.data(), raw_revision.data() + raw_revision.size(), revision);
+  if (parsed.ec != std::errc() || parsed.ptr != raw_revision.data() + raw_revision.size()) {
+    return core::Error::Serialization("failed to parse postgres task revision");
+  }
+  return TaskSnapshot{.task = std::move(task.value()), .revision = revision};
+}
+
+core::Result<TaskStore::ConditionalWriteResult> PostgresTaskStore::CreateOrUpdateIfRevision(
+    const lf::a2a::v1::Task& task, std::uint64_t expected_revision) {
+  if (task.id().empty()) {
+    return core::Error::Validation(std::string(kTaskIdFieldRequiredMessage));
+  }
+  const std::string payload = task.SerializeAsString();
+  const bool has_status_timestamp = task.status().has_timestamp();
+  const std::string has_timestamp = has_status_timestamp ? "true" : "false";
+  const std::string state = std::to_string(static_cast<int>(task.status().state()));
+  const std::string seconds = std::to_string(has_status_timestamp ? task.status().timestamp().seconds() : 0);
+  const std::string nanos = std::to_string(has_status_timestamp ? task.status().timestamp().nanos() : 0);
+  const std::string revision = std::to_string(expected_revision);
+  const std::string table = TaskTable(options_.schema);
+  std::string sql;
+  if (expected_revision == 0) {
+    sql.reserve(table.size() + kConditionalTaskWriteSqlReserve);
+    sql.append("INSERT INTO ");
+    sql.append(table);
+    sql.append(
+        " (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING RETURNING revision");
+  } else {
+    sql.reserve(table.size() + kConditionalTaskWriteSqlReserve);
+    sql.append("UPDATE ");
+    sql.append(table);
+    sql.append(
+        " SET context_id = $2, state = $3, has_status_timestamp = $4, status_seconds = $5, "
+        "status_nanos = $6, task_proto = $7, revision = revision + 1, updated_at = now() "
+        "WHERE id = $1 AND revision = $8 RETURNING revision");
+  }
+  constexpr int kCreateParameterCount = 7;
+  constexpr int kUpdateParameterCount = 8;
+  const std::array<const char*, kUpdateParameterCount> values = {task.id().c_str(), task.context_id().c_str(),
+                                                                 state.c_str(),     has_timestamp.c_str(),
+                                                                 seconds.c_str(),   nanos.c_str(),
+                                                                 payload.data(),    revision.c_str()};
+  const std::array<int, kUpdateParameterCount> lengths = {0, 0, 0, 0, 0, 0, static_cast<int>(payload.size()), 0};
+  const std::array<int, kUpdateParameterCount> formats = {0, 0, 0, 0, 0, 0, 1, 0};
+  const int parameter_count = expected_revision == 0 ? kCreateParameterCount : kUpdateParameterCount;
+  auto lease = pool_->Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskUpsert);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), parameter_count, nullptr, values.data(), lengths.data(),
+                              formats.data(), 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "conditionally persist postgres task");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  return PQntuples(result.get()) == 0 ? ConditionalWriteResult::kConflict : ConditionalWriteResult::kUpdated;
 }
 
 core::Result<lf::a2a::v1::Task> PostgresTaskStore::Get(std::string_view id) const {
@@ -299,7 +423,7 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Cancel(std::string_view id) {
   if (!begun.ok()) {
     return begun.error();
   }
-  auto task = SelectTaskForUpdate(lease.value().get(), options_, id);
+  auto task = SelectTaskForUpdate(lease.value().get(), options_, id, false);
   if (!task.ok()) {
     return task.error();
   }
@@ -333,7 +457,7 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
   if (!begun.ok()) {
     return begun.error();
   }
-  auto task = SelectTaskForUpdate(lease.value().get(), options_, task_id);
+  auto task = SelectTaskForUpdate(lease.value().get(), options_, task_id, true);
   if (!task.ok()) {
     return task.error();
   }

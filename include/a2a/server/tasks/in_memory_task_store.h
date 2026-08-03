@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -50,6 +51,10 @@ class InMemoryTaskStore final : public TaskStore {
   explicit InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink);
 
   [[nodiscard]] core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override;
+  [[nodiscard]] bool SupportsConditionalWrites() const noexcept override { return true; }
+  [[nodiscard]] core::Result<TaskSnapshot> GetSnapshot(std::string_view id) const override;
+  [[nodiscard]] core::Result<ConditionalWriteResult> CreateOrUpdateIfRevision(const lf::a2a::v1::Task& task,
+                                                                              std::uint64_t expected_revision) override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override;
   [[nodiscard]] core::Result<ListTasksResponse> List(const ListTasksRequest& request) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override;
@@ -68,6 +73,7 @@ class InMemoryTaskStore final : public TaskStore {
   std::shared_ptr<HistoryTelemetrySink> telemetry_sink_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
   std::vector<lf::a2a::v1::Task> ordered_tasks_;
+  std::vector<std::uint64_t> revisions_;
   std::unordered_map<std::string, std::size_t, TaskStoreStringHash, TaskStoreStringEqual> task_indices_;
 };
 

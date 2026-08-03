@@ -236,6 +236,7 @@ transport-level coverage. In-process rows use
 PostgreSQL result rows expose `postgres_phase_latency_ms`,
 `postgres_phase_call_count`, and `postgres_phase_calls_per_operation`. The phase
 names are stable: `connection_acquire_wait`, `task_get`, `task_upsert`,
+`task_history_lock_read`,
 `push_config_upsert`, `push_config_get`, `push_config_delete`,
 `push_config_list_count`, `push_config_list_select`, `transaction_begin`, and
 `transaction_commit`. A command phase counts one invocation per `PQexecParams`
