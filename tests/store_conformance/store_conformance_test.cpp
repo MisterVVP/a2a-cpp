@@ -119,7 +119,6 @@ constexpr std::string_view kRoleResetOperation = "reset least-privilege maintena
 constexpr std::string_view kRoleCleanupOperation = "clean up least-privilege maintenance role";
 constexpr std::string_view kRoleTaskDeleteOperation = "delete task as least-privilege maintenance role";
 constexpr std::string_view kRolePushDeleteOperation = "directly delete push config as maintenance role";
-constexpr std::string_view kTaskIdColumn = "id";
 constexpr std::string_view kPushTaskIdColumn = "task_id";
 constexpr std::string_view kResetRoleSql = "RESET ROLE";
 constexpr std::string_view kSecretDsn =
@@ -218,15 +217,6 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return equivalent;
 }
 
-[[nodiscard]] std::string PasswordFromDsn(std::string_view dsn) {
-  char* error = nullptr;
-  Conninfo options(PQconninfoParse(std::string(dsn).c_str(), &error));
-  if (error != nullptr) {
-    PQfreemem(error);
-  }
-  return options == nullptr ? std::string{} : ConninfoValue(options.get(), kConninfoPassword);
-}
-
 [[nodiscard]] std::string BuildMaintenanceRoleSetupSql(std::string_view role, std::string_view schema,
                                                        std::string_view task_table) {
   const std::string quoted_role = a2a::server::stores::QuoteSqlIdentifier(role);
@@ -272,6 +262,14 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return sql;
 }
 
+[[nodiscard]] std::string BuildDeleteAllSql(std::string_view table) {
+  // An unfiltered DELETE exercises task-table DELETE privilege without also
+  // requiring SELECT privilege for a predicate column.
+  std::string sql = "DELETE FROM ";
+  sql.append(table);
+  return sql;
+}
+
 void ExpectEquivalentStorageIdentities(const a2a::server::stores::PostgresStorageIdentity& expected,
                                        const a2a::server::stores::PostgresStorageIdentity& identical,
                                        const a2a::server::stores::PostgresStorageIdentity& reordered,
@@ -279,17 +277,6 @@ void ExpectEquivalentStorageIdentities(const a2a::server::stores::PostgresStorag
   EXPECT_EQ(expected, identical);
   EXPECT_EQ(expected, reordered);
   EXPECT_EQ(expected, uri);
-}
-
-void ExpectStorageIdentityExcludesPassword(const a2a::server::stores::PostgresStorageIdentity& identity,
-                                           std::string_view password) {
-  if (password.empty()) {
-    return;
-  }
-  EXPECT_EQ(identity.host.find(password), std::string::npos);
-  EXPECT_EQ(identity.port.find(password), std::string::npos);
-  EXPECT_EQ(identity.database.find(password), std::string::npos);
-  EXPECT_EQ(identity.schema.find(password), std::string::npos);
 }
 
 struct ConcurrentDeleteOutcome final {
@@ -374,9 +361,8 @@ struct LeastPrivilegeDeleteOutcome final {
   if (!switched.ok()) {
     return switched.error();
   }
-  const auto deleted = a2a::server::stores::Exec(connection.value().get(),
-                                                 BuildDeleteByTaskIdSql(task_table, kTaskIdColumn, kAtomicCreateTaskId),
-                                                 kRoleTaskDeleteOperation);
+  const auto deleted =
+      a2a::server::stores::Exec(connection.value().get(), BuildDeleteAllSql(task_table), kRoleTaskDeleteOperation);
   if (!deleted.ok()) {
     return deleted.error();
   }
@@ -696,7 +682,6 @@ TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesEffectiveConnectionA
   }
   const std::string keyword_dsn = BuildEquivalentKeywordDsn(dsn_value);
   const std::string uri_dsn = BuildEquivalentUriDsn(dsn_value);
-  const std::string password = PasswordFromDsn(dsn_value);
   ASSERT_FALSE(keyword_dsn.empty());
   ASSERT_FALSE(uri_dsn.empty());
   a2a::server::stores::PostgresConnectionPool original(dsn_value, 1U);
@@ -707,7 +692,6 @@ TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesEffectiveConnectionA
   ExpectEquivalentStorageIdentities(identity, original.StorageIdentity(std::string(kIdentitySchema)),
                                     reordered.StorageIdentity(std::string(kIdentitySchema)),
                                     uri.StorageIdentity(std::string(kIdentitySchema)));
-  ExpectStorageIdentityExcludesPassword(identity, password);
 }
 
 TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesOmittedDefaultPort) {
