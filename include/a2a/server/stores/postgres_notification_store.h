@@ -59,6 +59,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 
   std::shared_ptr<PostgresConnectionPool> pool_;
   PostgresStoreOptions options_;
+  PostgresStorageIdentity storage_identity_;
 };
 
 }  // namespace a2a::server::stores

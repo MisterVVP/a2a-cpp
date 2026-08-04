@@ -82,6 +82,16 @@ constexpr std::string_view kDeleteTaskPushConfigsFunction = "a2a_delete_task_pus
 constexpr std::string_view kDeleteTaskPushConfigsTrigger = "a2a_delete_task_push_configs_trigger";
 constexpr std::size_t kDeleteTaskPushConfigsFunctionSqlReserveSlack = 160U;
 constexpr std::size_t kDeleteTaskPushConfigsTriggerSqlReserveSlack = 192U;
+constexpr std::size_t kRevokeDeleteTaskPushConfigsFunctionSqlReserveSlack = 48U;
+
+struct PostgresStorageIdentity final {
+  std::string host;
+  std::string port;
+  std::string database;
+  std::string schema;
+
+  friend bool operator==(const PostgresStorageIdentity&, const PostgresStorageIdentity&) = default;
+};
 
 struct PgResultDeleter final {
   void operator()(PGresult* result) const noexcept;
@@ -113,12 +123,14 @@ class PostgresConnectionPool final {
 
   [[nodiscard]] core::Result<Lease> Acquire();
   [[nodiscard]] std::size_t capacity() const noexcept;
+  [[nodiscard]] PostgresStorageIdentity StorageIdentity(std::string schema) const;
 
  private:
   [[nodiscard]] core::Result<PgConnection> OpenConnection() const;
   void Return(PgConnection connection);
 
   std::string connection_string_;
+  PostgresStorageIdentity database_identity_;
   std::size_t capacity_;
   std::mutex mutex_;
   std::condition_variable condition_;

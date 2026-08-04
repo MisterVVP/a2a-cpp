@@ -107,7 +107,9 @@ constexpr std::string_view kPushListMissingCountMessage =
 }  // namespace
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOptions options)
-    : pool_(MakePool(options)), options_(std::move(options)) {
+    : pool_(MakePool(options)),
+      options_(std::move(options)),
+      storage_identity_(pool_->StorageIdentity(options_.schema)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
@@ -117,7 +119,7 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<PostgresConnectionPool> pool,
                                                              PostgresStoreOptions options)
-    : pool_(std::move(pool)), options_(std::move(options)) {
+    : pool_(std::move(pool)), options_(std::move(options)), storage_identity_(pool_->StorageIdentity(options_.schema)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
@@ -166,7 +168,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   }
   sql.append(
       "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
-      "config_proto = EXCLUDED.config_proto, updated_at = now() RETURNING config_proto");
+      "config_proto = EXCLUDED.config_proto, updated_at = now() RETURNING 1");
   constexpr int kPushUpsertParameterCount = 4;
   const std::array<const char*, kPushUpsertParameterCount> values = {config.task_id().c_str(), config.id().c_str(),
                                                                      config.url().c_str(), payload.data()};
@@ -199,7 +201,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdateForTask(
     const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
   const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
-  if (postgres_task_store != nullptr && postgres_task_store->UsesStorage(options_)) {
+  if (postgres_task_store != nullptr && postgres_task_store->UsesStorage(storage_identity_)) {
     return Upsert(config, true);
   }
   const auto task = task_store.Get(config.task_id());

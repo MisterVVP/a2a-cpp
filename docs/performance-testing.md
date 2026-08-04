@@ -261,10 +261,16 @@ batch SDK call, and therefore executes eight commands rather than sixteen. The
 create upsert selects and key-locks the task row in the same statement. A
 missing task produces no returned row and maps to `TaskNotFound`; the
 task-delete trigger removes configs when deletion wins after creation, so
-concurrent deletion cannot leave an orphaned configuration. When the supplied
-authoritative task store is not the PostgreSQL task store for the same database
-and schema, create retains the lookup-first fallback because the PostgreSQL
-statement cannot validate that external store.
+concurrent deletion cannot leave an orphaned configuration. The trigger uses a
+fixed-search-path `SECURITY DEFINER` function, allowing a role with task-delete
+permission to invoke cleanup without receiving direct push-config delete
+permission. Store identity is cached from effective libpq host, port, and
+database attributes plus the configured schema. Equivalent URI and keyword
+DSNs therefore retain the atomic path without request-time parsing. When the
+supplied authoritative task store has a different identity, create retains the
+lookup-first fallback because the PostgreSQL statement cannot validate that
+external store. The upsert returns only a small sentinel; config payload bytes
+are not returned on create or update.
 
 Further round-trip reductions require separate SQL-design changes. List could combine existence, count,
 and rows, but empty/out-of-range pages and a consistent count need careful

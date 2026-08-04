@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <cctype>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -26,9 +27,12 @@
 #include "store_conformance/task_store_conformance.h"
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
+#include <libpq-fe.h>
+
 #include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/postgres_notification_store.h"
 #include "a2a/server/stores/postgres_task_store.h"
+#include "a2a/server/stores/sql_identifier.h"
 #endif
 
 namespace {
@@ -93,6 +97,200 @@ constexpr std::string_view kMixedCreateTaskId = "mixed-create-task";
 constexpr std::string_view kMixedCreateConfigId = "mixed-create-config";
 constexpr std::string_view kHoldConcurrentDeleteOperation = "hold concurrent task deletion";
 constexpr auto kConcurrentCreateBlockedTimeout = std::chrono::milliseconds(50);
+constexpr std::size_t kLargeConfigMetadataSize = std::size_t{64U} * 1024U;
+constexpr char kLargeConfigMetadataFill = 'x';
+constexpr std::string_view kLargeConfigAuthScheme = "Bearer";
+constexpr std::string_view kLargeConfigUpdatedUrl = "https://example.test/updated-large";
+constexpr std::string_view kDefaultPostgresPort = "5432";
+constexpr std::string_view kConninfoPassword = "password";
+constexpr std::string_view kConninfoDatabase = "dbname";
+constexpr std::string_view kConninfoHost = "host";
+constexpr std::string_view kConninfoUser = "user";
+constexpr std::string_view kConninfoPort = "port";
+constexpr std::string_view kConninfoApplicationName = "application_name";
+constexpr std::string_view kIdentityApplicationName = "a2a-identity-test";
+constexpr std::string_view kUriScheme = "postgresql://";
+constexpr std::string_view kHexDigits = "0123456789ABCDEF";
+constexpr unsigned char kLowNibbleMask = 0x0FU;
+constexpr std::string_view kMaintenanceRolePrefix = "a2a_push_maintenance_";
+constexpr std::string_view kRoleSetupOperation = "set up least-privilege maintenance role";
+constexpr std::string_view kRoleSwitchOperation = "switch to least-privilege maintenance role";
+constexpr std::string_view kRoleResetOperation = "reset least-privilege maintenance role";
+constexpr std::string_view kRoleCleanupOperation = "clean up least-privilege maintenance role";
+constexpr std::string_view kRoleTaskDeleteOperation = "delete task as least-privilege maintenance role";
+constexpr std::string_view kRolePushDeleteOperation = "directly delete push config as maintenance role";
+constexpr std::string_view kTaskIdColumn = "id";
+constexpr std::string_view kPushTaskIdColumn = "task_id";
+constexpr std::string_view kResetRoleSql = "RESET ROLE";
+constexpr std::string_view kSecretDsn =
+    "host=invalid.invalid dbname=a2a user=a2a password=storage-identity-secret connect_timeout=1";
+constexpr std::string_view kSecretDsnPassword = "storage-identity-secret";
+constexpr std::string_view kUnexpectedSecretDsnConnection = "invalid PostgreSQL endpoint unexpectedly connected";
+constexpr std::string_view kIdentitySchema = "identity_schema";
+constexpr std::string_view kDefaultPortIdentitySchema = "default_port_identity_schema";
+constexpr std::string_view kNonDefaultPortSkipMessage = "PostgreSQL test DSN does not use the default port";
+constexpr char kPgPortEnvironmentVariable[] = "PGPORT";
+constexpr std::string_view kNonDefaultPgPortSkipMessage = "PGPORT overrides the libpq default port";
+
+struct ConninfoDeleter final {
+  void operator()(PQconninfoOption* options) const noexcept { PQconninfoFree(options); }
+};
+
+using Conninfo = std::unique_ptr<PQconninfoOption, ConninfoDeleter>;
+
+[[nodiscard]] std::string ConninfoValue(PQconninfoOption* options, std::string_view keyword) {
+  for (PQconninfoOption* option = options; option->keyword != nullptr; ++option) {
+    if (keyword == option->keyword && option->val != nullptr) {
+      return option->val;
+    }
+  }
+  return {};
+}
+
+void AppendKeywordValue(std::string& dsn, std::string_view keyword, std::string_view value) {
+  if (value.empty()) {
+    return;
+  }
+  dsn.append(keyword);
+  dsn.append("='");
+  for (const char character : value) {
+    if (character == '\'' || character == '\\') {
+      dsn.push_back('\\');
+    }
+    dsn.push_back(character);
+  }
+  dsn.append("' ");
+}
+
+[[nodiscard]] std::string BuildEquivalentKeywordDsn(std::string_view dsn, bool include_port = true) {
+  char* error = nullptr;
+  Conninfo options(PQconninfoParse(std::string(dsn).c_str(), &error));
+  if (error != nullptr) {
+    PQfreemem(error);
+  }
+  if (options == nullptr) {
+    return {};
+  }
+  std::string equivalent;
+  AppendKeywordValue(equivalent, kConninfoPassword, ConninfoValue(options.get(), kConninfoPassword));
+  AppendKeywordValue(equivalent, kConninfoDatabase, ConninfoValue(options.get(), kConninfoDatabase));
+  AppendKeywordValue(equivalent, kConninfoHost, ConninfoValue(options.get(), kConninfoHost));
+  AppendKeywordValue(equivalent, kConninfoUser, ConninfoValue(options.get(), kConninfoUser));
+  if (include_port) {
+    AppendKeywordValue(equivalent, kConninfoPort, ConninfoValue(options.get(), kConninfoPort));
+  }
+  AppendKeywordValue(equivalent, kConninfoApplicationName, kIdentityApplicationName);
+  return equivalent;
+}
+
+void AppendUriEncoded(std::string& output, std::string_view value) {
+  for (const char raw_character : value) {
+    const auto character = static_cast<unsigned char>(raw_character);
+    if (std::isalnum(character) != 0 || character == '-' || character == '_' || character == '.' || character == '~') {
+      output.push_back(static_cast<char>(character));
+      continue;
+    }
+    output.push_back('%');
+    output.push_back(kHexDigits[character >> 4U]);
+    output.push_back(kHexDigits[character & kLowNibbleMask]);
+  }
+}
+
+[[nodiscard]] std::string BuildEquivalentUriDsn(std::string_view dsn) {
+  char* error = nullptr;
+  Conninfo options(PQconninfoParse(std::string(dsn).c_str(), &error));
+  if (error != nullptr) {
+    PQfreemem(error);
+  }
+  if (options == nullptr) {
+    return {};
+  }
+  std::string equivalent(kUriScheme);
+  AppendUriEncoded(equivalent, ConninfoValue(options.get(), kConninfoUser));
+  equivalent.push_back(':');
+  AppendUriEncoded(equivalent, ConninfoValue(options.get(), kConninfoPassword));
+  equivalent.push_back('@');
+  equivalent.append(ConninfoValue(options.get(), kConninfoHost));
+  equivalent.push_back(':');
+  equivalent.append(ConninfoValue(options.get(), kConninfoPort));
+  equivalent.push_back('/');
+  AppendUriEncoded(equivalent, ConninfoValue(options.get(), kConninfoDatabase));
+  return equivalent;
+}
+
+[[nodiscard]] std::string PasswordFromDsn(std::string_view dsn) {
+  char* error = nullptr;
+  Conninfo options(PQconninfoParse(std::string(dsn).c_str(), &error));
+  if (error != nullptr) {
+    PQfreemem(error);
+  }
+  return options == nullptr ? std::string{} : ConninfoValue(options.get(), kConninfoPassword);
+}
+
+[[nodiscard]] std::string BuildMaintenanceRoleSetupSql(std::string_view role, std::string_view schema,
+                                                       std::string_view task_table) {
+  const std::string quoted_role = a2a::server::stores::QuoteSqlIdentifier(role);
+  std::string sql = "CREATE ROLE ";
+  sql.append(quoted_role);
+  sql.append(" NOLOGIN; GRANT USAGE ON SCHEMA ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(schema));
+  sql.append(" TO ");
+  sql.append(quoted_role);
+  sql.append("; GRANT DELETE ON ");
+  sql.append(task_table);
+  sql.append(" TO ");
+  sql.append(quoted_role);
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildSetRoleSql(std::string_view role) {
+  std::string sql = "SET ROLE ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDropRoleSql(std::string_view role) {
+  const std::string quoted_role = a2a::server::stores::QuoteSqlIdentifier(role);
+  std::string sql = "DROP OWNED BY ";
+  sql.append(quoted_role);
+  sql.append("; DROP ROLE ");
+  sql.append(quoted_role);
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDeleteByTaskIdSql(std::string_view table, std::string_view id_column,
+                                                 std::string_view task_id) {
+  std::string sql = "DELETE FROM ";
+  sql.append(table);
+  sql.append(" WHERE ");
+  sql.append(id_column);
+  sql.append(" = '");
+  sql.append(task_id);
+  sql.push_back('\'');
+  return sql;
+}
+
+void ExpectEquivalentStorageIdentities(const a2a::server::stores::PostgresStorageIdentity& expected,
+                                       const a2a::server::stores::PostgresStorageIdentity& identical,
+                                       const a2a::server::stores::PostgresStorageIdentity& reordered,
+                                       const a2a::server::stores::PostgresStorageIdentity& uri) {
+  EXPECT_EQ(expected, identical);
+  EXPECT_EQ(expected, reordered);
+  EXPECT_EQ(expected, uri);
+}
+
+void ExpectStorageIdentityExcludesPassword(const a2a::server::stores::PostgresStorageIdentity& identity,
+                                           std::string_view password) {
+  if (password.empty()) {
+    return;
+  }
+  EXPECT_EQ(identity.host.find(password), std::string::npos);
+  EXPECT_EQ(identity.port.find(password), std::string::npos);
+  EXPECT_EQ(identity.database.find(password), std::string::npos);
+  EXPECT_EQ(identity.schema.find(password), std::string::npos);
+}
 
 struct ConcurrentDeleteOutcome final {
   std::future_status create_wait_status;
@@ -148,6 +346,88 @@ void ExpectConcurrentDeleteOutcome(const a2a::core::Result<ConcurrentDeleteOutco
   EXPECT_EQ(outcome.value().create_result.error().protocol_code().value_or(std::string{}),
             a2a::core::protocol_codes::kTaskNotFound);
   EXPECT_FALSE(outcome.value().config_remains);
+}
+
+struct LeastPrivilegeDeleteOutcome final {
+  bool config_removed;
+  bool direct_push_delete_denied;
+};
+
+[[nodiscard]] a2a::core::Result<LeastPrivilegeDeleteOutcome> RunLeastPrivilegeTaskDelete(
+    a2a::server::stores::PostgresPushNotificationStore& push_store,
+    const a2a::server::stores::PostgresStoreOptions& options) {
+  auto connection = push_store.AcquireConnectionForTesting();
+  if (!connection.ok()) {
+    return connection.error();
+  }
+  std::string role(kMaintenanceRolePrefix);
+  role.append(std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const std::string task_table = a2a::server::stores::TaskTable(options.schema);
+  const std::string push_table = a2a::server::stores::PushTable(options.schema);
+  const auto setup = a2a::server::stores::Exec(
+      connection.value().get(), BuildMaintenanceRoleSetupSql(role, options.schema, task_table), kRoleSetupOperation);
+  if (!setup.ok()) {
+    return setup.error();
+  }
+  const auto switched =
+      a2a::server::stores::Exec(connection.value().get(), BuildSetRoleSql(role), kRoleSwitchOperation);
+  if (!switched.ok()) {
+    return switched.error();
+  }
+  const auto deleted = a2a::server::stores::Exec(connection.value().get(),
+                                                 BuildDeleteByTaskIdSql(task_table, kTaskIdColumn, kAtomicCreateTaskId),
+                                                 kRoleTaskDeleteOperation);
+  if (!deleted.ok()) {
+    return deleted.error();
+  }
+  const auto reset =
+      a2a::server::stores::Exec(connection.value().get(), std::string(kResetRoleSql), kRoleResetOperation);
+  if (!reset.ok()) {
+    return reset.error();
+  }
+  const bool config_removed = !push_store.Get(kAtomicCreateTaskId, kAtomicCreateConfigId).ok();
+  const auto reswitched =
+      a2a::server::stores::Exec(connection.value().get(), BuildSetRoleSql(role), kRoleSwitchOperation);
+  if (!reswitched.ok()) {
+    return reswitched.error();
+  }
+  const auto direct_delete = a2a::server::stores::Exec(
+      connection.value().get(), BuildDeleteByTaskIdSql(push_table, kPushTaskIdColumn, kAtomicCreateTaskId),
+      kRolePushDeleteOperation);
+  const auto final_reset =
+      a2a::server::stores::Exec(connection.value().get(), std::string(kResetRoleSql), kRoleResetOperation);
+  if (!final_reset.ok()) {
+    return final_reset.error();
+  }
+  const auto cleanup =
+      a2a::server::stores::Exec(connection.value().get(), BuildDropRoleSql(role), kRoleCleanupOperation);
+  if (!cleanup.ok()) {
+    return cleanup.error();
+  }
+  return LeastPrivilegeDeleteOutcome{.config_removed = config_removed,
+                                     .direct_push_delete_denied = !direct_delete.ok()};
+}
+
+void ExpectLeastPrivilegeDeleteOutcome(const a2a::core::Result<LeastPrivilegeDeleteOutcome>& outcome) {
+  ASSERT_TRUE(outcome.ok());
+  EXPECT_TRUE(outcome.value().config_removed);
+  EXPECT_TRUE(outcome.value().direct_push_delete_denied);
+}
+
+void ExpectSingleTaskAwarePushConfigUpsert() {
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(
+      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+      1U);
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+}
+
+void ExpectStoredLargePushConfig(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& stored) {
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().url(), kLargeConfigUpdatedUrl);
+  EXPECT_EQ(stored.value().token().size(), kLargeConfigMetadataSize);
+  EXPECT_EQ(stored.value().authentication().credentials().size(), kLargeConfigMetadataSize);
 }
 
 template <typename Insert>
@@ -407,6 +687,71 @@ TEST(StoreConformanceTest, PostgresOptionsDefaultToFourConnections) {
 
   EXPECT_EQ(options.connection_pool_size, a2a::server::stores::kDefaultPostgresConnectionPoolSize);
   EXPECT_EQ(options.connection_pool_size, 4U);
+}
+
+TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesEffectiveConnectionAttributes) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string keyword_dsn = BuildEquivalentKeywordDsn(dsn_value);
+  const std::string uri_dsn = BuildEquivalentUriDsn(dsn_value);
+  const std::string password = PasswordFromDsn(dsn_value);
+  ASSERT_FALSE(keyword_dsn.empty());
+  ASSERT_FALSE(uri_dsn.empty());
+  a2a::server::stores::PostgresConnectionPool original(dsn_value, 1U);
+  a2a::server::stores::PostgresConnectionPool reordered(keyword_dsn, 1U);
+  a2a::server::stores::PostgresConnectionPool uri(uri_dsn, 1U);
+  const auto identity = original.StorageIdentity(std::string(kIdentitySchema));
+
+  ExpectEquivalentStorageIdentities(identity, original.StorageIdentity(std::string(kIdentitySchema)),
+                                    reordered.StorageIdentity(std::string(kIdentitySchema)),
+                                    uri.StorageIdentity(std::string(kIdentitySchema)));
+  ExpectStorageIdentityExcludesPassword(identity, password);
+}
+
+TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesOmittedDefaultPort) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  a2a::server::stores::PostgresConnectionPool explicit_port(dsn_value, 1U);
+  if (explicit_port.StorageIdentity(std::string(kDefaultPortIdentitySchema)).port != kDefaultPostgresPort) {
+    GTEST_SKIP() << kNonDefaultPortSkipMessage;
+  }
+  const char* environment_port = std::getenv(kPgPortEnvironmentVariable);
+  if (environment_port != nullptr && std::string_view(environment_port) != kDefaultPostgresPort) {
+    GTEST_SKIP() << kNonDefaultPgPortSkipMessage;
+  }
+  a2a::server::stores::PostgresConnectionPool default_port(BuildEquivalentKeywordDsn(dsn_value, false), 1U);
+  EXPECT_EQ(explicit_port.StorageIdentity(std::string(kDefaultPortIdentitySchema)),
+            default_port.StorageIdentity(std::string(kDefaultPortIdentitySchema)));
+}
+
+TEST(StoreConformanceTest, PostgresStorageIdentityDistinguishesStorageCoordinates) {
+  a2a::server::stores::PostgresStorageIdentity identity{
+      .host = "database.example", .port = "5432", .database = "a2a", .schema = "public"};
+  auto different = identity;
+  different.database = "other";
+  EXPECT_NE(identity, different);
+  different = identity;
+  different.host = "replica.example";
+  EXPECT_NE(identity, different);
+  different = identity;
+  different.port = "5433";
+  EXPECT_NE(identity, different);
+  different = identity;
+  different.schema = "tenant";
+  EXPECT_NE(identity, different);
+}
+
+TEST(StoreConformanceTest, PostgresConnectionErrorsDoNotExposeSecrets) {
+  try {
+    (void)a2a::server::stores::PostgresConnectionPool(std::string(kSecretDsn), 1U);
+    FAIL() << kUnexpectedSecretDsnConnection;
+  } catch (const std::runtime_error& error) {
+    EXPECT_EQ(std::string_view(error.what()).find(kSecretDsnPassword), std::string_view::npos);
+  }
 }
 
 TEST(StoreConformanceTest, PostgresFactoryRejectsZeroPoolSizeBeforeConnecting) {
@@ -768,6 +1113,37 @@ TEST(StoreConformanceTest, PostgresPushConfigUsesSuppliedAuthoritativeTaskStore)
   EXPECT_EQ(fetched.value().id(), kMixedCreateConfigId);
 }
 
+TEST(StoreConformanceTest, EquivalentPostgresDsnsUseAtomicSentinelUpsertForLargeConfig) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema("push_equivalent_dsn");
+  const a2a::server::stores::PostgresStoreOptions task_options{.connection_string = dsn_value, .schema = schema};
+  const a2a::server::stores::PostgresStoreOptions push_options{
+      .connection_string = BuildEquivalentKeywordDsn(dsn_value), .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(task_options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(push_options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  auto config =
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId));
+  config.set_token(std::string(kLargeConfigMetadataSize, kLargeConfigMetadataFill));
+  config.mutable_authentication()->set_scheme(std::string(kLargeConfigAuthScheme));
+  config.mutable_authentication()->set_credentials(std::string(kLargeConfigMetadataSize, kLargeConfigMetadataFill));
+
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, task_store).ok());
+  ExpectSingleTaskAwarePushConfigUpsert();
+  config.set_url(std::string(kLargeConfigUpdatedUrl));
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, task_store).ok());
+  ExpectSingleTaskAwarePushConfigUpsert();
+
+  const auto stored = push_store.Get(kAtomicCreateTaskId, kAtomicCreateConfigId);
+  ExpectStoredLargePushConfig(stored);
+}
+
 TEST(StoreConformanceTest, PostgresPushConfigCreateReturnsTaskNotFoundWhenConcurrentDeletionWins) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -786,6 +1162,25 @@ TEST(StoreConformanceTest, PostgresPushConfigCreateReturnsTaskNotFoundWhenConcur
 
   const auto outcome = RunConcurrentPushConfigDelete(push_store, options);
   ExpectConcurrentDeleteOutcome(outcome);
+}
+
+TEST(StoreConformanceTest, PostgresTaskDeleteTriggerUsesLeastPrivilegeSecurityDefiner) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema("push_least_privilege_delete");
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId),
+                                                                            std::string(kAtomicCreateConfigId)))
+                  .ok());
+  const auto outcome = RunLeastPrivilegeTaskDelete(push_store, options);
+  ExpectLeastPrivilegeDeleteOutcome(outcome);
 }
 #endif
 

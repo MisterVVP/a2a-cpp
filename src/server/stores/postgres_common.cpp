@@ -81,10 +81,24 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   sql.reserve(function.size() + push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
   sql.append(function);
-  sql.append("() RETURNS trigger LANGUAGE plpgsql AS $a2a$ BEGIN DELETE FROM ");
+  sql.append(
+      "() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ BEGIN DELETE FROM ");
   sql.append(push_table);
   sql.append(" WHERE task_id = OLD.id; RETURN OLD; END $a2a$;");
   return sql;
+}
+
+[[nodiscard]] std::string BuildRevokeDeleteTaskPushConfigsFunctionSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kRevokeDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  sql.append("REVOKE ALL ON FUNCTION ");
+  sql.append(function);
+  sql.append("() FROM PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string LibpqValue(const char* value) {
+  return value == nullptr ? std::string{} : std::string(value);
 }
 
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsTriggerSql(std::string_view function, std::string_view task_table) {
@@ -215,6 +229,10 @@ PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, st
     }
     connections_.push_back(std::move(connection.value()));
   }
+  PGconn* established_connection = connections_.front().get();
+  database_identity_.host = LibpqValue(PQhost(established_connection));
+  database_identity_.port = LibpqValue(PQport(established_connection));
+  database_identity_.database = LibpqValue(PQdb(established_connection));
 }
 
 PostgresConnectionPool::Lease::Lease(PostgresConnectionPool* pool, PgConnection connection)
@@ -261,6 +279,12 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
 }
 
 std::size_t PostgresConnectionPool::capacity() const noexcept { return capacity_; }
+
+PostgresStorageIdentity PostgresConnectionPool::StorageIdentity(std::string schema) const {
+  PostgresStorageIdentity identity = database_identity_;
+  identity.schema = std::move(schema);
+  return identity;
+}
 
 core::Result<PgConnection> PostgresConnectionPool::OpenConnection() const {
   PgConnection connection(PQconnectdb(connection_string_.c_str()));
@@ -343,6 +367,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
       BuildDeleteTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
+  const std::string revoke_delete_task_push_configs_function =
+      BuildRevokeDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function);
   const std::string add_push_configs_created_sequence =
       "ALTER TABLE " + push_configs + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       push_created_sequence_regclass + ");";
@@ -363,6 +389,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_push_configs,
                                                       remove_push_configs_task_foreign_key,
                                                       create_delete_task_push_configs_function,
+                                                      revoke_delete_task_push_configs_function,
                                                       create_delete_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
                                                       create_push_configs_task_index,
