@@ -34,10 +34,10 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationService::C
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationService::GetConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request) const {
-  if (push_store_ == nullptr) {
-    return core::Error::Internal("push notification store is not configured");
+  if (task_store_ == nullptr || push_store_ == nullptr) {
+    return core::Error::Internal("push notification service is not configured");
   }
-  return push_store_->Get(request.task_id(), request.id());
+  return push_store_->GetForTask(request.task_id(), request.id(), *task_store_);
 }
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificationService::ListConfigs(
@@ -45,11 +45,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificat
   if (task_store_ == nullptr || push_store_ == nullptr) {
     return core::Error::Internal("push notification service is not configured");
   }
-  const auto task = task_store_->Get(request.task_id());
-  if (!task.ok()) {
-    return task.error();
-  }
-  return push_store_->ListForExistingTask(request.task_id(), request.page_size(), request.page_token());
+  return push_store_->ListForTask(request.task_id(), request.page_size(), request.page_token(), *task_store_);
 }
 
 core::Result<void> PushNotificationService::DeleteConfig(

@@ -252,30 +252,44 @@ while CSV and Markdown provide the same totals and calls per measured operation.
 Focused scenario fixture preparation must occur before the measured window; setup commands must not be attributed to the named operation.
 
 
-The current successful PostgreSQL paths intentionally use one `task_get` for task
-get; one task-aware `push_config_upsert` for create-config; one
-`push_config_get` for a present config; `task_get`, `push_config_list_count`, and
-`push_config_list_select` for list; and one `push_config_delete` for delete.
-Create-many fan-out eight represents eight independent public API calls, not a
-batch SDK call, and therefore executes eight commands rather than sixteen. The
-create upsert selects and key-locks the task row in the same statement. A
-missing task produces no returned row and maps to `TaskNotFound`; the
-task-delete trigger removes configs when deletion wins after creation, so
-concurrent deletion cannot leave an orphaned configuration. The trigger uses a
-fixed-search-path `SECURITY DEFINER` function, allowing a role with task-delete
-permission to invoke cleanup without receiving direct push-config delete
-permission. Store identity is cached from effective libpq host, port, and
-database attributes plus the configured schema. Equivalent URI and keyword
-DSNs therefore retain the atomic path without request-time parsing. When the
-supplied authoritative task store has a different identity, create retains the
-lookup-first fallback because the PostgreSQL statement cannot validate that
-external store. The upsert returns only a small sentinel; config payload bytes
-are not returned on create or update.
+## PostgreSQL push-configuration query paths
 
-Further round-trip reductions require separate SQL-design changes. List could combine existence, count,
-and rows, but empty/out-of-range pages and a consistent count need careful
-snapshot semantics. Get currently uses a second `push_config_get` only after a
-miss to distinguish a missing task from a missing config; a join or tagged query
-could preserve that distinction in one command. Whether count-plus-select is
-material depends on controlled page-size measurements, so diagnostics alone do
-not justify changing it.
+PostgreSQL stores distinguish **storage coordinates** (server host and port,
+database, and schema) from **execution identity** (those coordinates plus the
+effective PostgreSQL role). The pool reads `current_user` once from an
+established connection and caches it; passwords and raw connection strings are
+never part of either identity. Consequently, equivalent URI and keyword DSNs
+select the same atomic path only when their effective roles also match. A
+persistent out-of-band `SET ROLE` on a pooled connection is unsupported unless
+the cached identity is explicitly refreshed.
+
+The push-config table records conservative provenance in
+`local_postgres_task`. New and migrated rows default to external/unknown; the
+migration never infers ownership from a coincidentally matching local task ID.
+The local task-aware create path marks rows local, while an external task-store
+create marks them external. Conflict updates replace provenance with the latest
+authoritative path. The task-delete trigger removes only locally owned rows, so
+deleting a stale local task cannot remove an external authority's config.
+Same-storage stores with different roles use a precheck, locally marked upsert,
+and revalidation fallback: deletion before the upsert is caught by revalidation,
+and deletion after the upsert is handled by the local cleanup trigger.
+
+Stable, schema-qualified SQL is built once when each push store is constructed.
+Create, get, list, and delete operations do not quote schemas or rebuild SQL on
+the request path. Prepared statements are intentionally not retained without a
+controlled measurement demonstrating the required improvement.
+
+For matching execution identities, service-level task-aware operations have
+these PostgreSQL command and pool-acquisition counts:
+
+| Operation | Commands | Acquisitions |
+| --- | ---: | ---: |
+| create or update | 1 | 1 |
+| list (including missing/empty/out-of-range classification) | 1 | 1 |
+| get present config | 1 | 1 |
+| get missing config | 1 | 1 |
+| get missing task | 1 | 1 |
+
+External task stores retain authority and therefore perform their task lookup
+before using an already-validated push query. Split-role creation deliberately
+uses additional commands for race-safe validation.

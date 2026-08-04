@@ -87,6 +87,21 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::Cre
   return CreateOrUpdate(config);
 }
 
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::GetForTask(
+    std::string_view task_id, std::string_view config_id, const TaskStore& task_store) const {
+  (void)task_store;
+  return Get(task_id, config_id);
+}
+
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificationStore::ListForTask(
+    std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const {
+  const auto task = task_store.Get(task_id);
+  if (!task.ok()) {
+    return task.error();
+  }
+  return ListForExistingTask(task_id, page_size, page_token);
+}
+
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {
   const auto validation = ValidateConfig(config);

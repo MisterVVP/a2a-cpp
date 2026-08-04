@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "a2a/server/push_notification_store.h"
@@ -41,10 +42,14 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
       const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) override;
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Get(std::string_view task_id,
                                                                           std::string_view config_id) const override;
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetForTask(
+      std::string_view task_id, std::string_view config_id, const TaskStore& task_store) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(
       std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListForExistingTask(
       std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const override;
+  [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListForTask(
+      std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const override;
   [[nodiscard]] core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override;
 #ifdef A2A_POSTGRES_STORE_TESTING
   [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
@@ -52,14 +57,27 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 #endif
 
  private:
+  enum class UpsertPath { kLocalAtomic, kExternal, kSplitRoleLocal };
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Upsert(
-      const lf::a2a::v1::TaskPushNotificationConfig& config, bool validate_postgres_task);
+      const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path);
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetInternal(std::string_view task_id,
+                                                                                  std::string_view config_id,
+                                                                                  bool validate_task_existence) const;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListInternal(
       std::string_view task_id, int page_size, std::string_view page_token, bool validate_task_existence) const;
 
   std::shared_ptr<PostgresConnectionPool> pool_;
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;
+  PostgresExecutionIdentity execution_identity_;
+  std::string local_upsert_sql_;
+  std::string external_upsert_sql_;
+  std::string split_role_upsert_sql_;
+  std::string task_aware_get_sql_;
+  std::string existing_task_get_sql_;
+  std::string task_aware_list_sql_;
+  std::string existing_task_list_sql_;
+  std::string delete_sql_;
 };
 
 }  // namespace a2a::server::stores

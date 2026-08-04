@@ -23,6 +23,7 @@ namespace a2a::server::stores {
 namespace {
 
 constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
+constexpr char kCurrentUserSql[] = "SELECT current_user";
 
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
@@ -84,7 +85,7 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   sql.append(
       "() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ BEGIN DELETE FROM ");
   sql.append(push_table);
-  sql.append(" WHERE task_id = OLD.id; RETURN OLD; END $a2a$;");
+  sql.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END $a2a$;");
   return sql;
 }
 
@@ -230,9 +231,16 @@ PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, st
     connections_.push_back(std::move(connection.value()));
   }
   PGconn* established_connection = connections_.front().get();
-  database_identity_.host = LibpqValue(PQhost(established_connection));
-  database_identity_.port = LibpqValue(PQport(established_connection));
-  database_identity_.database = LibpqValue(PQdb(established_connection));
+  database_identity_.storage.host = LibpqValue(PQhost(established_connection));
+  database_identity_.storage.port = LibpqValue(PQport(established_connection));
+  database_identity_.storage.database = LibpqValue(PQdb(established_connection));
+  PgResult role_result(PQexec(established_connection, kCurrentUserSql));
+  const auto role_checked = CheckTuples(established_connection, role_result.get(), "read postgres effective role");
+  if (!role_checked.ok() || PQntuples(role_result.get()) != 1) {
+    throw std::runtime_error(role_checked.ok() ? "read postgres effective role: query returned no row"
+                                               : std::string(role_checked.error().message()));
+  }
+  database_identity_.effective_role = LibpqValue(PQgetvalue(role_result.get(), 0, 0));
 }
 
 PostgresConnectionPool::Lease::Lease(PostgresConnectionPool* pool, PgConnection connection)
@@ -280,9 +288,15 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
 
 std::size_t PostgresConnectionPool::capacity() const noexcept { return capacity_; }
 
-PostgresStorageIdentity PostgresConnectionPool::StorageIdentity(std::string schema) const {
-  PostgresStorageIdentity identity = database_identity_;
+PostgresStorageCoordinates PostgresConnectionPool::StorageCoordinates(std::string schema) const {
+  PostgresStorageCoordinates identity = database_identity_.storage;
   identity.schema = std::move(schema);
+  return identity;
+}
+
+PostgresExecutionIdentity PostgresConnectionPool::ExecutionIdentity(std::string schema) const {
+  PostgresExecutionIdentity identity = database_identity_;
+  identity.storage.schema = std::move(schema);
   return identity;
 }
 
@@ -351,13 +365,18 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string create_tasks_context_index =
       CreateIndexStatement(kTasksContextIndex, tasks, kTasksContextIndexColumns);
   const std::string create_tasks_state_index = CreateIndexStatement(kTasksStateIndex, tasks, kTasksStateIndexColumns);
-  const std::string create_push_configs = "CREATE TABLE IF NOT EXISTS " + push_configs +
-                                          " (task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
-                                          "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
-                                          push_created_sequence_regclass +
-                                          "), "
-                                          "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
-                                          "PRIMARY KEY (task_id, config_id));";
+  const std::string create_push_configs =
+      "CREATE TABLE IF NOT EXISTS " + push_configs +
+      " (task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
+      "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
+      push_created_sequence_regclass +
+      "), "
+      "config_proto BYTEA NOT NULL, local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE, "
+      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+      "PRIMARY KEY (task_id, config_id));";
+  std::string add_push_config_provenance = "ALTER TABLE ";
+  add_push_config_provenance.append(push_configs);
+  add_push_config_provenance.append(" ADD COLUMN IF NOT EXISTS local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE;");
   std::string remove_push_configs_task_foreign_key = "ALTER TABLE ";
   remove_push_configs_task_foreign_key.append(push_configs);
   remove_push_configs_task_foreign_key.append(" DROP CONSTRAINT IF EXISTS ");
@@ -387,6 +406,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_tasks_context_index,
                                                       create_tasks_state_index,
                                                       create_push_configs,
+                                                      add_push_config_provenance,
                                                       remove_push_configs_task_foreign_key,
                                                       create_delete_task_push_configs_function,
                                                       revoke_delete_task_push_configs_function,
