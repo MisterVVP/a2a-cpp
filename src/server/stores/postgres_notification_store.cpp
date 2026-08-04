@@ -23,6 +23,9 @@ namespace a2a::server::stores {
 namespace {
 
 constexpr std::uint64_t kPostgresBigintMaximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+constexpr std::size_t kPushTaskAwareGetSqlReserveSlack = 192U;
+constexpr std::size_t kPushExistingTaskGetSqlReserveSlack = 96U;
+constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
 
@@ -81,6 +84,60 @@ constexpr std::string_view kPushListMissingCountMessage =
   return sql;
 }
 
+[[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task,
+                                             bool local_postgres_task) {
+  const std::string push_table = PushTable(schema);
+  const std::string task_table = validate_postgres_task ? TaskTable(schema) : std::string{};
+  std::string sql;
+  sql.reserve(push_table.size() + task_table.size() + kPushUpsertSqlReserveSlack);
+  sql.append("INSERT INTO ");
+  sql.append(push_table);
+  sql.append(" (task_id, config_id, url, config_proto, local_postgres_task, updated_at) ");
+  if (validate_postgres_task) {
+    sql.append("SELECT $1, $2, $3, $4, TRUE, now() FROM ");
+    sql.append(task_table);
+    sql.append(" WHERE id = $1 FOR KEY SHARE ");
+  } else {
+    sql.append(local_postgres_task ? "VALUES ($1, $2, $3, $4, TRUE, now()) "
+                                   : "VALUES ($1, $2, $3, $4, FALSE, now()) ");
+  }
+  sql.append(
+      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
+      "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
+      "updated_at = now() RETURNING 1");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildPushGetSql(std::string_view schema, bool validate_task_existence) {
+  const std::string push_table = PushTable(schema);
+  std::string sql;
+  if (validate_task_existence) {
+    const std::string task_table = TaskTable(schema);
+    sql.reserve(task_table.size() + push_table.size() + kPushTaskAwareGetSqlReserveSlack);
+    sql.append("SELECT config.config_proto FROM ");
+    sql.append(task_table);
+    sql.append(" AS task LEFT JOIN ");
+    sql.append(push_table);
+    sql.append(" AS config ON config.task_id = task.id AND config.config_id = $2 WHERE task.id = $1");
+  } else {
+    sql.reserve(push_table.size() + kPushExistingTaskGetSqlReserveSlack);
+    sql.append("SELECT config_proto FROM ");
+    sql.append(push_table);
+    sql.append(" WHERE task_id = $1 AND config_id = $2");
+  }
+  return sql;
+}
+
+[[nodiscard]] std::string BuildPushDeleteSql(std::string_view schema) {
+  const std::string push_table = PushTable(schema);
+  std::string sql;
+  sql.reserve(push_table.size() + kPushDeleteSqlReserveSlack);
+  sql.append("DELETE FROM ");
+  sql.append(push_table);
+  sql.append(" WHERE task_id = $1 AND config_id = $2");
+  return sql;
+}
+
 [[nodiscard]] core::Result<void> ValidatePushConfig(const lf::a2a::v1::TaskPushNotificationConfig& config) {
   if (config.task_id().empty()) {
     return core::Error::Validation(std::string(kPushTaskIdRequiredMessage));
@@ -109,7 +166,16 @@ constexpr std::string_view kPushListMissingCountMessage =
 PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOptions options)
     : pool_(MakePool(options)),
       options_(std::move(options)),
-      storage_identity_(pool_->StorageIdentity(options_.schema)) {
+      storage_identity_(pool_->StorageCoordinates(options_.schema)),
+      execution_identity_(pool_->ExecutionIdentity(options_.schema)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false)),
+      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true)),
+      task_aware_get_sql_(BuildPushGetSql(options_.schema, true)),
+      existing_task_get_sql_(BuildPushGetSql(options_.schema, false)),
+      task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
+      existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
@@ -119,7 +185,18 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<PostgresConnectionPool> pool,
                                                              PostgresStoreOptions options)
-    : pool_(std::move(pool)), options_(std::move(options)), storage_identity_(pool_->StorageIdentity(options_.schema)) {
+    : pool_(std::move(pool)),
+      options_(std::move(options)),
+      storage_identity_(pool_->StorageCoordinates(options_.schema)),
+      execution_identity_(pool_->ExecutionIdentity(options_.schema)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false)),
+      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true)),
+      task_aware_get_sql_(BuildPushGetSql(options_.schema, true)),
+      existing_task_get_sql_(BuildPushGetSql(options_.schema, false)),
+      task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
+      existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
@@ -142,33 +219,22 @@ core::Result<PostgresConnectionPool::Lease> PostgresPushNotificationStore::Acqui
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {
-  return Upsert(config, true);
+  return Upsert(config, UpsertPath::kLocalAtomic);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Upsert(
-    const lf::a2a::v1::TaskPushNotificationConfig& config, bool validate_postgres_task) {
+    const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path) {
   const auto validation = ValidatePushConfig(config);
   if (!validation.ok()) {
     return validation.error();
   }
   const std::string payload = config.SerializeAsString();
-  const std::string push_table = PushTable(options_.schema);
-  const std::string task_table = validate_postgres_task ? TaskTable(options_.schema) : std::string{};
-  std::string sql;
-  sql.reserve(push_table.size() + task_table.size() + kPushUpsertSqlReserveSlack);
-  sql.append("INSERT INTO ");
-  sql.append(push_table);
-  sql.append(" (task_id, config_id, url, config_proto, updated_at) ");
-  if (validate_postgres_task) {
-    sql.append("SELECT $1, $2, $3, $4, now() FROM ");
-    sql.append(task_table);
-    sql.append(" WHERE id = $1 FOR KEY SHARE ");
-  } else {
-    sql.append("VALUES ($1, $2, $3, $4, now()) ");
+  const std::string* sql = &external_upsert_sql_;
+  if (path == UpsertPath::kLocalAtomic) {
+    sql = &local_upsert_sql_;
+  } else if (path == UpsertPath::kSplitRoleLocal) {
+    sql = &split_role_upsert_sql_;
   }
-  sql.append(
-      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
-      "config_proto = EXCLUDED.config_proto, updated_at = now() RETURNING 1");
   constexpr int kPushUpsertParameterCount = 4;
   const std::array<const char*, kPushUpsertParameterCount> values = {config.task_id().c_str(), config.id().c_str(),
                                                                      config.url().c_str(), payload.data()};
@@ -184,7 +250,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
 #endif
     result.reset(
-        PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
+        PQexecParams(lease.value().get(), sql->c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
@@ -192,7 +258,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!checked.ok()) {
     return checked.error();
   }
-  if (validate_postgres_task && PQntuples(result.get()) == 0) {
+  if (path == UpsertPath::kLocalAtomic && PQntuples(result.get()) == 0) {
     return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
   }
   return config;
@@ -202,30 +268,63 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
   const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
   if (postgres_task_store != nullptr && postgres_task_store->UsesStorage(storage_identity_)) {
-    return Upsert(config, true);
+    if (postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
+      return Upsert(config, UpsertPath::kLocalAtomic);
+    }
+    const auto before = task_store.Get(config.task_id());
+    if (!before.ok()) {
+      return before.error();
+    }
+    auto created = Upsert(config, UpsertPath::kSplitRoleLocal);
+    if (!created.ok()) {
+      return created.error();
+    }
+    const auto after = task_store.Get(config.task_id());
+    if (!after.ok()) {
+      const auto removed = Delete(config.task_id(), config.id());
+      return removed.ok() ? after.error() : removed.error();
+    }
+    return created;
   }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {
     return task.error();
   }
-  return Upsert(config, false);
+  return Upsert(config, UpsertPath::kExternal);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Get(
     std::string_view task_id, std::string_view config_id) const {
+  return GetInternal(task_id, config_id, false);
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::GetForTask(
+    std::string_view task_id, std::string_view config_id, const TaskStore& task_store) const {
+  const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
+  if (postgres_task_store != nullptr && postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
+    return GetInternal(task_id, config_id, true);
+  }
+  const auto task = task_store.Get(task_id);
+  if (!task.ok()) {
+    return task.error();
+  }
+  return GetInternal(task_id, config_id, false);
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::GetInternal(
+    std::string_view task_id, std::string_view config_id, bool validate_task_existence) const {
   const auto validation = ValidatePushLookup(task_id, config_id);
   if (!validation.ok()) {
     return validation.error();
   }
   const std::string task_id_value(task_id);
   const std::string config_id_value(config_id);
-  const std::string sql =
-      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
   const std::array<const char*, 2> values = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
+  const std::string& sql = validate_task_existence ? task_aware_get_sql_ : existing_task_get_sql_;
   PgResult result;
 #ifdef A2A_POSTGRES_STORE_TESTING
   {
@@ -240,25 +339,10 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     return checked.error();
   }
   if (PQntuples(result.get()) == 0) {
-    const std::string exists_sql = "SELECT 1 FROM " + PushTable(options_.schema) + " WHERE task_id = $1 LIMIT 1";
-    PgResult exists;
-#ifdef A2A_POSTGRES_STORE_TESTING
-    {
-      const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigGet);
-#endif
-      exists.reset(
-          PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 0));
-#ifdef A2A_POSTGRES_STORE_TESTING
-    }
-#endif
-    const auto exists_checked =
-        CheckTuples(lease.value().get(), exists.get(), "check postgres push notification task configs");
-    if (!exists_checked.ok()) {
-      return exists_checked.error();
-    }
-    if (PQntuples(exists.get()) == 0) {
-      return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
-    }
+    return validate_task_existence ? core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage))
+                                   : core::Error::Validation(std::string(kConfigNotFoundMessage));
+  }
+  if (PQgetisnull(result.get(), 0, 0) != 0) {
     return core::Error::Validation(std::string(kConfigNotFoundMessage));
   }
   lf::a2a::v1::TaskPushNotificationConfig config;
@@ -275,6 +359,19 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListForExistingTask(
     std::string_view task_id, int page_size, std::string_view page_token) const {
+  return ListInternal(task_id, page_size, page_token, false);
+}
+
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListForTask(
+    std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const {
+  const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
+  if (postgres_task_store != nullptr && postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
+    return ListInternal(task_id, page_size, page_token, true);
+  }
+  const auto task = task_store.Get(task_id);
+  if (!task.ok()) {
+    return task.error();
+  }
   return ListInternal(task_id, page_size, page_token, false);
 }
 
@@ -297,7 +394,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   }
   const std::string limit_value = page_size == 0 ? std::string{} : std::to_string(page_size);
   const std::string offset_value = std::to_string(offset.value());
-  const std::string sql = BuildPushListSql(options_.schema, validate_task_existence);
+  const std::string& sql = validate_task_existence ? task_aware_list_sql_ : existing_task_list_sql_;
   const std::array<const char*, 3> values = {task_id_value.c_str(), page_size == 0 ? nullptr : limit_value.c_str(),
                                              offset_value.c_str()};
 
@@ -354,7 +451,7 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   }
   const std::string task_id_value(task_id);
   const std::string config_id_value(config_id);
-  const std::string sql = "DELETE FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
+  const std::string& sql = delete_sql_;
   const std::array<const char*, 2> values = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {

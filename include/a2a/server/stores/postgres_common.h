@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "a2a/core/error.h"
@@ -84,14 +85,23 @@ constexpr std::size_t kDeleteTaskPushConfigsFunctionSqlReserveSlack = 160U;
 constexpr std::size_t kDeleteTaskPushConfigsTriggerSqlReserveSlack = 192U;
 constexpr std::size_t kRevokeDeleteTaskPushConfigsFunctionSqlReserveSlack = 48U;
 
-struct PostgresStorageIdentity final {
+struct PostgresStorageCoordinates final {
   std::string host;
   std::string port;
   std::string database;
   std::string schema;
 
-  friend bool operator==(const PostgresStorageIdentity&, const PostgresStorageIdentity&) = default;
+  friend bool operator==(const PostgresStorageCoordinates&, const PostgresStorageCoordinates&) = default;
 };
+
+struct PostgresExecutionIdentity final {
+  PostgresStorageCoordinates storage;
+  std::string effective_role;
+
+  friend bool operator==(const PostgresExecutionIdentity&, const PostgresExecutionIdentity&) = default;
+};
+
+using PostgresStorageIdentity = PostgresStorageCoordinates;
 
 struct PgResultDeleter final {
   void operator()(PGresult* result) const noexcept;
@@ -123,14 +133,18 @@ class PostgresConnectionPool final {
 
   [[nodiscard]] core::Result<Lease> Acquire();
   [[nodiscard]] std::size_t capacity() const noexcept;
-  [[nodiscard]] PostgresStorageIdentity StorageIdentity(std::string schema) const;
+  [[nodiscard]] PostgresStorageCoordinates StorageCoordinates(std::string schema) const;
+  [[nodiscard]] PostgresStorageIdentity StorageIdentity(std::string schema) const {
+    return StorageCoordinates(std::move(schema));
+  }
+  [[nodiscard]] PostgresExecutionIdentity ExecutionIdentity(std::string schema) const;
 
  private:
   [[nodiscard]] core::Result<PgConnection> OpenConnection() const;
   void Return(PgConnection connection);
 
   std::string connection_string_;
-  PostgresStorageIdentity database_identity_;
+  PostgresExecutionIdentity database_identity_;
   std::size_t capacity_;
   std::mutex mutex_;
   std::condition_variable condition_;
