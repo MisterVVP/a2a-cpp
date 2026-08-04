@@ -75,6 +75,37 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return statement;
 }
 
+[[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
+                                                                std::string_view push_table) {
+  std::string sql;
+  sql.reserve(function.size() + push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  sql.append("CREATE OR REPLACE FUNCTION ");
+  sql.append(function);
+  sql.append("() RETURNS trigger LANGUAGE plpgsql AS $a2a$ BEGIN DELETE FROM ");
+  sql.append(push_table);
+  sql.append(" WHERE task_id = OLD.id; RETURN OLD; END $a2a$;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDeleteTaskPushConfigsTriggerSql(std::string_view function, std::string_view task_table) {
+  const std::string trigger = QuoteSqlIdentifier(kDeleteTaskPushConfigsTrigger);
+  std::string sql;
+  sql.reserve((2U * trigger.size()) + function.size() + (2U * task_table.size()) +
+              kDeleteTaskPushConfigsTriggerSqlReserveSlack);
+  sql.append("DROP TRIGGER IF EXISTS ");
+  sql.append(trigger);
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append("; CREATE TRIGGER ");
+  sql.append(trigger);
+  sql.append(" AFTER DELETE ON ");
+  sql.append(task_table);
+  sql.append(" FOR EACH ROW EXECUTE FUNCTION ");
+  sql.append(function);
+  sql.append("();");
+  return sql;
+}
+
 #ifdef A2A_POSTGRES_STORE_TESTING
 [[nodiscard]] std::optional<core::Error> ConsumePostgresAcquireFailureForTesting() {
   std::lock_guard<std::mutex> lock(g_test_acquire_failure_mutex);
@@ -267,6 +298,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string push_configs = PushTable(options.schema);
   const std::string task_created_sequence = TaskCreatedSequence(options.schema);
   const std::string push_created_sequence = PushCreatedSequence(options.schema);
+  const std::string delete_task_push_configs_function =
+      QualifiedSqlIdentifier(options.schema, kDeleteTaskPushConfigsFunction);
   const std::string task_created_sequence_regclass = SqlStringLiteral(task_created_sequence);
   const std::string push_created_sequence_regclass = SqlStringLiteral(push_created_sequence);
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
@@ -301,11 +334,15 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                           "), "
                                           "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
                                           "PRIMARY KEY (task_id, config_id));";
-  const std::string add_push_configs_task_foreign_key =
-      "DO $a2a$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '" + push_configs +
-      "'::regclass AND conname = 'a2a_push_configs_task_fk') THEN ALTER TABLE " + push_configs +
-      " ADD CONSTRAINT a2a_push_configs_task_fk FOREIGN KEY (task_id) REFERENCES " + tasks +
-      " (id) ON DELETE CASCADE; END IF; END $a2a$;";
+  std::string remove_push_configs_task_foreign_key = "ALTER TABLE ";
+  remove_push_configs_task_foreign_key.append(push_configs);
+  remove_push_configs_task_foreign_key.append(" DROP CONSTRAINT IF EXISTS ");
+  remove_push_configs_task_foreign_key.append(QuoteSqlIdentifier(kPushConfigsTaskForeignKey));
+  remove_push_configs_task_foreign_key.push_back(';');
+  const std::string create_delete_task_push_configs_function =
+      BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
+  const std::string create_delete_task_push_configs_trigger =
+      BuildDeleteTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
   const std::string add_push_configs_created_sequence =
       "ALTER TABLE " + push_configs + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       push_created_sequence_regclass + ");";
@@ -324,7 +361,9 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_tasks_context_index,
                                                       create_tasks_state_index,
                                                       create_push_configs,
-                                                      add_push_configs_task_foreign_key,
+                                                      remove_push_configs_task_foreign_key,
+                                                      create_delete_task_push_configs_function,
+                                                      create_delete_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
                                                       create_push_configs_task_index,
                                                       create_push_configs_created_sequence_index};

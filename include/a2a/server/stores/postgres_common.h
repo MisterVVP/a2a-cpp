@@ -77,6 +77,11 @@ constexpr std::string_view kPushConfigsTaskIndex = "idx_a2a_push_configs_task";
 constexpr std::string_view kPushConfigsCreatedSequenceIndex = "idx_a2a_push_configs_created_sequence";
 constexpr std::string_view kPushConfigsTaskIndexColumns = "(task_id)";
 constexpr std::string_view kPushConfigsCreatedSequenceIndexColumns = "(task_id, created_sequence ASC)";
+constexpr std::string_view kPushConfigsTaskForeignKey = "a2a_push_configs_task_fk";
+constexpr std::string_view kDeleteTaskPushConfigsFunction = "a2a_delete_task_push_configs";
+constexpr std::string_view kDeleteTaskPushConfigsTrigger = "a2a_delete_task_push_configs_trigger";
+constexpr std::size_t kDeleteTaskPushConfigsFunctionSqlReserveSlack = 160U;
+constexpr std::size_t kDeleteTaskPushConfigsTriggerSqlReserveSlack = 192U;
 
 struct PgResultDeleter final {
   void operator()(PGresult* result) const noexcept;

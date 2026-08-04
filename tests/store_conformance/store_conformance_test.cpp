@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <future>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -86,6 +87,68 @@ constexpr std::string_view kBeyondPostgresBigintToken = "9223372036854775808";
 constexpr std::string_view kFirstPageToken = "1";
 constexpr int kBoundedPushListPageSize = 1;
 constexpr int kPushListConfigCount = 2;
+constexpr std::string_view kAtomicCreateTaskId = "atomic-create-task";
+constexpr std::string_view kAtomicCreateConfigId = "atomic-create-config";
+constexpr std::string_view kMixedCreateTaskId = "mixed-create-task";
+constexpr std::string_view kMixedCreateConfigId = "mixed-create-config";
+constexpr std::string_view kHoldConcurrentDeleteOperation = "hold concurrent task deletion";
+constexpr auto kConcurrentCreateBlockedTimeout = std::chrono::milliseconds(50);
+
+struct ConcurrentDeleteOutcome final {
+  std::future_status create_wait_status;
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> create_result;
+  bool config_remains;
+};
+
+[[nodiscard]] a2a::core::Result<ConcurrentDeleteOutcome> RunConcurrentPushConfigDelete(
+    a2a::server::stores::PostgresPushNotificationStore& push_store,
+    const a2a::server::stores::PostgresStoreOptions& options) {
+  auto deletion_connection = push_store.AcquireConnectionForTesting();
+  if (!deletion_connection.ok()) {
+    return deletion_connection.error();
+  }
+  a2a::server::stores::Transaction deletion_transaction(deletion_connection.value().get());
+  const auto begun = deletion_transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  std::string delete_sql = "DELETE FROM ";
+  delete_sql.append(a2a::server::stores::TaskTable(options.schema));
+  delete_sql.append(" WHERE id = '");
+  delete_sql.append(kAtomicCreateTaskId);
+  delete_sql.push_back('\'');
+  const auto deleted =
+      a2a::server::stores::Exec(deletion_connection.value().get(), delete_sql, kHoldConcurrentDeleteOperation);
+  if (!deleted.ok()) {
+    return deleted.error();
+  }
+
+  std::barrier create_started(2);
+  auto create = std::async(std::launch::async, [&] {
+    create_started.arrive_and_wait();
+    return push_store.CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId),
+                                                                               std::string(kAtomicCreateConfigId)));
+  });
+  create_started.arrive_and_wait();
+  const std::future_status wait_status = create.wait_for(kConcurrentCreateBlockedTimeout);
+  const auto committed = deletion_transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  auto create_result = create.get();
+  const bool config_remains = push_store.Get(kAtomicCreateTaskId, kAtomicCreateConfigId).ok();
+  return ConcurrentDeleteOutcome{
+      .create_wait_status = wait_status, .create_result = std::move(create_result), .config_remains = config_remains};
+}
+
+void ExpectConcurrentDeleteOutcome(const a2a::core::Result<ConcurrentDeleteOutcome>& outcome) {
+  ASSERT_TRUE(outcome.ok());
+  EXPECT_EQ(outcome.value().create_wait_status, std::future_status::timeout);
+  ASSERT_FALSE(outcome.value().create_result.ok());
+  EXPECT_EQ(outcome.value().create_result.error().protocol_code().value_or(std::string{}),
+            a2a::core::protocol_codes::kTaskNotFound);
+  EXPECT_FALSE(outcome.value().config_remains);
+}
 
 template <typename Insert>
 [[nodiscard]] bool RunDeterministicallyInterleavedInserts(Insert insert) {
@@ -656,18 +719,16 @@ TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
   }
-  constexpr std::string_view kTaskId = "atomic-create-task";
-  constexpr std::string_view kConfigId = "atomic-create-config";
   const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value,
                                                           .schema = MakePostgresTestSchema("push_atomic_create")};
   a2a::server::stores::PostgresTaskStore task_store(options);
   a2a::server::stores::PostgresPushNotificationStore push_store(options);
-  AddPostgresTask(task_store, kTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
                   kOldTargetTaskTimestampSeconds);
 
   a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
   const auto created = push_store.CreateOrUpdate(
-      a2a::tests::store_conformance::MakeConfig(std::string(kTaskId), std::string(kConfigId)));
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)));
   ASSERT_TRUE(created.ok());
   const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
   EXPECT_EQ(
@@ -677,9 +738,54 @@ TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
             0U);
 
   const auto missing = push_store.CreateOrUpdate(
-      a2a::tests::store_conformance::MakeConfig("missing-atomic-create-task", std::string(kConfigId)));
+      a2a::tests::store_conformance::MakeConfig("missing-atomic-create-task", std::string(kAtomicCreateConfigId)));
   ASSERT_FALSE(missing.ok());
   EXPECT_EQ(missing.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+}
+
+TEST(StoreConformanceTest, PostgresPushConfigUsesSuppliedAuthoritativeTaskStore) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value,
+                                                          .schema = MakePostgresTestSchema("push_mixed_task_store")};
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  ASSERT_TRUE(task_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask(
+                      std::string(kMixedCreateTaskId), std::string(kPushListContextId), lf::a2a::v1::TASK_STATE_WORKING,
+                      kOldTargetTaskTimestampSeconds))
+                  .ok());
+
+  const auto created = push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId), std::string(kMixedCreateConfigId)),
+      task_store);
+
+  ASSERT_TRUE(created.ok());
+  const auto fetched = push_store.Get(kMixedCreateTaskId, kMixedCreateConfigId);
+  ASSERT_TRUE(fetched.ok());
+  EXPECT_EQ(fetched.value().id(), kMixedCreateConfigId);
+}
+
+TEST(StoreConformanceTest, PostgresPushConfigCreateReturnsTaskNotFoundWhenConcurrentDeletionWins) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value,
+                                                          .schema = MakePostgresTestSchema("push_concurrent_delete")};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId),
+                                                                            std::string(kAtomicCreateConfigId)))
+                  .ok());
+
+  const auto outcome = RunConcurrentPushConfigDelete(push_store, options);
+  ExpectConcurrentDeleteOutcome(outcome);
 }
 #endif
 

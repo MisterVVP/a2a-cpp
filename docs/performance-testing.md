@@ -259,9 +259,12 @@ get; one task-aware `push_config_upsert` for create-config; one
 Create-many fan-out eight represents eight independent public API calls, not a
 batch SDK call, and therefore executes eight commands rather than sixteen. The
 create upsert selects and key-locks the task row in the same statement. A
-missing task produces no returned row and maps to `TaskNotFound`; the foreign
-key cascades a deletion that wins after creation, so concurrent deletion cannot
-leave an orphaned configuration.
+missing task produces no returned row and maps to `TaskNotFound`; the
+task-delete trigger removes configs when deletion wins after creation, so
+concurrent deletion cannot leave an orphaned configuration. When the supplied
+authoritative task store is not the PostgreSQL task store for the same database
+and schema, create retains the lookup-first fallback because the PostgreSQL
+statement cannot validate that external store.
 
 Further round-trip reductions require separate SQL-design changes. List could combine existence, count,
 and rows, but empty/out-of-range pages and a consistent count need careful

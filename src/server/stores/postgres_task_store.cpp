@@ -192,6 +192,10 @@ PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> poo
 
 PostgresTaskStore::~PostgresTaskStore() = default;
 
+bool PostgresTaskStore::UsesStorage(const PostgresStoreOptions& options) const noexcept {
+  return options_.connection_string == options.connection_string && options_.schema == options.schema;
+}
+
 #ifdef A2A_POSTGRES_STORE_TESTING
 const PostgresConnectionPool* PostgresTaskStore::connection_pool_for_testing() const noexcept { return pool_.get(); }
 #endif

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string_view>
 
@@ -23,6 +24,8 @@ constexpr std::string_view kTaskConfigNotFoundMessage = "push notification task 
 constexpr std::string_view kConfigNotFoundMessage = "push notification config not found";
 constexpr std::string_view kPageSizeInvalidMessage =
     "ListTaskPushNotificationConfigsRequest.page_size must be non-negative";
+constexpr std::size_t kPushListSqlReserveSlack = 512U;
+constexpr std::size_t kPushUpsertSqlReserveSlack = 384U;
 
 class PostgresConnectionPool;
 
@@ -45,9 +48,12 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   [[nodiscard]] core::Result<void> Delete(std::string_view task_id, std::string_view config_id) override;
 #ifdef A2A_POSTGRES_STORE_TESTING
   [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
+  [[nodiscard]] core::Result<PostgresConnectionPool::Lease> AcquireConnectionForTesting();
 #endif
 
  private:
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Upsert(
+      const lf::a2a::v1::TaskPushNotificationConfig& config, bool validate_postgres_task);
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListInternal(
       std::string_view task_id, int page_size, std::string_view page_token, bool validate_task_existence) const;
 

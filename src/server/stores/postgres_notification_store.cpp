@@ -17,15 +17,14 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/server/stores/postgres_task_store.h"
 
 namespace a2a::server::stores {
 namespace {
 
 constexpr std::uint64_t kPostgresBigintMaximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-constexpr std::size_t kPushListSqlReserveSlack = 512U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
-constexpr std::size_t kPushUpsertSqlReserveSlack = 384U;
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -133,25 +132,40 @@ PostgresPushNotificationStore::~PostgresPushNotificationStore() = default;
 const PostgresConnectionPool* PostgresPushNotificationStore::connection_pool_for_testing() const noexcept {
   return pool_.get();
 }
+
+core::Result<PostgresConnectionPool::Lease> PostgresPushNotificationStore::AcquireConnectionForTesting() {
+  return pool_->Acquire();
+}
 #endif
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {
+  return Upsert(config, true);
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Upsert(
+    const lf::a2a::v1::TaskPushNotificationConfig& config, bool validate_postgres_task) {
   const auto validation = ValidatePushConfig(config);
   if (!validation.ok()) {
     return validation.error();
   }
   const std::string payload = config.SerializeAsString();
   const std::string push_table = PushTable(options_.schema);
-  const std::string task_table = TaskTable(options_.schema);
+  const std::string task_table = validate_postgres_task ? TaskTable(options_.schema) : std::string{};
   std::string sql;
   sql.reserve(push_table.size() + task_table.size() + kPushUpsertSqlReserveSlack);
   sql.append("INSERT INTO ");
   sql.append(push_table);
-  sql.append(" (task_id, config_id, url, config_proto, updated_at) SELECT $1, $2, $3, $4, now() FROM ");
-  sql.append(task_table);
+  sql.append(" (task_id, config_id, url, config_proto, updated_at) ");
+  if (validate_postgres_task) {
+    sql.append("SELECT $1, $2, $3, $4, now() FROM ");
+    sql.append(task_table);
+    sql.append(" WHERE id = $1 FOR KEY SHARE ");
+  } else {
+    sql.append("VALUES ($1, $2, $3, $4, now()) ");
+  }
   sql.append(
-      " WHERE id = $1 FOR KEY SHARE ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
+      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
       "config_proto = EXCLUDED.config_proto, updated_at = now() RETURNING config_proto");
   constexpr int kPushUpsertParameterCount = 4;
   const std::array<const char*, kPushUpsertParameterCount> values = {config.task_id().c_str(), config.id().c_str(),
@@ -176,15 +190,23 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!checked.ok()) {
     return checked.error();
   }
-  if (PQntuples(result.get()) == 0) {
+  if (validate_postgres_task && PQntuples(result.get()) == 0) {
     return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
   }
   return config;
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdateForTask(
-    const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& /*task_store*/) {
-  return CreateOrUpdate(config);
+    const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
+  const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
+  if (postgres_task_store != nullptr && postgres_task_store->UsesStorage(options_)) {
+    return Upsert(config, true);
+  }
+  const auto task = task_store.Get(config.task_id());
+  if (!task.ok()) {
+    return task.error();
+  }
+  return Upsert(config, false);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Get(
