@@ -15,12 +15,18 @@
 
 namespace a2a::server {
 
+class TaskStore;
+
 class PushNotificationStore {
  public:
   virtual ~PushNotificationStore() = default;
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdate(
       const lf::a2a::v1::TaskPushNotificationConfig& config) = 0;
+  // Creates only when the task exists. Backends that share storage with the
+  // task store can override this to perform the check and write atomically.
+  [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdateForTask(
+      const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store);
   [[nodiscard]] virtual core::Result<lf::a2a::v1::TaskPushNotificationConfig> Get(std::string_view task_id,
                                                                                   std::string_view config_id) const = 0;
   [[nodiscard]] virtual core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(

@@ -12,6 +12,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/server/tasks/task_store.h"
 
 namespace a2a::server {
 namespace {
@@ -76,6 +77,15 @@ core::Result<void> ValidateListRequest(std::string_view task_id, int page_size) 
 }
 
 }  // namespace
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::CreateOrUpdateForTask(
+    const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
+  const auto task = task_store.Get(config.task_id());
+  if (!task.ok()) {
+    return task.error();
+  }
+  return CreateOrUpdate(config);
+}
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {

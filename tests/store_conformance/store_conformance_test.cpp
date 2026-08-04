@@ -650,6 +650,37 @@ TEST(StoreConformanceTest, PostgresPushConfigListEdgeCasesUseOneCommand) {
   ExpectPushConfigTokenBeyondPostgresBigint(push_store);
   ExpectMissingPushConfigTask(push_store);
 }
+
+TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  constexpr std::string_view kTaskId = "atomic-create-task";
+  constexpr std::string_view kConfigId = "atomic-create-config";
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value,
+                                                          .schema = MakePostgresTestSchema("push_atomic_create")};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(task_store, kTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  const auto created = push_store.CreateOrUpdate(
+      a2a::tests::store_conformance::MakeConfig(std::string(kTaskId), std::string(kConfigId)));
+  ASSERT_TRUE(created.ok());
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(
+      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+      1U);
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            0U);
+
+  const auto missing = push_store.CreateOrUpdate(
+      a2a::tests::store_conformance::MakeConfig("missing-atomic-create-task", std::string(kConfigId)));
+  ASSERT_FALSE(missing.ok());
+  EXPECT_EQ(missing.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+}
 #endif
 
 }  // namespace

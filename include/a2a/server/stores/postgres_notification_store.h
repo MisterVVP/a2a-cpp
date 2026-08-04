@@ -34,6 +34,8 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdate(
       const lf::a2a::v1::TaskPushNotificationConfig& config) override;
+  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdateForTask(
+      const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) override;
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Get(std::string_view task_id,
                                                                           std::string_view config_id) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(

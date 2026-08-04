@@ -301,6 +301,11 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                           "), "
                                           "config_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
                                           "PRIMARY KEY (task_id, config_id));";
+  const std::string add_push_configs_task_foreign_key =
+      "DO $a2a$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '" + push_configs +
+      "'::regclass AND conname = 'a2a_push_configs_task_fk') THEN ALTER TABLE " + push_configs +
+      " ADD CONSTRAINT a2a_push_configs_task_fk FOREIGN KEY (task_id) REFERENCES " + tasks +
+      " (id) ON DELETE CASCADE; END IF; END $a2a$;";
   const std::string add_push_configs_created_sequence =
       "ALTER TABLE " + push_configs + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       push_created_sequence_regclass + ");";
@@ -319,6 +324,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_tasks_context_index,
                                                       create_tasks_state_index,
                                                       create_push_configs,
+                                                      add_push_configs_task_foreign_key,
                                                       add_push_configs_created_sequence,
                                                       create_push_configs_task_index,
                                                       create_push_configs_created_sequence_index};

@@ -253,15 +253,17 @@ Focused scenario fixture preparation must occur before the measured window; setu
 
 
 The current successful PostgreSQL paths intentionally use one `task_get` for task
-get; `task_get` plus `push_config_upsert` for create-config; one
+get; one task-aware `push_config_upsert` for create-config; one
 `push_config_get` for a present config; `task_get`, `push_config_list_count`, and
 `push_config_list_select` for list; and one `push_config_delete` for delete.
 Create-many fan-out eight represents eight independent public API calls, not a
-batch SDK call.
+batch SDK call, and therefore executes eight commands rather than sixteen. The
+create upsert selects and key-locks the task row in the same statement. A
+missing task produces no returned row and maps to `TaskNotFound`; the foreign
+key cascades a deletion that wins after creation, so concurrent deletion cannot
+leave an orphaned configuration.
 
-Round-trip reductions require a separate SQL-design change. Create could replace
-its preliminary lookup with an atomic task-aware insert, but must preserve
-`TaskNotFound` under concurrent deletion. List could combine existence, count,
+Further round-trip reductions require separate SQL-design changes. List could combine existence, count,
 and rows, but empty/out-of-range pages and a consistent count need careful
 snapshot semantics. Get currently uses a second `push_config_get` only after a
 miss to distinguish a missing task from a missing config; a join or tagged query
