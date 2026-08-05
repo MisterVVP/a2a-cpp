@@ -60,12 +60,13 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 #endif
 
  private:
+  enum class GetPath { kDirect, kTaskAware, kExistingTask };
   enum class UpsertPath { kLocalAtomic, kExternal, kSplitRoleLocal };
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Upsert(
       const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path, std::string* row_version = nullptr);
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetInternal(std::string_view task_id,
                                                                                   std::string_view config_id,
-                                                                                  bool validate_task_existence) const;
+                                                                                  GetPath path) const;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListInternal(
       std::string_view task_id, int page_size, std::string_view page_token, bool validate_task_existence) const;
   [[nodiscard]] core::Result<void> DeleteIfVersionMatches(std::string_view task_id, std::string_view config_id,
@@ -80,6 +81,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   std::string split_role_upsert_sql_;
   std::string task_aware_get_sql_;
   std::string existing_task_get_sql_;
+  std::string task_config_exists_sql_;
   std::string task_aware_list_sql_;
   std::string existing_task_list_sql_;
   std::string delete_sql_;

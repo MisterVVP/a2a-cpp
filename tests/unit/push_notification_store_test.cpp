@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/error.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 
@@ -96,6 +97,17 @@ TEST(PushNotificationStoreTest, GetForTaskRejectsStaleConfigWhenAuthoritativeTas
 
   ASSERT_FALSE(fetched.ok());
   EXPECT_EQ(fetched.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+}
+
+TEST(PushNotificationStoreTest, GetForTaskValidatesLookupBeforeMissingTask) {
+  a2a::server::InMemoryPushNotificationStore push_store;
+  a2a::server::InMemoryTaskStore task_store;
+
+  const auto fetched = push_store.GetForTask(kOtherTaskId, {}, task_store);
+
+  ASSERT_FALSE(fetched.ok());
+  EXPECT_EQ(fetched.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(fetched.error().protocol_code().has_value());
 }
 
 TEST(PushNotificationStoreTest, RejectsMissingRequiredFields) {
