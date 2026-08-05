@@ -143,7 +143,6 @@ constexpr std::string_view kDeleteProvenanceTaskOperation = "delete provenance t
 constexpr std::string_view kSplitRoleSetupOperation = "set up split-role push store";
 constexpr std::string_view kSplitRoleCleanupOperation = "clean up split-role push store";
 constexpr std::string_view kSplitRolePassword = "a2a_split_role_password";
-constexpr auto kSplitRoleBlockedTimeout = std::chrono::milliseconds(250);
 
 struct ConninfoDeleter final {
   void operator()(PQconninfoOption* options) const noexcept { PQconninfoFree(options); }
@@ -383,6 +382,49 @@ struct SplitRoleCreateOutcome final {
   a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> result;
   a2a::server::stores::PostgresOperationDiagnostics diagnostics;
 };
+
+void ExpectSplitRoleCreateDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            2U);
+  EXPECT_EQ(
+      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+      1U);
+}
+
+void ExpectSplitRoleDeletionRaceOutcome(const SplitRoleCreateOutcome& outcome,
+                                        a2a::server::stores::PostgresPushNotificationStore& owner_push_store) {
+  ASSERT_FALSE(outcome.result.ok());
+  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  ExpectSplitRoleCreateDiagnostics(outcome.diagnostics);
+  EXPECT_EQ(outcome.diagnostics
+                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigDelete)],
+            1U);
+  ExpectPushConfigMissing(owner_push_store, kSplitRoleTaskId, kSplitRoleRaceConfigId);
+}
+
+void ExpectLocalTaskStoreProvenanceAfterConflict(a2a::server::stores::PostgresPushNotificationStore& push_store,
+                                                 a2a::server::stores::PostgresTaskStore& local_task_store,
+                                                 a2a::server::InMemoryTaskStore& external_task_store,
+                                                 const a2a::server::stores::PostgresStoreOptions& options,
+                                                 const lf::a2a::v1::TaskPushNotificationConfig& config) {
+  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, external_task_store).ok());
+  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, local_task_store).ok());
+  ASSERT_TRUE(DeletePostgresTask(push_store, options, kProvenanceTaskId).ok());
+  ExpectPushConfigMissing(push_store, kProvenanceTaskId, kTransitionProvenanceConfigId);
+}
+
+void ExpectExternalTaskStoreProvenanceAfterConflict(a2a::server::stores::PostgresPushNotificationStore& push_store,
+                                                    a2a::server::stores::PostgresTaskStore& local_task_store,
+                                                    a2a::server::InMemoryTaskStore& external_task_store,
+                                                    const a2a::server::stores::PostgresStoreOptions& options,
+                                                    const lf::a2a::v1::TaskPushNotificationConfig& config) {
+  AddPostgresTask(local_task_store, kProvenanceTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, local_task_store).ok());
+  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, external_task_store).ok());
+  ASSERT_TRUE(DeletePostgresTask(push_store, options, kProvenanceTaskId).ok());
+  ExpectPushConfigPresent(push_store, kProvenanceTaskId, kTransitionProvenanceConfigId);
+}
 
 [[nodiscard]] std::string BuildDeleteByTaskIdSql(std::string_view table, std::string_view id_column,
                                                  std::string_view task_id) {
@@ -1315,12 +1357,7 @@ TEST(StoreConformanceTest, DifferentPostgresRolesUseSafeSplitRoleCreatePath) {
 
     ASSERT_TRUE(created.ok());
     const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
-    EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
-              2U);
-    EXPECT_EQ(
-        diagnostics
-            .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-        1U);
+    ExpectSplitRoleCreateDiagnostics(diagnostics);
     ExpectPushConfigPresent(owner_push_store, kSplitRoleTaskId, kSplitRoleConfigId);
   }
 }
@@ -1349,35 +1386,27 @@ TEST(StoreConformanceTest, SplitRoleCreateRemovesConfigWhenDeletionWinsAfterPrec
   const a2a::server::stores::PostgresStoreOptions role_options{
       .connection_string = role_dsn, .schema = schema, .auto_create_schema = false, .connection_pool_size = 1U};
   a2a::server::stores::PostgresPushNotificationStore role_push_store(role_options);
-  std::future<SplitRoleCreateOutcome> create;
-  {
-    auto held_connection = role_push_store.AcquireConnectionForTesting();
-    ASSERT_TRUE(held_connection.ok());
-    create = std::async(std::launch::async, [&] {
-      a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
-      auto result = role_push_store.CreateOrUpdateForTask(
-          a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId)),
-          task_store);
-      return SplitRoleCreateOutcome{.result = std::move(result),
-                                    .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting()};
-    });
-    EXPECT_EQ(create.wait_for(kSplitRoleBlockedTimeout), std::future_status::timeout);
-    ASSERT_TRUE(DeletePostgresTask(owner_push_store, owner_options, kSplitRoleTaskId).ok());
-  }
+  std::barrier precheck_completed(2);
+  std::barrier deletion_completed(2);
+  role_push_store.SetSplitRoleAfterPrecheckHookForTesting([&] {
+    precheck_completed.arrive_and_wait();
+    deletion_completed.arrive_and_wait();
+  });
+  auto create = std::async(std::launch::async, [&] {
+    a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+    auto result = role_push_store.CreateOrUpdateForTask(
+        a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId)),
+        task_store);
+    return SplitRoleCreateOutcome{.result = std::move(result),
+                                  .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting()};
+  });
 
+  precheck_completed.arrive_and_wait();
+  const auto deleted = DeletePostgresTask(owner_push_store, owner_options, kSplitRoleTaskId);
+  deletion_completed.arrive_and_wait();
+  ASSERT_TRUE(deleted.ok());
   const auto outcome = create.get();
-  ASSERT_FALSE(outcome.result.ok());
-  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
-  EXPECT_EQ(
-      outcome.diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
-      2U);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-            1U);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigDelete)],
-            1U);
-  ExpectPushConfigMissing(owner_push_store, kSplitRoleTaskId, kSplitRoleRaceConfigId);
+  ExpectSplitRoleDeletionRaceOutcome(outcome, owner_push_store);
 }
 
 TEST(StoreConformanceTest, LocalTaskDeletionPreservesExternalTaskStoreConfigs) {
@@ -1434,17 +1463,8 @@ TEST(StoreConformanceTest, ConflictUpdateUsesLatestTaskStoreProvenance) {
   const auto config = a2a::tests::store_conformance::MakeConfig(std::string(kProvenanceTaskId),
                                                                 std::string(kTransitionProvenanceConfigId));
 
-  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, external_task_store).ok());
-  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, local_task_store).ok());
-  ASSERT_TRUE(DeletePostgresTask(push_store, options, kProvenanceTaskId).ok());
-  ExpectPushConfigMissing(push_store, kProvenanceTaskId, kTransitionProvenanceConfigId);
-
-  AddPostgresTask(local_task_store, kProvenanceTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, local_task_store).ok());
-  ASSERT_TRUE(push_store.CreateOrUpdateForTask(config, external_task_store).ok());
-  ASSERT_TRUE(DeletePostgresTask(push_store, options, kProvenanceTaskId).ok());
-  ExpectPushConfigPresent(push_store, kProvenanceTaskId, kTransitionProvenanceConfigId);
+  ExpectLocalTaskStoreProvenanceAfterConflict(push_store, local_task_store, external_task_store, options, config);
+  ExpectExternalTaskStoreProvenanceAfterConflict(push_store, local_task_store, external_task_store, options, config);
 }
 
 TEST(StoreConformanceTest, PostgresTaskDeleteTriggerUsesLeastPrivilegeSecurityDefiner) {

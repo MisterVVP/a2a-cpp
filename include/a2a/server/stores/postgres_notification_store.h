@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -54,6 +55,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 #ifdef A2A_POSTGRES_STORE_TESTING
   [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
   [[nodiscard]] core::Result<PostgresConnectionPool::Lease> AcquireConnectionForTesting();
+  void SetSplitRoleAfterPrecheckHookForTesting(std::function<void()> hook);
 #endif
 
  private:
@@ -78,6 +80,9 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   std::string task_aware_list_sql_;
   std::string existing_task_list_sql_;
   std::string delete_sql_;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  std::function<void()> split_role_after_precheck_hook_for_testing_;
+#endif
 };
 
 }  // namespace a2a::server::stores

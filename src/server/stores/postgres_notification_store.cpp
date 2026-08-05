@@ -215,6 +215,10 @@ const PostgresConnectionPool* PostgresPushNotificationStore::connection_pool_for
 core::Result<PostgresConnectionPool::Lease> PostgresPushNotificationStore::AcquireConnectionForTesting() {
   return pool_->Acquire();
 }
+
+void PostgresPushNotificationStore::SetSplitRoleAfterPrecheckHookForTesting(std::function<void()> hook) {
+  split_role_after_precheck_hook_for_testing_ = std::move(hook);
+}
 #endif
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdate(
@@ -275,6 +279,11 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     if (!before.ok()) {
       return before.error();
     }
+#ifdef A2A_POSTGRES_STORE_TESTING
+    if (split_role_after_precheck_hook_for_testing_) {
+      split_role_after_precheck_hook_for_testing_();
+    }
+#endif
     auto created = Upsert(config, UpsertPath::kSplitRoleLocal);
     if (!created.ok()) {
       return created.error();
