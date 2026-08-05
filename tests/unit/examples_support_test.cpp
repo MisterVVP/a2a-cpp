@@ -397,8 +397,9 @@ TEST(ExampleSupportTest, StreamingAndListTasksAreDeterministic) {
   ASSERT_FALSE(listed.value().tasks.empty());
 }
 
-TEST(ExampleSupportTest, IndependentPushReadProgressesWhileTaskStoreCallIsBlocked) {
+TEST(ExampleSupportTest, IndependentTaskPushReadProgressesWhileAnotherTaskStoreCallIsBlocked) {
   constexpr std::string_view kBlockedTaskId = "blocked-task";
+  constexpr std::string_view kIndependentTaskId = "independent-task";
   constexpr std::string_view kConfigId = "independent-config";
   constexpr std::chrono::seconds kProgressTimeout{1};
   BlockingGetTaskStore task_store{std::string(kBlockedTaskId)};
@@ -406,9 +407,12 @@ TEST(ExampleSupportTest, IndependentPushReadProgressesWhileTaskStoreCallIsBlocke
   blocked_task.set_id(std::string(kBlockedTaskId));
   blocked_task.set_context_id("blocked-context");
   ASSERT_TRUE(task_store.CreateOrUpdate(blocked_task).ok());
+  lf::a2a::v1::Task independent_task = blocked_task;
+  independent_task.set_id(std::string(kIndependentTaskId));
+  ASSERT_TRUE(task_store.CreateOrUpdate(independent_task).ok());
   a2a::server::InMemoryPushNotificationStore push_store;
   lf::a2a::v1::TaskPushNotificationConfig config;
-  config.set_task_id(std::string(kBlockedTaskId));
+  config.set_task_id(std::string(kIndependentTaskId));
   config.set_id(std::string(kConfigId));
   config.set_url("https://example.test/callback");
   ASSERT_TRUE(push_store.CreateOrUpdate(config).ok());
@@ -429,7 +433,7 @@ TEST(ExampleSupportTest, IndependentPushReadProgressesWhileTaskStoreCallIsBlocke
   auto push_read = std::async(std::launch::async, [&] {
     a2a::server::RequestContext context;
     lf::a2a::v1::GetTaskPushNotificationConfigRequest request;
-    request.set_task_id(std::string(kBlockedTaskId));
+    request.set_task_id(std::string(kIndependentTaskId));
     request.set_id(std::string(kConfigId));
     return executor.GetTaskPushNotificationConfig(request, context).ok();
   });
