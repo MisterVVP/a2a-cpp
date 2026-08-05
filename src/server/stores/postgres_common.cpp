@@ -105,7 +105,7 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 [[nodiscard]] std::string ConnectedPostgresEndpoint(PGconn* connection) {
   const char* host_address = PQhostaddr(connection);
   if (host_address != nullptr && host_address[0] != '\0') {
-    return std::string(host_address);
+    return {host_address};
   }
   return LibpqValue(PQhost(connection));
 }
