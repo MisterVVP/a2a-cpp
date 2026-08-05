@@ -1476,6 +1476,27 @@ TEST(StoreConformanceTest, SplitRoleCreateRemovesConfigWhenDeletionWinsAfterPrec
   ExpectSplitRoleDeletionRaceOutcome(outcome, owner_push_store);
 }
 
+void ExpectSplitRoleCleanupWritesSucceeded(const a2a::core::Result<void>& deleted,
+                                           const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& replaced) {
+  EXPECT_TRUE(deleted.ok());
+  EXPECT_TRUE(replaced.ok());
+}
+
+void ExpectSplitRoleCleanupCreateFailure(const SplitRoleCreateOutcome& outcome) {
+  ASSERT_FALSE(outcome.result.ok());
+  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  ExpectSplitRoleCreateDiagnostics(outcome.diagnostics);
+  EXPECT_EQ(outcome.diagnostics
+                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigDelete)],
+            1U);
+}
+
+void ExpectSplitRoleReplacementPreserved(a2a::server::stores::PostgresPushNotificationStore& owner_push_store) {
+  const auto stored = owner_push_store.Get(kSplitRoleTaskId, kSplitRoleRaceConfigId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().url(), kSplitRoleReplacementUrl);
+}
+
 TEST(StoreConformanceTest, SplitRoleCleanupPreservesNewerConfigWrite) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -1524,17 +1545,9 @@ TEST(StoreConformanceTest, SplitRoleCleanupPreservesNewerConfigWrite) {
   replacement_completed.arrive_and_wait();
   const auto outcome = create.get();
 
-  ASSERT_TRUE(deleted.ok());
-  ASSERT_TRUE(replaced.ok());
-  ASSERT_FALSE(outcome.result.ok());
-  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
-  ExpectSplitRoleCreateDiagnostics(outcome.diagnostics);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigDelete)],
-            1U);
-  const auto stored = owner_push_store.Get(kSplitRoleTaskId, kSplitRoleRaceConfigId);
-  ASSERT_TRUE(stored.ok());
-  EXPECT_EQ(stored.value().url(), kSplitRoleReplacementUrl);
+  ExpectSplitRoleCleanupWritesSucceeded(deleted, replaced);
+  ExpectSplitRoleCleanupCreateFailure(outcome);
+  ExpectSplitRoleReplacementPreserved(owner_push_store);
 }
 
 TEST(StoreConformanceTest, LocalTaskDeletionPreservesExternalTaskStoreConfigs) {
