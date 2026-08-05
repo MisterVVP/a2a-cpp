@@ -353,6 +353,9 @@ class ScopedPostgresRole final {
 [[nodiscard]] std::string BuildDeleteByTaskIdSql(std::string_view table, std::string_view id_column,
                                                  std::string_view task_id);
 
+void AddPostgresTask(a2a::server::stores::PostgresTaskStore& store, std::string_view task_id,
+                     std::string_view context_id, lf::a2a::v1::TaskState state, int timestamp_seconds);
+
 [[nodiscard]] a2a::core::Result<void> DeletePostgresTask(a2a::server::stores::PostgresPushNotificationStore& push_store,
                                                          const a2a::server::stores::PostgresStoreOptions& options,
                                                          std::string_view task_id) {
