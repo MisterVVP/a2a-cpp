@@ -10,6 +10,9 @@
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/protocol_codes.h"
+#include "a2a/server/tasks/in_memory_task_store.h"
+
 namespace {
 
 constexpr std::string_view kTaskId = "task-1";
@@ -82,6 +85,17 @@ TEST(PushNotificationStoreTest, CreateGetListAndDeleteConfig) {
   EXPECT_TRUE(store.Delete(kTaskId, kConfigId).ok());
   EXPECT_TRUE(store.Delete(kTaskId, kConfigId).ok());
   EXPECT_EQ(store.List(kTaskId).value().configs_size(), kEmptyConfigCount);
+}
+
+TEST(PushNotificationStoreTest, GetForTaskRejectsStaleConfigWhenAuthoritativeTaskIsMissing) {
+  a2a::server::InMemoryPushNotificationStore push_store;
+  a2a::server::InMemoryTaskStore task_store;
+  ASSERT_TRUE(push_store.CreateOrUpdate(BuildConfig(PushConfigIds{.task_id = kTaskId, .config_id = kConfigId})).ok());
+
+  const auto fetched = push_store.GetForTask(kTaskId, kConfigId, task_store);
+
+  ASSERT_FALSE(fetched.ok());
+  EXPECT_EQ(fetched.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
 }
 
 TEST(PushNotificationStoreTest, RejectsMissingRequiredFields) {

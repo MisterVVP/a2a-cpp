@@ -102,6 +102,14 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return value == nullptr ? std::string{} : std::string(value);
 }
 
+[[nodiscard]] std::string ConnectedPostgresEndpoint(PGconn* connection) {
+  const char* host_address = PQhostaddr(connection);
+  if (host_address != nullptr && host_address[0] != '\0') {
+    return std::string(host_address);
+  }
+  return LibpqValue(PQhost(connection));
+}
+
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsTriggerSql(std::string_view function, std::string_view task_table) {
   const std::string trigger = QuoteSqlIdentifier(kDeleteTaskPushConfigsTrigger);
   std::string sql;
@@ -231,7 +239,7 @@ PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, st
     connections_.push_back(std::move(connection.value()));
   }
   PGconn* established_connection = connections_.front().get();
-  database_identity_.storage.host = LibpqValue(PQhost(established_connection));
+  database_identity_.storage.host = ConnectedPostgresEndpoint(established_connection);
   database_identity_.storage.port = LibpqValue(PQport(established_connection));
   database_identity_.storage.database = LibpqValue(PQdb(established_connection));
   PgResult role_result(PQexec(established_connection, kCurrentUserSql));

@@ -89,7 +89,10 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::Cre
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::GetForTask(
     std::string_view task_id, std::string_view config_id, const TaskStore& task_store) const {
-  (void)task_store;
+  const auto task = task_store.Get(task_id);
+  if (!task.ok()) {
+    return task.error();
+  }
   return Get(task_id, config_id);
 }
 

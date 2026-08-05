@@ -223,7 +223,7 @@ void PostgresPushNotificationStore::SetSplitRoleAfterPrecheckHookForTesting(std:
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {
-  return Upsert(config, UpsertPath::kLocalAtomic);
+  return Upsert(config, UpsertPath::kExternal);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Upsert(
