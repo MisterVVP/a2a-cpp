@@ -34,6 +34,9 @@ cmake --build build-postgres
 ```
 
 When enabled, CMake builds `a2a::store_postgres`. Applications that instantiate PostgreSQL stores should link this target in addition to the normal server target.
+The PostgreSQL store requires libpq/PostgreSQL client version 12 or newer; CMake fails configuration with a clear error when an older client library is found.
+
+Task-aware push-config creation uses one SQL command only when the push-config store and task store share the same PostgreSQL storage and execution identity. Split-role or external authoritative task-store deployments validate task existence first and then write the config without claiming cross-role atomicity; use a local PostgreSQL task store for delete-cascade cleanup guarantees. Existing foreign keys on push-config tables are preserved by automatic schema initialization.
 
 ## Local Docker PostgreSQL
 

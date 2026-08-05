@@ -80,6 +80,10 @@ core::Result<void> ValidateListRequest(std::string_view task_id, int page_size) 
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::CreateOrUpdateForTask(
     const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
+  const auto validation = ValidateConfig(config);
+  if (!validation.ok()) {
+    return validation.error();
+  }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {
     return task.error();
@@ -102,6 +106,14 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::Get
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificationStore::ListForTask(
     std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const {
+  const auto validation = ValidateListRequest(task_id, page_size);
+  if (!validation.ok()) {
+    return validation.error();
+  }
+  const auto offset = ParsePageToken(page_token);
+  if (!offset.ok()) {
+    return offset.error();
+  }
   const auto task = task_store.Get(task_id);
   if (!task.ok()) {
     return task.error();

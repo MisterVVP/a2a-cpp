@@ -141,6 +141,9 @@ target_link_libraries(a2a_server
 
 if(A2A_ENABLE_POSTGRES_STORE)
   find_package(PostgreSQL REQUIRED)
+  if(PostgreSQL_VERSION_STRING VERSION_LESS "12")
+    message(FATAL_ERROR "A2A PostgreSQL stores require libpq/PostgreSQL client version 12 or newer")
+  endif()
 
   add_library(a2a_store_postgres STATIC
     server/stores/postgres_common.cpp

@@ -107,13 +107,7 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return value == nullptr ? std::string{} : std::string(value);
 }
 
-[[nodiscard]] std::string ConnectedPostgresEndpoint(PGconn* connection) {
-  const char* host_address = PQhostaddr(connection);
-  if (host_address != nullptr && host_address[0] != '\0') {
-    return {host_address};
-  }
-  return LibpqValue(PQhost(connection));
-}
+[[nodiscard]] std::string ConnectedPostgresEndpoint(PGconn* connection) { return LibpqValue(PQhost(connection)); }
 
 [[nodiscard]] core::Result<PostgresExecutionIdentity> ReadPostgresExecutionIdentity(PGconn* connection) {
   PostgresExecutionIdentity identity;
@@ -339,12 +333,10 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
   if (PQstatus(connection.get()) != CONNECTION_OK) {
     auto reopened = OpenConnection();
     if (!reopened.ok()) {
-      Return(std::move(connection));
       return reopened.error();
     }
     const auto identity_checked = ValidatePostgresConnectionIdentity(reopened.value().get(), database_identity_);
     if (!identity_checked.ok()) {
-      Return(std::move(connection));
       return identity_checked.error();
     }
     connection = std::move(reopened.value());
@@ -443,11 +435,6 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   std::string add_push_config_provenance = "ALTER TABLE ";
   add_push_config_provenance.append(push_configs);
   add_push_config_provenance.append(" ADD COLUMN IF NOT EXISTS local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE;");
-  std::string remove_push_configs_task_foreign_key = "ALTER TABLE ";
-  remove_push_configs_task_foreign_key.append(push_configs);
-  remove_push_configs_task_foreign_key.append(" DROP CONSTRAINT IF EXISTS ");
-  remove_push_configs_task_foreign_key.append(QuoteSqlIdentifier(kPushConfigsTaskForeignKey));
-  remove_push_configs_task_foreign_key.push_back(';');
   const std::string create_delete_task_push_configs_function =
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
@@ -473,7 +460,6 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_tasks_state_index,
                                                       create_push_configs,
                                                       add_push_config_provenance,
-                                                      remove_push_configs_task_foreign_key,
                                                       create_delete_task_push_configs_function,
                                                       revoke_delete_task_push_configs_function,
                                                       create_delete_task_push_configs_trigger,

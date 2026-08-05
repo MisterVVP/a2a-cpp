@@ -103,7 +103,7 @@ constexpr std::string_view kConditionalPushDeleteOperation = "conditionally dele
   if (validate_postgres_task) {
     sql.append("SELECT $1, $2, $3, $4, TRUE, now() FROM ");
     sql.append(task_table);
-    sql.append(" WHERE id = $1 FOR KEY SHARE ");
+    sql.append(" WHERE id = $1 ");
   } else {
     sql.append(local_postgres_task ? "VALUES ($1, $2, $3, $4, TRUE, now()) "
                                    : "VALUES ($1, $2, $3, $4, FALSE, now()) ");
@@ -164,11 +164,6 @@ constexpr std::string_view kConditionalPushDeleteOperation = "conditionally dele
     return checked.error();
   }
   return PQntuples(result.get()) != 0;
-}
-
-[[nodiscard]] bool IsTaskNotFound(const core::Error& error) {
-  const auto& protocol_code = error.protocol_code();
-  return protocol_code.has_value() && protocol_code.value() == core::protocol_codes::kTaskNotFound;
 }
 
 [[nodiscard]] std::string BuildPushDeleteSql(std::string_view schema) {
@@ -342,34 +337,10 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     if (postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
       return Upsert(config, UpsertPath::kLocalAtomic);
     }
-    const auto before = task_store.Get(config.task_id());
-    if (!before.ok()) {
-      return before.error();
-    }
-#ifdef A2A_POSTGRES_STORE_TESTING
-    if (split_role_after_precheck_hook_for_testing_) {
-      split_role_after_precheck_hook_for_testing_();
-    }
-#endif
-    std::string row_version;
-    auto created = Upsert(config, UpsertPath::kSplitRoleLocal, &row_version);
-    if (!created.ok()) {
-      return created.error();
-    }
-#ifdef A2A_POSTGRES_STORE_TESTING
-    if (split_role_after_upsert_hook_for_testing_) {
-      split_role_after_upsert_hook_for_testing_();
-    }
-#endif
-    const auto after = task_store.Get(config.task_id());
-    if (!after.ok()) {
-      if (!IsTaskNotFound(after.error())) {
-        return after.error();
-      }
-      const auto removed = DeleteIfVersionMatches(config.task_id(), config.id(), row_version);
-      return removed.ok() ? after.error() : removed.error();
-    }
-    return created;
+  }
+  const auto validation = ValidatePushConfig(config);
+  if (!validation.ok()) {
+    return validation.error();
   }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {
