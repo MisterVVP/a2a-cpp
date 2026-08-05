@@ -143,6 +143,10 @@ constexpr std::string_view kDeleteProvenanceTaskOperation = "delete provenance t
 constexpr std::string_view kSplitRoleSetupOperation = "set up split-role push store";
 constexpr std::string_view kSplitRoleCleanupOperation = "clean up split-role push store";
 constexpr std::string_view kSplitRolePassword = "a2a_split_role_password";
+constexpr std::string_view kSplitRoleReplacementUrl = "https://example.test/split-role-replacement";
+constexpr std::string_view kSplitRoleCleanupRaceSchemaSuffix = "push_split_role_cleanup_race";
+constexpr std::string_view kMismatchedPoolEndpoint = "mismatched-postgres-endpoint";
+constexpr std::size_t kIdentityValidationPoolSize = 2U;
 
 struct ConninfoDeleter final {
   void operator()(PQconninfoOption* options) const noexcept { PQconninfoFree(options); }
@@ -891,6 +895,28 @@ TEST(StoreConformanceTest, PostgresStorageIdentityUsesConnectedEndpoint) {
   EXPECT_EQ(pool.StorageIdentity(std::string(kIdentitySchema)).host, connected_endpoint);
 }
 
+TEST(StoreConformanceTest, PostgresConnectionPoolRejectsMixedConnectionIdentities) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  a2a::server::stores::PostgresConnectionPool baseline(dsn_value, 1U);
+  auto mismatched_identity = baseline.ExecutionIdentity(std::string{});
+  mismatched_identity.storage.host = std::string(kMismatchedPoolEndpoint);
+  a2a::server::stores::OverrideNextPostgresConnectionIdentityForTesting(std::move(mismatched_identity));
+
+  bool rejected = false;
+  try {
+    (void)a2a::server::stores::PostgresConnectionPool(dsn_value, kIdentityValidationPoolSize);
+  } catch (const std::runtime_error& error) {
+    rejected = true;
+    EXPECT_EQ(std::string_view(error.what()), a2a::server::stores::kPostgresConnectionPoolIdentityMismatchMessage);
+  }
+  a2a::server::stores::ClearPostgresConnectionIdentityOverrideForTesting();
+
+  EXPECT_TRUE(rejected);
+}
+
 TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesOmittedDefaultPort) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -1448,6 +1474,67 @@ TEST(StoreConformanceTest, SplitRoleCreateRemovesConfigWhenDeletionWinsAfterPrec
   ASSERT_TRUE(deleted.ok());
   const auto outcome = create.get();
   ExpectSplitRoleDeletionRaceOutcome(outcome, owner_push_store);
+}
+
+TEST(StoreConformanceTest, SplitRoleCleanupPreservesNewerConfigWrite) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema(kSplitRoleCleanupRaceSchemaSuffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{
+      .connection_string = dsn_value, .schema = schema, .connection_pool_size = 2U};
+  a2a::server::stores::PostgresTaskStore task_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore owner_push_store(owner_options);
+  AddPostgresTask(task_store, kSplitRoleTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  auto admin_connection = owner_push_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(admin_connection.ok());
+  ScopedPostgresRole role(admin_connection.value().get(), MakePostgresTestRole(kSplitRolePrefix),
+                          task_store.execution_identity().storage.database, schema);
+  ASSERT_TRUE(role.Create().ok());
+  const std::string role_dsn = BuildRoleDsn(dsn_value, role.role());
+  ASSERT_FALSE(role_dsn.empty());
+
+  const a2a::server::stores::PostgresStoreOptions role_options{
+      .connection_string = role_dsn, .schema = schema, .auto_create_schema = false, .connection_pool_size = 1U};
+  a2a::server::stores::PostgresPushNotificationStore role_push_store(role_options);
+  std::barrier split_upsert_completed(2);
+  std::barrier replacement_completed(2);
+  role_push_store.SetSplitRoleAfterUpsertHookForTesting([&] {
+    split_upsert_completed.arrive_and_wait();
+    replacement_completed.arrive_and_wait();
+  });
+  auto create = std::async(std::launch::async, [&] {
+    a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+    auto result = role_push_store.CreateOrUpdateForTask(
+        a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId)),
+        task_store);
+    return SplitRoleCreateOutcome{.result = std::move(result),
+                                  .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting()};
+  });
+
+  split_upsert_completed.arrive_and_wait();
+  const auto deleted = DeletePostgresTask(owner_push_store, owner_options, kSplitRoleTaskId);
+  auto replacement =
+      a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId));
+  replacement.set_url(std::string(kSplitRoleReplacementUrl));
+  const auto replaced = owner_push_store.CreateOrUpdate(replacement);
+  replacement_completed.arrive_and_wait();
+  const auto outcome = create.get();
+
+  ASSERT_TRUE(deleted.ok());
+  ASSERT_TRUE(replaced.ok());
+  ASSERT_FALSE(outcome.result.ok());
+  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  ExpectSplitRoleCreateDiagnostics(outcome.diagnostics);
+  EXPECT_EQ(outcome.diagnostics
+                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigDelete)],
+            1U);
+  const auto stored = owner_push_store.Get(kSplitRoleTaskId, kSplitRoleRaceConfigId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().url(), kSplitRoleReplacementUrl);
 }
 
 TEST(StoreConformanceTest, LocalTaskDeletionPreservesExternalTaskStoreConfigs) {

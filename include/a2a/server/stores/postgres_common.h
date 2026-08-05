@@ -62,6 +62,8 @@ void ResetPostgresOperationDiagnosticsForTesting() noexcept;
 
 constexpr std::string_view kPostgresConnectionPoolSizeValidationMessage =
     "PostgreSQL connection_pool_size must be greater than zero";
+constexpr std::string_view kPostgresConnectionPoolIdentityMismatchMessage =
+    "PostgreSQL connection pool resolved to inconsistent endpoint or role";
 constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";
@@ -100,6 +102,11 @@ struct PostgresExecutionIdentity final {
 
   friend bool operator==(const PostgresExecutionIdentity&, const PostgresExecutionIdentity&) = default;
 };
+
+#ifdef A2A_POSTGRES_STORE_TESTING
+void OverrideNextPostgresConnectionIdentityForTesting(PostgresExecutionIdentity identity);
+void ClearPostgresConnectionIdentityOverrideForTesting();
+#endif
 
 using PostgresStorageIdentity = PostgresStorageCoordinates;
 

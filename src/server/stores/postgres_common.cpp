@@ -24,10 +24,15 @@ namespace {
 
 constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
 constexpr char kCurrentUserSql[] = "SELECT current_user";
+constexpr std::string_view kReadPostgresEffectiveRoleOperation = "read postgres effective role";
+constexpr std::string_view kReadPostgresEffectiveRoleMissingRowMessage =
+    "read postgres effective role: query returned no row";
 
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
 std::optional<core::Error> g_test_acquire_failure;
+std::mutex g_test_connection_identity_mutex;
+std::optional<PostgresExecutionIdentity> g_test_connection_identity_override;
 thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 #endif
 
@@ -110,6 +115,23 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return LibpqValue(PQhost(connection));
 }
 
+[[nodiscard]] core::Result<PostgresExecutionIdentity> ReadPostgresExecutionIdentity(PGconn* connection) {
+  PostgresExecutionIdentity identity;
+  identity.storage.host = ConnectedPostgresEndpoint(connection);
+  identity.storage.port = LibpqValue(PQport(connection));
+  identity.storage.database = LibpqValue(PQdb(connection));
+  PgResult role_result(PQexec(connection, kCurrentUserSql));
+  const auto role_checked = CheckTuples(connection, role_result.get(), kReadPostgresEffectiveRoleOperation);
+  if (!role_checked.ok()) {
+    return role_checked.error();
+  }
+  if (PQntuples(role_result.get()) != 1) {
+    return core::Error::Internal(std::string(kReadPostgresEffectiveRoleMissingRowMessage));
+  }
+  identity.effective_role = LibpqValue(PQgetvalue(role_result.get(), 0, 0));
+  return identity;
+}
+
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsTriggerSql(std::string_view function, std::string_view task_table) {
   const std::string trigger = QuoteSqlIdentifier(kDeleteTaskPushConfigsTrigger);
   std::string sql;
@@ -139,7 +161,35 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   g_test_acquire_failure.reset();
   return error;
 }
+
+[[nodiscard]] std::optional<PostgresExecutionIdentity> ConsumePostgresConnectionIdentityOverrideForTesting() {
+  std::lock_guard<std::mutex> lock(g_test_connection_identity_mutex);
+  auto identity = std::move(g_test_connection_identity_override);
+  g_test_connection_identity_override.reset();
+  return identity;
+}
 #endif
+
+[[nodiscard]] core::Result<void> ValidatePostgresConnectionIdentity(
+    PGconn* connection, const PostgresExecutionIdentity& expected_identity) {
+#ifdef A2A_POSTGRES_STORE_TESTING
+  if (auto overridden_identity = ConsumePostgresConnectionIdentityOverrideForTesting();
+      overridden_identity.has_value()) {
+    if (overridden_identity.value() != expected_identity) {
+      return core::Error::Internal(std::string(kPostgresConnectionPoolIdentityMismatchMessage));
+    }
+    return {};
+  }
+#endif
+  const auto actual_identity = ReadPostgresExecutionIdentity(connection);
+  if (!actual_identity.ok()) {
+    return actual_identity.error();
+  }
+  if (actual_identity.value() != expected_identity) {
+    return core::Error::Internal(std::string(kPostgresConnectionPoolIdentityMismatchMessage));
+  }
+  return {};
+}
 
 }  // namespace
 
@@ -231,24 +281,27 @@ PostgresConnectionPool::PostgresConnectionPool(std::string connection_string, st
     throw std::invalid_argument(std::string(kPostgresConnectionPoolSizeValidationMessage));
   }
   connections_.reserve(size);
-  for (std::size_t index = 0; index < size; ++index) {
+  auto first_connection = OpenConnection();
+  if (!first_connection.ok()) {
+    throw std::runtime_error(std::string(first_connection.error().message()));
+  }
+  auto identity = ReadPostgresExecutionIdentity(first_connection.value().get());
+  if (!identity.ok()) {
+    throw std::runtime_error(std::string(identity.error().message()));
+  }
+  database_identity_ = std::move(identity.value());
+  connections_.push_back(std::move(first_connection.value()));
+  while (connections_.size() < size) {
     auto connection = OpenConnection();
     if (!connection.ok()) {
       throw std::runtime_error(std::string(connection.error().message()));
     }
+    const auto identity_checked = ValidatePostgresConnectionIdentity(connection.value().get(), database_identity_);
+    if (!identity_checked.ok()) {
+      throw std::runtime_error(std::string(identity_checked.error().message()));
+    }
     connections_.push_back(std::move(connection.value()));
   }
-  PGconn* established_connection = connections_.front().get();
-  database_identity_.storage.host = ConnectedPostgresEndpoint(established_connection);
-  database_identity_.storage.port = LibpqValue(PQport(established_connection));
-  database_identity_.storage.database = LibpqValue(PQdb(established_connection));
-  PgResult role_result(PQexec(established_connection, kCurrentUserSql));
-  const auto role_checked = CheckTuples(established_connection, role_result.get(), "read postgres effective role");
-  if (!role_checked.ok() || PQntuples(role_result.get()) != 1) {
-    throw std::runtime_error(role_checked.ok() ? "read postgres effective role: query returned no row"
-                                               : std::string(role_checked.error().message()));
-  }
-  database_identity_.effective_role = LibpqValue(PQgetvalue(role_result.get(), 0, 0));
 }
 
 PostgresConnectionPool::Lease::Lease(PostgresConnectionPool* pool, PgConnection connection)
@@ -288,6 +341,11 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
     if (!reopened.ok()) {
       Return(std::move(connection));
       return reopened.error();
+    }
+    const auto identity_checked = ValidatePostgresConnectionIdentity(reopened.value().get(), database_identity_);
+    if (!identity_checked.ok()) {
+      Return(std::move(connection));
+      return identity_checked.error();
     }
     connection = std::move(reopened.value());
   }
@@ -448,6 +506,16 @@ PostgresConnectionPool::Lease AcquireOrThrow(PostgresConnectionPool& pool) {
 void FailNextPostgresAcquireForTesting(core::Error error) {
   std::lock_guard<std::mutex> lock(g_test_acquire_failure_mutex);
   g_test_acquire_failure = std::move(error);
+}
+
+void OverrideNextPostgresConnectionIdentityForTesting(PostgresExecutionIdentity identity) {
+  std::lock_guard<std::mutex> lock(g_test_connection_identity_mutex);
+  g_test_connection_identity_override = std::move(identity);
+}
+
+void ClearPostgresConnectionIdentityOverrideForTesting() {
+  std::lock_guard<std::mutex> lock(g_test_connection_identity_mutex);
+  g_test_connection_identity_override.reset();
 }
 
 void ResetPostgresOperationDiagnosticsForTesting() noexcept { g_operation_diagnostics = {}; }
