@@ -409,6 +409,11 @@ struct SplitRoleTaskLockOutcome final {
   a2a::core::Result<void> deletion;
 };
 
+struct SplitRoleDeletionFirstOutcome final {
+  std::future_status create_wait_status;
+  SplitRoleCreateOutcome create;
+};
+
 [[nodiscard]] SplitRoleTaskLockOutcome RunSplitRoleTaskLockScenario(
     a2a::server::stores::PostgresPushNotificationStore& role_push_store,
     a2a::server::stores::PostgresTaskStore& task_store,
@@ -437,6 +442,50 @@ struct SplitRoleTaskLockOutcome final {
       .deletion_wait_status = deletion_wait_status, .create = create.get(), .deletion = deletion.get()};
 }
 
+[[nodiscard]] a2a::core::Result<SplitRoleDeletionFirstOutcome> RunSplitRoleDeletionFirstScenario(
+    a2a::server::stores::PostgresPushNotificationStore& role_push_store,
+    a2a::server::stores::PostgresTaskStore& task_store,
+    a2a::server::stores::PostgresPushNotificationStore& owner_push_store,
+    const a2a::server::stores::PostgresStoreOptions& owner_options) {
+  std::future<SplitRoleCreateOutcome> create;
+  std::future_status create_wait_status = std::future_status::deferred;
+  a2a::core::Result<void> committed;
+  {
+    auto deletion_connection = owner_push_store.AcquireConnectionForTesting();
+    if (!deletion_connection.ok()) {
+      return deletion_connection.error();
+    }
+    a2a::server::stores::Transaction deletion_transaction(deletion_connection.value().get());
+    const auto begun = deletion_transaction.Begin();
+    if (!begun.ok()) {
+      return begun.error();
+    }
+    const auto deleted = a2a::server::stores::Exec(
+        deletion_connection.value().get(),
+        BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(owner_options.schema), kTaskIdColumn, kSplitRoleTaskId),
+        kHoldConcurrentDeleteOperation);
+    if (!deleted.ok()) {
+      return deleted.error();
+    }
+
+    create = std::async(std::launch::async, [&] {
+      a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+      auto result = role_push_store.CreateOrUpdateForTask(
+          a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId)),
+          task_store);
+      return SplitRoleCreateOutcome{.result = std::move(result),
+                                    .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting()};
+    });
+    create_wait_status = create.wait_for(kConcurrentCreateBlockedTimeout);
+    committed = deletion_transaction.Commit();
+  }
+  auto create_outcome = create.get();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  return SplitRoleDeletionFirstOutcome{.create_wait_status = create_wait_status, .create = std::move(create_outcome)};
+}
+
 void ExpectSplitRoleCreateDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
             1U);
@@ -449,6 +498,46 @@ void ExpectSplitRoleCreateDiagnostics(const a2a::server::stores::PostgresOperati
   EXPECT_EQ(diagnostics
                 .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionCommit)],
             1U);
+}
+
+void ExpectSplitRoleTaskLockOutcome(const SplitRoleTaskLockOutcome& outcome,
+                                    a2a::server::stores::PostgresPushNotificationStore& owner_push_store) {
+  EXPECT_EQ(outcome.deletion_wait_status, std::future_status::timeout);
+  ASSERT_TRUE(outcome.create.result.ok());
+  ExpectSplitRoleCreateDiagnostics(outcome.create.diagnostics);
+  ASSERT_TRUE(outcome.deletion.ok());
+  ExpectPushConfigMissing(owner_push_store, kSplitRoleTaskId, kSplitRoleRaceConfigId);
+}
+
+void ExpectSplitRoleDeletionFirstCreateOutcome(const SplitRoleCreateOutcome& outcome) {
+  ASSERT_FALSE(outcome.result.ok());
+  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  EXPECT_EQ(outcome.diagnostics
+                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+            0U);
+}
+
+void ExpectPushConfigUrl(a2a::server::stores::PostgresPushNotificationStore& store, std::string_view task_id,
+                         std::string_view config_id, std::string_view expected_url) {
+  const auto stored = store.Get(task_id, config_id);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().url(), expected_url);
+}
+
+void RunAndExpectSplitRoleDeletionFirstScenario(a2a::server::stores::PostgresPushNotificationStore& role_push_store,
+                                                a2a::server::stores::PostgresTaskStore& task_store,
+                                                a2a::server::stores::PostgresPushNotificationStore& owner_push_store,
+                                                const a2a::server::stores::PostgresStoreOptions& owner_options) {
+  auto external =
+      a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId));
+  external.set_url(std::string(kSplitRoleExternalUrl));
+  ASSERT_TRUE(owner_push_store.CreateOrUpdate(external).ok());
+
+  const auto outcome = RunSplitRoleDeletionFirstScenario(role_push_store, task_store, owner_push_store, owner_options);
+  ASSERT_TRUE(outcome.ok());
+  EXPECT_EQ(outcome.value().create_wait_status, std::future_status::timeout);
+  ExpectSplitRoleDeletionFirstCreateOutcome(outcome.value().create);
+  ExpectPushConfigUrl(owner_push_store, kSplitRoleTaskId, kSplitRoleRaceConfigId, kSplitRoleExternalUrl);
 }
 
 void ExpectLocalTaskStoreProvenanceAfterConflict(a2a::server::stores::PostgresPushNotificationStore& push_store,
@@ -1587,12 +1676,7 @@ TEST(StoreConformanceTest, SplitRoleCreateHoldsTaskLockThroughUpsert) {
       .connection_string = role_dsn, .schema = schema, .auto_create_schema = false, .connection_pool_size = 1U};
   a2a::server::stores::PostgresPushNotificationStore role_push_store(role_options);
   const auto outcome = RunSplitRoleTaskLockScenario(role_push_store, task_store, owner_push_store, owner_options);
-
-  EXPECT_EQ(outcome.deletion_wait_status, std::future_status::timeout);
-  ASSERT_TRUE(outcome.create.result.ok());
-  ExpectSplitRoleCreateDiagnostics(outcome.create.diagnostics);
-  ASSERT_TRUE(outcome.deletion.ok());
-  ExpectPushConfigMissing(owner_push_store, kSplitRoleTaskId, kSplitRoleRaceConfigId);
+  ExpectSplitRoleTaskLockOutcome(outcome, owner_push_store);
 }
 
 TEST(StoreConformanceTest, SplitRoleCreatePreservesExternalConfigWhenDeletionAlreadyInProgress) {
@@ -1619,44 +1703,7 @@ TEST(StoreConformanceTest, SplitRoleCreatePreservesExternalConfigWhenDeletionAlr
   const a2a::server::stores::PostgresStoreOptions role_options{
       .connection_string = role_dsn, .schema = schema, .auto_create_schema = false, .connection_pool_size = 1U};
   a2a::server::stores::PostgresPushNotificationStore role_push_store(role_options);
-  auto external =
-      a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId));
-  external.set_url(std::string(kSplitRoleExternalUrl));
-  ASSERT_TRUE(owner_push_store.CreateOrUpdate(external).ok());
-
-  std::future<SplitRoleCreateOutcome> create;
-  {
-    auto deletion_connection = owner_push_store.AcquireConnectionForTesting();
-    ASSERT_TRUE(deletion_connection.ok());
-    a2a::server::stores::Transaction deletion_transaction(deletion_connection.value().get());
-    ASSERT_TRUE(deletion_transaction.Begin().ok());
-    const auto deleted = a2a::server::stores::Exec(
-        deletion_connection.value().get(),
-        BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(owner_options.schema), kTaskIdColumn, kSplitRoleTaskId),
-        kHoldConcurrentDeleteOperation);
-    ASSERT_TRUE(deleted.ok());
-
-    create = std::async(std::launch::async, [&] {
-      a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
-      auto result = role_push_store.CreateOrUpdateForTask(
-          a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId)),
-          task_store);
-      return SplitRoleCreateOutcome{.result = std::move(result),
-                                    .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting()};
-    });
-    EXPECT_EQ(create.wait_for(kConcurrentCreateBlockedTimeout), std::future_status::timeout);
-    ASSERT_TRUE(deletion_transaction.Commit().ok());
-  }
-
-  const auto outcome = create.get();
-  ASSERT_FALSE(outcome.result.ok());
-  EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-            0U);
-  const auto stored = owner_push_store.Get(kSplitRoleTaskId, kSplitRoleRaceConfigId);
-  ASSERT_TRUE(stored.ok());
-  EXPECT_EQ(stored.value().url(), kSplitRoleExternalUrl);
+  RunAndExpectSplitRoleDeletionFirstScenario(role_push_store, task_store, owner_push_store, owner_options);
 }
 
 TEST(StoreConformanceTest, LocalTaskDeletionPreservesExternalTaskStoreConfigs) {
