@@ -27,7 +27,9 @@ namespace {
 constexpr std::size_t kTaskUpsertSqlReserve = 520U;
 constexpr std::size_t kTaskSnapshotSqlReserve = 15U;
 constexpr std::size_t kConditionalTaskWriteSqlReserve = 300U;
-constexpr std::size_t kTaskLockSqlReserve = 48U;
+constexpr std::size_t kTaskLockSqlReserve = 160U;
+constexpr std::string_view kPushConfigTaskLockSql =
+    "pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))";
 
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
@@ -222,10 +224,12 @@ core::Result<void> PostgresTaskStore::ExecuteWhileTaskLocked(
   }
   const std::string id_value(id);
   const std::string table = TaskTable(options_.schema);
-  std::string sql = "SELECT 1 FROM ";
-  sql.reserve(sql.size() + table.size() + kTaskLockSqlReserve);
+  std::string sql = "WITH task_lock AS MATERIALIZED (SELECT ";
+  sql.reserve(sql.size() + kPushConfigTaskLockSql.size() + table.size() + kTaskLockSqlReserve);
+  sql.append(kPushConfigTaskLockSql);
+  sql.append(") SELECT 1 FROM task_lock CROSS JOIN ");
   sql.append(table);
-  sql.append(" WHERE id = $1 FOR KEY SHARE");
+  sql.append(" WHERE id = $1");
   const std::array<const char*, 1> values = {id_value.c_str()};
 
   auto lease = pool_->Acquire();

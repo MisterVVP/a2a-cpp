@@ -81,14 +81,19 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return statement;
 }
 
+constexpr std::string_view kPushConfigDeleteTaskLockSql =
+    "PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(OLD.id, 0)); ";
+
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
                                                                 std::string_view push_table) {
   std::string sql;
-  sql.reserve(function.size() + push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  sql.reserve(function.size() + push_table.size() + kPushConfigDeleteTaskLockSql.size() +
+              kDeleteTaskPushConfigsFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
   sql.append(function);
-  sql.append(
-      "() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ BEGIN DELETE FROM ");
+  sql.append("() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ BEGIN ");
+  sql.append(kPushConfigDeleteTaskLockSql);
+  sql.append("DELETE FROM ");
   sql.append(push_table);
   sql.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END $a2a$;");
   return sql;
@@ -143,7 +148,7 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   sql.append(task_table);
   sql.append("; CREATE TRIGGER ");
   sql.append(trigger);
-  sql.append(" AFTER DELETE ON ");
+  sql.append(" BEFORE DELETE ON ");
   sql.append(task_table);
   sql.append(" FOR EACH ROW EXECUTE FUNCTION ");
   sql.append(function);

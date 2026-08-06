@@ -30,6 +30,8 @@ constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
 constexpr std::string_view kCheckPushTaskConfigsOperation = "check postgres push notification task configs";
+constexpr std::string_view kPushConfigTaskLockSql =
+    "pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))";
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -91,14 +93,19 @@ constexpr std::string_view kCheckPushTaskConfigsOperation = "check postgres push
   const std::string push_table = PushTable(schema);
   const std::string task_table = validate_postgres_task ? TaskTable(schema) : std::string{};
   std::string sql;
-  sql.reserve(push_table.size() + task_table.size() + kPushUpsertSqlReserveSlack);
+  sql.reserve(push_table.size() + task_table.size() + kPushConfigTaskLockSql.size() + kPushUpsertSqlReserveSlack);
+  if (validate_postgres_task) {
+    sql.append("WITH task_lock AS MATERIALIZED (SELECT ");
+    sql.append(kPushConfigTaskLockSql);
+    sql.append("), task AS MATERIALIZED (SELECT 1 FROM task_lock CROSS JOIN ");
+    sql.append(task_table);
+    sql.append(" WHERE id = $1) ");
+  }
   sql.append("INSERT INTO ");
   sql.append(push_table);
   sql.append(" (task_id, config_id, url, config_proto, local_postgres_task, updated_at) ");
   if (validate_postgres_task) {
-    sql.append("SELECT $1, $2, $3, $4, TRUE, now() FROM ");
-    sql.append(task_table);
-    sql.append(" WHERE id = $1 FOR KEY SHARE ");
+    sql.append("SELECT $1, $2, $3, $4, TRUE, now() FROM task ");
   } else {
     sql.append(local_postgres_task ? "VALUES ($1, $2, $3, $4, TRUE, now()) "
                                    : "VALUES ($1, $2, $3, $4, FALSE, now()) ");
