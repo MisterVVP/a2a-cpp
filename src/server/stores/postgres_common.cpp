@@ -23,6 +23,7 @@ namespace a2a::server::stores {
 namespace {
 
 constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
+constexpr std::size_t kTaskPushConfigLockFunctionSqlReserveSlack = 512U;
 constexpr char kCurrentUserSql[] = "SELECT current_user";
 constexpr std::string_view kReadPostgresEffectiveRoleOperation = "read postgres effective role";
 constexpr std::string_view kReadPostgresEffectiveRoleMissingRowMessage =
@@ -56,12 +57,18 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return QualifiedSqlIdentifier(schema, kPushCreatedSequenceName);
 }
 
-[[nodiscard]] std::string SqlStringLiteral(const std::string& value) {
-  std::string literal = "'";
+[[nodiscard]] std::string SqlStringLiteral(std::string_view value) {
+  std::string literal;
+  literal.reserve(value.size() + 2U);
+  literal.push_back('\'');
   for (const char symbol : value) {
-    literal += symbol == '\'' ? "''" : std::string(1, symbol);
+    if (symbol == '\'') {
+      literal.append("''");
+    } else {
+      literal.push_back(symbol);
+    }
   }
-  literal += "'";
+  literal.push_back('\'');
   return literal;
 }
 
@@ -81,18 +88,35 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return statement;
 }
 
-constexpr std::string_view kPushConfigDeleteTaskLockSql =
-    "PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(OLD.id, 0)); ";
+[[nodiscard]] std::string BuildTaskPushConfigLockFunctionSql(std::string_view function, std::string_view task_table) {
+  const std::string task_table_literal = SqlStringLiteral(task_table);
+  std::string sql;
+  sql.reserve(function.size() + task_table.size() + task_table_literal.size() +
+              kTaskPushConfigLockFunctionSqlReserveSlack);
+  sql.append("CREATE OR REPLACE FUNCTION ");
+  sql.append(function);
+  sql.append(
+      "(requested_task_id text) RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER "
+      "SET search_path = pg_catalog AS $a2a$ DECLARE caller_role name; BEGIN "
+      "caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
+      "IF caller_role IS NULL THEN caller_role := session_user; END IF; "
+      "IF NOT pg_catalog.has_table_privilege(caller_role, ");
+  sql.append(task_table_literal);
+  sql.append(
+      ", 'SELECT') THEN RAISE insufficient_privilege; END IF; "
+      "PERFORM 1 FROM ");
+  sql.append(task_table);
+  sql.append(" WHERE id = requested_task_id FOR KEY SHARE; RETURN FOUND; END $a2a$;");
+  return sql;
+}
 
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
                                                                 std::string_view push_table) {
   std::string sql;
-  sql.reserve(function.size() + push_table.size() + kPushConfigDeleteTaskLockSql.size() +
-              kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  sql.reserve(function.size() + push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
   sql.append(function);
   sql.append("() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ BEGIN ");
-  sql.append(kPushConfigDeleteTaskLockSql);
   sql.append("DELETE FROM ");
   sql.append(push_table);
   sql.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END $a2a$;");
@@ -205,6 +229,10 @@ void PgConnectionDeleter::operator()(PGconn* connection) const noexcept { PQfini
 std::string TaskTable(std::string_view schema) { return QualifiedSqlIdentifier(schema, kTaskTableName); }
 
 std::string PushTable(std::string_view schema) { return QualifiedSqlIdentifier(schema, kPushTableName); }
+
+std::string TaskPushConfigLockFunction(std::string_view schema) {
+  return QualifiedSqlIdentifier(schema, kTaskPushConfigLockFunction);
+}
 
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
   if (options.connection_pool_size == 0U) {
@@ -409,6 +437,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string push_created_sequence = PushCreatedSequence(options.schema);
   const std::string delete_task_push_configs_function =
       QualifiedSqlIdentifier(options.schema, kDeleteTaskPushConfigsFunction);
+  const std::string task_push_config_lock_function = TaskPushConfigLockFunction(options.schema);
   const std::string task_created_sequence_regclass = SqlStringLiteral(task_created_sequence);
   const std::string push_created_sequence_regclass = SqlStringLiteral(push_created_sequence);
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
@@ -453,6 +482,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   remove_push_configs_task_foreign_key.append(" DROP CONSTRAINT IF EXISTS ");
   remove_push_configs_task_foreign_key.append(QuoteSqlIdentifier(kPushConfigsTaskForeignKey));
   remove_push_configs_task_foreign_key.push_back(';');
+  const std::string create_task_push_config_lock_function =
+      BuildTaskPushConfigLockFunctionSql(task_push_config_lock_function, tasks);
   const std::string create_delete_task_push_configs_function =
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
@@ -473,6 +504,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       add_tasks_created_sequence,
                                                       add_tasks_has_status_timestamp,
                                                       add_tasks_revision,
+                                                      create_task_push_config_lock_function,
                                                       create_tasks_created_sequence_index,
                                                       create_tasks_context_index,
                                                       create_tasks_state_index,

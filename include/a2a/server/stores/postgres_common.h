@@ -82,6 +82,7 @@ constexpr std::string_view kPushConfigsTaskIndexColumns = "(task_id)";
 constexpr std::string_view kPushConfigsCreatedSequenceIndexColumns = "(task_id, created_sequence ASC)";
 constexpr std::string_view kPushConfigsTaskForeignKey = "a2a_push_configs_task_fk";
 constexpr std::string_view kDeleteTaskPushConfigsFunction = "a2a_delete_task_push_configs";
+constexpr std::string_view kTaskPushConfigLockFunction = "a2a_lock_task_for_push_config";
 constexpr std::string_view kDeleteTaskPushConfigsTrigger = "a2a_delete_task_push_configs_trigger";
 constexpr std::size_t kDeleteTaskPushConfigsFunctionSqlReserveSlack = 160U;
 constexpr std::size_t kDeleteTaskPushConfigsTriggerSqlReserveSlack = 192U;
@@ -172,6 +173,7 @@ class Transaction final {
 
 [[nodiscard]] std::string TaskTable(std::string_view schema);
 [[nodiscard]] std::string PushTable(std::string_view schema);
+[[nodiscard]] std::string TaskPushConfigLockFunction(std::string_view schema);
 [[nodiscard]] core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options);
 void ValidatePostgresStoreOptionsOrThrow(const PostgresStoreOptions& options);
 [[nodiscard]] core::Result<void> CheckCommand(PGconn* connection, PGresult* result, std::string_view operation);
