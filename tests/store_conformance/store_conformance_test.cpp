@@ -37,6 +37,32 @@
 
 namespace {
 
+constexpr std::string_view kMissingTaskAwareListTaskId = "missing-task-aware-list";
+constexpr std::string_view kMalformedTaskAwareListPageToken = "invalid-page-token";
+constexpr int kInvalidTaskAwareListPageSize = -1;
+constexpr int kValidTaskAwareListPageSize = 1;
+
+void ExpectTaskAwarePushListValidation(a2a::server::PushNotificationStore& push_store,
+                                       const a2a::server::TaskStore& task_store) {
+  const auto invalid_page_size =
+      push_store.ListForTask(kMissingTaskAwareListTaskId, kInvalidTaskAwareListPageSize, {}, task_store);
+  ASSERT_FALSE(invalid_page_size.ok());
+  EXPECT_EQ(invalid_page_size.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(invalid_page_size.error().protocol_code().has_value());
+
+  const auto malformed_page_token = push_store.ListForTask(kMissingTaskAwareListTaskId, kValidTaskAwareListPageSize,
+                                                           kMalformedTaskAwareListPageToken, task_store);
+  ASSERT_FALSE(malformed_page_token.ok());
+  EXPECT_EQ(malformed_page_token.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(malformed_page_token.error().protocol_code().has_value());
+}
+
+TEST(StoreConformanceTest, InMemoryTaskAwarePushListValidatesRequestBeforeMissingTask) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  ExpectTaskAwarePushListValidation(push_store, task_store);
+}
+
 TEST(StoreConformanceTest, InMemoryTaskStore) {
   a2a::tests::store_conformance::RunTaskStoreConformance(
       [] { return std::make_unique<a2a::server::InMemoryTaskStore>(); });
@@ -153,7 +179,12 @@ constexpr std::string_view kRetainTaskTriggerName = "zz_a2a_retain_task_trigger"
 constexpr std::string_view kInstallRetainTaskTriggerOperation = "install task retention trigger";
 constexpr std::string_view kSuppressedDeleteSchemaSuffix = "push_suppressed_task_delete";
 constexpr std::string_view kExternalMigrationSchemaSuffix = "push_external_schema_migration";
+constexpr std::string_view kMissingCleanupTriggerSchemaSuffix = "push_external_schema_missing_cleanup";
+constexpr std::string_view kListValidationOrderSchemaSuffix = "push_list_validation_order";
 constexpr std::string_view kClearPushMigrationOperation = "simulate pre-migration push schema";
+constexpr std::string_view kDropPushCleanupTriggerOperation = "drop push cleanup trigger";
+constexpr std::string_view kOutdatedManagedPushSchemaAcceptedMessage =
+    "outdated externally managed PostgreSQL schema was accepted";
 constexpr std::string_view kSplitRolePassword = "a2a_split_role_password";
 constexpr std::string_view kSplitRoleExternalUrl = "https://example.test/split-role-external";
 constexpr std::string_view kDirectGetClassificationSchemaSuffix = "push_direct_get_classification";
@@ -448,6 +479,25 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
   sql.append("(text) IS NULL;");
   return sql;
+}
+
+[[nodiscard]] std::string BuildDropPushCleanupTriggerSql(std::string_view schema) {
+  std::string sql = "DROP TRIGGER ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kDeleteTaskPushConfigsTrigger));
+  sql.append(" ON ");
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.push_back(';');
+  return sql;
+}
+
+void ExpectManagedPushSchemaRejected(const a2a::server::stores::PostgresStoreOptions& options) {
+  try {
+    (void)a2a::server::stores::PostgresPushNotificationStore(options);
+    FAIL() << kOutdatedManagedPushSchemaAcceptedMessage;
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string_view(error.what()).find(a2a::server::stores::kTaskPushConfigMigrationId),
+              std::string_view::npos);
+  }
 }
 
 class ScopedPostgresRole final {
@@ -1542,6 +1592,18 @@ TEST(StoreConformanceTest, PostgresPushConfigListEdgeCasesUseOneCommand) {
   ExpectMissingPushConfigTask(push_store);
 }
 
+TEST(StoreConformanceTest, PostgresTaskAwarePushListValidatesRequestBeforeMissingTask) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const a2a::server::stores::PostgresStoreOptions options{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kListValidationOrderSchemaSuffix)};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  ExpectTaskAwarePushListValidation(push_store, task_store);
+}
+
 TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -1940,13 +2002,26 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCurrentMigration) 
   const a2a::server::stores::PostgresStoreOptions managed_options{
       .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
 
-  try {
-    (void)a2a::server::stores::PostgresPushNotificationStore(managed_options);
-    FAIL() << "outdated externally managed PostgreSQL schema was accepted";
-  } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string_view(error.what()).find(a2a::server::stores::kTaskPushConfigMigrationId),
-              std::string_view::npos);
+  ExpectManagedPushSchemaRejected(managed_options);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupTrigger) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
   }
+  const std::string schema = MakePostgresTestSchema(kMissingCleanupTriggerSchemaSuffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresPushNotificationStore owner_store(owner_options);
+  auto connection = owner_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildDropPushCleanupTriggerSql(schema),
+                                        kDropPushCleanupTriggerOperation)
+                  .ok());
+  const a2a::server::stores::PostgresStoreOptions managed_options{
+      .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
+
+  ExpectManagedPushSchemaRejected(managed_options);
 }
 
 TEST(StoreConformanceTest, PostgresTaskDeleteTriggerUsesLeastPrivilegeSecurityDefiner) {

@@ -35,15 +35,28 @@ constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
     "PostgreSQL push-notification schema is missing task-aware-push-config-v1; apply the migration in "
     "docs/storage.md before using auto_create_schema=false";
 constexpr std::string_view kPushConfigProvenanceColumnName = "local_postgres_task";
+constexpr std::string_view kPostgresAfterDeleteRowTriggerType = "9";
+constexpr std::string_view kPostgresTriggerEnabledForOrigin = "O";
+constexpr std::string_view kPostgresTriggerEnabledAlways = "A";
 constexpr std::string_view kPostgresTrueValue = "t";
-constexpr int kPostgresPushSchemaParameterCount = 5;
-constexpr int kPostgresPushSchemaCheckCount = 4;
+constexpr int kPostgresPushSchemaParameterCount = 11;
+constexpr int kPostgresPushSchemaCheckCount = 6;
 constexpr char kValidatePostgresPushSchemaSql[] =
     "WITH lock_function AS MATERIALIZED ("
     "SELECT routine.oid, routine.proacl, routine.proowner, routine.prosecdef, routine.provolatile, "
     "routine.proconfig, pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
     "(SELECT pg_catalog.to_regprocedure(pg_catalog.format('%I.%I(text)', $1::text, $4::text)) AS oid) AS resolved "
-    "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid) "
+    "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid), "
+    "delete_function AS MATERIALIZED ("
+    "SELECT routine.oid, routine.prosecdef, routine.provolatile, routine.proconfig, routine.prorettype FROM "
+    "(SELECT pg_catalog.to_regprocedure(pg_catalog.format('%I.%I()', $1::text, $6::text)) AS oid) AS resolved "
+    "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid), "
+    "cleanup_trigger AS MATERIALIZED ("
+    "SELECT trigger.tgfoid, trigger.tgtype, trigger.tgenabled FROM pg_catalog.pg_trigger AS trigger "
+    "JOIN pg_catalog.pg_class AS relation ON relation.oid = trigger.tgrelid "
+    "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
+    "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 AND trigger.tgname = $7 "
+    "AND NOT trigger.tgisinternal) "
     "SELECT "
     "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute AS attribute "
     "JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid "
@@ -58,8 +71,15 @@ constexpr char kValidatePostgresPushSchemaSql[] =
     "pg_catalog.acldefault('f', lock_function.proowner))) AS acl_entry "
     "WHERE acl_entry.grantee = 0 AND acl_entry.privilege_type = 'EXECUTE') END, "
     "CASE WHEN lock_function.oid IS NULL THEN FALSE ELSE "
-    "pg_catalog.has_function_privilege(current_user, lock_function.oid, 'EXECUTE') END "
-    "FROM lock_function";
+    "pg_catalog.has_function_privilege(current_user, lock_function.oid, 'EXECUTE') END, "
+    "delete_function.oid IS NOT NULL AND delete_function.prosecdef AND delete_function.provolatile = 'v' "
+    "AND delete_function.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype "
+    "AND 'search_path=pg_catalog' = ANY(delete_function.proconfig), "
+    "EXISTS (SELECT 1 FROM cleanup_trigger WHERE cleanup_trigger.tgfoid = delete_function.oid "
+    "AND cleanup_trigger.tgtype = $9::smallint "
+    "AND (cleanup_trigger.tgenabled = $10::pg_catalog.\"char\" "
+    "OR cleanup_trigger.tgenabled = $11::pg_catalog.\"char\")) "
+    "FROM lock_function CROSS JOIN delete_function";
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -227,14 +247,33 @@ constexpr char kValidatePostgresPushSchemaSql[] =
   return {};
 }
 
+[[nodiscard]] core::Result<std::size_t> ValidatePushListRequest(std::string_view task_id, int page_size,
+                                                                std::string_view page_token) {
+  if (task_id.empty()) {
+    return core::Error::Validation(std::string(kPushTaskIdRequiredMessage));
+  }
+  if (page_size < 0) {
+    return core::Error::Validation(std::string(kPageSizeInvalidMessage));
+  }
+  return ParsePushListPageToken(page_token);
+}
+
 [[nodiscard]] bool IsPostgresTrue(PGresult* result, int column) {
   return PQgetisnull(result, 0, column) == 0 && std::string_view(PQgetvalue(result, 0, column)) == kPostgresTrueValue;
 }
 
 [[nodiscard]] core::Result<void> ValidateManagedPushSchema(PGconn* connection, const PostgresStoreOptions& options) {
-  const std::array<const char*, kPostgresPushSchemaParameterCount> values = {
-      options.schema.c_str(), kPushTableName.data(), kPushConfigProvenanceColumnName.data(),
-      kTaskPushConfigLockFunction.data(), kTaskPushConfigMigrationId.data()};
+  const std::array<const char*, kPostgresPushSchemaParameterCount> values = {options.schema.c_str(),
+                                                                             kPushTableName.data(),
+                                                                             kPushConfigProvenanceColumnName.data(),
+                                                                             kTaskPushConfigLockFunction.data(),
+                                                                             kTaskPushConfigMigrationId.data(),
+                                                                             kDeleteTaskPushConfigsFunction.data(),
+                                                                             kDeleteTaskPushConfigsTrigger.data(),
+                                                                             kTaskTableName.data(),
+                                                                             kPostgresAfterDeleteRowTriggerType.data(),
+                                                                             kPostgresTriggerEnabledForOrigin.data(),
+                                                                             kPostgresTriggerEnabledAlways.data()};
   PgResult result(PQexecParams(connection, kValidatePostgresPushSchemaSql, static_cast<int>(values.size()), nullptr,
                                values.data(), nullptr, nullptr, 0));
   const auto checked = CheckTuples(connection, result.get(), kValidatePostgresPushSchemaOperation);
@@ -489,6 +528,10 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListForTask(
     std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const {
+  const auto validation = ValidatePushListRequest(task_id, page_size, page_token);
+  if (!validation.ok()) {
+    return validation.error();
+  }
   const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
   if (postgres_task_store != nullptr && postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
     return ListInternal(task_id, page_size, page_token, true);
