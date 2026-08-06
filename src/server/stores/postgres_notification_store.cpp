@@ -16,7 +16,6 @@
 #include <utility>
 
 #include "a2a/core/error.h"
-#include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/server/stores/postgres_task_store.h"
 
@@ -28,13 +27,9 @@ constexpr std::size_t kPushTaskAwareGetSqlReserveSlack = 192U;
 constexpr std::size_t kPushExistingTaskGetSqlReserveSlack = 96U;
 constexpr std::size_t kPushTaskConfigExistsSqlReserveSlack = 64U;
 constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
-constexpr std::size_t kPushConditionalDeleteSqlReserveSlack = 96U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
-constexpr std::string_view kSplitRoleUpsertMissingVersionMessage =
-    "upsert postgres push notification config: query returned no row version";
 constexpr std::string_view kCheckPushTaskConfigsOperation = "check postgres push notification task configs";
-constexpr std::string_view kConditionalPushDeleteOperation = "conditionally delete postgres push notification config";
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -92,7 +87,7 @@ constexpr std::string_view kConditionalPushDeleteOperation = "conditionally dele
 }
 
 [[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task,
-                                             bool local_postgres_task, bool return_row_version) {
+                                             bool local_postgres_task) {
   const std::string push_table = PushTable(schema);
   const std::string task_table = validate_postgres_task ? TaskTable(schema) : std::string{};
   std::string sql;
@@ -112,7 +107,7 @@ constexpr std::string_view kConditionalPushDeleteOperation = "conditionally dele
       "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
       "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
       "updated_at = now() ");
-  sql.append(return_row_version ? "RETURNING xmin::text" : "RETURNING 1");
+  sql.append("RETURNING 1");
   return sql;
 }
 
@@ -166,11 +161,6 @@ constexpr std::string_view kConditionalPushDeleteOperation = "conditionally dele
   return PQntuples(result.get()) != 0;
 }
 
-[[nodiscard]] bool IsTaskNotFound(const core::Error& error) {
-  const auto& protocol_code = error.protocol_code();
-  return protocol_code.has_value() && protocol_code.value() == core::protocol_codes::kTaskNotFound;
-}
-
 [[nodiscard]] std::string BuildPushDeleteSql(std::string_view schema) {
   const std::string push_table = PushTable(schema);
   std::string sql;
@@ -178,16 +168,6 @@ constexpr std::string_view kConditionalPushDeleteOperation = "conditionally dele
   sql.append("DELETE FROM ");
   sql.append(push_table);
   sql.append(" WHERE task_id = $1 AND config_id = $2");
-  return sql;
-}
-
-[[nodiscard]] std::string BuildConditionalPushDeleteSql(std::string_view schema) {
-  const std::string push_table = PushTable(schema);
-  std::string sql;
-  sql.reserve(push_table.size() + kPushConditionalDeleteSqlReserveSlack);
-  sql.append("DELETE FROM ");
-  sql.append(push_table);
-  sql.append(" WHERE task_id = $1 AND config_id = $2 AND xmin = $3::xid");
   return sql;
 }
 
@@ -221,16 +201,15 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema)),
       execution_identity_(pool_->ExecutionIdentity(options_.schema)),
-      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true, false)),
-      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false, false)),
-      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true, true)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false)),
+      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true)),
       task_aware_get_sql_(BuildPushGetSql(options_.schema, true)),
       existing_task_get_sql_(BuildPushGetSql(options_.schema, false)),
       task_config_exists_sql_(BuildPushTaskConfigExistsSql(options_.schema)),
       task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
       existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
-      delete_sql_(BuildPushDeleteSql(options_.schema)),
-      conditional_delete_sql_(BuildConditionalPushDeleteSql(options_.schema)) {
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
@@ -244,16 +223,15 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema)),
       execution_identity_(pool_->ExecutionIdentity(options_.schema)),
-      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true, false)),
-      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false, false)),
-      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true, true)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false)),
+      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true)),
       task_aware_get_sql_(BuildPushGetSql(options_.schema, true)),
       existing_task_get_sql_(BuildPushGetSql(options_.schema, false)),
       task_config_exists_sql_(BuildPushTaskConfigExistsSql(options_.schema)),
       task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
       existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
-      delete_sql_(BuildPushDeleteSql(options_.schema)),
-      conditional_delete_sql_(BuildConditionalPushDeleteSql(options_.schema)) {
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
@@ -273,10 +251,6 @@ core::Result<PostgresConnectionPool::Lease> PostgresPushNotificationStore::Acqui
   return pool_->Acquire();
 }
 
-void PostgresPushNotificationStore::SetSplitRoleAfterPrecheckHookForTesting(std::function<void()> hook) {
-  split_role_after_precheck_hook_for_testing_ = std::move(hook);
-}
-
 void PostgresPushNotificationStore::SetSplitRoleAfterUpsertHookForTesting(std::function<void()> hook) {
   split_role_after_upsert_hook_for_testing_ = std::move(hook);
 }
@@ -288,7 +262,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Upsert(
-    const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path, std::string* row_version) {
+    const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path) {
   const auto validation = ValidatePushConfig(config);
   if (!validation.ok()) {
     return validation.error();
@@ -326,12 +300,6 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (path == UpsertPath::kLocalAtomic && PQntuples(result.get()) == 0) {
     return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
   }
-  if (path == UpsertPath::kSplitRoleLocal) {
-    if (row_version == nullptr || PQntuples(result.get()) != 1 || PQgetisnull(result.get(), 0, 0) != 0) {
-      return core::Error::Internal(std::string(kSplitRoleUpsertMissingVersionMessage));
-    }
-    *row_version = PQgetvalue(result.get(), 0, 0);
-  }
   return config;
 }
 
@@ -342,34 +310,23 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     if (postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
       return Upsert(config, UpsertPath::kLocalAtomic);
     }
-    const auto before = task_store.Get(config.task_id());
-    if (!before.ok()) {
-      return before.error();
-    }
-#ifdef A2A_POSTGRES_STORE_TESTING
-    if (split_role_after_precheck_hook_for_testing_) {
-      split_role_after_precheck_hook_for_testing_();
-    }
-#endif
-    std::string row_version;
-    auto created = Upsert(config, UpsertPath::kSplitRoleLocal, &row_version);
-    if (!created.ok()) {
-      return created.error();
-    }
-#ifdef A2A_POSTGRES_STORE_TESTING
-    if (split_role_after_upsert_hook_for_testing_) {
-      split_role_after_upsert_hook_for_testing_();
-    }
-#endif
-    const auto after = task_store.Get(config.task_id());
-    if (!after.ok()) {
-      if (!IsTaskNotFound(after.error())) {
-        return after.error();
+    const auto upsert_while_locked = [&]() -> core::Result<void> {
+      const auto created = Upsert(config, UpsertPath::kSplitRoleLocal);
+      if (!created.ok()) {
+        return created.error();
       }
-      const auto removed = DeleteIfVersionMatches(config.task_id(), config.id(), row_version);
-      return removed.ok() ? after.error() : removed.error();
+#ifdef A2A_POSTGRES_STORE_TESTING
+      if (split_role_after_upsert_hook_for_testing_) {
+        split_role_after_upsert_hook_for_testing_();
+      }
+#endif
+      return {};
+    };
+    const auto locked = postgres_task_store->ExecuteWhileTaskLocked(config.task_id(), upsert_while_locked);
+    if (!locked.ok()) {
+      return locked.error();
     }
-    return created;
+    return config;
   }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {
@@ -569,37 +526,6 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   }
 #endif
   return CheckCommand(lease.value().get(), result.get(), "delete postgres push notification config");
-}
-
-core::Result<void> PostgresPushNotificationStore::DeleteIfVersionMatches(std::string_view task_id,
-                                                                         std::string_view config_id,
-                                                                         std::string_view row_version) {
-  const auto validation = ValidatePushLookup(task_id, config_id);
-  if (!validation.ok()) {
-    return validation.error();
-  }
-  if (row_version.empty()) {
-    return core::Error::Internal(std::string(kSplitRoleUpsertMissingVersionMessage));
-  }
-  const std::string task_id_value(task_id);
-  const std::string config_id_value(config_id);
-  const std::string row_version_value(row_version);
-  const std::array<const char*, 3> values = {task_id_value.c_str(), config_id_value.c_str(), row_version_value.c_str()};
-  auto lease = pool_->Acquire();
-  if (!lease.ok()) {
-    return lease.error();
-  }
-  PgResult result;
-#ifdef A2A_POSTGRES_STORE_TESTING
-  {
-    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigDelete);
-#endif
-    result.reset(PQexecParams(lease.value().get(), conditional_delete_sql_.c_str(), static_cast<int>(values.size()),
-                              nullptr, values.data(), nullptr, nullptr, 0));
-#ifdef A2A_POSTGRES_STORE_TESTING
-  }
-#endif
-  return CheckCommand(lease.value().get(), result.get(), kConditionalPushDeleteOperation);
 }
 
 }  // namespace a2a::server::stores

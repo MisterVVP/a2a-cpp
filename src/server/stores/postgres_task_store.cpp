@@ -27,6 +27,7 @@ namespace {
 constexpr std::size_t kTaskUpsertSqlReserve = 520U;
 constexpr std::size_t kTaskSnapshotSqlReserve = 15U;
 constexpr std::size_t kConditionalTaskWriteSqlReserve = 300U;
+constexpr std::size_t kTaskLockSqlReserve = 48U;
 
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
@@ -213,6 +214,54 @@ const PostgresExecutionIdentity& PostgresTaskStore::execution_identity() const n
 #ifdef A2A_POSTGRES_STORE_TESTING
 const PostgresConnectionPool* PostgresTaskStore::connection_pool_for_testing() const noexcept { return pool_.get(); }
 #endif
+
+core::Result<void> PostgresTaskStore::ExecuteWhileTaskLocked(
+    std::string_view id, const std::function<core::Result<void>()>& operation) const {
+  if (id.empty()) {
+    return core::Error::Validation(std::string(kTaskIdRequiredMessage));
+  }
+  const std::string id_value(id);
+  const std::string table = TaskTable(options_.schema);
+  std::string sql = "SELECT 1 FROM ";
+  sql.reserve(sql.size() + table.size() + kTaskLockSqlReserve);
+  sql.append(table);
+  sql.append(" WHERE id = $1 FOR KEY SHARE");
+  const std::array<const char*, 1> values = {id_value.c_str()};
+
+  auto lease = pool_->Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  Transaction transaction(lease.value().get());
+  const auto begun = transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskGet);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
+                              nullptr, nullptr, 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
+  const auto checked = CheckTuples(lease.value().get(), result.get(), "lock postgres task for push config upsert");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) == 0) {
+    return core::protocol_errors::TaskNotFound(std::string(kTaskNotFoundMessage));
+  }
+
+  const auto executed = operation();
+  if (!executed.ok()) {
+    return executed.error();
+  }
+  return transaction.Commit();
+}
 
 core::Result<void> PostgresTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& task) {
   if (task.id().empty()) {
