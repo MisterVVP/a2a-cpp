@@ -98,6 +98,90 @@ limit (including connections used by other application instances and tools).
 Task and push-notification stores returned by `CreateStoreBundle()` share this
 single configured pool; separately created stores each own a separate pool.
 
+## Externally managed PostgreSQL schemas
+
+When `auto_create_schema=false`, the push-notification store validates the
+`task-aware-push-config-v1` migration during construction. Startup fails with an
+actionable error instead of allowing the first request to fail against an
+outdated schema.
+
+Apply the following migration before upgrading. This example uses the `public`
+schema and an SDK database role named `a2a_sdk`; replace both names for your
+deployment. Grant the lock helper only to SDK roles authorized to create push
+notification configurations. Repeat the `GRANT` for both roles when task and
+push stores use different roles.
+
+```sql
+BEGIN;
+
+ALTER TABLE public.a2a_push_notification_configs
+  ADD COLUMN IF NOT EXISTS local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE public.a2a_push_notification_configs
+  DROP CONSTRAINT IF EXISTS a2a_push_configs_task_fk;
+
+CREATE OR REPLACE FUNCTION public.a2a_lock_task_for_push_config(requested_task_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $a2a$
+DECLARE
+  caller_role NAME;
+BEGIN
+  caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none');
+  IF caller_role IS NULL THEN
+    caller_role := session_user;
+  END IF;
+  IF NOT pg_catalog.has_table_privilege(caller_role, 'public.a2a_tasks', 'SELECT') THEN
+    RAISE insufficient_privilege;
+  END IF;
+  PERFORM 1
+  FROM public.a2a_tasks
+  WHERE id = requested_task_id
+  FOR KEY SHARE;
+  RETURN FOUND;
+END
+$a2a$;
+
+REVOKE ALL ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) TO a2a_sdk;
+
+CREATE OR REPLACE FUNCTION public.a2a_delete_task_push_configs()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $a2a$
+BEGIN
+  DELETE FROM public.a2a_push_notification_configs
+  WHERE task_id = OLD.id AND local_postgres_task;
+  RETURN OLD;
+END
+$a2a$;
+
+REVOKE ALL ON FUNCTION public.a2a_delete_task_push_configs() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS a2a_delete_task_push_configs_trigger ON public.a2a_tasks;
+CREATE TRIGGER a2a_delete_task_push_configs_trigger
+AFTER DELETE ON public.a2a_tasks
+FOR EACH ROW
+EXECUTE FUNCTION public.a2a_delete_task_push_configs();
+
+COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
+  IS 'task-aware-push-config-v1';
+
+COMMIT;
+```
+
+The migration marker is written last inside the transaction, so a partial
+migration is never accepted. Existing push configurations are marked as
+externally owned by the new column's `FALSE` default. The SDK role that
+constructs a push store must have `EXECUTE` on
+`a2a_lock_task_for_push_config(TEXT)`; reporting and unrelated read-only
+roles should not receive it.
+
 ## Sensitive push notification data
 
 Push notification configs can include delivery URLs, tokens, and authentication metadata. Treat stored `TaskPushNotificationConfig` payloads as sensitive operational data. This SDK stores protobuf payloads in PostgreSQL but does not implement encryption at rest; use database-level encryption, access control, backups, and audit logging appropriate for your environment.

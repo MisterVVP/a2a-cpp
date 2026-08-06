@@ -24,7 +24,16 @@ namespace {
 
 constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
 constexpr std::size_t kTaskPushConfigLockFunctionSqlReserveSlack = 512U;
+constexpr std::size_t kTaskPushConfigLockFunctionPrivilegeSqlReserveSlack = 64U;
+constexpr std::size_t kTaskPushConfigMigrationMarkerSqlReserveSlack = 96U;
 constexpr char kCurrentUserSql[] = "SELECT current_user";
+constexpr char kBeginSchemaTransactionSql[] = "BEGIN";
+constexpr char kCommitSchemaTransactionSql[] = "COMMIT";
+constexpr char kRollbackSchemaTransactionSql[] = "ROLLBACK";
+constexpr std::string_view kBeginSchemaTransactionOperation = "begin postgres schema transaction";
+constexpr std::string_view kCommitSchemaTransactionOperation = "commit postgres schema transaction";
+constexpr std::string_view kRollbackSchemaTransactionOperation = "rollback postgres schema transaction";
+constexpr std::string_view kInitializePostgresSchemaOperation = "initialize postgres store schema";
 constexpr std::string_view kReadPostgresEffectiveRoleOperation = "read postgres effective role";
 constexpr std::string_view kReadPostgresEffectiveRoleMissingRowMessage =
     "read postgres effective role: query returned no row";
@@ -110,6 +119,35 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return sql;
 }
 
+[[nodiscard]] std::string BuildRevokeTaskPushConfigLockFunctionSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kTaskPushConfigLockFunctionPrivilegeSqlReserveSlack);
+  sql.append("REVOKE ALL ON FUNCTION ");
+  sql.append(function);
+  sql.append("(text) FROM PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildGrantTaskPushConfigLockFunctionSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kTaskPushConfigLockFunctionPrivilegeSqlReserveSlack);
+  sql.append("GRANT EXECUTE ON FUNCTION ");
+  sql.append(function);
+  sql.append("(text) TO CURRENT_USER;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildTaskPushConfigMigrationMarkerSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kTaskPushConfigMigrationMarkerSqlReserveSlack);
+  sql.append("COMMENT ON FUNCTION ");
+  sql.append(function);
+  sql.append("(text) IS ");
+  sql.append(SqlStringLiteral(kTaskPushConfigMigrationId));
+  sql.push_back(';');
+  return sql;
+}
+
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
                                                                 std::string_view push_table) {
   std::string sql;
@@ -161,6 +199,26 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return identity;
 }
 
+[[nodiscard]] core::Result<void> ExecuteSchemaStatements(PGconn* connection,
+                                                         const std::vector<std::string>& statements) {
+  const auto begun = Exec(connection, kBeginSchemaTransactionSql, kBeginSchemaTransactionOperation);
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  for (const auto& statement : statements) {
+    const auto executed = Exec(connection, statement, kInitializePostgresSchemaOperation);
+    if (!executed.ok()) {
+      (void)Exec(connection, kRollbackSchemaTransactionSql, kRollbackSchemaTransactionOperation);
+      return executed.error();
+    }
+  }
+  auto committed = Exec(connection, kCommitSchemaTransactionSql, kCommitSchemaTransactionOperation);
+  if (!committed.ok()) {
+    (void)Exec(connection, kRollbackSchemaTransactionSql, kRollbackSchemaTransactionOperation);
+  }
+  return committed;
+}
+
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsTriggerSql(std::string_view function, std::string_view task_table) {
   const std::string trigger = QuoteSqlIdentifier(kDeleteTaskPushConfigsTrigger);
   std::string sql;
@@ -172,7 +230,7 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   sql.append(task_table);
   sql.append("; CREATE TRIGGER ");
   sql.append(trigger);
-  sql.append(" BEFORE DELETE ON ");
+  sql.append(" AFTER DELETE ON ");
   sql.append(task_table);
   sql.append(" FOR EACH ROW EXECUTE FUNCTION ");
   sql.append(function);
@@ -484,6 +542,12 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   remove_push_configs_task_foreign_key.push_back(';');
   const std::string create_task_push_config_lock_function =
       BuildTaskPushConfigLockFunctionSql(task_push_config_lock_function, tasks);
+  const std::string revoke_task_push_config_lock_function =
+      BuildRevokeTaskPushConfigLockFunctionSql(task_push_config_lock_function);
+  const std::string grant_task_push_config_lock_function =
+      BuildGrantTaskPushConfigLockFunctionSql(task_push_config_lock_function);
+  const std::string mark_task_push_config_migration =
+      BuildTaskPushConfigMigrationMarkerSql(task_push_config_lock_function);
   const std::string create_delete_task_push_configs_function =
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
@@ -505,6 +569,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       add_tasks_has_status_timestamp,
                                                       add_tasks_revision,
                                                       create_task_push_config_lock_function,
+                                                      revoke_task_push_config_lock_function,
+                                                      grant_task_push_config_lock_function,
                                                       create_tasks_created_sequence_index,
                                                       create_tasks_context_index,
                                                       create_tasks_state_index,
@@ -516,14 +582,9 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_delete_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
                                                       create_push_configs_task_index,
-                                                      create_push_configs_created_sequence_index};
-  for (const auto& statement : schema_statements) {
-    const auto executed = Exec(connection, statement, "initialize postgres store schema");
-    if (!executed.ok()) {
-      return executed.error();
-    }
-  }
-  return {};
+                                                      create_push_configs_created_sequence_index,
+                                                      mark_task_push_config_migration};
+  return ExecuteSchemaStatements(connection, schema_statements);
 }
 
 std::shared_ptr<PostgresConnectionPool> MakePool(const PostgresStoreOptions& options) {
