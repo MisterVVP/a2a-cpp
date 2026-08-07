@@ -7,6 +7,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <future>
 #include <memory>
@@ -758,7 +759,11 @@ class ScopedPostgresRole final {
   bool created_ = false;
 };
 
-enum class SecurityDefinerOwnerCase { kTaskLock, kCleanup };
+enum class SecurityDefinerOwnerCase : std::uint8_t { kTaskLock, kCleanup };
+
+void ExpectPostgresExecOk(PGconn* connection, std::string_view sql, std::string_view operation) {
+  ASSERT_TRUE(a2a::server::stores::Exec(connection, sql, operation).ok());
+}
 
 void ExpectSecurityDefinerOwnerPrivilegesRequired(std::string_view schema_suffix, SecurityDefinerOwnerCase owner_case) {
   const char* dsn_value = GetPostgresDsn();
@@ -773,26 +778,23 @@ void ExpectSecurityDefinerOwnerPrivilegesRequired(std::string_view schema_suffix
   ASSERT_TRUE(connection.ok());
   ScopedPostgresRole role(connection.value().get(), MakePostgresTestRole(kSecurityDefinerOwnerRolePrefix),
                           task_store.execution_identity().storage.database, schema);
-  ASSERT_TRUE(role.Create().ok());
-  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildGrantSchemaCreateSql(role.role(), schema),
-                                        kGrantSchemaCreateOperation)
-                  .ok());
+  const auto role_created = role.Create();
+  ASSERT_TRUE(role_created.ok());
+  ExpectPostgresExecOk(connection.value().get(), BuildGrantSchemaCreateSql(role.role(), schema),
+                       kGrantSchemaCreateOperation);
   if (owner_case == SecurityDefinerOwnerCase::kCleanup) {
-    ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildRevokePushDeleteSql(schema, role.role()),
-                                          kRevokePushDeleteOperation)
-                    .ok());
+    ExpectPostgresExecOk(connection.value().get(), BuildRevokePushDeleteSql(schema, role.role()),
+                         kRevokePushDeleteOperation);
   }
   const std::string alter_owner_sql = owner_case == SecurityDefinerOwnerCase::kTaskLock
                                           ? BuildAlterTaskLockFunctionOwnerSql(schema, role.role())
                                           : BuildAlterCleanupFunctionOwnerSql(schema, role.role());
-  ASSERT_TRUE(
-      a2a::server::stores::Exec(connection.value().get(), alter_owner_sql, kAlterSecurityDefinerOwnerOperation).ok());
+  ExpectPostgresExecOk(connection.value().get(), alter_owner_sql, kAlterSecurityDefinerOwnerOperation);
   const a2a::server::stores::PostgresStoreOptions managed_options{
       .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
   ExpectManagedPushSchemaRejected(managed_options);
-  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildReassignRoleObjectsSql(role.role()),
-                                        kReassignSecurityDefinerOwnerOperation)
-                  .ok());
+  ExpectPostgresExecOk(connection.value().get(), BuildReassignRoleObjectsSql(role.role()),
+                       kReassignSecurityDefinerOwnerOperation);
 }
 
 [[nodiscard]] std::string BuildDeleteByTaskIdSql(std::string_view table, std::string_view id_column,
