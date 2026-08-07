@@ -187,11 +187,32 @@ constexpr std::string_view kInstallRetainTaskTriggerOperation = "install task re
 constexpr std::string_view kSuppressedDeleteSchemaSuffix = "push_suppressed_task_delete";
 constexpr std::string_view kExternalMigrationSchemaSuffix = "push_external_schema_migration";
 constexpr std::string_view kMissingCleanupTriggerSchemaSuffix = "push_external_schema_missing_cleanup";
+constexpr std::string_view kLegacyForeignKeySchemaSuffix = "push_schema_legacy_fk";
+constexpr std::string_view kCleanupImplementationSchemaSuffix = "push_schema_cleanup_impl";
+constexpr std::string_view kCleanupVersionSchemaSuffix = "push_schema_cleanup_ver";
+constexpr std::string_view kLockPublicExecuteSchemaSuffix = "push_schema_lock_public";
+constexpr std::string_view kCleanupPublicExecuteSchemaSuffix = "push_schema_cleanup_public";
+constexpr std::string_view kCleanupTriggerWhenSchemaSuffix = "push_schema_cleanup_when";
+constexpr std::string_view kProvenanceTypeSchemaSuffix = "push_schema_prov_type";
+constexpr std::string_view kProvenanceNotNullSchemaSuffix = "push_schema_prov_not_null";
+constexpr std::string_view kProvenanceDefaultSchemaSuffix = "push_schema_prov_default";
+constexpr std::string_view kLockOwnerPrivilegeSchemaSuffix = "push_schema_lock_owner";
+constexpr std::string_view kCleanupOwnerPrivilegeSchemaSuffix = "push_schema_cleanup_owner";
+constexpr std::string_view kPushOnlyExternalSchemaSuffix = "push_external_push_only";
 constexpr std::string_view kListValidationOrderSchemaSuffix = "push_list_validation_order";
 constexpr std::string_view kClearPushMigrationOperation = "simulate pre-migration push schema";
+constexpr std::string_view kMutateManagedPushSchemaOperation = "mutate externally managed push schema";
 constexpr std::string_view kRowLevelSecuritySchemaSuffix = "push_task_rls";
 constexpr std::string_view kEnableTaskRowLevelSecurityOperation = "enable task row-level security";
+constexpr std::string_view kExpectedTaskRowLevelSecurityError =
+    "PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks";
 constexpr std::string_view kDropPushCleanupTriggerOperation = "drop push cleanup trigger";
+constexpr std::string_view kSecurityDefinerOwnerRolePrefix = "a2a_push_security_owner_";
+constexpr std::string_view kGrantSchemaCreateOperation = "grant schema create to security definer owner";
+constexpr std::string_view kAlterSecurityDefinerOwnerOperation = "alter security definer owner";
+constexpr std::string_view kReassignSecurityDefinerOwnerOperation = "restore security definer owner";
+constexpr std::string_view kRevokePushDeleteOperation = "revoke push delete from security definer owner";
+constexpr std::string_view kRevokeLocalTaskAwarePrivilegesOperation = "revoke local task-aware push privileges";
 constexpr std::string_view kOutdatedManagedPushSchemaAcceptedMessage =
     "outdated externally managed PostgreSQL schema was accepted";
 constexpr std::string_view kSplitRolePassword = "a2a_split_role_password";
@@ -501,6 +522,93 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return sql;
 }
 
+[[nodiscard]] std::string DeleteTaskPushConfigsFunction(std::string_view schema) {
+  return a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kDeleteTaskPushConfigsFunction);
+}
+
+[[nodiscard]] std::string BuildClearCleanupMigrationSql(std::string_view schema) {
+  std::string sql = "COMMENT ON FUNCTION ";
+  sql.append(DeleteTaskPushConfigsFunction(schema));
+  sql.append("() IS NULL;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildRestoreLegacyTaskForeignKeySql(std::string_view schema) {
+  std::string sql = "ALTER TABLE ";
+  sql.append(a2a::server::stores::PushTable(schema));
+  sql.append(" ADD CONSTRAINT ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kPushConfigsTaskForeignKey));
+  sql.append(" FOREIGN KEY (task_id) REFERENCES ");
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.append("(id);");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildNoOpCleanupFunctionSql(std::string_view schema) {
+  std::string sql = "CREATE OR REPLACE FUNCTION ";
+  sql.append(DeleteTaskPushConfigsFunction(schema));
+  sql.append(
+      "() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog "
+      "AS $a2a$ BEGIN RETURN OLD; END $a2a$;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildGrantPublicLockExecuteSql(std::string_view schema) {
+  std::string sql = "GRANT EXECUTE ON FUNCTION ";
+  sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
+  sql.append("(text) TO PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildGrantPublicCleanupExecuteSql(std::string_view schema) {
+  std::string sql = "GRANT EXECUTE ON FUNCTION ";
+  sql.append(DeleteTaskPushConfigsFunction(schema));
+  sql.append("() TO PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildCleanupTriggerWithWhenSql(std::string_view schema) {
+  const std::string trigger =
+      a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kDeleteTaskPushConfigsTrigger);
+  const std::string task_table = a2a::server::stores::TaskTable(schema);
+  std::string sql = "DROP TRIGGER ";
+  sql.append(trigger);
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append("; CREATE TRIGGER ");
+  sql.append(trigger);
+  sql.append(" AFTER DELETE ON ");
+  sql.append(task_table);
+  sql.append(" FOR EACH ROW WHEN (OLD.id IS NOT NULL) EXECUTE FUNCTION ");
+  sql.append(DeleteTaskPushConfigsFunction(schema));
+  sql.append("();");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildWrongProvenanceTypeSql(std::string_view schema) {
+  const std::string push_table = a2a::server::stores::PushTable(schema);
+  std::string sql = "ALTER TABLE ";
+  sql.append(push_table);
+  sql.append(" DROP COLUMN local_postgres_task; ALTER TABLE ");
+  sql.append(push_table);
+  sql.append(" ADD COLUMN local_postgres_task TEXT NOT NULL DEFAULT 'false';");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildNullableProvenanceSql(std::string_view schema) {
+  std::string sql = "ALTER TABLE ";
+  sql.append(a2a::server::stores::PushTable(schema));
+  sql.append(" ALTER COLUMN local_postgres_task DROP NOT NULL;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildTrueProvenanceDefaultSql(std::string_view schema) {
+  std::string sql = "ALTER TABLE ";
+  sql.append(a2a::server::stores::PushTable(schema));
+  sql.append(" ALTER COLUMN local_postgres_task SET DEFAULT TRUE;");
+  return sql;
+}
+
 [[nodiscard]] std::string BuildDropPushCleanupTriggerSql(std::string_view schema) {
   std::string sql = "DROP TRIGGER ";
   sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kDeleteTaskPushConfigsTrigger));
@@ -517,6 +625,66 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return sql;
 }
 
+[[nodiscard]] std::string BuildGrantSchemaCreateSql(std::string_view role, std::string_view schema) {
+  const std::string quoted_role = a2a::server::stores::QuoteSqlIdentifier(role);
+  std::string sql = "GRANT ";
+  sql.append(quoted_role);
+  sql.append(" TO CURRENT_USER; GRANT CREATE ON SCHEMA ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(schema));
+  sql.append(" TO ");
+  sql.append(quoted_role);
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildAlterTaskLockFunctionOwnerSql(std::string_view schema, std::string_view role) {
+  std::string sql = "ALTER FUNCTION ";
+  sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
+  sql.append("(text) OWNER TO ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildAlterCleanupFunctionOwnerSql(std::string_view schema, std::string_view role) {
+  std::string sql = "ALTER FUNCTION ";
+  sql.append(DeleteTaskPushConfigsFunction(schema));
+  sql.append("() OWNER TO ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildReassignRoleObjectsSql(std::string_view role) {
+  std::string sql = "REASSIGN OWNED BY ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.append(" TO CURRENT_USER;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildRevokePushDeleteSql(std::string_view schema, std::string_view role) {
+  std::string sql = "REVOKE DELETE ON ";
+  sql.append(a2a::server::stores::PushTable(schema));
+  sql.append(" FROM ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildRevokeLocalTaskAwarePrivilegesSql(std::string_view schema, std::string_view role) {
+  const std::string quoted_role = a2a::server::stores::QuoteSqlIdentifier(role);
+  std::string sql = "REVOKE SELECT ON ";
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.append(" FROM ");
+  sql.append(quoted_role);
+  sql.append("; REVOKE EXECUTE ON FUNCTION ");
+  sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
+  sql.append("(text) FROM ");
+  sql.append(quoted_role);
+  sql.push_back(';');
+  return sql;
+}
+
 void ExpectManagedPushSchemaRejected(const a2a::server::stores::PostgresStoreOptions& options) {
   try {
     (void)a2a::server::stores::PostgresPushNotificationStore(options);
@@ -525,6 +693,27 @@ void ExpectManagedPushSchemaRejected(const a2a::server::stores::PostgresStoreOpt
     EXPECT_NE(std::string_view(error.what()).find(a2a::server::stores::kTaskPushConfigMigrationId),
               std::string_view::npos);
   }
+}
+
+using ManagedPushSchemaMutationBuilder = std::string (*)(std::string_view);
+
+void ExpectManagedPushSchemaMutationRejected(std::string_view schema_suffix,
+                                             ManagedPushSchemaMutationBuilder build_mutation) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema(schema_suffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresPushNotificationStore owner_store(owner_options);
+  auto connection = owner_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+  ASSERT_TRUE(
+      a2a::server::stores::Exec(connection.value().get(), build_mutation(schema), kMutateManagedPushSchemaOperation)
+          .ok());
+  const a2a::server::stores::PostgresStoreOptions managed_options{
+      .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
+  ExpectManagedPushSchemaRejected(managed_options);
 }
 
 void ExpectPushConfigValidationError(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& result) {
@@ -536,15 +725,6 @@ void ExpectPushConfigValidationError(const a2a::core::Result<lf::a2a::v1::TaskPu
 void ExpectPushConfigTaskNotFound(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& result) {
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
-}
-
-[[nodiscard]] bool PushStoreConstructionThrowsRuntimeError(const a2a::server::stores::PostgresStoreOptions& options) {
-  try {
-    (void)a2a::server::stores::PostgresPushNotificationStore(options);
-  } catch (const std::runtime_error&) {
-    return true;
-  }
-  return false;
 }
 
 class ScopedPostgresRole final {
@@ -577,6 +757,43 @@ class ScopedPostgresRole final {
   std::string schema_;
   bool created_ = false;
 };
+
+enum class SecurityDefinerOwnerCase { kTaskLock, kCleanup };
+
+void ExpectSecurityDefinerOwnerPrivilegesRequired(std::string_view schema_suffix, SecurityDefinerOwnerCase owner_case) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema(schema_suffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore owner_store(owner_options);
+  auto connection = owner_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+  ScopedPostgresRole role(connection.value().get(), MakePostgresTestRole(kSecurityDefinerOwnerRolePrefix),
+                          task_store.execution_identity().storage.database, schema);
+  ASSERT_TRUE(role.Create().ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildGrantSchemaCreateSql(role.role(), schema),
+                                        kGrantSchemaCreateOperation)
+                  .ok());
+  if (owner_case == SecurityDefinerOwnerCase::kCleanup) {
+    ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildRevokePushDeleteSql(schema, role.role()),
+                                          kRevokePushDeleteOperation)
+                    .ok());
+  }
+  const std::string alter_owner_sql = owner_case == SecurityDefinerOwnerCase::kTaskLock
+                                          ? BuildAlterTaskLockFunctionOwnerSql(schema, role.role())
+                                          : BuildAlterCleanupFunctionOwnerSql(schema, role.role());
+  ASSERT_TRUE(
+      a2a::server::stores::Exec(connection.value().get(), alter_owner_sql, kAlterSecurityDefinerOwnerOperation).ok());
+  const a2a::server::stores::PostgresStoreOptions managed_options{
+      .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
+  ExpectManagedPushSchemaRejected(managed_options);
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildReassignRoleObjectsSql(role.role()),
+                                        kReassignSecurityDefinerOwnerOperation)
+                  .ok());
+}
 
 [[nodiscard]] std::string BuildDeleteByTaskIdSql(std::string_view table, std::string_view id_column,
                                                  std::string_view task_id);
@@ -2030,14 +2247,61 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupTrigger) {
   ExpectManagedPushSchemaRejected(managed_options);
 }
 
-TEST(StoreConformanceTest, PostgresPushNotificationStoreRejectsTaskRowLevelSecurity) {
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsLegacyTaskForeignKey) {
+  ExpectManagedPushSchemaMutationRejected(kLegacyForeignKeySchemaSuffix, BuildRestoreLegacyTaskForeignKeySql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupImplementation) {
+  ExpectManagedPushSchemaMutationRejected(kCleanupImplementationSchemaSuffix, BuildNoOpCleanupFunctionSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupVersion) {
+  ExpectManagedPushSchemaMutationRejected(kCleanupVersionSchemaSuffix, BuildClearCleanupMigrationSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsPublicLockExecute) {
+  ExpectManagedPushSchemaMutationRejected(kLockPublicExecuteSchemaSuffix, BuildGrantPublicLockExecuteSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsPublicCleanupExecute) {
+  ExpectManagedPushSchemaMutationRejected(kCleanupPublicExecuteSchemaSuffix, BuildGrantPublicCleanupExecuteSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsCleanupTriggerWhenClause) {
+  ExpectManagedPushSchemaMutationRejected(kCleanupTriggerWhenSchemaSuffix, BuildCleanupTriggerWithWhenSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresBooleanProvenance) {
+  ExpectManagedPushSchemaMutationRejected(kProvenanceTypeSchemaSuffix, BuildWrongProvenanceTypeSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresNotNullProvenance) {
+  ExpectManagedPushSchemaMutationRejected(kProvenanceNotNullSchemaSuffix, BuildNullableProvenanceSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresFalseProvenanceDefault) {
+  ExpectManagedPushSchemaMutationRejected(kProvenanceDefaultSchemaSuffix, BuildTrueProvenanceDefaultSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskLockOwnerPrivileges) {
+  ExpectSecurityDefinerOwnerPrivilegesRequired(kLockOwnerPrivilegeSchemaSuffix, SecurityDefinerOwnerCase::kTaskLock);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupOwnerPrivileges) {
+  ExpectSecurityDefinerOwnerPrivilegesRequired(kCleanupOwnerPrivilegeSchemaSuffix, SecurityDefinerOwnerCase::kCleanup);
+}
+
+TEST(StoreConformanceTest, PostgresLocalTaskAwarePushCreateRejectsTaskRowLevelSecurity) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
   }
   const std::string schema = MakePostgresTestSchema(kRowLevelSecuritySchemaSuffix);
   const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(owner_options);
   a2a::server::stores::PostgresPushNotificationStore owner_store(owner_options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
   auto connection = owner_store.AcquireConnectionForTesting();
   ASSERT_TRUE(connection.ok());
   ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildEnableTaskRowLevelSecuritySql(schema),
@@ -2046,7 +2310,56 @@ TEST(StoreConformanceTest, PostgresPushNotificationStoreRejectsTaskRowLevelSecur
   const a2a::server::stores::PostgresStoreOptions managed_options{
       .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
 
-  EXPECT_TRUE(PushStoreConstructionThrowsRuntimeError(managed_options));
+  a2a::server::stores::PostgresPushNotificationStore managed_store(managed_options);
+  const auto created = managed_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      task_store);
+  ASSERT_FALSE(created.ok());
+  EXPECT_NE(std::string_view(created.error().message()).find(kExpectedTaskRowLevelSecurityError),
+            std::string_view::npos);
+}
+
+TEST(StoreConformanceTest, ExternalAuthorityPushOnlyRoleDoesNotRequireTaskPrivilegesOrRejectTaskRls) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema(kPushOnlyExternalSchemaSuffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{
+      .connection_string = dsn_value, .schema = schema, .connection_pool_size = 2U};
+  a2a::server::stores::PostgresTaskStore owner_task_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore owner_push_store(owner_options);
+  auto connection = owner_push_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildEnableTaskRowLevelSecuritySql(schema),
+                                        kEnableTaskRowLevelSecurityOperation)
+                  .ok());
+  ScopedPostgresRole role(connection.value().get(), MakePostgresTestRole(kSplitRolePrefix),
+                          owner_task_store.execution_identity().storage.database, schema);
+  ASSERT_TRUE(role.Create().ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(),
+                                        BuildRevokeLocalTaskAwarePrivilegesSql(schema, role.role()),
+                                        kRevokeLocalTaskAwarePrivilegesOperation)
+                  .ok());
+  const std::string role_dsn = BuildRoleDsn(dsn_value, role.role());
+  ASSERT_FALSE(role_dsn.empty());
+  a2a::server::InMemoryTaskStore external_task_store;
+  ASSERT_TRUE(external_task_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeTask(
+                      std::string(kMixedCreateTaskId), std::string(kPushListContextId), lf::a2a::v1::TASK_STATE_WORKING,
+                      kOldTargetTaskTimestampSeconds))
+                  .ok());
+
+  {
+    const a2a::server::stores::PostgresStoreOptions role_options{
+        .connection_string = role_dsn, .schema = schema, .auto_create_schema = false, .connection_pool_size = 1U};
+    a2a::server::stores::PostgresPushNotificationStore push_only_store(role_options);
+    const auto created = push_only_store.CreateOrUpdateForTask(
+        a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId), std::string(kMixedCreateConfigId)),
+        external_task_store);
+    ASSERT_TRUE(created.ok());
+    ExpectPushConfigPresent(push_only_store, kMixedCreateTaskId, kMixedCreateConfigId);
+  }
 }
 
 TEST(StoreConformanceTest, PostgresTaskDeleteTriggerUsesLeastPrivilegeSecurityDefiner) {

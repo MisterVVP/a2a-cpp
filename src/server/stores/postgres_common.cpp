@@ -24,9 +24,15 @@ namespace a2a::server::stores {
 namespace {
 
 constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
-constexpr std::size_t kTaskPushConfigLockFunctionSqlReserveSlack = 512U;
+constexpr std::size_t kTaskPushConfigLockFunctionSqlReserveSlack = 768U;
 constexpr std::size_t kTaskPushConfigLockFunctionPrivilegeSqlReserveSlack = 64U;
 constexpr std::size_t kTaskPushConfigMigrationMarkerSqlReserveSlack = 96U;
+constexpr std::string_view kFeatureNotSupportedSqlState = "0A000";
+constexpr std::string_view kInsufficientPrivilegeSqlState = "42501";
+constexpr std::string_view kPostgresTaskRowLevelSecurityUnsupportedMessage =
+    "PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks";
+constexpr std::string_view kPostgresPushTaskSelectRequiredMessage =
+    "PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation";
 constexpr char kCurrentUserSql[] = "SELECT current_user";
 constexpr char kBeginSchemaTransactionSql[] = "BEGIN";
 constexpr char kCommitSchemaTransactionSql[] = "COMMIT";
@@ -106,8 +112,13 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 
 [[nodiscard]] std::string BuildTaskPushConfigLockFunctionSql(std::string_view function, std::string_view task_table) {
   const std::string task_table_literal = SqlStringLiteral(task_table);
+  const std::string rls_error_code = SqlStringLiteral(kFeatureNotSupportedSqlState);
+  const std::string rls_error_message = SqlStringLiteral(kPostgresTaskRowLevelSecurityUnsupportedMessage);
+  const std::string privilege_error_code = SqlStringLiteral(kInsufficientPrivilegeSqlState);
+  const std::string privilege_error_message = SqlStringLiteral(kPostgresPushTaskSelectRequiredMessage);
   std::string sql;
-  sql.reserve(function.size() + task_table.size() + task_table_literal.size() +
+  sql.reserve(function.size() + task_table.size() + (2U * task_table_literal.size()) + rls_error_code.size() +
+              rls_error_message.size() + privilege_error_code.size() + privilege_error_message.size() +
               kTaskPushConfigLockFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
   sql.append(function);
@@ -115,12 +126,20 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
       "(requested_task_id text) RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER "
       "SET search_path = pg_catalog AS $a2a$ DECLARE caller_role name; BEGIN "
       "caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
-      "IF caller_role IS NULL THEN caller_role := session_user; END IF; "
-      "IF NOT pg_catalog.has_table_privilege(caller_role, ");
+      "IF caller_role IS NULL THEN caller_role := session_user; END IF; IF EXISTS ("
+      "SELECT 1 FROM pg_catalog.pg_class AS relation WHERE relation.oid = pg_catalog.to_regclass(");
   sql.append(task_table_literal);
-  sql.append(
-      ", 'SELECT') THEN RAISE insufficient_privilege; END IF; "
-      "PERFORM 1 FROM ");
+  sql.append(") AND relation.relrowsecurity) THEN RAISE EXCEPTION USING ERRCODE = ");
+  sql.append(rls_error_code);
+  sql.append(", MESSAGE = ");
+  sql.append(rls_error_message);
+  sql.append("; END IF; IF NOT pg_catalog.has_table_privilege(caller_role, ");
+  sql.append(task_table_literal);
+  sql.append(", 'SELECT') THEN RAISE EXCEPTION USING ERRCODE = ");
+  sql.append(privilege_error_code);
+  sql.append(", MESSAGE = ");
+  sql.append(privilege_error_message);
+  sql.append("; END IF; PERFORM 1 FROM ");
   sql.append(task_table);
   sql.append(" WHERE id = requested_task_id FOR KEY SHARE; RETURN FOUND; END $a2a$;");
   return sql;
@@ -174,6 +193,17 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   sql.append("REVOKE ALL ON FUNCTION ");
   sql.append(function);
   sql.append("() FROM PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDeleteTaskPushConfigsMigrationMarkerSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kTaskPushConfigMigrationMarkerSqlReserveSlack);
+  sql.append("COMMENT ON FUNCTION ");
+  sql.append(function);
+  sql.append("() IS ");
+  sql.append(SqlStringLiteral(kTaskPushConfigMigrationId));
+  sql.push_back(';');
   return sql;
 }
 
@@ -575,6 +605,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       BuildDeleteTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
   const std::string revoke_delete_task_push_configs_function =
       BuildRevokeDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function);
+  const std::string mark_delete_task_push_configs_migration =
+      BuildDeleteTaskPushConfigsMigrationMarkerSql(delete_task_push_configs_function);
   const std::string add_push_configs_created_sequence =
       "ALTER TABLE " + push_configs + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       push_created_sequence_regclass + ");";
@@ -604,6 +636,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       add_push_configs_created_sequence,
                                                       create_push_configs_task_index,
                                                       create_push_configs_created_sequence_index,
+                                                      mark_delete_task_push_configs_migration,
                                                       mark_task_push_config_migration};
   return ExecuteSchemaStatements(connection, schema_statements);
 }

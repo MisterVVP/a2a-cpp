@@ -32,66 +32,83 @@ constexpr std::string_view kPushListMissingCountMessage =
 constexpr std::string_view kCheckPushTaskConfigsOperation = "check postgres push notification task configs";
 constexpr std::string_view kValidatePostgresPushSchemaOperation = "validate postgres push notification schema";
 constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
-    "PostgreSQL push-notification schema is missing task-aware-push-config-v1; apply the migration in "
+    "PostgreSQL push-notification schema is missing task-aware-push-config-v2; apply the migration in "
     "docs/storage.md before using auto_create_schema=false";
 constexpr std::string_view kPushConfigProvenanceColumnName = "local_postgres_task";
 constexpr std::string_view kPostgresAfterDeleteRowTriggerType = "9";
 constexpr std::string_view kPostgresTriggerEnabledForOrigin = "O";
 constexpr std::string_view kPostgresTriggerEnabledAlways = "A";
 constexpr std::string_view kPostgresTrueValue = "t";
-constexpr std::string_view kPostgresTaskRowLevelSecurityUnsupportedMessage =
-    "PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks";
-constexpr std::string_view kPostgresPushTaskSelectRequiredMessage =
-    "PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation";
 constexpr int kPostgresPushSchemaParameterCount = 11;
-constexpr int kPostgresPushSchemaMigrationCheckCount = 6;
-constexpr int kPostgresPushSchemaCheckCount = 8;
+constexpr int kPostgresPushSchemaCheckCount = 9;
 constexpr char kValidatePostgresPushSchemaSql[] =
-    "WITH lock_function AS MATERIALIZED ("
+    "WITH relations AS MATERIALIZED ("
+    "SELECT schema_namespace.oid AS schema_oid, "
+    "pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1::text, $2::text)) AS push_oid, "
+    "pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1::text, $8::text)) AS task_oid "
+    "FROM pg_catalog.pg_namespace AS schema_namespace WHERE schema_namespace.nspname = $1), "
+    "lock_function AS MATERIALIZED ("
     "SELECT routine.oid, routine.proacl, routine.proowner, routine.prosecdef, routine.provolatile, "
-    "routine.proconfig, pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
+    "routine.proconfig, routine.prorettype, "
+    "pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
     "(SELECT pg_catalog.to_regprocedure(pg_catalog.format('%I.%I(text)', $1::text, $4::text)) AS oid) AS resolved "
     "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid), "
     "delete_function AS MATERIALIZED ("
-    "SELECT routine.oid, routine.prosecdef, routine.provolatile, routine.proconfig, routine.prorettype FROM "
+    "SELECT routine.oid, routine.proacl, routine.proowner, routine.prosecdef, routine.provolatile, routine.proconfig, "
+    "routine.prorettype, routine.prosrc, pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
     "(SELECT pg_catalog.to_regprocedure(pg_catalog.format('%I.%I()', $1::text, $6::text)) AS oid) AS resolved "
     "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid), "
     "cleanup_trigger AS MATERIALIZED ("
-    "SELECT trigger.tgfoid, trigger.tgtype, trigger.tgenabled FROM pg_catalog.pg_trigger AS trigger "
+    "SELECT trigger.tgfoid, trigger.tgtype, trigger.tgenabled, trigger.tgnargs, trigger.tgqual "
+    "FROM pg_catalog.pg_trigger AS trigger "
     "JOIN pg_catalog.pg_class AS relation ON relation.oid = trigger.tgrelid "
     "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
     "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 AND trigger.tgname = $7 "
     "AND NOT trigger.tgisinternal) "
     "SELECT "
     "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute AS attribute "
-    "JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid "
-    "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
-    "WHERE relation_namespace.nspname = $1 AND relation.relname = $2 AND attribute.attname = $3 "
+    "JOIN pg_catalog.pg_attrdef AS column_default ON column_default.adrelid = attribute.attrelid "
+    "AND column_default.adnum = attribute.attnum "
+    "WHERE attribute.attrelid = relations.push_oid AND attribute.attname = $3 "
     "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
-    "AND attribute.atttypid = 'pg_catalog.bool'::pg_catalog.regtype AND attribute.attnotnull), "
+    "AND attribute.atttypid = 'pg_catalog.bool'::pg_catalog.regtype AND attribute.attnotnull "
+    "AND attribute.atthasdef "
+    "AND pg_catalog.pg_get_expr(column_default.adbin, column_default.adrelid) = 'false'), "
+    "relations.push_oid IS NOT NULL AND relations.task_oid IS NOT NULL AND NOT EXISTS ("
+    "SELECT 1 FROM pg_catalog.pg_constraint AS foreign_key WHERE foreign_key.contype = 'f' "
+    "AND foreign_key.conrelid = relations.push_oid AND foreign_key.confrelid = relations.task_oid), "
     "lock_function.oid IS NOT NULL AND lock_function.migration_id = $5 AND lock_function.prosecdef "
-    "AND lock_function.provolatile = 'v' AND 'search_path=pg_catalog' = ANY(lock_function.proconfig), "
+    "AND lock_function.provolatile = 'v' AND lock_function.prorettype = 'pg_catalog.bool'::pg_catalog.regtype "
+    "AND 'search_path=pg_catalog' = ANY(lock_function.proconfig), "
     "CASE WHEN lock_function.oid IS NULL THEN FALSE ELSE NOT EXISTS ("
     "SELECT 1 FROM pg_catalog.aclexplode(COALESCE(lock_function.proacl, "
     "pg_catalog.acldefault('f', lock_function.proowner))) AS acl_entry "
     "WHERE acl_entry.grantee = 0 AND acl_entry.privilege_type = 'EXECUTE') END, "
-    "CASE WHEN lock_function.oid IS NULL THEN FALSE ELSE "
-    "pg_catalog.has_function_privilege(current_user, lock_function.oid, 'EXECUTE') END, "
-    "delete_function.oid IS NOT NULL AND delete_function.prosecdef AND delete_function.provolatile = 'v' "
+    "lock_function.oid IS NOT NULL "
+    "AND pg_catalog.has_schema_privilege(lock_function.proowner, relations.schema_oid, 'USAGE') "
+    "AND pg_catalog.has_table_privilege(lock_function.proowner, relations.task_oid, 'SELECT') "
+    "AND pg_catalog.has_table_privilege(lock_function.proowner, relations.task_oid, 'UPDATE'), "
+    "delete_function.oid IS NOT NULL AND delete_function.migration_id = $5 AND delete_function.prosecdef "
+    "AND delete_function.provolatile = 'v' "
     "AND delete_function.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype "
-    "AND 'search_path=pg_catalog' = ANY(delete_function.proconfig), "
+    "AND 'search_path=pg_catalog' = ANY(delete_function.proconfig) "
+    "AND pg_catalog.regexp_replace(pg_catalog.lower(delete_function.prosrc), '[[:space:]\"]+', '', 'g') = "
+    "'begindeletefrom' || pg_catalog.lower($1::text) || '.' || pg_catalog.lower($2::text) || "
+    "'wheretask_id=old.idandlocal_postgres_task;returnold;end', "
+    "CASE WHEN delete_function.oid IS NULL THEN FALSE ELSE NOT EXISTS ("
+    "SELECT 1 FROM pg_catalog.aclexplode(COALESCE(delete_function.proacl, "
+    "pg_catalog.acldefault('f', delete_function.proowner))) AS acl_entry "
+    "WHERE acl_entry.grantee = 0 AND acl_entry.privilege_type = 'EXECUTE') END, "
+    "delete_function.oid IS NOT NULL "
+    "AND pg_catalog.has_schema_privilege(delete_function.proowner, relations.schema_oid, 'USAGE') "
+    "AND pg_catalog.has_table_privilege(delete_function.proowner, relations.push_oid, 'SELECT') "
+    "AND pg_catalog.has_table_privilege(delete_function.proowner, relations.push_oid, 'DELETE'), "
     "EXISTS (SELECT 1 FROM cleanup_trigger WHERE cleanup_trigger.tgfoid = delete_function.oid "
     "AND cleanup_trigger.tgtype = $9::smallint "
     "AND (cleanup_trigger.tgenabled = $10::pg_catalog.\"char\" "
-    "OR cleanup_trigger.tgenabled = $11::pg_catalog.\"char\")), "
-    "EXISTS (SELECT 1 FROM pg_catalog.pg_class AS relation "
-    "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
-    "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 AND NOT relation.relrowsecurity), "
-    "EXISTS (SELECT 1 FROM pg_catalog.pg_class AS relation "
-    "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
-    "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 "
-    "AND pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT')) "
-    "FROM lock_function CROSS JOIN delete_function";
+    "OR cleanup_trigger.tgenabled = $11::pg_catalog.\"char\") "
+    "AND cleanup_trigger.tgnargs = 0 AND cleanup_trigger.tgqual IS NULL) "
+    "FROM relations CROSS JOIN lock_function CROSS JOIN delete_function";
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -293,16 +310,10 @@ constexpr char kValidatePostgresPushSchemaSql[] =
   if (PQntuples(result.get()) != 1 || PQnfields(result.get()) != kPostgresPushSchemaCheckCount) {
     return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
   }
-  for (int column = 0; column < kPostgresPushSchemaMigrationCheckCount; ++column) {
+  for (int column = 0; column < kPostgresPushSchemaCheckCount; ++column) {
     if (!IsPostgresTrue(result.get(), column)) {
       return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
     }
-  }
-  if (!IsPostgresTrue(result.get(), kPostgresPushSchemaMigrationCheckCount)) {
-    return core::Error::Validation(std::string(kPostgresTaskRowLevelSecurityUnsupportedMessage));
-  }
-  if (!IsPostgresTrue(result.get(), kPostgresPushSchemaMigrationCheckCount + 1)) {
-    return core::Error::Validation(std::string(kPostgresPushTaskSelectRequiredMessage));
   }
   return {};
 }

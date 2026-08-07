@@ -105,17 +105,24 @@ differences remain distinct.
 ## Externally managed PostgreSQL schemas
 
 When `auto_create_schema=false`, the push-notification store validates the
-`task-aware-push-config-v1` migration during construction. Startup fails with an
+`task-aware-push-config-v2` migration during construction. Startup fails with an
 actionable error instead of allowing the first request to fail against an
-outdated schema.
+outdated or insecure schema. Validation covers the provenance column type,
+nullability and `FALSE` default; removal of the legacy task foreign key; both
+SECURITY DEFINER helpers and their owners' required privileges; absence of
+`PUBLIC EXECUTE`; the cleanup implementation/version; and exact cleanup-trigger
+wiring without a `WHEN` clause.
 
 Apply the following migration before upgrading. This example uses the `public`
 schema and an SDK database role named `a2a_sdk`; replace both names for your
 deployment. Grant the lock helper only to SDK roles authorized to create push
-notification configurations. The push-store role must also have `SELECT` on
-the task table so the helper can preserve task visibility without requiring
-task `UPDATE`. PostgreSQL row-level security on the task table is unsupported
-for this task-aware path and is rejected during store construction.
+notification configurations. Task-table `SELECT` and lock-helper `EXECUTE` are
+required only when that role uses the local PostgreSQL task-aware create path;
+push-only roles paired with an external authoritative `TaskStore` do not need
+either privilege. PostgreSQL row-level security on the task table is allowed
+for external-authority/push-only use, but the local task-aware create path
+rejects it explicitly because a SECURITY DEFINER lock must not bypass caller
+row policies.
 
 ```sql
 BEGIN;
@@ -140,8 +147,16 @@ BEGIN
   IF caller_role IS NULL THEN
     caller_role := session_user;
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_class
+    WHERE oid = pg_catalog.to_regclass('public.a2a_tasks') AND relrowsecurity
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE = '0A000', MESSAGE =
+      'PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks';
+  END IF;
   IF NOT pg_catalog.has_table_privilege(caller_role, 'public.a2a_tasks', 'SELECT') THEN
-    RAISE insufficient_privilege;
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE =
+      'PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation';
   END IF;
   PERFORM 1
   FROM public.a2a_tasks
@@ -176,18 +191,23 @@ AFTER DELETE ON public.a2a_tasks
 FOR EACH ROW
 EXECUTE FUNCTION public.a2a_delete_task_push_configs();
 
+COMMENT ON FUNCTION public.a2a_delete_task_push_configs()
+  IS 'task-aware-push-config-v2';
+
 COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
-  IS 'task-aware-push-config-v1';
+  IS 'task-aware-push-config-v2';
 
 COMMIT;
 ```
 
-The migration marker is written last inside the transaction, so a partial
+The migration markers are written last inside the transaction, so a partial
 migration is never accepted. Existing push configurations are marked as
-externally owned by the new column's `FALSE` default. The SDK role that
-constructs a push store must have `EXECUTE` on
-`a2a_lock_task_for_push_config(TEXT)`; reporting and unrelated read-only
-roles should not receive it.
+externally owned by the new column's `FALSE` default. The owner of
+`a2a_lock_task_for_push_config(TEXT)` must have schema `USAGE` plus `SELECT` and
+`UPDATE` on `a2a_tasks`; the `UPDATE` privilege is needed by PostgreSQL for
+`FOR KEY SHARE`. The owner of `a2a_delete_task_push_configs()` must have schema
+`USAGE` plus `SELECT` and `DELETE` on the push-config table. These are SECURITY
+DEFINER owner requirements, not privileges that every push-store role must receive.
 
 ## Sensitive push notification data
 
