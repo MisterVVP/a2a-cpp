@@ -1182,6 +1182,19 @@ void ExpectStoredLargePushConfig(const a2a::core::Result<lf::a2a::v1::TaskPushNo
   EXPECT_EQ(stored.value().authentication().credentials().size(), kLargeConfigMetadataSize);
 }
 
+void ExpectUncertainAuthorityCreateRejected(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& created,
+                                            const a2a::server::stores::PostgresOperationDiagnostics& diagnostics,
+                                            const a2a::server::stores::PostgresPushNotificationStore& push_store) {
+  ASSERT_FALSE(created.ok());
+  EXPECT_EQ(created.error().message(), a2a::server::stores::kPostgresTaskAuthorityUncertainMessage);
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            kSinglePostgresCommandCount);
+  EXPECT_EQ(
+      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+      kNoPostgresCommandCount);
+  EXPECT_FALSE(push_store.Get(kAuthorityTaskId, kAuthorityConfigId).ok());
+}
+
 template <typename Insert>
 [[nodiscard]] bool RunDeterministicallyInterleavedInserts(Insert insert) {
   std::barrier synchronization_point(2);
@@ -2062,14 +2075,7 @@ TEST(StoreConformanceTest, UncertainPostgresAuthorityDoesNotWriteExternalProvena
       task_store);
   const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
 
-  ASSERT_FALSE(created.ok());
-  EXPECT_EQ(created.error().message(), a2a::server::stores::kPostgresTaskAuthorityUncertainMessage);
-  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
-            kSinglePostgresCommandCount);
-  EXPECT_EQ(
-      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-      kNoPostgresCommandCount);
-  EXPECT_FALSE(push_store.Get(kAuthorityTaskId, kAuthorityConfigId).ok());
+  ExpectUncertainAuthorityCreateRejected(created, diagnostics, push_store);
 }
 
 TEST(StoreConformanceTest, DifferentPostgresSchemasAreConfirmedExternalAuthority) {
