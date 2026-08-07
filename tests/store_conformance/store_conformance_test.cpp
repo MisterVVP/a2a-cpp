@@ -514,6 +514,21 @@ void ExpectManagedPushSchemaRejected(const a2a::server::stores::PostgresStoreOpt
   }
 }
 
+void ExpectPushConfigValidationError(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(result.error().protocol_code().has_value());
+}
+
+[[nodiscard]] bool PushStoreConstructionThrowsRuntimeError(const a2a::server::stores::PostgresStoreOptions& options) {
+  try {
+    (void)a2a::server::stores::PostgresPushNotificationStore(options);
+  } catch (const std::runtime_error&) {
+    return true;
+  }
+  return false;
+}
+
 class ScopedPostgresRole final {
  public:
   ScopedPostgresRole(PGconn* connection, std::string role, std::string database, std::string schema)
@@ -1638,9 +1653,7 @@ TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
 
   const auto invalid = push_store.CreateOrUpdateForTask(
       a2a::tests::store_conformance::MakeConfig("missing-atomic-create-task", ""), task_store);
-  ASSERT_FALSE(invalid.ok());
-  EXPECT_EQ(invalid.error().code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_FALSE(invalid.error().protocol_code().has_value());
+  ExpectPushConfigValidationError(invalid);
 
   a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
   const auto created = push_store.CreateOrUpdateForTask(
@@ -2066,7 +2079,7 @@ TEST(StoreConformanceTest, PostgresPushNotificationStoreRejectsTaskRowLevelSecur
   const a2a::server::stores::PostgresStoreOptions managed_options{
       .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
 
-  EXPECT_THROW((void)a2a::server::stores::PostgresPushNotificationStore(managed_options), std::runtime_error);
+  EXPECT_TRUE(PushStoreConstructionThrowsRuntimeError(managed_options));
 }
 
 TEST(StoreConformanceTest, PostgresTaskDeleteTriggerUsesLeastPrivilegeSecurityDefiner) {
