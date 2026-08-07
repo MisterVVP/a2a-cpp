@@ -1225,12 +1225,16 @@ TEST(StoreConformanceTest, PostgresStorageIdentityUsesLogicalConnectionTarget) {
   Conninfo options(PQconninfo(connection.value().get()));
   ASSERT_NE(options, nullptr);
   const auto identity = pool.StorageIdentity(std::string(kIdentitySchema));
+  const a2a::server::stores::PostgresStorageIdentity expected{
+      .host = ConninfoValue(options.get(), kConninfoHost),
+      .host_address = ConninfoValue(options.get(), kConninfoHostAddress),
+      .port = ConninfoValue(options.get(), kConninfoPort),
+      .database = ConninfoValue(options.get(), kConninfoDatabase),
+      .target_session_attributes = ConninfoValue(options.get(), kConninfoTargetSessionAttributes),
+      .schema = std::string(kIdentitySchema),
+  };
 
-  EXPECT_EQ(identity.host, ConninfoValue(options.get(), kConninfoHost));
-  EXPECT_EQ(identity.host_address, ConninfoValue(options.get(), kConninfoHostAddress));
-  EXPECT_EQ(identity.port, ConninfoValue(options.get(), kConninfoPort));
-  EXPECT_EQ(identity.database, ConninfoValue(options.get(), kConninfoDatabase));
-  EXPECT_EQ(identity.target_session_attributes, ConninfoValue(options.get(), kConninfoTargetSessionAttributes));
+  EXPECT_EQ(identity, expected);
 }
 
 TEST(StoreConformanceTest, PostgresConnectionPoolRejectsMixedConnectionIdentities) {
