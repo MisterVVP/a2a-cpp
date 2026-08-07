@@ -761,7 +761,7 @@ class ScopedPostgresRole final {
 
 enum class SecurityDefinerOwnerCase : std::uint8_t { kTaskLock, kCleanup };
 
-void ExpectPostgresExecOk(PGconn* connection, std::string_view sql, std::string_view operation) {
+void ExpectPostgresExecOk(PGconn* connection, const std::string& sql, std::string_view operation) {
   ASSERT_TRUE(a2a::server::stores::Exec(connection, sql, operation).ok());
 }
 
