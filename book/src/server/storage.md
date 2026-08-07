@@ -35,9 +35,16 @@ auto stores = factory.CreateStoreBundle();
 
 Task and push-notification stores returned by `CreateStoreBundle()` share one
 connection pool. Separately constructed stores own separate pools. Storage
-matching uses libpq's logical connection target rather than the active resolved
-server IP, so DNS and multi-host failover do not invalidate pool identity.
-Explicit `hostaddr` and `target_session_attrs` differences remain distinct.
+matching uses libpq's effective logical connection options rather than the
+active resolved server IP, so equivalent URI/keyword DSNs and stable
+DNS/multi-host configurations remain comparable across reconnects. Exact
+logical storage coordinates confirm local authority; a different database or
+schema confirms external authority. Other PostgreSQL mismatches, including
+`host`, `hostaddr`, port, and `target_session_attrs`, are uncertain because they
+can represent either aliases/failover or genuinely different servers.
+Task-aware creates reject uncertain authority before writing provenance. The
+effective PostgreSQL role is separate: role differences disable same-execution
+read shortcuts but do not by themselves make storage external.
 
 ## Externally managed PostgreSQL schemas
 

@@ -25,6 +25,8 @@ constexpr std::string_view kTaskConfigNotFoundMessage = "push notification task 
 constexpr std::string_view kConfigNotFoundMessage = "push notification config not found";
 constexpr std::string_view kPageSizeInvalidMessage =
     "ListTaskPushNotificationConfigsRequest.page_size must be non-negative";
+constexpr std::string_view kPostgresTaskAuthorityUncertainMessage =
+    "PostgreSQL task authority cannot be proven local or external from the configured storage identity";
 constexpr std::size_t kPushListSqlReserveSlack = 512U;
 constexpr std::size_t kPushUpsertSqlReserveSlack = 384U;
 

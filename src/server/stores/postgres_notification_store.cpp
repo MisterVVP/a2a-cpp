@@ -439,12 +439,19 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     return validation.error();
   }
   const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
-  if (postgres_task_store != nullptr && postgres_task_store->UsesStorage(storage_identity_)) {
+  const PostgresStorageAuthority authority =
+      postgres_task_store == nullptr
+          ? PostgresStorageAuthority::kExternal
+          : ClassifyPostgresStorageAuthority(postgres_task_store->storage_identity(), storage_identity_);
+  if (authority == PostgresStorageAuthority::kLocal) {
     return Upsert(config, UpsertPath::kLocalAtomic);
   }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {
     return task.error();
+  }
+  if (authority == PostgresStorageAuthority::kUncertain) {
+    return core::Error::Internal(std::string(kPostgresTaskAuthorityUncertainMessage));
   }
   return Upsert(config, UpsertPath::kExternal);
 }

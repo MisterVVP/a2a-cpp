@@ -199,11 +199,11 @@ PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> poo
 PostgresTaskStore::~PostgresTaskStore() = default;
 
 bool PostgresTaskStore::UsesStorage(const PostgresStorageIdentity& identity) const noexcept {
-  return storage_identity_ == identity;
+  return ClassifyPostgresStorageAuthority(storage_identity_, identity) == PostgresStorageAuthority::kLocal;
 }
 
 bool PostgresTaskStore::UsesExecutionIdentity(const PostgresExecutionIdentity& identity) const noexcept {
-  return execution_identity_ == identity;
+  return HasSamePostgresExecutionIdentity(execution_identity_, identity);
 }
 
 const PostgresStorageIdentity& PostgresTaskStore::storage_identity() const noexcept { return storage_identity_; }

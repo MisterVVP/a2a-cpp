@@ -343,6 +343,25 @@ std::string TaskPushConfigLockFunction(std::string_view schema) {
   return QualifiedSqlIdentifier(schema, kTaskPushConfigLockFunction);
 }
 
+PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
+                                                          const PostgresStorageIdentity& rhs) noexcept {
+  if (lhs.database != rhs.database || lhs.schema != rhs.schema) {
+    return PostgresStorageAuthority::kExternal;
+  }
+  if (lhs == rhs) {
+    return PostgresStorageAuthority::kLocal;
+  }
+  // Endpoint differences can be aliases or failover candidates, so they do not
+  // prove external ownership.
+  return PostgresStorageAuthority::kUncertain;
+}
+
+bool HasSamePostgresExecutionIdentity(const PostgresExecutionIdentity& lhs,
+                                      const PostgresExecutionIdentity& rhs) noexcept {
+  return ClassifyPostgresStorageAuthority(lhs.storage, rhs.storage) == PostgresStorageAuthority::kLocal &&
+         lhs.effective_role == rhs.effective_role;
+}
+
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
   if (options.connection_pool_size == 0U) {
     return core::Error::Validation(std::string(kPostgresConnectionPoolSizeValidationMessage));

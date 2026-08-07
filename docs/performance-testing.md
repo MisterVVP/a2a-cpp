@@ -254,22 +254,33 @@ Focused scenario fixture preparation must occur before the measured window; setu
 
 ## PostgreSQL push-configuration query paths
 
-PostgreSQL stores distinguish **storage coordinates** (server host and port,
-database, and schema) from **execution identity** (those coordinates plus the
-effective PostgreSQL role). The pool reads `current_user` once from an
-established connection and caches it; passwords and raw connection strings are
-never part of either identity. Consequently, equivalent URI and keyword DSNs
-select the same atomic path only when their effective roles also match. A
-persistent out-of-band `SET ROLE` on a pooled connection is unsupported unless
-the cached identity is explicitly refreshed.
+PostgreSQL stores distinguish **storage coordinates** (logical `host`,
+`hostaddr`, port, database, `target_session_attrs`, and schema) from
+**execution identity** (those coordinates plus the effective PostgreSQL role).
+The pool reads effective libpq options and `current_user` from an established
+connection and caches them; passwords and raw connection strings are never part
+of either identity. Equivalent URI and keyword DSNs therefore select the same
+local path even when independently constructed stores own different pools.
+Different effective roles remain the same storage authority but do not qualify
+for same-execution read shortcuts. A persistent out-of-band `SET ROLE` on a
+pooled connection is unsupported unless the cached identity is explicitly
+refreshed.
+
+Storage authority is deliberately tri-state. Exact logical storage coordinates
+confirm local authority, while a different database or schema confirms external
+authority. Other PostgreSQL identity mismatches are uncertain because host
+aliases, `hostaddr`, ports, `target_session_attrs`, DNS, and multi-host failover
+can make textual differences insufficient evidence of external ownership.
+Task-aware creates reject uncertain authority before the push upsert.
 
 The push-config table records conservative provenance in
 `local_postgres_task`. New and migrated rows default to external/unknown; the
 migration never infers ownership from a coincidentally matching local task ID.
-The local task-aware create path marks rows local, while an external task-store
-create marks them external. Conflict updates replace provenance with the latest
-authoritative path. The task-delete trigger removes only locally owned rows, so
-deleting a stale local task cannot remove an external authority's config.
+The local task-aware create path marks rows local, while a confirmed external
+task-store create marks them external. Conflict updates replace provenance with
+the latest authoritative path. The task-delete trigger removes only locally
+owned rows, so deleting a stale local task cannot remove an external authority's
+config.
 Same-storage stores with different roles use one push-store transaction for
 both the task lock and locally marked upsert. The push role invokes the
 `SECURITY DEFINER` lock helper, which requires `SELECT` on the task table but

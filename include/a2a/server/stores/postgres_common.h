@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -107,6 +108,12 @@ struct PostgresExecutionIdentity final {
   friend bool operator==(const PostgresExecutionIdentity&, const PostgresExecutionIdentity&) = default;
 };
 
+enum class PostgresStorageAuthority : std::uint8_t {
+  kLocal,
+  kExternal,
+  kUncertain,
+};
+
 #ifdef A2A_POSTGRES_STORE_TESTING
 void OverrideNextPostgresConnectionIdentityForTesting(PostgresExecutionIdentity identity);
 void ClearPostgresConnectionIdentityOverrideForTesting();
@@ -177,6 +184,10 @@ class Transaction final {
 [[nodiscard]] std::string TaskTable(std::string_view schema);
 [[nodiscard]] std::string PushTable(std::string_view schema);
 [[nodiscard]] std::string TaskPushConfigLockFunction(std::string_view schema);
+[[nodiscard]] PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
+                                                                        const PostgresStorageIdentity& rhs) noexcept;
+[[nodiscard]] bool HasSamePostgresExecutionIdentity(const PostgresExecutionIdentity& lhs,
+                                                    const PostgresExecutionIdentity& rhs) noexcept;
 [[nodiscard]] core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options);
 void ValidatePostgresStoreOptionsOrThrow(const PostgresStoreOptions& options);
 [[nodiscard]] core::Result<void> CheckCommand(PGconn* connection, PGresult* result, std::string_view operation);
