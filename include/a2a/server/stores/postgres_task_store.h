@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -19,7 +18,6 @@ constexpr std::string_view kTaskNotFoundMessage = "Task not found";
 constexpr std::string_view kTaskIdFieldRequiredMessage = "Task.id is required";
 
 class PostgresConnectionPool;
-class PostgresPushNotificationStore;
 
 class PostgresTaskStore final : public a2a::server::TaskStore {
  public:
@@ -48,11 +46,6 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
 #endif
 
  private:
-  friend class PostgresPushNotificationStore;
-
-  [[nodiscard]] core::Result<void> ExecuteWhileTaskLocked(std::string_view id,
-                                                          const std::function<core::Result<void>()>& operation) const;
-
   std::shared_ptr<PostgresConnectionPool> pool_;
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;

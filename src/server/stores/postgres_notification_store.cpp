@@ -148,8 +148,7 @@ constexpr char kValidatePostgresPushSchemaSql[] =
   return sql;
 }
 
-[[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task,
-                                             bool local_postgres_task) {
+[[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task) {
   const std::string push_table = PushTable(schema);
   const std::string task_lock_function = validate_postgres_task ? TaskPushConfigLockFunction(schema) : std::string{};
   std::string sql;
@@ -165,8 +164,7 @@ constexpr char kValidatePostgresPushSchemaSql[] =
   if (validate_postgres_task) {
     sql.append("SELECT $1, $2, $3, $4, TRUE, now() FROM task WHERE task.task_exists ");
   } else {
-    sql.append(local_postgres_task ? "VALUES ($1, $2, $3, $4, TRUE, now()) "
-                                   : "VALUES ($1, $2, $3, $4, FALSE, now()) ");
+    sql.append("VALUES ($1, $2, $3, $4, FALSE, now()) ");
   }
   sql.append(
       "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
@@ -324,9 +322,8 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema)),
       execution_identity_(pool_->ExecutionIdentity(options_.schema)),
-      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true)),
-      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false)),
-      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
       task_aware_get_sql_(BuildPushGetSql(options_.schema, true)),
       existing_task_get_sql_(BuildPushGetSql(options_.schema, false)),
       task_config_exists_sql_(BuildPushTaskConfigExistsSql(options_.schema)),
@@ -346,9 +343,8 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema)),
       execution_identity_(pool_->ExecutionIdentity(options_.schema)),
-      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, true)),
-      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, false)),
-      split_role_upsert_sql_(BuildPushUpsertSql(options_.schema, false, true)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
       task_aware_get_sql_(BuildPushGetSql(options_.schema, true)),
       existing_task_get_sql_(BuildPushGetSql(options_.schema, false)),
       task_config_exists_sql_(BuildPushTaskConfigExistsSql(options_.schema)),
@@ -373,10 +369,6 @@ const PostgresConnectionPool* PostgresPushNotificationStore::connection_pool_for
 core::Result<PostgresConnectionPool::Lease> PostgresPushNotificationStore::AcquireConnectionForTesting() {
   return pool_->Acquire();
 }
-
-void PostgresPushNotificationStore::SetSplitRoleAfterUpsertHookForTesting(std::function<void()> hook) {
-  split_role_after_upsert_hook_for_testing_ = std::move(hook);
-}
 #endif
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdate(
@@ -400,12 +392,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::UpsertOnConnection(
     PGconn* connection, const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path) {
   const std::string payload = config.SerializeAsString();
-  const std::string* sql = &external_upsert_sql_;
-  if (path == UpsertPath::kLocalAtomic) {
-    sql = &local_upsert_sql_;
-  } else if (path == UpsertPath::kSplitRoleLocal) {
-    sql = &split_role_upsert_sql_;
-  }
+  const std::string& sql = path == UpsertPath::kLocalAtomic ? local_upsert_sql_ : external_upsert_sql_;
   constexpr int kPushUpsertParameterCount = 4;
   const std::array<const char*, kPushUpsertParameterCount> values = {config.task_id().c_str(), config.id().c_str(),
                                                                      config.url().c_str(), payload.data()};
@@ -416,7 +403,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   {
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
 #endif
-    result.reset(PQexecParams(connection, sql->c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
+    result.reset(PQexecParams(connection, sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
@@ -434,36 +421,15 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
   const auto validation = ValidatePushConfig(config);
   if (!validation.ok()) {
+    const auto task = task_store.Get(config.task_id());
+    if (!task.ok()) {
+      return task.error();
+    }
     return validation.error();
   }
   const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
   if (postgres_task_store != nullptr && postgres_task_store->UsesStorage(storage_identity_)) {
-    if (postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
-      return Upsert(config, UpsertPath::kLocalAtomic);
-    }
-    auto lease = pool_->Acquire();
-    if (!lease.ok()) {
-      return lease.error();
-    }
-    Transaction transaction(lease.value().get());
-    const auto begun = transaction.Begin();
-    if (!begun.ok()) {
-      return begun.error();
-    }
-    const auto created = UpsertOnConnection(lease.value().get(), config, UpsertPath::kLocalAtomic);
-    if (!created.ok()) {
-      return created.error();
-    }
-#ifdef A2A_POSTGRES_STORE_TESTING
-    if (split_role_after_upsert_hook_for_testing_) {
-      split_role_after_upsert_hook_for_testing_();
-    }
-#endif
-    const auto committed = transaction.Commit();
-    if (!committed.ok()) {
-      return committed.error();
-    }
-    return config;
+    return Upsert(config, UpsertPath::kLocalAtomic);
   }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {

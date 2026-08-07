@@ -63,7 +63,7 @@ void ResetPostgresOperationDiagnosticsForTesting() noexcept;
 constexpr std::string_view kPostgresConnectionPoolSizeValidationMessage =
     "PostgreSQL connection_pool_size must be greater than zero";
 constexpr std::string_view kPostgresConnectionPoolIdentityMismatchMessage =
-    "PostgreSQL connection pool resolved to inconsistent endpoint or role";
+    "PostgreSQL connection pool resolved to inconsistent logical target or role";
 constexpr std::size_t kPostgresIdentifierMaxBytes = 63;
 constexpr std::string_view kPublicSchema = "public";
 constexpr std::string_view kTaskTableName = "a2a_tasks";
@@ -91,8 +91,10 @@ constexpr std::size_t kRevokeDeleteTaskPushConfigsFunctionSqlReserveSlack = 48U;
 
 struct PostgresStorageCoordinates final {
   std::string host;
+  std::string host_address;
   std::string port;
   std::string database;
+  std::string target_session_attributes;
   std::string schema;
 
   friend bool operator==(const PostgresStorageCoordinates&, const PostgresStorageCoordinates&) = default;

@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -37,6 +38,12 @@ constexpr std::string_view kInitializePostgresSchemaOperation = "initialize post
 constexpr std::string_view kReadPostgresEffectiveRoleOperation = "read postgres effective role";
 constexpr std::string_view kReadPostgresEffectiveRoleMissingRowMessage =
     "read postgres effective role: query returned no row";
+constexpr std::string_view kReadPostgresConnectionOptionsMissingMessage =
+    "read postgres connection identity: unable to read libpq connection options";
+constexpr std::string_view kConninfoHostKeyword = "host";
+constexpr std::string_view kConninfoHostAddressKeyword = "hostaddr";
+constexpr std::string_view kConninfoPortKeyword = "port";
+constexpr std::string_view kConninfoTargetSessionAttributesKeyword = "target_session_attrs";
 
 #ifdef A2A_POSTGRES_STORE_TESTING
 std::mutex g_test_acquire_failure_mutex;
@@ -174,19 +181,33 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return value == nullptr ? std::string{} : std::string(value);
 }
 
-[[nodiscard]] std::string ConnectedPostgresEndpoint(PGconn* connection) {
-  const char* host_address = PQhostaddr(connection);
-  if (host_address != nullptr && host_address[0] != '\0') {
-    return {host_address};
+struct ConninfoDeleter final {
+  void operator()(PQconninfoOption* options) const noexcept { PQconninfoFree(options); }
+};
+
+using Conninfo = std::unique_ptr<PQconninfoOption, ConninfoDeleter>;
+
+[[nodiscard]] std::string ConninfoValue(PQconninfoOption* options, std::string_view keyword) {
+  for (PQconninfoOption* option = options; option->keyword != nullptr; ++option) {
+    if (keyword == option->keyword && option->val != nullptr) {
+      return option->val;
+    }
   }
-  return LibpqValue(PQhost(connection));
+  return {};
 }
 
 [[nodiscard]] core::Result<PostgresExecutionIdentity> ReadPostgresExecutionIdentity(PGconn* connection) {
+  Conninfo options(PQconninfo(connection));
+  if (options == nullptr) {
+    return core::Error::Internal(std::string(kReadPostgresConnectionOptionsMissingMessage));
+  }
+
   PostgresExecutionIdentity identity;
-  identity.storage.host = ConnectedPostgresEndpoint(connection);
-  identity.storage.port = LibpqValue(PQport(connection));
+  identity.storage.host = ConninfoValue(options.get(), kConninfoHostKeyword);
+  identity.storage.host_address = ConninfoValue(options.get(), kConninfoHostAddressKeyword);
+  identity.storage.port = ConninfoValue(options.get(), kConninfoPortKeyword);
   identity.storage.database = LibpqValue(PQdb(connection));
+  identity.storage.target_session_attributes = ConninfoValue(options.get(), kConninfoTargetSessionAttributesKeyword);
   PgResult role_result(PQexec(connection, kCurrentUserSql));
   const auto role_checked = CheckTuples(connection, role_result.get(), kReadPostgresEffectiveRoleOperation);
   if (!role_checked.ok()) {

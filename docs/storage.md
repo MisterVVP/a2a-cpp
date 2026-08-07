@@ -97,6 +97,10 @@ concurrent database operations while staying within PostgreSQL's connection
 limit (including connections used by other application instances and tools).
 Task and push-notification stores returned by `CreateStoreBundle()` share this
 single configured pool; separately created stores each own a separate pool.
+Storage matching uses libpq's logical connection target rather than the active
+resolved server IP. DNS and multi-host failover therefore do not invalidate a
+pool's identity, while explicit `hostaddr` and `target_session_attrs`
+differences remain distinct.
 
 ## Externally managed PostgreSQL schemas
 

@@ -4,7 +4,6 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -55,12 +54,11 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 #ifdef A2A_POSTGRES_STORE_TESTING
   [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
   [[nodiscard]] core::Result<PostgresConnectionPool::Lease> AcquireConnectionForTesting();
-  void SetSplitRoleAfterUpsertHookForTesting(std::function<void()> hook);
 #endif
 
  private:
   enum class GetPath { kDirect, kTaskAware, kExistingTask };
-  enum class UpsertPath { kLocalAtomic, kExternal, kSplitRoleLocal };
+  enum class UpsertPath { kLocalAtomic, kExternal };
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Upsert(
       const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path);
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> UpsertOnConnection(
@@ -77,16 +75,12 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   PostgresExecutionIdentity execution_identity_;
   std::string local_upsert_sql_;
   std::string external_upsert_sql_;
-  std::string split_role_upsert_sql_;
   std::string task_aware_get_sql_;
   std::string existing_task_get_sql_;
   std::string task_config_exists_sql_;
   std::string task_aware_list_sql_;
   std::string existing_task_list_sql_;
   std::string delete_sql_;
-#ifdef A2A_POSTGRES_STORE_TESTING
-  std::function<void()> split_role_after_upsert_hook_for_testing_;
-#endif
 };
 
 }  // namespace a2a::server::stores

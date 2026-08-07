@@ -117,6 +117,17 @@ lf::a2a::v1::SendMessageRequest BuildInlineRequest() {
   return request;
 }
 
+void ExpectPushConfigValidationError(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(result.error().protocol_code().has_value());
+}
+
+void ExpectPushConfigTaskNotFound(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+}
+
 }  // namespace
 
 TEST(PushNotificationServiceTest, CreateConfigRequiresExistingTask) {
@@ -131,7 +142,7 @@ TEST(PushNotificationServiceTest, CreateConfigRequiresExistingTask) {
   EXPECT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
 }
 
-TEST(PushNotificationServiceTest, CreateConfigValidatesBeforeTaskLookup) {
+TEST(PushNotificationServiceTest, CreateConfigPreservesTaskFirstErrorSemantics) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;
   RecordingDeliveryClient delivery;
@@ -139,11 +150,12 @@ TEST(PushNotificationServiceTest, CreateConfigValidatesBeforeTaskLookup) {
   auto config = BuildConfig(kConfigId);
   config.clear_id();
 
-  const auto created = service.CreateConfig(config);
+  const auto missing_task = service.CreateConfig(config);
+  ExpectPushConfigTaskNotFound(missing_task);
 
-  ASSERT_FALSE(created.ok());
-  EXPECT_EQ(created.error().code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_FALSE(created.error().protocol_code().has_value());
+  ASSERT_TRUE(task_store.CreateOrUpdate(BuildTask()).ok());
+  const auto invalid_config = service.CreateConfig(config);
+  ExpectPushConfigValidationError(invalid_config);
 }
 
 TEST(PushNotificationServiceTest, CreateConfigRequiresConfiguredStores) {

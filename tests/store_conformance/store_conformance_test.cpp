@@ -119,6 +119,7 @@ constexpr int kBoundedPushListPageSize = 1;
 constexpr int kPushListConfigCount = 2;
 constexpr std::string_view kAtomicCreateTaskId = "atomic-create-task";
 constexpr std::string_view kAtomicCreateConfigId = "atomic-create-config";
+constexpr std::string_view kMissingAtomicCreateTaskId = "missing-atomic-create-task";
 constexpr std::string_view kMixedCreateTaskId = "mixed-create-task";
 constexpr std::string_view kMixedCreateConfigId = "mixed-create-config";
 constexpr std::string_view kHoldConcurrentDeleteOperation = "hold concurrent task deletion";
@@ -131,9 +132,11 @@ constexpr std::string_view kDefaultPostgresPort = "5432";
 constexpr std::string_view kConninfoPassword = "password";
 constexpr std::string_view kConninfoDatabase = "dbname";
 constexpr std::string_view kConninfoHost = "host";
+constexpr std::string_view kConninfoHostAddress = "hostaddr";
 constexpr std::string_view kConninfoUser = "user";
 constexpr std::string_view kConninfoPort = "port";
 constexpr std::string_view kConninfoApplicationName = "application_name";
+constexpr std::string_view kConninfoTargetSessionAttributes = "target_session_attrs";
 constexpr std::string_view kIdentityApplicationName = "a2a-identity-test";
 constexpr std::string_view kUriScheme = "postgresql://";
 constexpr std::string_view kHexDigits = "0123456789ABCDEF";
@@ -153,6 +156,10 @@ constexpr std::string_view kSecretDsnPassword = "storage-identity-secret";
 constexpr std::string_view kUnexpectedSecretDsnConnection = "invalid PostgreSQL endpoint unexpectedly connected";
 constexpr std::string_view kIdentitySchema = "identity_schema";
 constexpr std::string_view kDefaultPortIdentitySchema = "default_port_identity_schema";
+constexpr char kIdentityHostAddress[] = "192.0.2.10";
+constexpr char kOtherIdentityHostAddress[] = "192.0.2.11";
+constexpr char kIdentityTargetSessionAttributes[] = "read-write";
+constexpr char kOtherIdentityTargetSessionAttributes[] = "any";
 constexpr std::string_view kNonDefaultPortSkipMessage = "PostgreSQL test DSN does not use the default port";
 constexpr char kPgPortEnvironmentVariable[] = "PGPORT";
 constexpr std::string_view kNonDefaultPgPortSkipMessage = "PGPORT overrides the libpq default port";
@@ -238,11 +245,14 @@ void AppendKeywordValue(std::string& dsn, std::string_view keyword, std::string_
   AppendKeywordValue(equivalent, kConninfoPassword, ConninfoValue(options.get(), kConninfoPassword));
   AppendKeywordValue(equivalent, kConninfoDatabase, ConninfoValue(options.get(), kConninfoDatabase));
   AppendKeywordValue(equivalent, kConninfoHost, ConninfoValue(options.get(), kConninfoHost));
+  AppendKeywordValue(equivalent, kConninfoHostAddress, ConninfoValue(options.get(), kConninfoHostAddress));
   AppendKeywordValue(equivalent, kConninfoUser, ConninfoValue(options.get(), kConninfoUser));
   if (include_port) {
     AppendKeywordValue(equivalent, kConninfoPort, ConninfoValue(options.get(), kConninfoPort));
   }
   AppendKeywordValue(equivalent, kConninfoApplicationName, kIdentityApplicationName);
+  AppendKeywordValue(equivalent, kConninfoTargetSessionAttributes,
+                     ConninfoValue(options.get(), kConninfoTargetSessionAttributes));
   return equivalent;
 }
 
@@ -332,9 +342,12 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   AppendKeywordValue(role_dsn, kConninfoPassword, kSplitRolePassword);
   AppendKeywordValue(role_dsn, kConninfoDatabase, ConninfoValue(options.get(), kConninfoDatabase));
   AppendKeywordValue(role_dsn, kConninfoHost, ConninfoValue(options.get(), kConninfoHost));
+  AppendKeywordValue(role_dsn, kConninfoHostAddress, ConninfoValue(options.get(), kConninfoHostAddress));
   AppendKeywordValue(role_dsn, kConninfoUser, role);
   AppendKeywordValue(role_dsn, kConninfoPort, ConninfoValue(options.get(), kConninfoPort));
   AppendKeywordValue(role_dsn, kConninfoApplicationName, kIdentityApplicationName);
+  AppendKeywordValue(role_dsn, kConninfoTargetSessionAttributes,
+                     ConninfoValue(options.get(), kConninfoTargetSessionAttributes));
   return role_dsn;
 }
 
@@ -520,6 +533,11 @@ void ExpectPushConfigValidationError(const a2a::core::Result<lf::a2a::v1::TaskPu
   EXPECT_FALSE(result.error().protocol_code().has_value());
 }
 
+void ExpectPushConfigTaskNotFound(const a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+}
+
 [[nodiscard]] bool PushStoreConstructionThrowsRuntimeError(const a2a::server::stores::PostgresStoreOptions& options) {
   try {
     (void)a2a::server::stores::PostgresPushNotificationStore(options);
@@ -596,44 +614,10 @@ struct SplitRoleCreateOutcome final {
   a2a::server::stores::PostgresOperationDiagnostics diagnostics;
 };
 
-struct SplitRoleTaskLockOutcome final {
-  std::future_status deletion_wait_status;
-  SplitRoleCreateOutcome create;
-  a2a::core::Result<void> deletion;
-};
-
 struct SplitRoleDeletionFirstOutcome final {
   std::future_status create_wait_status;
   SplitRoleCreateOutcome create;
 };
-
-[[nodiscard]] SplitRoleTaskLockOutcome RunSplitRoleTaskLockScenario(
-    a2a::server::stores::PostgresPushNotificationStore& role_push_store,
-    a2a::server::stores::PostgresTaskStore& task_store,
-    a2a::server::stores::PostgresPushNotificationStore& owner_push_store,
-    const a2a::server::stores::PostgresStoreOptions& owner_options) {
-  std::barrier upsert_completed(2);
-  std::barrier allow_lock_release(2);
-  role_push_store.SetSplitRoleAfterUpsertHookForTesting([&] {
-    upsert_completed.arrive_and_wait();
-    allow_lock_release.arrive_and_wait();
-  });
-  auto create = std::async(std::launch::async, [&] {
-    a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
-    auto result = role_push_store.CreateOrUpdateForTask(
-        a2a::tests::store_conformance::MakeConfig(std::string(kSplitRoleTaskId), std::string(kSplitRoleRaceConfigId)),
-        task_store);
-    return SplitRoleCreateOutcome{.result = std::move(result),
-                                  .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting()};
-  });
-  upsert_completed.arrive_and_wait();
-  auto deletion = std::async(std::launch::async,
-                             [&] { return DeletePostgresTask(owner_push_store, owner_options, kSplitRoleTaskId); });
-  const std::future_status deletion_wait_status = deletion.wait_for(kConcurrentCreateBlockedTimeout);
-  allow_lock_release.arrive_and_wait();
-  return SplitRoleTaskLockOutcome{
-      .deletion_wait_status = deletion_wait_status, .create = create.get(), .deletion = deletion.get()};
-}
 
 [[nodiscard]] a2a::core::Result<SplitRoleDeletionFirstOutcome> RunSplitRoleDeletionFirstScenario(
     a2a::server::stores::PostgresPushNotificationStore& role_push_store,
@@ -687,19 +671,10 @@ void ExpectSplitRoleCreateDiagnostics(const a2a::server::stores::PostgresOperati
       1U);
   EXPECT_EQ(
       diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionBegin)],
-      1U);
+      0U);
   EXPECT_EQ(diagnostics
                 .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionCommit)],
-            1U);
-}
-
-void ExpectSplitRoleTaskLockOutcome(const SplitRoleTaskLockOutcome& outcome,
-                                    a2a::server::stores::PostgresPushNotificationStore& owner_push_store) {
-  EXPECT_EQ(outcome.deletion_wait_status, std::future_status::timeout);
-  ASSERT_TRUE(outcome.create.result.ok());
-  ExpectSplitRoleCreateDiagnostics(outcome.create.diagnostics);
-  ASSERT_TRUE(outcome.deletion.ok());
-  ExpectPushConfigMissing(owner_push_store, kSplitRoleTaskId, kSplitRoleRaceConfigId);
+            0U);
 }
 
 void ExpectSplitRoleDeletionFirstCreateOutcome(const SplitRoleCreateOutcome& outcome) {
@@ -710,7 +685,7 @@ void ExpectSplitRoleDeletionFirstCreateOutcome(const SplitRoleCreateOutcome& out
             1U);
   EXPECT_EQ(outcome.diagnostics
                 .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionBegin)],
-            1U);
+            0U);
   EXPECT_EQ(outcome.diagnostics
                 .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionCommit)],
             0U);
@@ -1239,7 +1214,7 @@ TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesEffectiveConnectionA
                                     uri.StorageIdentity(std::string(kIdentitySchema)));
 }
 
-TEST(StoreConformanceTest, PostgresStorageIdentityUsesConnectedEndpoint) {
+TEST(StoreConformanceTest, PostgresStorageIdentityUsesLogicalConnectionTarget) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
@@ -1247,13 +1222,15 @@ TEST(StoreConformanceTest, PostgresStorageIdentityUsesConnectedEndpoint) {
   a2a::server::stores::PostgresConnectionPool pool(dsn_value, 1U);
   auto connection = pool.Acquire();
   ASSERT_TRUE(connection.ok());
-  const char* connected_endpoint = PQhostaddr(connection.value().get());
-  if (connected_endpoint == nullptr || connected_endpoint[0] == '\0') {
-    connected_endpoint = PQhost(connection.value().get());
-  }
-  ASSERT_NE(connected_endpoint, nullptr);
+  Conninfo options(PQconninfo(connection.value().get()));
+  ASSERT_NE(options, nullptr);
+  const auto identity = pool.StorageIdentity(std::string(kIdentitySchema));
 
-  EXPECT_EQ(pool.StorageIdentity(std::string(kIdentitySchema)).host, connected_endpoint);
+  EXPECT_EQ(identity.host, ConninfoValue(options.get(), kConninfoHost));
+  EXPECT_EQ(identity.host_address, ConninfoValue(options.get(), kConninfoHostAddress));
+  EXPECT_EQ(identity.port, ConninfoValue(options.get(), kConninfoPort));
+  EXPECT_EQ(identity.database, ConninfoValue(options.get(), kConninfoDatabase));
+  EXPECT_EQ(identity.target_session_attributes, ConninfoValue(options.get(), kConninfoTargetSessionAttributes));
 }
 
 TEST(StoreConformanceTest, PostgresConnectionPoolRejectsMixedConnectionIdentities) {
@@ -1297,8 +1274,12 @@ TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesOmittedDefaultPort) 
 }
 
 TEST(StoreConformanceTest, PostgresStorageIdentityDistinguishesStorageCoordinates) {
-  a2a::server::stores::PostgresStorageIdentity identity{
-      .host = "database.example", .port = "5432", .database = "a2a", .schema = "public"};
+  a2a::server::stores::PostgresStorageIdentity identity{.host = "database.example",
+                                                        .host_address = kIdentityHostAddress,
+                                                        .port = "5432",
+                                                        .database = "a2a",
+                                                        .target_session_attributes = kIdentityTargetSessionAttributes,
+                                                        .schema = "public"};
   auto different = identity;
   different.database = "other";
   EXPECT_NE(identity, different);
@@ -1306,7 +1287,13 @@ TEST(StoreConformanceTest, PostgresStorageIdentityDistinguishesStorageCoordinate
   different.host = "replica.example";
   EXPECT_NE(identity, different);
   different = identity;
+  different.host_address = kOtherIdentityHostAddress;
+  EXPECT_NE(identity, different);
+  different = identity;
   different.port = "5433";
+  EXPECT_NE(identity, different);
+  different = identity;
+  different.target_session_attributes = kOtherIdentityTargetSessionAttributes;
   EXPECT_NE(identity, different);
   different = identity;
   different.schema = "tenant";
@@ -1651,9 +1638,13 @@ TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
   AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
                   kOldTargetTaskTimestampSeconds);
 
-  const auto invalid = push_store.CreateOrUpdateForTask(
-      a2a::tests::store_conformance::MakeConfig("missing-atomic-create-task", ""), task_store);
-  ExpectPushConfigValidationError(invalid);
+  const auto invalid_missing_task = push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kMissingAtomicCreateTaskId), ""), task_store);
+  ExpectPushConfigTaskNotFound(invalid_missing_task);
+
+  const auto invalid_existing_task = push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), ""), task_store);
+  ExpectPushConfigValidationError(invalid_existing_task);
 
   a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
   const auto created = push_store.CreateOrUpdateForTask(
@@ -1662,11 +1653,11 @@ TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
   ASSERT_TRUE(created.ok());
   ExpectSinglePushConfigUpsertWithoutTaskGet();
 
-  const auto missing = push_store.CreateOrUpdateForTask(
-      a2a::tests::store_conformance::MakeConfig("missing-atomic-create-task", std::string(kAtomicCreateConfigId)),
-      task_store);
-  ASSERT_FALSE(missing.ok());
-  EXPECT_EQ(missing.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
+  const auto missing =
+      push_store.CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(
+                                           std::string(kMissingAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+                                       task_store);
+  ExpectPushConfigTaskNotFound(missing);
 }
 
 TEST(StoreConformanceTest, PostgresPushConfigDirectCreatePreservesExternalOwnership) {
@@ -1864,34 +1855,6 @@ TEST(StoreConformanceTest, TaskAwarePushCreateDoesNotRequireTaskUpdatePrivilege)
     ExpectSinglePushConfigUpsertWithoutTaskGet();
     ExpectPushConfigPresent(owner_push_store, kSplitRoleTaskId, kSplitRoleConfigId);
   }
-}
-
-TEST(StoreConformanceTest, SplitRoleCreateHoldsTaskLockThroughUpsert) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
-  }
-  const std::string schema = MakePostgresTestSchema("push_split_role_race");
-  const a2a::server::stores::PostgresStoreOptions owner_options{
-      .connection_string = dsn_value, .schema = schema, .connection_pool_size = 2U};
-  a2a::server::stores::PostgresTaskStore task_store(owner_options);
-  a2a::server::stores::PostgresPushNotificationStore owner_push_store(owner_options);
-  AddPostgresTask(task_store, kSplitRoleTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-
-  auto admin_connection = owner_push_store.AcquireConnectionForTesting();
-  ASSERT_TRUE(admin_connection.ok());
-  ScopedPostgresRole role(admin_connection.value().get(), MakePostgresTestRole(kSplitRolePrefix),
-                          task_store.execution_identity().storage.database, schema);
-  ASSERT_TRUE(role.Create().ok());
-  const std::string role_dsn = BuildRoleDsn(dsn_value, role.role());
-  ASSERT_FALSE(role_dsn.empty());
-
-  const a2a::server::stores::PostgresStoreOptions role_options{
-      .connection_string = role_dsn, .schema = schema, .auto_create_schema = false, .connection_pool_size = 1U};
-  a2a::server::stores::PostgresPushNotificationStore role_push_store(role_options);
-  const auto outcome = RunSplitRoleTaskLockScenario(role_push_store, task_store, owner_push_store, owner_options);
-  ExpectSplitRoleTaskLockOutcome(outcome, owner_push_store);
 }
 
 TEST(StoreConformanceTest, SplitRoleCreatePreservesExternalConfigWhenDeletionAlreadyInProgress) {

@@ -34,7 +34,10 @@ auto stores = factory.CreateStoreBundle();
 ```
 
 Task and push-notification stores returned by `CreateStoreBundle()` share one
-connection pool. Separately constructed stores own separate pools.
+connection pool. Separately constructed stores own separate pools. Storage
+matching uses libpq's logical connection target rather than the active resolved
+server IP, so DNS and multi-host failover do not invalidate pool identity.
+Explicit `hostaddr` and `target_session_attrs` differences remain distinct.
 
 ## Externally managed PostgreSQL schemas
 
