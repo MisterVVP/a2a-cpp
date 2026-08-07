@@ -270,13 +270,15 @@ The local task-aware create path marks rows local, while an external task-store
 create marks them external. Conflict updates replace provenance with the latest
 authoritative path. The task-delete trigger removes only locally owned rows, so
 deleting a stale local task cannot remove an external authority's config.
-Same-storage stores with different roles use the authoritative task-store
-transaction to invoke the lock helper and hold a `FOR KEY SHARE` task-row lock
-while the push-store role performs the locally marked upsert. If deletion wins
-before the lock is acquired, the helper reports the task as missing and the
-upsert is not attempted. If creation acquires the lock first, task deletion
-waits until the upsert completes and the task-store transaction commits. This
-path does not use revalidation or compensating cleanup.
+Same-storage stores with different roles use one push-store transaction for
+both the task lock and locally marked upsert. The push role invokes the
+`SECURITY DEFINER` lock helper, which requires `SELECT` on the task table but
+does not require task `UPDATE`; the upsert then runs on the same connection
+while the `FOR KEY SHARE` lock remains held. Keeping both database locks in one
+transaction lets PostgreSQL detect lock cycles instead of creating an
+application-level cross-connection wait. If deletion wins before the lock is
+acquired, the helper reports the task as missing and the upsert writes nothing.
+This path does not use revalidation or compensating cleanup.
 
 Stable, schema-qualified SQL is built once when each push store is constructed.
 Create, get, list, and delete operations do not quote schemas or rebuild SQL on

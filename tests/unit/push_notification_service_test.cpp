@@ -131,6 +131,21 @@ TEST(PushNotificationServiceTest, CreateConfigRequiresExistingTask) {
   EXPECT_TRUE(service.CreateConfig(BuildConfig(kConfigId)).ok());
 }
 
+TEST(PushNotificationServiceTest, CreateConfigValidatesBeforeTaskLookup) {
+  a2a::server::InMemoryTaskStore task_store;
+  a2a::server::InMemoryPushNotificationStore push_store;
+  RecordingDeliveryClient delivery;
+  a2a::server::PushNotificationService service(&task_store, &push_store, &delivery);
+  auto config = BuildConfig(kConfigId);
+  config.clear_id();
+
+  const auto created = service.CreateConfig(config);
+
+  ASSERT_FALSE(created.ok());
+  EXPECT_EQ(created.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(created.error().protocol_code().has_value());
+}
+
 TEST(PushNotificationServiceTest, CreateConfigRequiresConfiguredStores) {
   a2a::server::InMemoryTaskStore task_store;
   a2a::server::InMemoryPushNotificationStore push_store;

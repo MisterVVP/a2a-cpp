@@ -47,7 +47,9 @@ any required object is absent or incorrectly configured.
 Apply the following migration before upgrading. The example uses the `public`
 schema and an SDK role named `a2a_sdk`; replace both names for your deployment.
 Grant the lock helper only to roles authorized to create push configurations.
-Repeat the `GRANT` when task and push stores use different authorized roles.
+The push-store role must also have `SELECT` on the task table; task `UPDATE`
+is not required. PostgreSQL row-level security on the task table is unsupported
+for task-aware push creation and is rejected during store construction.
 
 ```sql
 BEGIN;
@@ -84,6 +86,7 @@ END
 $a2a$;
 
 REVOKE ALL ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) FROM PUBLIC;
+GRANT SELECT ON public.a2a_tasks TO a2a_sdk;
 GRANT EXECUTE ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) TO a2a_sdk;
 
 CREATE OR REPLACE FUNCTION public.a2a_delete_task_push_configs()

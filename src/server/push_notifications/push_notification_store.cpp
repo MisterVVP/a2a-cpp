@@ -92,6 +92,10 @@ core::Result<void> ValidateTaskAwareListRequest(std::string_view task_id, int pa
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::CreateOrUpdateForTask(
     const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
+  const auto validation = ValidateConfig(config);
+  if (!validation.ok()) {
+    return validation.error();
+  }
   const auto task = task_store.Get(config.task_id());
   if (!task.ok()) {
     return task.error();

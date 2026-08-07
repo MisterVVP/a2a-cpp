@@ -108,8 +108,10 @@ outdated schema.
 Apply the following migration before upgrading. This example uses the `public`
 schema and an SDK database role named `a2a_sdk`; replace both names for your
 deployment. Grant the lock helper only to SDK roles authorized to create push
-notification configurations. Repeat the `GRANT` for both roles when task and
-push stores use different roles.
+notification configurations. The push-store role must also have `SELECT` on
+the task table so the helper can preserve task visibility without requiring
+task `UPDATE`. PostgreSQL row-level security on the task table is unsupported
+for this task-aware path and is rejected during store construction.
 
 ```sql
 BEGIN;
@@ -146,6 +148,7 @@ END
 $a2a$;
 
 REVOKE ALL ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) FROM PUBLIC;
+GRANT SELECT ON public.a2a_tasks TO a2a_sdk;
 GRANT EXECUTE ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) TO a2a_sdk;
 
 CREATE OR REPLACE FUNCTION public.a2a_delete_task_push_configs()
