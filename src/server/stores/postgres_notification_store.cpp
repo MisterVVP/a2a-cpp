@@ -27,6 +27,10 @@ constexpr std::size_t kPushGetSqlReserveSlack = 256U;
 constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
+constexpr std::string_view kPushConfigUpsertOperation = "upsert postgres push notification config";
+constexpr std::string_view kPushConfigGetOperation = "get postgres push notification config";
+constexpr std::string_view kPushConfigSerializationErrorMessage =
+    "failed to parse stored TaskPushNotificationConfig protobuf";
 constexpr std::string_view kValidatePostgresPushSchemaOperation = "validate postgres push notification schema";
 constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
     "PostgreSQL push-notification schema is missing task-aware-push-config-v2; apply the migration in "
@@ -371,11 +375,12 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   {
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
 #endif
-    result.reset(PQexecParams(connection, sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
+    result.reset(PQexecParams(connection, sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
+                              lengths.data(), formats.data(), 0));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
-  const auto checked = CheckTuples(connection, result.get(), "upsert postgres push notification config");
+  const auto checked = CheckTuples(connection, result.get(), kPushConfigUpsertOperation);
   if (!checked.ok()) {
     return checked.error();
   }
@@ -436,11 +441,12 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   {
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigGet);
 #endif
-    result.reset(PQexecParams(lease.value().get(), get_sql_.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 1));
+    result.reset(PQexecParams(lease.value().get(), get_sql_.c_str(), static_cast<int>(values.size()), nullptr,
+                              values.data(), nullptr, nullptr, 1));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
-  const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres push notification config");
+  const auto checked = CheckTuples(lease.value().get(), result.get(), kPushConfigGetOperation);
   if (!checked.ok()) {
     return checked.error();
   }
@@ -452,7 +458,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   }
   lf::a2a::v1::TaskPushNotificationConfig config;
   if (!config.ParseFromArray(PQgetvalue(result.get(), 0, 0), PQgetlength(result.get(), 0, 0))) {
-    return core::Error::Serialization("failed to parse stored TaskPushNotificationConfig protobuf");
+    return core::Error::Serialization(std::string(kPushConfigSerializationErrorMessage));
   }
   return config;
 }

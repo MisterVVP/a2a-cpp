@@ -40,6 +40,8 @@ constexpr char kRollbackSchemaTransactionSql[] = "ROLLBACK";
 constexpr std::string_view kBeginSchemaTransactionOperation = "begin postgres schema transaction";
 constexpr std::string_view kCommitSchemaTransactionOperation = "commit postgres schema transaction";
 constexpr std::string_view kRollbackSchemaTransactionOperation = "rollback postgres schema transaction";
+constexpr std::string_view kPostgresErrorSeparator = ": ";
+constexpr std::string_view kOpenPostgresConnectionOperation = "open postgres connection";
 constexpr std::string_view kInitializePostgresSchemaOperation = "initialize postgres store schema";
 constexpr std::string_view kReadPostgresEffectiveRoleOperation = "read postgres effective role";
 constexpr std::string_view kReadPostgresEffectiveRoleMissingRowMessage =
@@ -59,16 +61,25 @@ std::optional<PostgresExecutionIdentity> g_test_connection_identity_override;
 thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 #endif
 
+[[nodiscard]] std::string BuildPostgresErrorMessage(std::string_view operation, std::string_view message) {
+  std::string error;
+  error.reserve(operation.size() + kPostgresErrorSeparator.size() + message.size());
+  error.append(operation);
+  error.append(kPostgresErrorSeparator);
+  error.append(message);
+  return error;
+}
+
 [[nodiscard]] core::Error DatabaseError(PGconn* connection, std::string_view operation) {
-  return core::Error::Internal(std::string(operation) + ": " + PQerrorMessage(connection));
+  return core::Error::Internal(BuildPostgresErrorMessage(operation, PQerrorMessage(connection)));
 }
 
 [[nodiscard]] core::Error DatabaseResultError(PGresult* result, std::string_view operation) {
-  return core::Error::Internal(std::string(operation) + ": " + PQresultErrorMessage(result));
+  return core::Error::Internal(BuildPostgresErrorMessage(operation, PQresultErrorMessage(result)));
 }
 
 [[nodiscard]] core::Error DatabaseConnectionError(std::string_view message) {
-  return core::Error::Internal("open postgres connection: " + std::string(message));
+  return core::Error::Internal(BuildPostgresErrorMessage(kOpenPostgresConnectionOperation, message));
 }
 
 [[nodiscard]] std::string TaskCreatedSequence(std::string_view schema) {
@@ -593,15 +604,15 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string create_tasks_context_index =
       CreateIndexStatement(kTasksContextIndex, tasks, kTasksContextIndexColumns);
   const std::string create_tasks_state_index = CreateIndexStatement(kTasksStateIndex, tasks, kTasksStateIndexColumns);
-  const std::string create_push_configs =
-      "CREATE TABLE IF NOT EXISTS " + push_configs +
+  std::string create_push_configs = "CREATE TABLE IF NOT EXISTS ";
+  create_push_configs.append(push_configs);
+  create_push_configs.append(
       " (task_id TEXT NOT NULL, config_id TEXT NOT NULL, url TEXT NOT NULL, "
-      "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
-      push_created_sequence_regclass +
-      "), "
-      "config_proto BYTEA NOT NULL, local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE, "
-      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
-      "PRIMARY KEY (task_id, config_id));";
+      "created_sequence BIGINT NOT NULL DEFAULT nextval(");
+  create_push_configs.append(push_created_sequence_regclass);
+  create_push_configs.append(
+      "), config_proto BYTEA NOT NULL, local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE, "
+      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (task_id, config_id));");
   std::string add_push_config_provenance = "ALTER TABLE ";
   add_push_config_provenance.append(push_configs);
   add_push_config_provenance.append(" ADD COLUMN IF NOT EXISTS local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE;");

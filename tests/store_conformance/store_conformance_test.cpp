@@ -69,20 +69,31 @@ TEST(StoreConformanceTest, InMemoryPushNotificationStore) {
 }
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
-[[nodiscard]] const char* GetPostgresDsn() { return std::getenv("A2A_TEST_POSTGRES_DSN"); }
+constexpr char kPostgresDsnEnvironmentVariable[] = "A2A_TEST_POSTGRES_DSN";
+constexpr std::string_view kPostgresAcquireFailureMessage = "test postgres acquire failure";
+constexpr std::string_view kPostgresTestSchemaPrefix = "a2a_test_";
+constexpr std::string_view kPostgresTestNameSeparator = "_";
+
+[[nodiscard]] const char* GetPostgresDsn() { return std::getenv(kPostgresDsnEnvironmentVariable); }
 
 [[nodiscard]] a2a::core::Error MakePostgresAcquireFailureForTesting() {
-  return a2a::core::Error::Internal("test postgres acquire failure");
+  return a2a::core::Error::Internal(std::string(kPostgresAcquireFailureMessage));
 }
 
 void ExpectPostgresAcquireFailure(const a2a::core::Error& error) {
   EXPECT_EQ(error.code(), a2a::core::ErrorCode::kInternal);
-  EXPECT_NE(error.message().find("test postgres acquire failure"), std::string_view::npos);
+  EXPECT_NE(error.message().find(kPostgresAcquireFailureMessage), std::string_view::npos);
 }
 
 [[nodiscard]] std::string MakePostgresTestSchema(std::string_view suffix) {
-  const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-  return "a2a_test_" + std::to_string(ticks) + "_" + std::string(suffix);
+  const std::string ticks = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  std::string schema;
+  schema.reserve(kPostgresTestSchemaPrefix.size() + ticks.size() + kPostgresTestNameSeparator.size() + suffix.size());
+  schema.append(kPostgresTestSchemaPrefix);
+  schema.append(ticks);
+  schema.append(kPostgresTestNameSeparator);
+  schema.append(suffix);
+  return schema;
 }
 
 constexpr std::string_view kTargetContext = "target-context";
@@ -368,8 +379,12 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
 }
 
 [[nodiscard]] std::string MakePostgresTestRole(std::string_view prefix) {
-  const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-  return std::string(prefix) + std::to_string(ticks);
+  const std::string ticks = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  std::string role;
+  role.reserve(prefix.size() + ticks.size());
+  role.append(prefix);
+  role.append(ticks);
+  return role;
 }
 
 [[nodiscard]] std::string BuildRoleDsn(std::string_view dsn, std::string_view role) {
