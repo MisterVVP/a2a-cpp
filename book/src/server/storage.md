@@ -35,24 +35,44 @@ auto stores = factory.CreateStoreBundle();
 
 Task and push-notification stores returned by `CreateStoreBundle()` share one
 connection pool. Separately constructed stores own separate pools. Storage
-matching uses libpq's effective logical connection options rather than the
-active resolved server IP, so equivalent URI/keyword DSNs and stable
-DNS/multi-host configurations remain comparable across reconnects. Exact
-logical storage coordinates confirm local authority; a different database or
-schema confirms external authority. Other PostgreSQL mismatches, including
-`host`, `hostaddr`, port, and `target_session_attrs`, are uncertain because they
-can represent either aliases/failover or genuinely different servers.
-Task-aware creates reject uncertain authority before writing provenance. The
-effective PostgreSQL role is separate: role differences disable the
-same-execution task-aware list shortcut but do not by themselves make storage
-external.
+matching uses libpq's effective logical `host`, `hostaddr`, port, database, and
+`target_session_attrs` values plus schema. Exact coordinate equality confirms
+local authority; a different database or schema confirms external authority;
+other endpoint differences are uncertain. Passwords and raw connection strings
+are not part of the identity. The effective role is tracked separately: role
+differences still use the one-command local create path, while the one-command
+list shortcut requires the same storage coordinates and role.
+
+### Task-aware PostgreSQL behavior
+
+For same-storage task and push stores, create/update uses one push-store
+acquisition and one PostgreSQL command. That statement calls the
+`SECURITY DEFINER` task-lock helper, holds `FOR KEY SHARE`, and performs the
+upsert atomically. It has no separate task precheck, revalidation, compensating
+cleanup, or explicit multi-command transaction. Missing tasks return
+`TaskNotFound`, and concurrent deletion cannot leave a locally owned orphan.
+`PushConfig_CreateMany` at fan-out eight therefore performs eight create
+commands rather than sixteen.
+
+`GetConfig` remains push-store-only and uses one PostgreSQL statement. List uses
+one combined task/count/page statement when execution identities match; a
+different role or external task store uses the authoritative task lookup first
+and then one combined push-list statement. External-authority creates are marked
+with `local_postgres_task=FALSE`; direct non-task-aware `CreateOrUpdate` calls
+use the same external provenance. Only locally owned rows are removed by the
+task-delete cleanup trigger.
+
+When `auto_create_schema=true`, the SDK installs the provenance column, lock and
+cleanup helpers, `AFTER DELETE` trigger, sequences, and indexes, removes the
+legacy push-to-task foreign key, and writes the `task-aware-push-config-v2`
+migration markers last.
 
 ## Externally managed PostgreSQL schemas
 
 When `auto_create_schema=false`, the push-notification store validates the
 `task-aware-push-config-v2` migration during construction. Validation covers the
-exact provenance column/default, removal of the legacy task foreign key,
-constrained SECURITY DEFINER helpers and owner privileges, absence of `PUBLIC
+exact provenance column/default, absence of a push-to-task foreign key,
+constrained `SECURITY DEFINER` helpers and owner privileges, absence of `PUBLIC
 EXECUTE`, the cleanup implementation/version, and the enabled `AFTER DELETE`
 row trigger with no `WHEN` clause. Startup fails before serving requests when
 any required object is absent or incorrectly configured.
@@ -60,11 +80,12 @@ any required object is absent or incorrectly configured.
 Apply the following migration before upgrading. The example uses the `public`
 schema and an SDK role named `a2a_sdk`; replace both names for your deployment.
 Grant the lock helper only to roles authorized to create push configurations.
-Task-table `SELECT` and lock-helper `EXECUTE` are required only for roles that
-use local PostgreSQL task-aware creation. Push-only roles paired with an
-external authoritative `TaskStore` do not need them. Task-table row-level
-security is allowed for those external-authority paths but is rejected when the
-local task-aware create helper is invoked.
+The invoking push role needs task-table `SELECT` plus helper `EXECUTE`; task
+`UPDATE` is required by the helper owner, not by every caller. Push-only roles
+paired with an external authoritative `TaskStore` do not need task-table access
+or helper execution. Task-table row-level security is allowed for those
+external-authority paths but is rejected when the local task-aware create helper
+is invoked.
 
 ```sql
 BEGIN;
