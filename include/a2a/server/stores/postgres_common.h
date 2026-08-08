@@ -97,6 +97,7 @@ struct PostgresStorageCoordinates final {
   std::string database;
   std::string target_session_attributes;
   std::string schema;
+  std::string storage_authority_id = {};
 
   friend bool operator==(const PostgresStorageCoordinates&, const PostgresStorageCoordinates&) = default;
 };
@@ -151,11 +152,14 @@ class PostgresConnectionPool final {
 
   [[nodiscard]] core::Result<Lease> Acquire();
   [[nodiscard]] std::size_t capacity() const noexcept;
-  [[nodiscard]] PostgresStorageCoordinates StorageCoordinates(std::string schema) const;
-  [[nodiscard]] PostgresStorageIdentity StorageIdentity(std::string schema) const {
-    return StorageCoordinates(std::move(schema));
+  [[nodiscard]] PostgresStorageCoordinates StorageCoordinates(std::string schema,
+                                                              std::string_view storage_authority_id = {}) const;
+  [[nodiscard]] PostgresStorageIdentity StorageIdentity(std::string schema,
+                                                        std::string_view storage_authority_id = {}) const {
+    return StorageCoordinates(std::move(schema), storage_authority_id);
   }
-  [[nodiscard]] PostgresExecutionIdentity ExecutionIdentity(std::string schema) const;
+  [[nodiscard]] PostgresExecutionIdentity ExecutionIdentity(std::string schema,
+                                                            std::string_view storage_authority_id = {}) const;
 
  private:
   [[nodiscard]] core::Result<PgConnection> OpenConnection() const;
@@ -184,6 +188,8 @@ class Transaction final {
 [[nodiscard]] std::string TaskTable(std::string_view schema);
 [[nodiscard]] std::string PushTable(std::string_view schema);
 [[nodiscard]] std::string TaskPushConfigLockFunction(std::string_view schema);
+[[nodiscard]] std::string ExpectedTaskPushConfigLockFunctionBody(std::string_view schema);
+[[nodiscard]] std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema);
 [[nodiscard]] PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
                                                                         const PostgresStorageIdentity& rhs) noexcept;
 [[nodiscard]] bool HasSamePostgresExecutionIdentity(const PostgresExecutionIdentity& lhs,

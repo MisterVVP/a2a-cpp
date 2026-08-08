@@ -121,38 +121,48 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return statement;
 }
 
-[[nodiscard]] std::string BuildTaskPushConfigLockFunctionSql(std::string_view function, std::string_view task_table) {
+[[nodiscard]] std::string BuildTaskPushConfigLockFunctionBody(std::string_view task_table) {
   const std::string task_table_literal = SqlStringLiteral(task_table);
   const std::string rls_error_code = SqlStringLiteral(kFeatureNotSupportedSqlState);
   const std::string rls_error_message = SqlStringLiteral(kPostgresTaskRowLevelSecurityUnsupportedMessage);
   const std::string privilege_error_code = SqlStringLiteral(kInsufficientPrivilegeSqlState);
   const std::string privilege_error_message = SqlStringLiteral(kPostgresPushTaskSelectRequiredMessage);
+  std::string body;
+  body.reserve(task_table.size() + (2U * task_table_literal.size()) + rls_error_code.size() + rls_error_message.size() +
+               privilege_error_code.size() + privilege_error_message.size() +
+               kTaskPushConfigLockFunctionSqlReserveSlack);
+  body.append(
+      "DECLARE caller_role name; BEGIN caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
+      "IF caller_role IS NULL THEN caller_role := session_user; END IF; IF EXISTS ("
+      "SELECT 1 FROM pg_catalog.pg_class AS relation WHERE relation.oid = pg_catalog.to_regclass(");
+  body.append(task_table_literal);
+  body.append(") AND relation.relrowsecurity) THEN RAISE EXCEPTION USING ERRCODE = ");
+  body.append(rls_error_code);
+  body.append(", MESSAGE = ");
+  body.append(rls_error_message);
+  body.append("; END IF; IF NOT pg_catalog.has_table_privilege(caller_role, ");
+  body.append(task_table_literal);
+  body.append(", 'SELECT') THEN RAISE EXCEPTION USING ERRCODE = ");
+  body.append(privilege_error_code);
+  body.append(", MESSAGE = ");
+  body.append(privilege_error_message);
+  body.append("; END IF; PERFORM 1 FROM ");
+  body.append(task_table);
+  body.append(" WHERE id = requested_task_id FOR KEY SHARE; RETURN FOUND; END");
+  return body;
+}
+
+[[nodiscard]] std::string BuildTaskPushConfigLockFunctionSql(std::string_view function, std::string_view task_table) {
+  const std::string body = BuildTaskPushConfigLockFunctionBody(task_table);
   std::string sql;
-  sql.reserve(function.size() + task_table.size() + (2U * task_table_literal.size()) + rls_error_code.size() +
-              rls_error_message.size() + privilege_error_code.size() + privilege_error_message.size() +
-              kTaskPushConfigLockFunctionSqlReserveSlack);
+  sql.reserve(function.size() + body.size() + kTaskPushConfigLockFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
   sql.append(function);
   sql.append(
       "(requested_task_id text) RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER "
-      "SET search_path = pg_catalog AS $a2a$ DECLARE caller_role name; BEGIN "
-      "caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
-      "IF caller_role IS NULL THEN caller_role := session_user; END IF; IF EXISTS ("
-      "SELECT 1 FROM pg_catalog.pg_class AS relation WHERE relation.oid = pg_catalog.to_regclass(");
-  sql.append(task_table_literal);
-  sql.append(") AND relation.relrowsecurity) THEN RAISE EXCEPTION USING ERRCODE = ");
-  sql.append(rls_error_code);
-  sql.append(", MESSAGE = ");
-  sql.append(rls_error_message);
-  sql.append("; END IF; IF NOT pg_catalog.has_table_privilege(caller_role, ");
-  sql.append(task_table_literal);
-  sql.append(", 'SELECT') THEN RAISE EXCEPTION USING ERRCODE = ");
-  sql.append(privilege_error_code);
-  sql.append(", MESSAGE = ");
-  sql.append(privilege_error_message);
-  sql.append("; END IF; PERFORM 1 FROM ");
-  sql.append(task_table);
-  sql.append(" WHERE id = requested_task_id FOR KEY SHARE; RETURN FOUND; END $a2a$;");
+      "SET search_path = pg_catalog AS $a2a$ ");
+  sql.append(body);
+  sql.append(" $a2a$;");
   return sql;
 }
 
@@ -185,16 +195,25 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return sql;
 }
 
+[[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionBody(std::string_view push_table) {
+  std::string body;
+  body.reserve(push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  body.append("BEGIN DELETE FROM ");
+  body.append(push_table);
+  body.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END");
+  return body;
+}
+
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
                                                                 std::string_view push_table) {
+  const std::string body = BuildDeleteTaskPushConfigsFunctionBody(push_table);
   std::string sql;
-  sql.reserve(function.size() + push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  sql.reserve(function.size() + body.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
   sql.append(function);
-  sql.append("() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ BEGIN ");
-  sql.append("DELETE FROM ");
-  sql.append(push_table);
-  sql.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END $a2a$;");
+  sql.append("() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ ");
+  sql.append(body);
+  sql.append(" $a2a$;");
   return sql;
 }
 
@@ -354,23 +373,39 @@ std::string TaskPushConfigLockFunction(std::string_view schema) {
   return QualifiedSqlIdentifier(schema, kTaskPushConfigLockFunction);
 }
 
+std::string ExpectedTaskPushConfigLockFunctionBody(std::string_view schema) {
+  return BuildTaskPushConfigLockFunctionBody(TaskTable(schema));
+}
+
+std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema) {
+  return BuildDeleteTaskPushConfigsFunctionBody(PushTable(schema));
+}
+
 PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
                                                           const PostgresStorageIdentity& rhs) noexcept {
   if (lhs.database != rhs.database || lhs.schema != rhs.schema) {
     return PostgresStorageAuthority::kExternal;
   }
+  const bool lhs_has_authority_id = !lhs.storage_authority_id.empty();
+  const bool rhs_has_authority_id = !rhs.storage_authority_id.empty();
+  if (lhs_has_authority_id || rhs_has_authority_id) {
+    if (!lhs_has_authority_id || !rhs_has_authority_id) {
+      return PostgresStorageAuthority::kUncertain;
+    }
+    return lhs.storage_authority_id == rhs.storage_authority_id ? PostgresStorageAuthority::kLocal
+                                                                : PostgresStorageAuthority::kExternal;
+  }
   if (lhs == rhs) {
     return PostgresStorageAuthority::kLocal;
   }
   // Endpoint differences can be aliases or failover candidates, so they do not
-  // prove external ownership.
+  // prove external ownership without an explicit authority identifier.
   return PostgresStorageAuthority::kUncertain;
 }
 
 bool HasSamePostgresExecutionIdentity(const PostgresExecutionIdentity& lhs,
                                       const PostgresExecutionIdentity& rhs) noexcept {
-  return ClassifyPostgresStorageAuthority(lhs.storage, rhs.storage) == PostgresStorageAuthority::kLocal &&
-         lhs.effective_role == rhs.effective_role;
+  return lhs.storage == rhs.storage && lhs.effective_role == rhs.effective_role;
 }
 
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
@@ -526,15 +561,19 @@ core::Result<PostgresConnectionPool::Lease> PostgresConnectionPool::Acquire() {
 
 std::size_t PostgresConnectionPool::capacity() const noexcept { return capacity_; }
 
-PostgresStorageCoordinates PostgresConnectionPool::StorageCoordinates(std::string schema) const {
+PostgresStorageCoordinates PostgresConnectionPool::StorageCoordinates(std::string schema,
+                                                                      std::string_view storage_authority_id) const {
   PostgresStorageCoordinates identity = database_identity_.storage;
   identity.schema = std::move(schema);
+  identity.storage_authority_id = storage_authority_id;
   return identity;
 }
 
-PostgresExecutionIdentity PostgresConnectionPool::ExecutionIdentity(std::string schema) const {
+PostgresExecutionIdentity PostgresConnectionPool::ExecutionIdentity(std::string schema,
+                                                                    std::string_view storage_authority_id) const {
   PostgresExecutionIdentity identity = database_identity_;
   identity.storage.schema = std::move(schema);
+  identity.storage.storage_authority_id = storage_authority_id;
   return identity;
 }
 

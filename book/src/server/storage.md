@@ -38,10 +38,16 @@ connection pool. Separately constructed stores own separate pools. Storage
 matching uses libpq's effective logical `host`, `hostaddr`, port, database, and
 `target_session_attrs` values plus schema. Exact coordinate equality confirms
 local authority; a different database or schema confirms external authority;
-other endpoint differences are uncertain. Passwords and raw connection strings
-are not part of the identity. The effective role is tracked separately: role
+other endpoint differences are uncertain. Separately constructed stores can set
+`PostgresStoreOptions::storage_authority_id`: matching non-empty IDs prove local
+authority, different non-empty IDs prove external authority, and a one-sided ID
+remains uncertain. Database/schema differences still remain external. The ID is
+a stable, non-secret deployment identifier and must reflect the real storage
+authority because it affects provenance and cleanup. Passwords and raw
+connection strings are not part of the identity. The effective role is tracked
+separately: role
 differences still use the one-command local create path, while the one-command
-list shortcut requires the same storage coordinates and role.
+list shortcut requires identical storage coordinates and role.
 
 ### Task-aware PostgreSQL behavior
 
@@ -69,16 +75,23 @@ migration markers last.
 
 ## Externally managed PostgreSQL schemas
 
-When `auto_create_schema=false`, the push-notification store validates the
-`task-aware-push-config-v2` migration during construction. Validation covers the
-exact provenance column/default, absence of a push-to-task foreign key,
-constrained `SECURITY DEFINER` helpers and owner privileges, absence of `PUBLIC
-EXECUTE`, the cleanup implementation/version, and the enabled `AFTER DELETE`
-row trigger with no `WHEN` clause. Startup fails before serving requests when
-any required object is absent or incorrectly configured.
+When `auto_create_schema=false`, the push-notification store always validates
+the provenance column and absence of the legacy push-to-task foreign key. If the
+lock helper, cleanup helper, and cleanup trigger are all absent, construction is
+allowed for push-only use with an external authoritative `TaskStore`; local
+PostgreSQL task-aware creation then fails before writing until the migration is
+installed. Capability detection happens during store construction rather than
+on the request path.
 
-Apply the following migration before upgrading. The example uses the `public`
-schema and an SDK role named `a2a_sdk`; replace both names for your deployment.
+If any task-aware helper or trigger is present, the whole
+`task-aware-push-config-v2` migration is required. Validation checks both helper
+implementations and markers, owner privileges, absence of `PUBLIC EXECUTE`, and
+the enabled `AFTER DELETE` row trigger without a `WHEN` clause. Partial or stale
+installations fail construction.
+
+Apply the following migration before using local PostgreSQL task-aware
+create/update. The example uses the `public` schema and an SDK role named
+`a2a_sdk`; replace both names for your deployment.
 Grant the lock helper only to roles authorized to create push configurations.
 The invoking push role needs task-table `SELECT` plus helper `EXECUTE`; task
 `UPDATE` is required by the helper owner, not by every caller. Push-only roles

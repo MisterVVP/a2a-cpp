@@ -174,8 +174,8 @@ struct TaskListSqlFilter final {
 PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
     : pool_(MakePool(options)),
       options_(std::move(options)),
-      storage_identity_(pool_->StorageCoordinates(options_.schema)),
-      execution_identity_(pool_->ExecutionIdentity(options_.schema)) {
+      storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
+      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
@@ -186,8 +186,8 @@ PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
 PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> pool, PostgresStoreOptions options)
     : pool_(std::move(pool)),
       options_(std::move(options)),
-      storage_identity_(pool_->StorageCoordinates(options_.schema)),
-      execution_identity_(pool_->ExecutionIdentity(options_.schema)) {
+      storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
+      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);

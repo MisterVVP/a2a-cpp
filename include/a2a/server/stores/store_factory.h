@@ -26,6 +26,9 @@ struct PostgresStoreOptions final {
   std::string schema = "public";
   bool auto_create_schema = true;
   std::size_t connection_pool_size = kDefaultPostgresConnectionPoolSize;
+  // Optional operator-provided identity for the physical PostgreSQL authority.
+  // Matching non-empty IDs prove local storage; different non-empty IDs prove external storage.
+  std::string storage_authority_id = {};
 };
 
 struct StoreBundle final {

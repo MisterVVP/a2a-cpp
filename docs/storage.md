@@ -103,9 +103,15 @@ schema. Passwords and raw connection strings are not part of storage identity.
 Exact coordinate equality confirms local authority; a different database or
 schema confirms external authority. Other endpoint differences are uncertain
 because aliases, DNS, `hostaddr`, port changes, and multi-host failover can make
-textual differences insufficient evidence of external ownership. Equivalent URI
-and keyword DSNs therefore take the local path only when libpq reports the same
-effective logical options.
+textual differences insufficient evidence of external ownership. For separately
+constructed stores, `PostgresStoreOptions::storage_authority_id` can make that
+relationship explicit: matching non-empty IDs prove local authority, different
+non-empty IDs prove external authority, and a one-sided ID remains uncertain.
+Database or schema differences still override the ID and remain external. Treat
+the ID as a stable, non-secret deployment identifier rather than a connection
+credential. It is an authority assertion: incorrect IDs can change provenance
+and cleanup semantics. Equivalent URI and keyword DSNs continue to take the
+local path when libpq reports the same effective logical options.
 
 The effective PostgreSQL role is tracked separately as part of the execution
 identity. Role differences do not make storage external and do not disable the
@@ -159,20 +165,30 @@ markers are written last.
 
 ## Externally managed PostgreSQL schemas
 
-When `auto_create_schema=false`, the push-notification store validates the
-`task-aware-push-config-v2` migration during construction. Startup fails with an
-actionable error instead of allowing the first request to fail against an
-outdated or insecure schema. Validation covers the provenance column type,
-nullability and `FALSE` default; absence of a push-to-task foreign key; both
-`SECURITY DEFINER` helpers and their owners' required privileges; absence of
-`PUBLIC EXECUTE`; the cleanup implementation/version; and exact `AFTER DELETE`
-trigger wiring without a `WHEN` clause.
+When `auto_create_schema=false`, the push-notification store always validates
+the push table's provenance column and rejects a legacy push-to-task foreign key.
+The local task-aware objects are an optional capability: if the lock helper,
+cleanup helper, and cleanup trigger are all absent, construction succeeds for a
+push-only store paired with an external authoritative `TaskStore`. Attempting to
+pair that store with a local PostgreSQL task store fails before the push write
+with an actionable `task-aware-push-config-v2` migration error. Capability
+detection happens during store construction; request paths do not query the
+catalogs.
 
-Apply the following migration before upgrading. This example uses the `public`
-schema and an SDK database role named `a2a_sdk`; replace both names for your
-deployment. Grant the lock helper only to SDK roles authorized to create push
-notification configurations. The invoking push-store role needs task-table
-`SELECT` plus lock-helper `EXECUTE`, but it does not need task-table `UPDATE`;
+If any task-aware helper or trigger is present, construction requires the whole
+migration and rejects partial or stale installations. Validation covers both
+`SECURITY DEFINER` helper implementations and migration markers, their owners'
+required privileges, absence of `PUBLIC EXECUTE`, and exact `AFTER DELETE`
+trigger wiring without a `WHEN` clause. Function-body checks preserve the exact
+case of quoted schema/table identifiers so a similarly named object in another
+case-sensitive schema cannot satisfy validation.
+
+Apply the following migration before using local PostgreSQL task-aware
+create/update. This example uses the `public` schema and an SDK database role
+named `a2a_sdk`; replace both names for your deployment. Grant the lock helper
+only to SDK roles authorized to create push notification configurations. The
+invoking push-store role needs task-table `SELECT` plus lock-helper `EXECUTE`,
+but it does not need task-table `UPDATE`;
 the helper's owner needs `UPDATE` because the `SECURITY DEFINER` function takes
 `FOR KEY SHARE`. Push-only roles paired with an external authoritative
 `TaskStore` do not need task-table access or lock-helper execution. PostgreSQL

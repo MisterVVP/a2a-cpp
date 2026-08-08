@@ -266,15 +266,21 @@ PostgreSQL stores distinguish **storage coordinates** (effective libpq `host`,
 **execution identity** (those coordinates plus the effective PostgreSQL role).
 Passwords and raw connection strings are excluded. Exact storage-coordinate
 equality confirms local authority, a different database or schema confirms
-external authority, and other endpoint differences are uncertain. URI and
-keyword DSNs therefore share the local path only when libpq reports the same
-effective logical options.
+external authority, and other endpoint differences are uncertain. Separately
+constructed stores can supply a stable, non-secret `storage_authority_id` to
+resolve that ambiguity. The ID is an operator assertion and must reflect the
+actual storage authority: equal non-empty IDs prove local authority and different
+non-empty IDs prove external authority; a one-sided ID remains uncertain.
+Database/schema differences remain external regardless of the ID. URI and
+keyword DSNs therefore share the local path when libpq reports the same effective
+logical options or when matching explicit authority IDs prove locality.
 
 The effective role does not participate in storage authority. Same-storage
 stores with different roles still use the local atomic create path. Matching
-roles matter only for the list shortcut, which requires the complete execution
-identity to match. Each pool caches its established execution identity and
-checks other initial and reopened connections against it; persistent out-of-band
+roles matter only for the list shortcut, which still requires identical logical
+connection options, schema, explicit authority ID, and role. Each pool caches its
+established execution identity and checks other initial and reopened connections
+against it; persistent out-of-band
 `SET ROLE` on pooled connections is unsupported.
 
 ### Create/update
