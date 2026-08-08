@@ -910,31 +910,27 @@ struct SplitRoleDeletionFirstOutcome final {
 }
 
 void ExpectSplitRoleCreateDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kConnectionAcquireWait)],
+      kSinglePostgresCommandCount);
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
-            0U);
+            kNoPostgresCommandCount);
   EXPECT_EQ(
       diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-      1U);
+      kSinglePostgresCommandCount);
   EXPECT_EQ(
       diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionBegin)],
-      0U);
+      kNoPostgresCommandCount);
   EXPECT_EQ(diagnostics
                 .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionCommit)],
-            0U);
+            kNoPostgresCommandCount);
 }
 
 void ExpectSplitRoleDeletionFirstCreateOutcome(const SplitRoleCreateOutcome& outcome) {
   ASSERT_FALSE(outcome.result.ok());
   EXPECT_EQ(outcome.result.error().protocol_code().value_or(std::string{}), a2a::core::protocol_codes::kTaskNotFound);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-            1U);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionBegin)],
-            0U);
-  EXPECT_EQ(outcome.diagnostics
-                .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTransactionCommit)],
-            0U);
+  ExpectSplitRoleCreateDiagnostics(outcome.diagnostics);
 }
 
 void ExpectPushConfigUrl(a2a::server::stores::PostgresPushNotificationStore& store, std::string_view task_id,
@@ -1015,7 +1011,7 @@ void ExpectEquivalentStorageIdentities(const a2a::server::stores::PostgresStorag
 
 struct ConcurrentDeleteOutcome final {
   std::future_status create_wait_status;
-  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> create_result;
+  SplitRoleCreateOutcome create;
   bool config_remains;
 };
 
@@ -1045,9 +1041,14 @@ struct ConcurrentDeleteOutcome final {
   std::barrier create_started(2);
   auto create = std::async(std::launch::async, [&] {
     create_started.arrive_and_wait();
-    return push_store.CreateOrUpdateForTask(
+    a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+    auto result = push_store.CreateOrUpdateForTask(
         a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
         task_store);
+    return SplitRoleCreateOutcome{
+        .result = std::move(result),
+        .diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting(),
+    };
   });
   create_started.arrive_and_wait();
   const std::future_status wait_status = create.wait_for(kConcurrentCreateBlockedTimeout);
@@ -1055,18 +1056,19 @@ struct ConcurrentDeleteOutcome final {
   if (!committed.ok()) {
     return committed.error();
   }
-  auto create_result = create.get();
+  auto create_outcome = create.get();
   const bool config_remains = push_store.Get(kAtomicCreateTaskId, kAtomicCreateConfigId).ok();
   return ConcurrentDeleteOutcome{
-      .create_wait_status = wait_status, .create_result = std::move(create_result), .config_remains = config_remains};
+      .create_wait_status = wait_status, .create = std::move(create_outcome), .config_remains = config_remains};
 }
 
 void ExpectConcurrentDeleteOutcome(const a2a::core::Result<ConcurrentDeleteOutcome>& outcome) {
   ASSERT_TRUE(outcome.ok());
   EXPECT_EQ(outcome.value().create_wait_status, std::future_status::timeout);
-  ASSERT_FALSE(outcome.value().create_result.ok());
-  EXPECT_EQ(outcome.value().create_result.error().protocol_code().value_or(std::string{}),
+  ASSERT_FALSE(outcome.value().create.result.ok());
+  EXPECT_EQ(outcome.value().create.result.error().protocol_code().value_or(std::string{}),
             a2a::core::protocol_codes::kTaskNotFound);
+  ExpectSplitRoleCreateDiagnostics(outcome.value().create.diagnostics);
   EXPECT_FALSE(outcome.value().config_remains);
 }
 
