@@ -107,7 +107,8 @@ because they can represent either aliases/failover or genuinely different
 servers. Task-aware creates reject uncertain authority before writing
 provenance instead of treating an identity mismatch as external ownership.
 The effective PostgreSQL role is tracked separately: role differences disable
-same-execution read shortcuts but do not by themselves make storage external.
+the same-execution task-aware list shortcut but do not by themselves make
+storage external.
 
 ## Externally managed PostgreSQL schemas
 

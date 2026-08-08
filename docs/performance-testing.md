@@ -296,16 +296,23 @@ Create, get, list, and delete operations do not quote schemas or rebuild SQL on
 the request path. Prepared statements are intentionally not retained without a
 controlled measurement demonstrating the required improvement.
 
-For matching execution identities, service-level task-aware operations have
-these PostgreSQL command and pool-acquisition counts:
+For matching execution identities, service-level task-aware create/list paths
+have these PostgreSQL command and pool-acquisition counts:
 
 | Operation | Commands | Acquisitions |
 | --- | ---: | ---: |
 | create or update | 1 | 1 |
 | list (including missing/empty/out-of-range classification) | 1 | 1 |
-| get present config | 1 | 1 |
-| get missing config | 1 | 1 |
-| get missing task | 1 | 1 |
+| direct get present config | 1 | 1 |
+| direct get missing config | 1 | 1 |
+| direct get missing task/config collection | 1 | 1 |
+
+`GetConfig` intentionally remains a push-store-only API, matching the public
+behavior before the optimization work. PostgreSQL classifies a missing config
+versus a missing task config collection in one statement, so reads do not need
+an authoritative `TaskStore` lookup or contend on the task store. Stores that do
+not implement the optional task-aware capability retain the generic task-first
+service fallback for create/list.
 
 External task stores retain authority and therefore perform their task lookup
 before using an already-validated push query. Split-role creation deliberately

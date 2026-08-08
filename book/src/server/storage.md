@@ -43,8 +43,9 @@ schema confirms external authority. Other PostgreSQL mismatches, including
 `host`, `hostaddr`, port, and `target_session_attrs`, are uncertain because they
 can represent either aliases/failover or genuinely different servers.
 Task-aware creates reject uncertain authority before writing provenance. The
-effective PostgreSQL role is separate: role differences disable same-execution
-read shortcuts but do not by themselves make storage external.
+effective PostgreSQL role is separate: role differences disable the
+same-execution task-aware list shortcut but do not by themselves make storage
+external.
 
 ## Externally managed PostgreSQL schemas
 

@@ -32,7 +32,8 @@ constexpr std::size_t kPushUpsertSqlReserveSlack = 384U;
 
 class PostgresConnectionPool;
 
-class PostgresPushNotificationStore final : public a2a::server::PushNotificationStore {
+class PostgresPushNotificationStore final : public a2a::server::PushNotificationStore,
+                                            public a2a::server::TaskAwarePushNotificationStore {
  public:
   explicit PostgresPushNotificationStore(PostgresStoreOptions options);
   PostgresPushNotificationStore(std::shared_ptr<PostgresConnectionPool> pool, PostgresStoreOptions options);
@@ -44,8 +45,6 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
       const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) override;
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Get(std::string_view task_id,
                                                                           std::string_view config_id) const override;
-  [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetForTask(
-      std::string_view task_id, std::string_view config_id, const TaskStore& task_store) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(
       std::string_view task_id, int page_size = 0, std::string_view page_token = {}) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListForExistingTask(
@@ -59,15 +58,13 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
 #endif
 
  private:
-  enum class GetPath { kDirect, kTaskAware, kExistingTask };
   enum class UpsertPath { kLocalAtomic, kExternal };
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Upsert(
       const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path);
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> UpsertOnConnection(
       PGconn* connection, const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path);
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetInternal(std::string_view task_id,
-                                                                                  std::string_view config_id,
-                                                                                  GetPath path) const;
+                                                                                  std::string_view config_id) const;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListInternal(
       std::string_view task_id, int page_size, std::string_view page_token, bool validate_task_existence) const;
 
@@ -77,9 +74,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   PostgresExecutionIdentity execution_identity_;
   std::string local_upsert_sql_;
   std::string external_upsert_sql_;
-  std::string task_aware_get_sql_;
-  std::string existing_task_get_sql_;
-  std::string task_config_exists_sql_;
+  std::string get_sql_;
   std::string task_aware_list_sql_;
   std::string existing_task_list_sql_;
   std::string delete_sql_;

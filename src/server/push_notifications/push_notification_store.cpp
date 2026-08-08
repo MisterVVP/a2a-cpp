@@ -12,7 +12,6 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
-#include "a2a/server/tasks/task_store.h"
 
 namespace a2a::server {
 namespace {
@@ -76,58 +75,7 @@ core::Result<void> ValidateListRequest(std::string_view task_id, int page_size) 
   return {};
 }
 
-core::Result<void> ValidateTaskAwareListRequest(std::string_view task_id, int page_size, std::string_view page_token) {
-  const auto validation = ValidateListRequest(task_id, page_size);
-  if (!validation.ok()) {
-    return validation.error();
-  }
-  const auto offset = ParsePageToken(page_token);
-  if (!offset.ok()) {
-    return offset.error();
-  }
-  return {};
-}
-
 }  // namespace
-
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::CreateOrUpdateForTask(
-    const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
-  const auto task = task_store.Get(config.task_id());
-  if (!task.ok()) {
-    return task.error();
-  }
-  const auto validation = ValidateConfig(config);
-  if (!validation.ok()) {
-    return validation.error();
-  }
-  return CreateOrUpdate(config);
-}
-
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationStore::GetForTask(
-    std::string_view task_id, std::string_view config_id, const TaskStore& task_store) const {
-  const auto validation = ValidateLookup(task_id, config_id);
-  if (!validation.ok()) {
-    return validation.error();
-  }
-  const auto task = task_store.Get(task_id);
-  if (!task.ok()) {
-    return task.error();
-  }
-  return Get(task_id, config_id);
-}
-
-core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificationStore::ListForTask(
-    std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const {
-  const auto validation = ValidateTaskAwareListRequest(task_id, page_size, page_token);
-  if (!validation.ok()) {
-    return validation.error();
-  }
-  const auto task = task_store.Get(task_id);
-  if (!task.ok()) {
-    return task.error();
-  }
-  return ListForExistingTask(task_id, page_size, page_token);
-}
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> InMemoryPushNotificationStore::CreateOrUpdate(
     const lf::a2a::v1::TaskPushNotificationConfig& config) {

@@ -43,25 +43,19 @@ constexpr std::string_view kMalformedTaskAwareListPageToken = "invalid-page-toke
 constexpr int kInvalidTaskAwareListPageSize = -1;
 constexpr int kValidTaskAwareListPageSize = 1;
 
-void ExpectTaskAwarePushListValidation(a2a::server::PushNotificationStore& push_store,
-                                       const a2a::server::TaskStore& task_store) {
+void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAwarePushNotificationStore& push_store,
+                                                          const a2a::server::TaskStore& task_store) {
   const auto invalid_page_size =
       push_store.ListForTask(kMissingTaskAwareListTaskId, kInvalidTaskAwareListPageSize, {}, task_store);
   ASSERT_FALSE(invalid_page_size.ok());
-  EXPECT_EQ(invalid_page_size.error().code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_FALSE(invalid_page_size.error().protocol_code().has_value());
+  EXPECT_EQ(invalid_page_size.error().protocol_code().value_or(std::string{}),
+            a2a::core::protocol_codes::kTaskNotFound);
 
   const auto malformed_page_token = push_store.ListForTask(kMissingTaskAwareListTaskId, kValidTaskAwareListPageSize,
                                                            kMalformedTaskAwareListPageToken, task_store);
   ASSERT_FALSE(malformed_page_token.ok());
-  EXPECT_EQ(malformed_page_token.error().code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_FALSE(malformed_page_token.error().protocol_code().has_value());
-}
-
-TEST(StoreConformanceTest, InMemoryTaskAwarePushListValidatesRequestBeforeMissingTask) {
-  a2a::server::InMemoryTaskStore task_store;
-  a2a::server::InMemoryPushNotificationStore push_store;
-  ExpectTaskAwarePushListValidation(push_store, task_store);
+  EXPECT_EQ(malformed_page_token.error().protocol_code().value_or(std::string{}),
+            a2a::core::protocol_codes::kTaskNotFound);
 }
 
 TEST(StoreConformanceTest, InMemoryTaskStore) {
@@ -244,7 +238,7 @@ constexpr std::size_t kIdentityValidationPoolSize = 2U;
 constexpr std::size_t kNoPostgresCommandCount = 0U;
 constexpr std::size_t kSinglePostgresCommandCount = 1U;
 constexpr std::size_t kSinglePushConfigGetCommandCount = 1U;
-constexpr std::size_t kMissingPushConfigGetCommandCount = 2U;
+constexpr std::size_t kMissingPushConfigGetCommandCount = 1U;
 
 struct ConninfoDeleter final {
   void operator()(PQconninfoOption* options) const noexcept { PQconninfoFree(options); }
@@ -2521,7 +2515,7 @@ TEST(StoreConformanceTest, PostgresPushConfigListEdgeCasesUseOneCommand) {
   ExpectMissingPushConfigTask(push_store);
 }
 
-TEST(StoreConformanceTest, PostgresTaskAwarePushListValidatesRequestBeforeMissingTask) {
+TEST(StoreConformanceTest, PostgresTaskAwarePushListPreservesTaskFirstValidationOrder) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
@@ -2530,7 +2524,15 @@ TEST(StoreConformanceTest, PostgresTaskAwarePushListValidatesRequestBeforeMissin
       .connection_string = dsn_value, .schema = MakePostgresTestSchema(kListValidationOrderSchemaSuffix)};
   a2a::server::stores::PostgresTaskStore task_store(options);
   a2a::server::stores::PostgresPushNotificationStore push_store(options);
-  ExpectTaskAwarePushListValidation(push_store, task_store);
+  ExpectMissingTaskPrecedesTaskAwarePushListValidation(push_store, task_store);
+
+  AddPostgresTask(task_store, kMissingTaskAwareListTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  const auto malformed_page_token = push_store.ListForTask(kMissingTaskAwareListTaskId, kValidTaskAwareListPageSize,
+                                                           kMalformedTaskAwareListPageToken, task_store);
+  ASSERT_FALSE(malformed_page_token.ok());
+  EXPECT_EQ(malformed_page_token.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_FALSE(malformed_page_token.error().protocol_code().has_value());
 }
 
 TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {
