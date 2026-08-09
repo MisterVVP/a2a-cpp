@@ -97,21 +97,22 @@ concurrent database operations while staying within PostgreSQL's connection
 limit (including connections used by other application instances and tools).
 Task and push-notification stores returned by `CreateStoreBundle()` share this
 single configured pool; separately created stores each own a separate pool.
-Storage matching uses libpq's effective logical connection options (`host`,
-`hostaddr`, port, database, and `target_session_attrs`) plus the configured
-schema. Passwords and raw connection strings are not part of storage identity.
-Exact coordinate equality confirms local authority; a different database or
-schema confirms external authority. Other endpoint differences are uncertain
-because aliases, DNS, `hostaddr`, port changes, and multi-host failover can make
-textual differences insufficient evidence of external ownership. For separately
-constructed stores, `PostgresStoreOptions::storage_authority_id` can make that
-relationship explicit: matching non-empty IDs prove local authority, different
-non-empty IDs prove external authority, and a one-sided ID remains uncertain.
-Database or schema differences still override the ID and remain external. Treat
-the ID as a stable, non-secret deployment identifier rather than a connection
-credential. It is an authority assertion: incorrect IDs can change provenance
-and cleanup semantics. Equivalent URI and keyword DSNs continue to take the
-local path when libpq reports the same effective logical options.
+Storage matching uses libpq's active connection target (selected host,
+resolved server address, active port, and database) plus the configured
+`target_session_attrs` value and schema. Passwords and raw connection strings
+are not part of storage identity. Exact coordinate equality confirms local
+authority; a different database or schema confirms external authority. Other
+endpoint differences are uncertain because aliases, DNS, port changes, and
+multi-host failover can make textual differences insufficient evidence of
+external ownership. For separately constructed stores,
+`PostgresStoreOptions::storage_authority_id` can make that relationship explicit:
+matching non-empty IDs prove local authority, different non-empty IDs prove
+external authority, and a one-sided ID remains uncertain. Database or schema
+differences still override the ID and remain external. Treat the ID as a stable,
+non-secret deployment identifier rather than a connection credential. It is an
+authority assertion: incorrect IDs can change provenance and cleanup semantics.
+Equivalent URI and keyword DSNs continue to take the local path when they resolve
+to the same active server target.
 
 The effective PostgreSQL role is tracked separately as part of the execution
 identity. Role differences do not make storage external and do not disable the
@@ -178,10 +179,11 @@ catalogs.
 If any task-aware helper or trigger is present, construction requires the whole
 migration and rejects partial or stale installations. Validation covers both
 `SECURITY DEFINER` helper implementations and migration markers, their owners'
-required privileges, absence of `PUBLIC EXECUTE`, and exact `AFTER DELETE`
-trigger wiring without a `WHEN` clause. Function-body checks preserve the exact
-case of quoted schema/table identifiers so a similarly named object in another
-case-sensitive schema cannot satisfy validation.
+required privileges, absence of `PUBLIC EXECUTE`, exact `AFTER DELETE` trigger
+wiring without a `WHEN` clause, and the cleanup owner's ability to bypass any
+row-level security enabled on the push-config table. Function-body checks
+preserve the exact case of quoted schema/table identifiers so a similarly named
+object in another case-sensitive schema cannot satisfy validation.
 
 Apply the following migration before using local PostgreSQL task-aware
 create/update. This example uses the `public` schema and an SDK database role
@@ -194,7 +196,12 @@ the helper's owner needs `UPDATE` because the `SECURITY DEFINER` function takes
 `TaskStore` do not need task-table access or lock-helper execution. PostgreSQL
 row-level security on the task table is allowed for external-authority/push-only
 use, but the local task-aware create path rejects it explicitly because a
-`SECURITY DEFINER` lock must not bypass caller row policies.
+`SECURITY DEFINER` lock must not bypass caller row policies. If row-level
+security is enabled on the push-config table, managed-schema validation also
+requires the cleanup helper owner to bypass it: a table owner is sufficient when
+`FORCE ROW LEVEL SECURITY` is not enabled, while `BYPASSRLS` and superuser roles
+always bypass it. This prevents task deletion from silently leaving locally
+owned callback configurations behind.
 
 ```sql
 BEGIN;

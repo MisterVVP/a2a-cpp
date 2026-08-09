@@ -48,9 +48,6 @@ constexpr std::string_view kReadPostgresEffectiveRoleMissingRowMessage =
     "read postgres effective role: query returned no row";
 constexpr std::string_view kReadPostgresConnectionOptionsMissingMessage =
     "read postgres connection identity: unable to read libpq connection options";
-constexpr std::string_view kConninfoHostKeyword = "host";
-constexpr std::string_view kConninfoHostAddressKeyword = "hostaddr";
-constexpr std::string_view kConninfoPortKeyword = "port";
 constexpr std::string_view kConninfoTargetSessionAttributesKeyword = "target_session_attrs";
 
 #ifdef A2A_POSTGRES_STORE_TESTING
@@ -263,9 +260,9 @@ using Conninfo = std::unique_ptr<PQconninfoOption, ConninfoDeleter>;
   }
 
   PostgresExecutionIdentity identity;
-  identity.storage.host = ConninfoValue(options.get(), kConninfoHostKeyword);
-  identity.storage.host_address = ConninfoValue(options.get(), kConninfoHostAddressKeyword);
-  identity.storage.port = ConninfoValue(options.get(), kConninfoPortKeyword);
+  identity.storage.host = LibpqValue(PQhost(connection));
+  identity.storage.host_address = LibpqValue(PQhostaddr(connection));
+  identity.storage.port = LibpqValue(PQport(connection));
   identity.storage.database = LibpqValue(PQdb(connection));
   identity.storage.target_session_attributes = ConninfoValue(options.get(), kConninfoTargetSessionAttributesKeyword);
   PgResult role_result(PQexec(connection, kCurrentUserSql));

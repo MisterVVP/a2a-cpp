@@ -35,19 +35,19 @@ auto stores = factory.CreateStoreBundle();
 
 Task and push-notification stores returned by `CreateStoreBundle()` share one
 connection pool. Separately constructed stores own separate pools. Storage
-matching uses libpq's effective logical `host`, `hostaddr`, port, database, and
-`target_session_attrs` values plus schema. Exact coordinate equality confirms
-local authority; a different database or schema confirms external authority;
-other endpoint differences are uncertain. Separately constructed stores can set
+matching uses libpq's active connection target (selected host, resolved server
+address, active port, and database) plus the configured `target_session_attrs`
+value and schema. Exact coordinate equality confirms local authority; a
+different database or schema confirms external authority; other endpoint
+differences are uncertain. Separately constructed stores can set
 `PostgresStoreOptions::storage_authority_id`: matching non-empty IDs prove local
 authority, different non-empty IDs prove external authority, and a one-sided ID
 remains uncertain. Database/schema differences still remain external. The ID is
 a stable, non-secret deployment identifier and must reflect the real storage
 authority because it affects provenance and cleanup. Passwords and raw
 connection strings are not part of the identity. The effective role is tracked
-separately: role
-differences still use the one-command local create path, while the one-command
-list shortcut requires identical storage coordinates and role.
+separately: role differences still use the one-command local create path, while
+the one-command list shortcut requires identical storage coordinates and role.
 
 ### Task-aware PostgreSQL behavior
 
@@ -85,9 +85,10 @@ on the request path.
 
 If any task-aware helper or trigger is present, the whole
 `task-aware-push-config-v2` migration is required. Validation checks both helper
-implementations and markers, owner privileges, absence of `PUBLIC EXECUTE`, and
-the enabled `AFTER DELETE` row trigger without a `WHEN` clause. Partial or stale
-installations fail construction.
+implementations and markers, owner privileges, absence of `PUBLIC EXECUTE`, the
+enabled `AFTER DELETE` row trigger without a `WHEN` clause, and the cleanup
+owner's ability to bypass any row-level security enabled on the push-config
+table. Partial or stale installations fail construction.
 
 Apply the following migration before using local PostgreSQL task-aware
 create/update. The example uses the `public` schema and an SDK role named
@@ -98,7 +99,10 @@ The invoking push role needs task-table `SELECT` plus helper `EXECUTE`; task
 paired with an external authoritative `TaskStore` do not need task-table access
 or helper execution. Task-table row-level security is allowed for those
 external-authority paths but is rejected when the local task-aware create helper
-is invoked.
+is invoked. If push-table row-level security is enabled, the cleanup helper owner
+must bypass it via table ownership without `FORCE ROW LEVEL SECURITY`, or via
+`BYPASSRLS` or superuser status, so task deletion cannot silently retain local
+push configurations.
 
 ```sql
 BEGIN;
