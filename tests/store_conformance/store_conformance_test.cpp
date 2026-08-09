@@ -2431,35 +2431,50 @@ TEST(StoreConformanceTest, PostgresFactoryRejectsZeroPoolSizeBeforeConnecting) {
   EXPECT_EQ(result.error().message(), a2a::server::stores::kPostgresConnectionPoolSizeValidationMessage);
 }
 
-TEST(StoreConformanceTest, PostgresBundleSharesConfiguredConnectionPool) {
-  constexpr std::size_t kCustomPoolSize = 2U;
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
-  }
-  const a2a::server::stores::PostgresStoreFactory factory({.connection_string = dsn_value,
-                                                           .schema = MakePostgresTestSchema("shared_pool"),
-                                                           .connection_pool_size = kCustomPoolSize});
+constexpr std::string_view kSharedPoolSchemaSuffix = "shared_pool";
+constexpr std::size_t kConfiguredBundlePoolSize = 2U;
 
+void ExpectSharedPostgresBundlePool(a2a::server::stores::PostgresTaskStore& task_store,
+                                    a2a::server::stores::PostgresPushNotificationStore& push_store) {
+  ASSERT_EQ(task_store.connection_pool_for_testing(), push_store.connection_pool_for_testing());
+  EXPECT_EQ(task_store.connection_pool_for_testing()->capacity(), kConfiguredBundlePoolSize);
+}
+
+void ExpectSharedPostgresBundleListShortcut(a2a::server::stores::PostgresTaskStore& task_store,
+                                            a2a::server::stores::PostgresPushNotificationStore& push_store) {
+  AddPostgresTask(task_store, kSessionPolicyTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kSessionPolicyTaskId),
+                                                                            std::string(kSessionPolicyConfigId)))
+                  .ok());
+  ResetPushConfigListDiagnostics();
+  ASSERT_TRUE(push_store.ListForTask(kSessionPolicyTaskId, kUnboundedPushListPageSize, {}, task_store).ok());
+  ExpectSinglePushConfigListCommand();
+}
+
+void ExpectConfiguredPostgresBundle(std::string_view dsn) {
+  const a2a::server::stores::PostgresStoreFactory factory(
+      {.connection_string = std::string(dsn),
+       .schema = MakePostgresTestSchema(kSharedPoolSchemaSuffix),
+       .connection_pool_size = kConfiguredBundlePoolSize});
   auto bundle = factory.CreateStoreBundle();
-
   ASSERT_TRUE(bundle.ok());
+
   auto* task_store = dynamic_cast<a2a::server::stores::PostgresTaskStore*>(bundle.value().task_store.get());
   auto* push_store = dynamic_cast<a2a::server::stores::PostgresPushNotificationStore*>(bundle.value().push_store.get());
   ASSERT_NE(task_store, nullptr);
   ASSERT_NE(push_store, nullptr);
-  ASSERT_EQ(task_store->connection_pool_for_testing(), push_store->connection_pool_for_testing());
-  EXPECT_EQ(task_store->connection_pool_for_testing()->capacity(), kCustomPoolSize);
+  ExpectSharedPostgresBundlePool(*task_store, *push_store);
+  ExpectSharedPostgresBundleListShortcut(*task_store, *push_store);
+}
 
-  AddPostgresTask(*task_store, kSessionPolicyTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-  ASSERT_TRUE(push_store
-                  ->CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kSessionPolicyTaskId),
-                                                                             std::string(kSessionPolicyConfigId)))
-                  .ok());
-  ResetPushConfigListDiagnostics();
-  ASSERT_TRUE(push_store->ListForTask(kSessionPolicyTaskId, kUnboundedPushListPageSize, {}, *task_store).ok());
-  ExpectSinglePushConfigListCommand();
+TEST(StoreConformanceTest, PostgresBundleSharesConfiguredConnectionPool) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectConfiguredPostgresBundle(dsn_value);
 }
 
 TEST(StoreConformanceTest, SharedPostgresPoolWithDifferentSchemasUsesAuthoritativeTaskLookup) {
