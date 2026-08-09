@@ -2454,10 +2454,9 @@ void ExpectSharedPostgresBundleListShortcut(a2a::server::stores::PostgresTaskSto
 }
 
 void ExpectConfiguredPostgresBundle(std::string_view dsn) {
-  const a2a::server::stores::PostgresStoreFactory factory(
-      {.connection_string = std::string(dsn),
-       .schema = MakePostgresTestSchema(kSharedPoolSchemaSuffix),
-       .connection_pool_size = kConfiguredBundlePoolSize});
+  const a2a::server::stores::PostgresStoreFactory factory({.connection_string = std::string(dsn),
+                                                           .schema = MakePostgresTestSchema(kSharedPoolSchemaSuffix),
+                                                           .connection_pool_size = kConfiguredBundlePoolSize});
   auto bundle = factory.CreateStoreBundle();
   ASSERT_TRUE(bundle.ok());
 
