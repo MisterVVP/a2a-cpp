@@ -2444,9 +2444,8 @@ TEST(StoreConformanceTest, PostgresBundleSharesConfiguredConnectionPool) {
   auto bundle = factory.CreateStoreBundle();
 
   ASSERT_TRUE(bundle.ok());
-  const auto* task_store = dynamic_cast<a2a::server::stores::PostgresTaskStore*>(bundle.value().task_store.get());
-  const auto* push_store =
-      dynamic_cast<a2a::server::stores::PostgresPushNotificationStore*>(bundle.value().push_store.get());
+  auto* task_store = dynamic_cast<a2a::server::stores::PostgresTaskStore*>(bundle.value().task_store.get());
+  auto* push_store = dynamic_cast<a2a::server::stores::PostgresPushNotificationStore*>(bundle.value().push_store.get());
   ASSERT_NE(task_store, nullptr);
   ASSERT_NE(push_store, nullptr);
   ASSERT_EQ(task_store->connection_pool_for_testing(), push_store->connection_pool_for_testing());
