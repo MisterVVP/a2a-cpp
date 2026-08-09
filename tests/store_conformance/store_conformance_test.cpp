@@ -3250,9 +3250,9 @@ TEST(StoreConformanceTest, ExternalAuthorityPushOnlyRoleDoesNotRequireTaskPrivil
 }
 
 void DropTaskAwarePushSchemaObjects(PGconn* connection, std::string_view schema) {
-  ASSERT_TRUE(a2a::server::stores::Exec(connection, BuildDropTaskAwarePushSchemaSql(schema),
-                                        kMutateManagedPushSchemaOperation)
-                  .ok());
+  ASSERT_TRUE(
+      a2a::server::stores::Exec(connection, BuildDropTaskAwarePushSchemaSql(schema), kMutateManagedPushSchemaOperation)
+          .ok());
 }
 
 void ExpectExternalAuthorityPushOnlyCreate(a2a::server::stores::PostgresPushNotificationStore& push_store,
@@ -3265,8 +3265,7 @@ void ExpectExternalAuthorityPushOnlyCreate(a2a::server::stores::PostgresPushNoti
   ExpectPushConfigPresent(push_store, kMixedCreateTaskId, kMixedCreateConfigId);
 }
 
-void ExpectPushOnlySchemaLocalCreateDiagnostics(
-    const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
+void ExpectPushOnlySchemaLocalCreateDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
             kSinglePostgresCommandCount);
   EXPECT_EQ(
@@ -3274,9 +3273,8 @@ void ExpectPushOnlySchemaLocalCreateDiagnostics(
       kNoPostgresCommandCount);
 }
 
-void ExpectPushOnlySchemaRejectsLocalTaskAwareCreate(
-    a2a::server::stores::PostgresPushNotificationStore& push_store,
-    a2a::server::stores::PostgresTaskStore& local_task_store) {
+void ExpectPushOnlySchemaRejectsLocalTaskAwareCreate(a2a::server::stores::PostgresPushNotificationStore& push_store,
+                                                     a2a::server::stores::PostgresTaskStore& local_task_store) {
   a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
   const auto local_create = push_store.CreateOrUpdateForTask(
       a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
