@@ -215,6 +215,7 @@ constexpr std::string_view kRetainTaskTriggerName = "zz_a2a_retain_task_trigger"
 constexpr std::string_view kInstallRetainTaskTriggerOperation = "install task retention trigger";
 constexpr std::string_view kSuppressedDeleteSchemaSuffix = "push_suppressed_task_delete";
 constexpr std::string_view kExternalMigrationSchemaSuffix = "push_external_schema_migration";
+constexpr std::string_view kManagedValidationSchemaSuffix = "push_managed_validation";
 constexpr std::string_view kMissingCleanupTriggerSchemaSuffix = "push_external_schema_missing_cleanup";
 constexpr std::string_view kLegacyForeignKeySchemaSuffix = "push_schema_legacy_fk";
 constexpr std::string_view kCleanupImplementationSchemaSuffix = "push_schema_cleanup_impl";
@@ -3108,6 +3109,18 @@ TEST(StoreConformanceTest, PostgresTaskDeleteCleanupRunsOnlyAfterDeletion) {
 
   EXPECT_TRUE(task_store.Get(kAtomicCreateTaskId).ok());
   ExpectPushConfigPresent(push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
+}
+
+TEST(StoreConformanceTest, AutoCreatedTaskAwarePushSchemaPassesManagedValidation) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const a2a::server::stores::PostgresStoreOptions options{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kManagedValidationSchemaSuffix)};
+
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  EXPECT_NO_THROW(static_cast<void>(a2a::server::stores::PostgresPushNotificationStore(options)));
 }
 
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCurrentMigration) {
