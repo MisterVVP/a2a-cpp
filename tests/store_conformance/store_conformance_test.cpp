@@ -3249,11 +3249,51 @@ TEST(StoreConformanceTest, ExternalAuthorityPushOnlyRoleDoesNotRequireTaskPrivil
   ExpectExternalAuthorityPushOnlyRoleWorks(dsn_value);
 }
 
-TEST(StoreConformanceTest, ExternallyManagedPushOnlySchemaMayOmitTaskAwareObjects) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
-  }
+void DropTaskAwarePushSchemaObjects(PGconn* connection, std::string_view schema) {
+  ASSERT_TRUE(a2a::server::stores::Exec(connection, BuildDropTaskAwarePushSchemaSql(schema),
+                                        kMutateManagedPushSchemaOperation)
+                  .ok());
+}
+
+void ExpectExternalAuthorityPushOnlyCreate(a2a::server::stores::PostgresPushNotificationStore& push_store,
+                                           const a2a::server::TaskStore& external_task_store) {
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId),
+                                                                                   std::string(kMixedCreateConfigId)),
+                                         external_task_store)
+                  .ok());
+  ExpectPushConfigPresent(push_store, kMixedCreateTaskId, kMixedCreateConfigId);
+}
+
+void ExpectPushOnlySchemaLocalCreateDiagnostics(
+    const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            kSinglePostgresCommandCount);
+  EXPECT_EQ(
+      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+      kNoPostgresCommandCount);
+}
+
+void ExpectPushOnlySchemaRejectsLocalTaskAwareCreate(
+    a2a::server::stores::PostgresPushNotificationStore& push_store,
+    a2a::server::stores::PostgresTaskStore& local_task_store) {
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  const auto local_create = push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      local_task_store);
+
+  ASSERT_FALSE(local_create.ok());
+  EXPECT_EQ(local_create.error().code(), a2a::core::ErrorCode::kInternal);
+  EXPECT_NE(local_create.error().message().find(a2a::server::stores::kTaskPushConfigMigrationId),
+            std::string_view::npos);
+  ExpectPushOnlySchemaLocalCreateDiagnostics(a2a::server::stores::TakePostgresOperationDiagnosticsForTesting());
+}
+
+void DropTaskTableForPushOnlySchema(PGconn* connection, std::string_view schema) {
+  ASSERT_TRUE(a2a::server::stores::Exec(connection, BuildDropTaskTableSql(schema), kDropTaskTableOperation).ok());
+}
+
+void ExpectPushOnlySchemaWithoutTaskAwareObjects(const char* dsn_value) {
   const std::string schema = MakePostgresTestSchema(kPushOnlyNoTaskAwareSchemaSuffix);
   const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = dsn_value, .schema = schema};
   a2a::server::stores::PostgresTaskStore local_task_store(owner_options);
@@ -3262,46 +3302,27 @@ TEST(StoreConformanceTest, ExternallyManagedPushOnlySchemaMayOmitTaskAwareObject
                   kOldTargetTaskTimestampSeconds);
   auto connection = owner_push_store.AcquireConnectionForTesting();
   ASSERT_TRUE(connection.ok());
-  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildDropTaskAwarePushSchemaSql(schema),
-                                        kMutateManagedPushSchemaOperation)
-                  .ok());
+  DropTaskAwarePushSchemaObjects(connection.value().get(), schema);
 
   const a2a::server::stores::PostgresStoreOptions managed_options{
       .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
   a2a::server::stores::PostgresPushNotificationStore push_only_store(managed_options);
   a2a::server::InMemoryTaskStore external_task_store;
   AddExternalAuthorityTask(external_task_store);
-  ASSERT_TRUE(push_only_store
-                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId),
-                                                                                   std::string(kMixedCreateConfigId)),
-                                         external_task_store)
-                  .ok());
-  ExpectPushConfigPresent(push_only_store, kMixedCreateTaskId, kMixedCreateConfigId);
-  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  ExpectExternalAuthorityPushOnlyCreate(push_only_store, external_task_store);
+  ExpectPushOnlySchemaRejectsLocalTaskAwareCreate(push_only_store, local_task_store);
 
-  const auto local_create = push_only_store.CreateOrUpdateForTask(
-      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
-      local_task_store);
-  ASSERT_FALSE(local_create.ok());
-  EXPECT_EQ(local_create.error().code(), a2a::core::ErrorCode::kInternal);
-  EXPECT_NE(local_create.error().message().find(a2a::server::stores::kTaskPushConfigMigrationId),
-            std::string_view::npos);
-  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
-  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
-            kSinglePostgresCommandCount);
-  EXPECT_EQ(
-      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-      kNoPostgresCommandCount);
-
-  ASSERT_TRUE(
-      a2a::server::stores::Exec(connection.value().get(), BuildDropTaskTableSql(schema), kDropTaskTableOperation).ok());
+  DropTaskTableForPushOnlySchema(connection.value().get(), schema);
   a2a::server::stores::PostgresPushNotificationStore pure_push_only_store(managed_options);
-  ASSERT_TRUE(pure_push_only_store
-                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId),
-                                                                                   std::string(kMixedCreateConfigId)),
-                                         external_task_store)
-                  .ok());
-  ExpectPushConfigPresent(pure_push_only_store, kMixedCreateTaskId, kMixedCreateConfigId);
+  ExpectExternalAuthorityPushOnlyCreate(pure_push_only_store, external_task_store);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushOnlySchemaMayOmitTaskAwareObjects) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectPushOnlySchemaWithoutTaskAwareObjects(dsn_value);
 }
 
 TEST(StoreConformanceTest, PostgresTaskDeleteTriggerUsesLeastPrivilegeSecurityDefiner) {
