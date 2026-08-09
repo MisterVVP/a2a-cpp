@@ -172,7 +172,10 @@ struct TaskListSqlFilter final {
 }  // namespace
 
 PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
-    : pool_(MakePool(options)), options_(std::move(options)) {
+    : pool_(MakePool(options)),
+      options_(std::move(options)),
+      storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
+      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
@@ -181,7 +184,10 @@ PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
 }
 
 PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> pool, PostgresStoreOptions options)
-    : pool_(std::move(pool)), options_(std::move(options)) {
+    : pool_(std::move(pool)),
+      options_(std::move(options)),
+      storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
+      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
@@ -191,6 +197,18 @@ PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> poo
 }
 
 PostgresTaskStore::~PostgresTaskStore() = default;
+
+bool PostgresTaskStore::UsesStorage(const PostgresStorageIdentity& identity) const noexcept {
+  return ClassifyPostgresStorageAuthority(storage_identity_, identity) == PostgresStorageAuthority::kLocal;
+}
+
+bool PostgresTaskStore::SharesConnectionPool(const PostgresConnectionPool& pool) const noexcept {
+  return pool_.get() == &pool;
+}
+
+const PostgresStorageIdentity& PostgresTaskStore::storage_identity() const noexcept { return storage_identity_; }
+
+const PostgresExecutionIdentity& PostgresTaskStore::execution_identity() const noexcept { return execution_identity_; }
 
 #ifdef A2A_POSTGRES_STORE_TESTING
 const PostgresConnectionPool* PostgresTaskStore::connection_pool_for_testing() const noexcept { return pool_.get(); }

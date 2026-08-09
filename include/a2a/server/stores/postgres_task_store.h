@@ -37,6 +37,10 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
                                                                   const lf::a2a::v1::Message& message,
                                                                   HistoryAppendPolicy policy) override;
   [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override;
+  [[nodiscard]] bool UsesStorage(const PostgresStorageIdentity& identity) const noexcept;
+  [[nodiscard]] bool SharesConnectionPool(const PostgresConnectionPool& pool) const noexcept;
+  [[nodiscard]] const PostgresStorageIdentity& storage_identity() const noexcept;
+  [[nodiscard]] const PostgresExecutionIdentity& execution_identity() const noexcept;
 #ifdef A2A_POSTGRES_STORE_TESTING
   [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
 #endif
@@ -44,6 +48,8 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
  private:
   std::shared_ptr<PostgresConnectionPool> pool_;
   PostgresStoreOptions options_;
+  PostgresStorageIdentity storage_identity_;
+  PostgresExecutionIdentity execution_identity_;
   mutable std::mutex telemetry_mutex_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
 };

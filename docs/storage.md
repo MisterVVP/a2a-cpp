@@ -97,6 +97,206 @@ concurrent database operations while staying within PostgreSQL's connection
 limit (including connections used by other application instances and tools).
 Task and push-notification stores returned by `CreateStoreBundle()` share this
 single configured pool; separately created stores each own a separate pool.
+Storage matching uses libpq's active connection target (selected host,
+resolved server address, active port, and database) plus the configured
+`target_session_attrs` value and schema. Passwords and raw connection strings
+are not part of storage identity. Exact coordinate equality confirms local
+authority; a different database or schema confirms external authority. Other
+endpoint differences are uncertain because aliases, DNS, port changes, and
+multi-host failover can make textual differences insufficient evidence of
+external ownership. For separately constructed stores,
+`PostgresStoreOptions::storage_authority_id` can make that relationship explicit:
+matching non-empty IDs prove local authority, different non-empty IDs prove
+external authority, and a one-sided ID remains uncertain. Database or schema
+differences still override the ID and remain external. Treat the ID as a stable,
+non-secret deployment identifier rather than a connection credential. It is an
+authority assertion: incorrect IDs can change provenance and cleanup semantics.
+Equivalent URI and keyword DSNs continue to take the local path when they resolve
+to the same active server target.
+
+The effective PostgreSQL role is tracked as part of each pool's connection
+identity. This identity is used to keep connections inside a pool consistent;
+it is not used to prove that two independently constructed pools have equivalent
+session-policy context. PostgreSQL row-security policies can consult arbitrary
+session settings supplied through connection `options` or changed at runtime, so
+matching endpoint/schema/role metadata is insufficient for that proof.
+Consequently, the one-command task-aware list shortcut is used only when the task
+and push stores share the exact `PostgresConnectionPool` and resolve to the same
+local storage authority, as they do when created by
+`PostgresStoreFactory::CreateStoreBundle()`. Separately constructed stores
+perform the authoritative task-store lookup first even when their DSNs and roles
+otherwise appear equivalent. Applications must not leave pooled connections with
+out-of-band session state such as `SET ROLE` or custom policy GUCs.
+
+### Task-aware PostgreSQL behavior
+
+`PostgresPushNotificationStore` implements the optional task-aware store
+capability used by `PushNotificationService` for create and list operations. The
+final PostgreSQL paths are:
+
+- **Same storage, create/update:** one push-store pool acquisition and one
+  `PQexecParams` command. The statement invokes the schema-qualified
+  `SECURITY DEFINER` task-lock helper, takes `FOR KEY SHARE` on the task, and
+  performs `INSERT ... ON CONFLICT DO UPDATE ... RETURNING 1` in the same
+  statement. There is no preliminary `task_get`, explicit multi-command
+  transaction, revalidation, or compensating cleanup. A missing task returns
+  `TaskNotFound`; a concurrent delete cannot leave a locally owned orphan.
+- **External authority, create/update:** the supplied `TaskStore` remains
+  authoritative. The service performs its task lookup first and then writes an
+  externally owned push row (`local_postgres_task=FALSE`). A different database
+  or schema proves external authority. An uncertain PostgreSQL identity is never
+  treated as external and is rejected before the push write. Direct
+  `PushNotificationStore::CreateOrUpdate` calls have no authoritative
+  `TaskStore`, so PostgreSQL keeps them on this external-provenance path.
+- **Get:** `GetConfig` remains push-store-only. PostgreSQL uses one statement and
+  one push-store acquisition to distinguish a missing config from an absent
+  push-config collection without consulting the authoritative `TaskStore`.
+- **List:** task and push stores that share one connection pool and local storage
+  authority use one combined PostgreSQL statement for task existence, count,
+  and page rows. With separate
+  pools, the authoritative task lookup runs first and the push store then
+  executes one combined count/page statement. This fallback is intentional even
+  when endpoint and role metadata match, because independent sessions may carry
+  different RLS policy context.
+
+For the normal `PostgresStoreFactory::CreateStoreBundle()` layout, create, get,
+and list therefore use one PostgreSQL command and one pool acquisition per
+successful public operation. `PushConfig_CreateMany` with fan-out eight performs
+eight independent create commands, not sixteen; the task existence check is part
+of each atomic create statement. Separately constructed stores that resolve to
+the same storage coordinates retain the same one-command create path. Their list
+calls use the task-first fallback unless they explicitly share one pool and local
+storage authority.
+
+When `auto_create_schema=true`, schema initialization creates or upgrades the
+task/push tables, provenance column, helper functions, cleanup trigger, sequences,
+and indexes, and removes the legacy push-to-task foreign key. The migration
+objects are installed transactionally and the `task-aware-push-config-v2`
+markers are written last.
+
+## Externally managed PostgreSQL schemas
+
+When `auto_create_schema=false`, the push-notification store always validates
+the push table's provenance column and rejects a legacy push-to-task foreign key.
+The local task-aware objects are an optional capability: if the lock helper,
+cleanup helper, and cleanup trigger are all absent, construction succeeds for a
+push-only store paired with an external authoritative `TaskStore`. Attempting to
+pair that store with a local PostgreSQL task store fails before the push write
+with an actionable `task-aware-push-config-v2` migration error. Capability
+detection happens during store construction; request paths do not query the
+catalogs.
+
+If any task-aware helper or trigger is present, construction requires the whole
+migration and rejects partial or stale installations. Validation covers both
+`SECURITY DEFINER` helper implementations and migration markers, their owners'
+required privileges, absence of `PUBLIC EXECUTE`, exact `AFTER DELETE` trigger
+wiring without a `WHEN` clause, and the cleanup owner's ability to bypass any
+row-level security enabled on the push-config table. Function-body checks
+preserve the exact case of quoted schema/table identifiers so a similarly named
+object in another case-sensitive schema cannot satisfy validation.
+
+Apply the following migration before using local PostgreSQL task-aware
+create/update. This example uses the `public` schema and an SDK database role
+named `a2a_sdk`; replace both names for your deployment. Grant the lock helper
+only to SDK roles authorized to create push notification configurations. The
+invoking push-store role needs task-table `SELECT` plus lock-helper `EXECUTE`,
+but it does not need task-table `UPDATE`;
+the helper's owner needs `UPDATE` because the `SECURITY DEFINER` function takes
+`FOR KEY SHARE`. Push-only roles paired with an external authoritative
+`TaskStore` do not need task-table access or lock-helper execution. PostgreSQL
+row-level security on the task table is allowed for external-authority/push-only
+use, but the local task-aware create path rejects it explicitly because a
+`SECURITY DEFINER` lock must not bypass caller row policies. If row-level
+security is enabled on the push-config table, managed-schema validation also
+requires the cleanup helper owner to bypass it: a table owner is sufficient when
+`FORCE ROW LEVEL SECURITY` is not enabled, while `BYPASSRLS` and superuser roles
+always bypass it. This prevents task deletion from silently leaving locally
+owned callback configurations behind.
+
+```sql
+BEGIN;
+
+ALTER TABLE public.a2a_push_notification_configs
+  ADD COLUMN IF NOT EXISTS local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE public.a2a_push_notification_configs
+  DROP CONSTRAINT IF EXISTS a2a_push_configs_task_fk;
+
+CREATE OR REPLACE FUNCTION public.a2a_lock_task_for_push_config(requested_task_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $a2a$
+DECLARE
+  caller_role NAME;
+BEGIN
+  caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none');
+  IF caller_role IS NULL THEN
+    caller_role := session_user;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_class
+    WHERE oid = pg_catalog.to_regclass('public.a2a_tasks') AND relrowsecurity
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE = '0A000', MESSAGE =
+      'PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks';
+  END IF;
+  IF NOT pg_catalog.has_table_privilege(caller_role, 'public.a2a_tasks', 'SELECT') THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE =
+      'PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation';
+  END IF;
+  PERFORM 1
+  FROM public.a2a_tasks
+  WHERE id = requested_task_id
+  FOR KEY SHARE;
+  RETURN FOUND;
+END
+$a2a$;
+
+REVOKE ALL ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) FROM PUBLIC;
+GRANT SELECT ON public.a2a_tasks TO a2a_sdk;
+GRANT EXECUTE ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) TO a2a_sdk;
+
+CREATE OR REPLACE FUNCTION public.a2a_delete_task_push_configs()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $a2a$
+BEGIN
+  DELETE FROM public.a2a_push_notification_configs
+  WHERE task_id = OLD.id AND local_postgres_task;
+  RETURN OLD;
+END
+$a2a$;
+
+REVOKE ALL ON FUNCTION public.a2a_delete_task_push_configs() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS a2a_delete_task_push_configs_trigger ON public.a2a_tasks;
+CREATE TRIGGER a2a_delete_task_push_configs_trigger
+AFTER DELETE ON public.a2a_tasks
+FOR EACH ROW
+EXECUTE FUNCTION public.a2a_delete_task_push_configs();
+
+COMMENT ON FUNCTION public.a2a_delete_task_push_configs()
+  IS 'task-aware-push-config-v2';
+
+COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
+  IS 'task-aware-push-config-v2';
+
+COMMIT;
+```
+
+The migration markers are written last inside the transaction, so a partial
+migration is never accepted. Existing push configurations are marked as
+externally owned by the new column's `FALSE` default. The owner of
+`a2a_lock_task_for_push_config(TEXT)` must have schema `USAGE` plus `SELECT` and
+`UPDATE` on `a2a_tasks`; the `UPDATE` privilege is needed by PostgreSQL for
+`FOR KEY SHARE`. The owner of `a2a_delete_task_push_configs()` must have schema
+`USAGE` plus `SELECT` and `DELETE` on the push-config table. These are SECURITY
+DEFINER owner requirements, not privileges that every push-store role must receive.
 
 ## Sensitive push notification data
 

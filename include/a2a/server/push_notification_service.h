@@ -38,6 +38,7 @@ class PushNotificationService final {
  private:
   TaskStore* task_store_ = nullptr;
   PushNotificationStore* push_store_ = nullptr;
+  TaskAwarePushNotificationStore* task_aware_push_store_ = nullptr;
   PushNotificationDeliveryClient* delivery_client_ = nullptr;
 };
 

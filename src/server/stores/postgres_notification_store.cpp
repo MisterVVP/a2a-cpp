@@ -17,14 +17,133 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/server/stores/postgres_task_store.h"
 
 namespace a2a::server::stores {
 namespace {
 
 constexpr std::uint64_t kPostgresBigintMaximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-constexpr std::size_t kPushListSqlReserveSlack = 512U;
+constexpr std::size_t kPushGetSqlReserveSlack = 256U;
+constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
+constexpr std::string_view kPushConfigUpsertOperation = "upsert postgres push notification config";
+constexpr std::string_view kPushConfigGetOperation = "get postgres push notification config";
+constexpr std::string_view kPushConfigSerializationErrorMessage =
+    "failed to parse stored TaskPushNotificationConfig protobuf";
+constexpr std::string_view kValidatePostgresPushSchemaOperation = "validate postgres push notification schema";
+constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
+    "PostgreSQL push-notification schema has an invalid or incomplete task-aware-push-config-v2 migration; apply "
+    "the migration in docs/storage.md before using auto_create_schema=false";
+constexpr std::string_view kPostgresTaskAwarePushSchemaRequiredMessage =
+    "PostgreSQL task-aware push configuration requires task-aware-push-config-v2; apply the migration in "
+    "docs/storage.md before pairing this push store with a local PostgreSQL task store";
+constexpr std::string_view kPushConfigProvenanceColumnName = "local_postgres_task";
+constexpr std::string_view kPostgresAfterDeleteRowTriggerType = "9";
+constexpr std::string_view kPostgresTriggerEnabledForOrigin = "O";
+constexpr std::string_view kPostgresTriggerEnabledAlways = "A";
+constexpr std::string_view kPostgresTrueValue = "t";
+constexpr int kPostgresPushSchemaParameterCount = 19;
+constexpr std::string_view kTaskLockExpectedTableReferenceCount = "3";
+constexpr std::string_view kCleanupExpectedTableReferenceCount = "1";
+constexpr int kPostgresPushSchemaCheckCount = 10;
+constexpr int kPostgresPushSchemaBaseCheckCount = 2;
+constexpr int kPostgresPushSchemaTaskAwarePresenceColumn = 2;
+constexpr int kPostgresPushSchemaTaskAwareFirstCheckColumn = 3;
+constexpr char kValidatePostgresPushSchemaSql[] =
+    "WITH relations AS MATERIALIZED ("
+    "SELECT schema_namespace.oid AS schema_oid, "
+    "pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1::text, $2::text)) AS push_oid, "
+    "pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1::text, $8::text)) AS task_oid "
+    "FROM pg_catalog.pg_namespace AS schema_namespace WHERE schema_namespace.nspname = $1), "
+    "lock_function AS MATERIALIZED ("
+    "SELECT routine.oid, routine.proacl, routine.proowner, routine.prosecdef, routine.provolatile, "
+    "routine.proconfig, routine.prorettype, routine.prosrc, "
+    "pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
+    "(SELECT pg_catalog.to_regprocedure(pg_catalog.format('%I.%I(text)', $1::text, $4::text)) AS oid) AS resolved "
+    "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid), "
+    "delete_function AS MATERIALIZED ("
+    "SELECT routine.oid, routine.proacl, routine.proowner, routine.prosecdef, routine.provolatile, routine.proconfig, "
+    "routine.prorettype, routine.prosrc, pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
+    "(SELECT pg_catalog.to_regprocedure(pg_catalog.format('%I.%I()', $1::text, $6::text)) AS oid) AS resolved "
+    "LEFT JOIN pg_catalog.pg_proc AS routine ON routine.oid = resolved.oid), "
+    "cleanup_trigger AS MATERIALIZED ("
+    "SELECT trigger.tgfoid, trigger.tgtype, trigger.tgenabled, trigger.tgnargs, trigger.tgqual "
+    "FROM pg_catalog.pg_trigger AS trigger "
+    "JOIN pg_catalog.pg_class AS relation ON relation.oid = trigger.tgrelid "
+    "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
+    "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 AND trigger.tgname = $7 "
+    "AND NOT trigger.tgisinternal) "
+    "SELECT "
+    "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute AS attribute "
+    "JOIN pg_catalog.pg_attrdef AS column_default ON column_default.adrelid = attribute.attrelid "
+    "AND column_default.adnum = attribute.attnum "
+    "WHERE attribute.attrelid = relations.push_oid AND attribute.attname = $3 "
+    "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
+    "AND attribute.atttypid = 'pg_catalog.bool'::pg_catalog.regtype AND attribute.attnotnull "
+    "AND attribute.atthasdef "
+    "AND pg_catalog.pg_get_expr(column_default.adbin, column_default.adrelid) = 'false'), "
+    "relations.push_oid IS NOT NULL AND NOT EXISTS ("
+    "SELECT 1 FROM pg_catalog.pg_constraint AS foreign_key WHERE foreign_key.contype = 'f' "
+    "AND foreign_key.conrelid = relations.push_oid AND foreign_key.confrelid = relations.task_oid), "
+    "lock_function.oid IS NOT NULL OR delete_function.oid IS NOT NULL OR EXISTS (SELECT 1 FROM cleanup_trigger), "
+    "lock_function.oid IS NOT NULL AND relations.task_oid IS NOT NULL AND lock_function.migration_id = $5 "
+    "AND lock_function.prosecdef AND lock_function.provolatile = 'v' "
+    "AND lock_function.prorettype = 'pg_catalog.bool'::pg_catalog.regtype "
+    "AND 'search_path=pg_catalog' = ANY(lock_function.proconfig) "
+    "AND pg_catalog.replace(pg_catalog.replace("
+    "pg_catalog.regexp_replace(pg_catalog.lower(lock_function.prosrc), '[[:space:]\"]+', '', 'g'), "
+    "'asrelation', ''), 'relation.', '') = "
+    "pg_catalog.replace(pg_catalog.replace("
+    "pg_catalog.regexp_replace(pg_catalog.lower($12::text), '[[:space:]\"]+', '', 'g'), "
+    "'asrelation', ''), 'relation.', '') "
+    "AND ((pg_catalog.length(lock_function.prosrc) - "
+    "pg_catalog.length(pg_catalog.replace(lock_function.prosrc, $13::text, ''))) = "
+    "$18::integer * pg_catalog.length($13::text) OR "
+    "($1::text = pg_catalog.lower($1::text) AND "
+    "pg_catalog.length(lock_function.prosrc) - "
+    "pg_catalog.length(pg_catalog.replace(lock_function.prosrc, $14::text, '')) = "
+    "$18::integer * pg_catalog.length($14::text))), "
+    "CASE WHEN lock_function.oid IS NULL THEN FALSE ELSE NOT EXISTS ("
+    "SELECT 1 FROM pg_catalog.aclexplode(COALESCE(lock_function.proacl, "
+    "pg_catalog.acldefault('f', lock_function.proowner))) AS acl_entry "
+    "WHERE acl_entry.grantee = 0 AND acl_entry.privilege_type = 'EXECUTE') END, "
+    "lock_function.oid IS NOT NULL "
+    "AND pg_catalog.has_schema_privilege(lock_function.proowner, relations.schema_oid, 'USAGE') "
+    "AND pg_catalog.has_table_privilege(lock_function.proowner, relations.task_oid, 'SELECT') "
+    "AND pg_catalog.has_table_privilege(lock_function.proowner, relations.task_oid, 'UPDATE'), "
+    "delete_function.oid IS NOT NULL AND delete_function.migration_id = $5 AND delete_function.prosecdef "
+    "AND delete_function.provolatile = 'v' "
+    "AND delete_function.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype "
+    "AND 'search_path=pg_catalog' = ANY(delete_function.proconfig) "
+    "AND pg_catalog.regexp_replace(pg_catalog.lower(delete_function.prosrc), '[[:space:]\"]+', '', 'g') = "
+    "pg_catalog.regexp_replace(pg_catalog.lower($15::text), '[[:space:]\"]+', '', 'g') "
+    "AND ((pg_catalog.length(delete_function.prosrc) - "
+    "pg_catalog.length(pg_catalog.replace(delete_function.prosrc, $16::text, ''))) = "
+    "$19::integer * pg_catalog.length($16::text) OR "
+    "($1::text = pg_catalog.lower($1::text) AND "
+    "pg_catalog.length(delete_function.prosrc) - "
+    "pg_catalog.length(pg_catalog.replace(delete_function.prosrc, $17::text, '')) = "
+    "$19::integer * pg_catalog.length($17::text))), "
+    "CASE WHEN delete_function.oid IS NULL THEN FALSE ELSE NOT EXISTS ("
+    "SELECT 1 FROM pg_catalog.aclexplode(COALESCE(delete_function.proacl, "
+    "pg_catalog.acldefault('f', delete_function.proowner))) AS acl_entry "
+    "WHERE acl_entry.grantee = 0 AND acl_entry.privilege_type = 'EXECUTE') END, "
+    "delete_function.oid IS NOT NULL "
+    "AND pg_catalog.has_schema_privilege(delete_function.proowner, relations.schema_oid, 'USAGE') "
+    "AND pg_catalog.has_table_privilege(delete_function.proowner, relations.push_oid, 'SELECT') "
+    "AND pg_catalog.has_table_privilege(delete_function.proowner, relations.push_oid, 'DELETE') "
+    "AND EXISTS (SELECT 1 FROM pg_catalog.pg_class AS push_relation "
+    "JOIN pg_catalog.pg_roles AS cleanup_owner ON cleanup_owner.oid = delete_function.proowner "
+    "WHERE push_relation.oid = relations.push_oid "
+    "AND (NOT push_relation.relrowsecurity OR cleanup_owner.rolsuper OR cleanup_owner.rolbypassrls "
+    "OR (push_relation.relowner = delete_function.proowner AND NOT push_relation.relforcerowsecurity))), "
+    "EXISTS (SELECT 1 FROM cleanup_trigger WHERE cleanup_trigger.tgfoid = delete_function.oid "
+    "AND cleanup_trigger.tgtype = $9::smallint "
+    "AND (cleanup_trigger.tgenabled = $10::pg_catalog.\"char\" "
+    "OR cleanup_trigger.tgenabled = $11::pg_catalog.\"char\") "
+    "AND cleanup_trigger.tgnargs = 0 AND cleanup_trigger.tgqual IS NULL) "
+    "FROM relations CROSS JOIN lock_function CROSS JOIN delete_function";
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -81,6 +200,56 @@ constexpr std::string_view kPushListMissingCountMessage =
   return sql;
 }
 
+[[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task) {
+  const std::string push_table = PushTable(schema);
+  const std::string task_lock_function = validate_postgres_task ? TaskPushConfigLockFunction(schema) : std::string{};
+  std::string sql;
+  sql.reserve(push_table.size() + task_lock_function.size() + kPushUpsertSqlReserveSlack);
+  if (validate_postgres_task) {
+    sql.append("WITH task AS MATERIALIZED (SELECT ");
+    sql.append(task_lock_function);
+    sql.append("($1) AS task_exists) ");
+  }
+  sql.append("INSERT INTO ");
+  sql.append(push_table);
+  sql.append(" (task_id, config_id, url, config_proto, local_postgres_task, updated_at) ");
+  if (validate_postgres_task) {
+    sql.append("SELECT $1, $2, $3, $4, TRUE, now() FROM task WHERE task.task_exists ");
+  } else {
+    sql.append("VALUES ($1, $2, $3, $4, FALSE, now()) ");
+  }
+  sql.append(
+      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
+      "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
+      "updated_at = now() ");
+  sql.append("RETURNING 1");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildPushGetSql(std::string_view schema) {
+  const std::string push_table = PushTable(schema);
+  std::string sql;
+  sql.reserve((2U * push_table.size()) + kPushGetSqlReserveSlack);
+  sql.append("WITH config AS MATERIALIZED (SELECT config_proto FROM ");
+  sql.append(push_table);
+  sql.append(
+      " WHERE task_id = $1 AND config_id = $2) SELECT config_proto FROM config UNION ALL "
+      "SELECT NULL::bytea FROM ");
+  sql.append(push_table);
+  sql.append(" WHERE task_id = $1 AND NOT EXISTS (SELECT 1 FROM config) LIMIT 1");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildPushDeleteSql(std::string_view schema) {
+  const std::string push_table = PushTable(schema);
+  std::string sql;
+  sql.reserve(push_table.size() + kPushDeleteSqlReserveSlack);
+  sql.append("DELETE FROM ");
+  sql.append(push_table);
+  sql.append(" WHERE task_id = $1 AND config_id = $2");
+  return sql;
+}
+
 [[nodiscard]] core::Result<void> ValidatePushConfig(const lf::a2a::v1::TaskPushNotificationConfig& config) {
   if (config.task_id().empty()) {
     return core::Error::Validation(std::string(kPushTaskIdRequiredMessage));
@@ -104,26 +273,129 @@ constexpr std::string_view kPushListMissingCountMessage =
   return {};
 }
 
+[[nodiscard]] core::Result<std::size_t> ValidatePushListRequest(std::string_view task_id, int page_size,
+                                                                std::string_view page_token) {
+  if (task_id.empty()) {
+    return core::Error::Validation(std::string(kPushTaskIdRequiredMessage));
+  }
+  if (page_size < 0) {
+    return core::Error::Validation(std::string(kPageSizeInvalidMessage));
+  }
+  return ParsePushListPageToken(page_token);
+}
+
+[[nodiscard]] bool IsPostgresTrue(PGresult* result, int column) {
+  return PQgetisnull(result, 0, column) == 0 && std::string_view(PQgetvalue(result, 0, column)) == kPostgresTrueValue;
+}
+
+[[nodiscard]] std::string UnquotedQualifiedIdentifier(std::string_view schema, std::string_view identifier) {
+  std::string qualified;
+  qualified.reserve(schema.size() + 1U + identifier.size());
+  qualified.append(schema);
+  qualified.push_back('.');
+  qualified.append(identifier);
+  return qualified;
+}
+
+[[nodiscard]] core::Result<bool> ValidateManagedPushSchema(PGconn* connection, const PostgresStoreOptions& options) {
+  const std::string expected_lock_body = ExpectedTaskPushConfigLockFunctionBody(options.schema);
+  const std::string quoted_task_table = TaskTable(options.schema);
+  const std::string unquoted_task_table = UnquotedQualifiedIdentifier(options.schema, kTaskTableName);
+  const std::string expected_cleanup_body = ExpectedDeleteTaskPushConfigsFunctionBody(options.schema);
+  const std::string quoted_push_table = PushTable(options.schema);
+  const std::string unquoted_push_table = UnquotedQualifiedIdentifier(options.schema, kPushTableName);
+  const std::array<const char*, kPostgresPushSchemaParameterCount> values = {
+      options.schema.c_str(),
+      kPushTableName.data(),
+      kPushConfigProvenanceColumnName.data(),
+      kTaskPushConfigLockFunction.data(),
+      kTaskPushConfigMigrationId.data(),
+      kDeleteTaskPushConfigsFunction.data(),
+      kDeleteTaskPushConfigsTrigger.data(),
+      kTaskTableName.data(),
+      kPostgresAfterDeleteRowTriggerType.data(),
+      kPostgresTriggerEnabledForOrigin.data(),
+      kPostgresTriggerEnabledAlways.data(),
+      expected_lock_body.c_str(),
+      quoted_task_table.c_str(),
+      unquoted_task_table.c_str(),
+      expected_cleanup_body.c_str(),
+      quoted_push_table.c_str(),
+      unquoted_push_table.c_str(),
+      kTaskLockExpectedTableReferenceCount.data(),
+      kCleanupExpectedTableReferenceCount.data(),
+  };
+  PgResult result(PQexecParams(connection, kValidatePostgresPushSchemaSql, static_cast<int>(values.size()), nullptr,
+                               values.data(), nullptr, nullptr, 0));
+  const auto checked = CheckTuples(connection, result.get(), kValidatePostgresPushSchemaOperation);
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) != 1 || PQnfields(result.get()) != kPostgresPushSchemaCheckCount) {
+    return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
+  }
+  for (int column = 0; column < kPostgresPushSchemaBaseCheckCount; ++column) {
+    if (!IsPostgresTrue(result.get(), column)) {
+      return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
+    }
+  }
+  if (!IsPostgresTrue(result.get(), kPostgresPushSchemaTaskAwarePresenceColumn)) {
+    return false;
+  }
+  for (int column = kPostgresPushSchemaTaskAwareFirstCheckColumn; column < kPostgresPushSchemaCheckCount; ++column) {
+    if (!IsPostgresTrue(result.get(), column)) {
+      return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] core::Result<bool> PreparePushSchema(PGconn* connection, const PostgresStoreOptions& options) {
+  auto initialized = InitializeSchema(connection, options);
+  if (!initialized.ok()) {
+    return initialized.error();
+  }
+  return ValidateManagedPushSchema(connection, options);
+}
+
 }  // namespace
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOptions options)
-    : pool_(MakePool(options)), options_(std::move(options)) {
+    : pool_(MakePool(options)),
+      options_(std::move(options)),
+      storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
+      get_sql_(BuildPushGetSql(options_.schema)),
+      task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
+      existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   auto lease = AcquireOrThrow(*pool_);
-  const auto initialized = InitializeSchema(lease.get(), options_);
-  if (!initialized.ok()) {
-    throw std::runtime_error(std::string(initialized.error().message()));
+  const auto prepared = PreparePushSchema(lease.get(), options_);
+  if (!prepared.ok()) {
+    throw std::runtime_error(std::string(prepared.error().message()));
   }
+  task_aware_schema_available_ = prepared.value();
 }
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<PostgresConnectionPool> pool,
                                                              PostgresStoreOptions options)
-    : pool_(std::move(pool)), options_(std::move(options)) {
+    : pool_(std::move(pool)),
+      options_(std::move(options)),
+      storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
+      get_sql_(BuildPushGetSql(options_.schema)),
+      task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
+      existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
-  const auto initialized = InitializeSchema(lease.get(), options_);
-  if (!initialized.ok()) {
-    throw std::runtime_error(std::string(initialized.error().message()));
+  const auto prepared = PreparePushSchema(lease.get(), options_);
+  if (!prepared.ok()) {
+    throw std::runtime_error(std::string(prepared.error().message()));
   }
+  task_aware_schema_available_ = prepared.value();
 }
 
 PostgresPushNotificationStore::~PostgresPushNotificationStore() = default;
@@ -131,6 +403,10 @@ PostgresPushNotificationStore::~PostgresPushNotificationStore() = default;
 #ifdef A2A_POSTGRES_STORE_TESTING
 const PostgresConnectionPool* PostgresPushNotificationStore::connection_pool_for_testing() const noexcept {
   return pool_.get();
+}
+
+core::Result<PostgresConnectionPool::Lease> PostgresPushNotificationStore::AcquireConnectionForTesting() {
+  return pool_->Acquire();
 }
 #endif
 
@@ -140,35 +416,80 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!validation.ok()) {
     return validation.error();
   }
+  return Upsert(config, UpsertPath::kExternal);
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Upsert(
+    const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path) {
+  auto lease = pool_->Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  return UpsertOnConnection(lease.value().get(), config, path);
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::UpsertOnConnection(
+    PGconn* connection, const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path) {
   const std::string payload = config.SerializeAsString();
-  const std::string sql = "INSERT INTO " + PushTable(options_.schema) +
-                          " (task_id, config_id, url, config_proto, updated_at) VALUES ($1, $2, $3, $4, now()) "
-                          "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
-                          "config_proto = EXCLUDED.config_proto, updated_at = now()";
+  const std::string& sql = path == UpsertPath::kLocalAtomic ? local_upsert_sql_ : external_upsert_sql_;
   constexpr int kPushUpsertParameterCount = 4;
   const std::array<const char*, kPushUpsertParameterCount> values = {config.task_id().c_str(), config.id().c_str(),
                                                                      config.url().c_str(), payload.data()};
   const std::array<int, kPushUpsertParameterCount> lengths = {0, 0, 0, static_cast<int>(payload.size())};
   const std::array<int, kPushUpsertParameterCount> formats = {0, 0, 0, 1};
-  auto lease = pool_->Acquire();
-  if (!lease.ok()) {
-    return lease.error();
-  }
   PgResult result;
 #ifdef A2A_POSTGRES_STORE_TESTING
   {
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
 #endif
-    result.reset(
-        PQexecParams(lease.value().get(), sql.c_str(), 4, nullptr, values.data(), lengths.data(), formats.data(), 0));
+    result.reset(PQexecParams(connection, sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
+                              lengths.data(), formats.data(), 0));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
-  const auto checked = CheckCommand(lease.value().get(), result.get(), "upsert postgres push notification config");
+  const auto checked = CheckTuples(connection, result.get(), kPushConfigUpsertOperation);
   if (!checked.ok()) {
     return checked.error();
   }
+  if (path == UpsertPath::kLocalAtomic && PQntuples(result.get()) == 0) {
+    return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
+  }
   return config;
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdateForTask(
+    const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
+  const auto validation = ValidatePushConfig(config);
+  if (!validation.ok()) {
+    const auto task = task_store.Get(config.task_id());
+    if (!task.ok()) {
+      return task.error();
+    }
+    return validation.error();
+  }
+  const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
+  const PostgresStorageAuthority authority =
+      postgres_task_store == nullptr
+          ? PostgresStorageAuthority::kExternal
+          : ClassifyPostgresStorageAuthority(postgres_task_store->storage_identity(), storage_identity_);
+  if (authority == PostgresStorageAuthority::kLocal) {
+    if (!task_aware_schema_available_) {
+      const auto task = task_store.Get(config.task_id());
+      if (!task.ok()) {
+        return task.error();
+      }
+      return core::Error::Internal(std::string(kPostgresTaskAwarePushSchemaRequiredMessage));
+    }
+    return Upsert(config, UpsertPath::kLocalAtomic);
+  }
+  const auto task = task_store.Get(config.task_id());
+  if (!task.ok()) {
+    return task.error();
+  }
+  if (authority == PostgresStorageAuthority::kUncertain) {
+    return core::Error::Internal(std::string(kPostgresTaskAuthorityUncertainMessage));
+  }
+  return Upsert(config, UpsertPath::kExternal);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Get(
@@ -177,10 +498,13 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   if (!validation.ok()) {
     return validation.error();
   }
+  return GetInternal(task_id, config_id);
+}
+
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::GetInternal(
+    std::string_view task_id, std::string_view config_id) const {
   const std::string task_id_value(task_id);
   const std::string config_id_value(config_id);
-  const std::string sql =
-      "SELECT config_proto FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
   const std::array<const char*, 2> values = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
@@ -191,39 +515,24 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   {
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigGet);
 #endif
-    result.reset(PQexecParams(lease.value().get(), sql.c_str(), 2, nullptr, values.data(), nullptr, nullptr, 1));
+    result.reset(PQexecParams(lease.value().get(), get_sql_.c_str(), static_cast<int>(values.size()), nullptr,
+                              values.data(), nullptr, nullptr, 1));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
-  const auto checked = CheckTuples(lease.value().get(), result.get(), "get postgres push notification config");
+  const auto checked = CheckTuples(lease.value().get(), result.get(), kPushConfigGetOperation);
   if (!checked.ok()) {
     return checked.error();
   }
   if (PQntuples(result.get()) == 0) {
-    const std::string exists_sql = "SELECT 1 FROM " + PushTable(options_.schema) + " WHERE task_id = $1 LIMIT 1";
-    PgResult exists;
-#ifdef A2A_POSTGRES_STORE_TESTING
-    {
-      const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigGet);
-#endif
-      exists.reset(
-          PQexecParams(lease.value().get(), exists_sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 0));
-#ifdef A2A_POSTGRES_STORE_TESTING
-    }
-#endif
-    const auto exists_checked =
-        CheckTuples(lease.value().get(), exists.get(), "check postgres push notification task configs");
-    if (!exists_checked.ok()) {
-      return exists_checked.error();
-    }
-    if (PQntuples(exists.get()) == 0) {
-      return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
-    }
+    return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
+  }
+  if (PQgetisnull(result.get(), 0, 0) != 0) {
     return core::Error::Validation(std::string(kConfigNotFoundMessage));
   }
   lf::a2a::v1::TaskPushNotificationConfig config;
   if (!config.ParseFromArray(PQgetvalue(result.get(), 0, 0), PQgetlength(result.get(), 0, 0))) {
-    return core::Error::Serialization("failed to parse stored TaskPushNotificationConfig protobuf");
+    return core::Error::Serialization(std::string(kPushConfigSerializationErrorMessage));
   }
   return config;
 }
@@ -235,6 +544,29 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListForExistingTask(
     std::string_view task_id, int page_size, std::string_view page_token) const {
+  return ListInternal(task_id, page_size, page_token, false);
+}
+
+core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushNotificationStore::ListForTask(
+    std::string_view task_id, int page_size, std::string_view page_token, const TaskStore& task_store) const {
+  const auto validation = ValidatePushListRequest(task_id, page_size, page_token);
+  if (!validation.ok()) {
+    const auto task = task_store.Get(task_id);
+    if (!task.ok()) {
+      return task.error();
+    }
+    return validation.error();
+  }
+  const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
+  // Matching endpoint/role metadata does not prove equal RLS context across independent sessions.
+  if (postgres_task_store != nullptr && postgres_task_store->SharesConnectionPool(*pool_) &&
+      postgres_task_store->UsesStorage(storage_identity_)) {
+    return ListInternal(task_id, page_size, page_token, true);
+  }
+  const auto task = task_store.Get(task_id);
+  if (!task.ok()) {
+    return task.error();
+  }
   return ListInternal(task_id, page_size, page_token, false);
 }
 
@@ -257,7 +589,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
   }
   const std::string limit_value = page_size == 0 ? std::string{} : std::to_string(page_size);
   const std::string offset_value = std::to_string(offset.value());
-  const std::string sql = BuildPushListSql(options_.schema, validate_task_existence);
+  const std::string& sql = validate_task_existence ? task_aware_list_sql_ : existing_task_list_sql_;
   const std::array<const char*, 3> values = {task_id_value.c_str(), page_size == 0 ? nullptr : limit_value.c_str(),
                                              offset_value.c_str()};
 
@@ -314,7 +646,7 @@ core::Result<void> PostgresPushNotificationStore::Delete(std::string_view task_i
   }
   const std::string task_id_value(task_id);
   const std::string config_id_value(config_id);
-  const std::string sql = "DELETE FROM " + PushTable(options_.schema) + " WHERE task_id = $1 AND config_id = $2";
+  const std::string& sql = delete_sql_;
   const std::array<const char*, 2> values = {task_id_value.c_str(), config_id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {

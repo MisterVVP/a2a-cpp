@@ -105,7 +105,7 @@ The in-process push rows intentionally separate setup-heavy and delivery-only wo
 - `PushNotify_EndToEndManyConfigs` creates a task, writes eight push-notification configs, sends one task update, lets the push service list configs from the configured store, builds the update payload, and invokes the local recording callback once per config.
 - `PushConfig_ListManyConfigs` uses a task and eight configs seeded before warmup and measures only the list operation for that fixed fan-out.
 - `PushDelivery_CallbackFanout` uses preloaded configs and a prebuilt payload seeded before warmup, then measures only the in-process callback delivery loop. It does not create tasks, create configs, query the store, or perform network I/O inside the timed operation.
-- `PushConfig_CreateMany` uses a task seeded before warmup and measures only eight real `CreateTaskPushNotificationConfig` calls, including the production task-existence lookup for each config creation.
+- `PushConfig_CreateMany` uses a task seeded before warmup and measures only eight real `CreateTaskPushNotificationConfig` calls. On the same-storage PostgreSQL path, each call performs one atomic task-aware `push_config_upsert` command with no separate `task_get`.
 - `PushDelivery_BuildPayload` measures construction of the push status-update payload separately.
 
 The default fan-out is eight configs per operation and is reported in `fanout_per_operation`. `total_fanout_count` is cumulative across measured operations and reflects actual attempted/configured fan-out where known; for example, 2,000 successful operations at fan-out 8 report `fanout_per_operation=8` and `total_fanout_count=16000`. `fanout_count` remains as a backward-compatible alias for the cumulative total. Callback rows report actual attempted callbacks in `callback_count` and split delivery outcomes into `successful_deliveries` and `failed_deliveries`, including failed operations.
@@ -249,22 +249,117 @@ successful operations, while call counts include both successful and failed
 operations so failures do not hide database work. JSON retains the nested maps,
 while CSV and Markdown provide the same totals and calls per measured operation.
 
+The combined PostgreSQL push-list statement is attributed to
+`push_config_list_select`; `push_config_list_count` remains part of the stable
+diagnostic schema but the final list path does not issue a separate count
+command. The local task-aware create statement, including the task-lock helper,
+is attributed entirely to `push_config_upsert`; it does not emit a separate
+`task_get`, `transaction_begin`, or `transaction_commit` phase.
+
 Focused scenario fixture preparation must occur before the measured window; setup commands must not be attributed to the named operation.
 
 
-The current successful PostgreSQL paths intentionally use one `task_get` for task
-get; `task_get` plus `push_config_upsert` for create-config; one
-`push_config_get` for a present config; `task_get`, `push_config_list_count`, and
-`push_config_list_select` for list; and one `push_config_delete` for delete.
-Create-many fan-out eight represents eight independent public API calls, not a
-batch SDK call.
+## PostgreSQL push-configuration query paths
 
-Round-trip reductions require a separate SQL-design change. Create could replace
-its preliminary lookup with an atomic task-aware insert, but must preserve
-`TaskNotFound` under concurrent deletion. List could combine existence, count,
-and rows, but empty/out-of-range pages and a consistent count need careful
-snapshot semantics. Get currently uses a second `push_config_get` only after a
-miss to distinguish a missing task from a missing config; a join or tagged query
-could preserve that distinction in one command. Whether count-plus-select is
-material depends on controlled page-size measurements, so diagnostics alone do
-not justify changing it.
+PostgreSQL stores distinguish **storage coordinates** (effective libpq `host`,
+`hostaddr`, port, database, `target_session_attrs`, and schema) from
+**pool connection identity** (those coordinates plus the effective PostgreSQL
+role).
+Passwords and raw connection strings are excluded. Exact storage-coordinate
+equality confirms local authority, a different database or schema confirms
+external authority, and other endpoint differences are uncertain. Separately
+constructed stores can supply a stable, non-secret `storage_authority_id` to
+resolve that ambiguity. The ID is an operator assertion and must reflect the
+actual storage authority: equal non-empty IDs prove local authority and different
+non-empty IDs prove external authority; a one-sided ID remains uncertain.
+Database/schema differences remain external regardless of the ID. URI and
+keyword DSNs therefore share the local path when libpq reports the same effective
+logical options or when matching explicit authority IDs prove locality.
+
+The effective role does not participate in storage authority. Same-storage
+stores with different roles still use the local atomic create path. Pool
+connection identity is used only to keep connections within one pool
+consistent; it does not establish policy equivalence between independent pools.
+PostgreSQL RLS expressions can depend on per-session settings, including custom
+GUCs supplied through libpq `options`, so the one-command list shortcut requires
+the task and push stores to share the exact pool and local storage authority.
+Separate pools always perform the authoritative task lookup first, even when
+endpoint and role metadata match.
+Persistent out-of-band session changes such as `SET ROLE` or custom policy GUCs
+on pooled connections are unsupported.
+
+### Create/update
+
+For local authority, `CreateOrUpdateForTask` validates the request and then
+executes one `push_config_upsert` statement on one push-store lease. The
+statement calls the schema-qualified `SECURITY DEFINER` lock helper, which
+checks caller `SELECT`, rejects row-level security, takes `FOR KEY SHARE` on the
+task, and feeds the result into `INSERT ... ON CONFLICT DO UPDATE ... RETURNING
+1`. The caller does not perform a separate `task_get`, explicit `BEGIN`/`COMMIT`,
+post-write revalidation, or compensating cleanup. If the task is absent, the
+statement returns no row and maps to `TaskNotFound`. Existing config IDs retain
+normal update semantics. The task lock and upsert are one PostgreSQL statement,
+so concurrent deletion cannot create a locally owned orphan.
+
+Role differences do not create a special split-role transaction path. A
+same-storage push role must have task-table `SELECT` and helper `EXECUTE`; the
+helper owner, not the caller, needs task-table `UPDATE` for `FOR KEY SHARE`.
+
+For confirmed external authority, the supplied `TaskStore` remains
+authoritative: the SDK performs its task lookup and then executes one external
+push upsert with `local_postgres_task=FALSE`. An uncertain PostgreSQL identity
+is not treated as external and is rejected before the push write. The
+`AFTER DELETE` cleanup trigger removes only rows marked
+`local_postgres_task=TRUE`, preserving externally owned rows. The direct
+`PushNotificationStore::CreateOrUpdate` API has no authoritative `TaskStore` and
+therefore remains on the external-provenance upsert path.
+
+### Get/list
+
+`GetConfig` remains a push-store-only API. PostgreSQL uses one
+`push_config_get` statement and one push-store lease for present configs,
+missing config IDs, and an absent push-config collection; it does not perform
+an authoritative task-store lookup.
+
+For list, task and push stores sharing one connection pool and local storage
+authority use one `push_config_list_select` statement and one lease. That
+statement combines task
+existence, total count, and page selection. With separate pools, `ListForTask`
+validates task authority first and then runs one combined push-list statement,
+regardless of matching endpoint/role metadata. A shared pool with different
+schema/authority coordinates also uses the fallback. The same task-first path is
+used for external/custom task stores.
+
+### Command-count contract
+
+For PostgreSQL task and push stores, the final request-path command counts for
+valid request shapes are:
+
+| Path | Task-store commands | Push-store commands | Total PostgreSQL commands | Pool acquisitions |
+| --- | ---: | ---: | ---: | ---: |
+| same-storage create/update, any role | 0 | 1 | 1 | 1 |
+| shared-pool list, valid request | 0 | 1 | 1 | 1 |
+| separate-pool PostgreSQL list | 1 | 1 | 2 | 2 |
+| external-authority create/update | 1 | 1 | 2 | 2 |
+| external-authority list | 1 | 1 | 2 | 2 |
+| direct get | 0 | 1 | 1 | 1 |
+
+For a non-PostgreSQL external/custom task store, the external create/list rows
+still perform one PostgreSQL push command, plus the authoritative task-store
+operation outside PostgreSQL. Create/list requests rejected during argument
+validation may perform the authoritative task lookup first to preserve
+task-first error ordering; those validation paths are not represented by the
+successful/valid rows above.
+
+This preserves the command-count acceptance criterion from issue #187 for the
+normal same-storage `PostgresStoreFactory` layout: successful create is one
+PostgreSQL command, and `PushConfig_CreateMany` at fan-out eight performs eight
+`push_config_upsert` commands instead of the previous eight `task_get` plus
+eight upserts. The same path preserves `TaskNotFound`, update semantics, and
+concurrent-delete safety.
+
+These are structural command counts, not benchmark results. Throughput and
+latency claims must come from controlled current-run artifacts for
+`PushConfig_Create`, `PushConfig_CreateMany`, and
+`PushNotify_EndToEndManyConfigs`; this documentation intentionally does not
+carry forward performance numbers from earlier implementations.

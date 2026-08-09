@@ -852,9 +852,11 @@ target_link_libraries(store_conformance_test
 )
 
 if(A2A_ENABLE_POSTGRES_STORE)
+  find_package(PostgreSQL REQUIRED)
   target_link_libraries(store_conformance_test
     PRIVATE
       a2a::store_postgres
+      PostgreSQL::PostgreSQL
   )
   target_compile_definitions(store_conformance_test
     PRIVATE

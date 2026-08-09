@@ -22,12 +22,18 @@ lf::a2a::v1::StreamResponse BuildTaskStatusUpdatePayload(const lf::a2a::v1::Task
 
 PushNotificationService::PushNotificationService(TaskStore* task_store, PushNotificationStore* push_store,
                                                  PushNotificationDeliveryClient* delivery_client)
-    : task_store_(task_store), push_store_(push_store), delivery_client_(delivery_client) {}
+    : task_store_(task_store),
+      push_store_(push_store),
+      task_aware_push_store_(dynamic_cast<TaskAwarePushNotificationStore*>(push_store)),
+      delivery_client_(delivery_client) {}
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PushNotificationService::CreateConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& config) const {
   if (task_store_ == nullptr || push_store_ == nullptr) {
     return core::Error::Internal("push notification service is not configured");
+  }
+  if (task_aware_push_store_ != nullptr) {
+    return task_aware_push_store_->CreateOrUpdateForTask(config, *task_store_);
   }
   const auto task = task_store_->Get(config.task_id());
   if (!task.ok()) {
@@ -48,6 +54,10 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PushNotificat
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request) const {
   if (task_store_ == nullptr || push_store_ == nullptr) {
     return core::Error::Internal("push notification service is not configured");
+  }
+  if (task_aware_push_store_ != nullptr) {
+    return task_aware_push_store_->ListForTask(request.task_id(), request.page_size(), request.page_token(),
+                                               *task_store_);
   }
   const auto task = task_store_->Get(request.task_id());
   if (!task.ok()) {

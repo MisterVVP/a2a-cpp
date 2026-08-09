@@ -12,6 +12,7 @@
   - [Custom Executor](server/custom-executor.md)
   - [REST Server](server/rest-server.md)
   - [JSON-RPC Server](server/json-rpc-server.md)
+  - [Storage Backends](server/storage.md)
   - [Push Notifications](server/push-notifications.md)
   - [Interceptors](server/interceptors.md)
 - [Transports](transports/overview.md)
