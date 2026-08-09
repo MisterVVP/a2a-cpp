@@ -24,6 +24,7 @@ constexpr int kPartialFailureEventCount = 7;
 constexpr int kConcurrentRequests = 16;
 constexpr int kConcurrentWorkers = 4;
 constexpr int kFollowUpFixtureCount = 3;
+constexpr int kFocusedFixtureCount = 3;
 constexpr double kDiagnosticTaskUpsertMs = 1.25;
 constexpr std::size_t kTaskUpsertPhaseIndex = 2U;
 constexpr std::size_t kFailedDiagnosticCallCount = 2U;
@@ -80,6 +81,20 @@ bool ExecuteCommonFollowUpsAtExpectedDepth(ScenarioHarness* harness) {
     }
   }
   return true;
+}
+
+bool ExecuteAllDeleteFixtures(ScenarioHarness* harness, int fixture_count) {
+  for (int index = 0; index < fixture_count; ++index) {
+    if (!harness->Execute(kScenarioPushConfigDelete, 0, index).ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void ExpectNoFixtureSetup(const ScenarioInstrumentation& instrumentation) {
+  EXPECT_EQ(0, AtomicValue(instrumentation.task_creates));
+  EXPECT_EQ(0, AtomicValue(instrumentation.config_creates));
 }
 
 }  // namespace
@@ -185,6 +200,45 @@ TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   EXPECT_EQ(kPushConfigFanout, outcome.event_count);
   EXPECT_EQ(kPushConfigFanout, outcome.fanout_per_operation);
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
+}
+
+TEST(PerformanceScenarioIsolationTest, FocusedGetAndListDoNotCreateSetupData) {
+  ScenarioInstrumentation instrumentation;
+  ScenarioHarness harness(kInMemoryStore, &instrumentation);
+  ASSERT_TRUE(harness.ok());
+  instrumentation.task_creates.store(0, std::memory_order_relaxed);
+  instrumentation.config_creates.store(0, std::memory_order_relaxed);
+
+  EXPECT_TRUE(harness.Execute(kScenarioPushConfigGet, 0, 0).ok);
+  EXPECT_TRUE(harness.Execute(kScenarioPushConfigList, 0, 0).ok);
+
+  ExpectNoFixtureSetup(instrumentation);
+}
+
+TEST(PerformanceScenarioIsolationTest, DeleteUsesIndependentMeasuredFixtures) {
+  ScenarioInstrumentation instrumentation;
+  ScenarioHarness harness(kInMemoryStore, &instrumentation);
+  ASSERT_TRUE(harness.ok());
+  ASSERT_TRUE(harness.PrepareMeasuredFixtures(kScenarioPushConfigDelete, kFocusedFixtureCount));
+  ASSERT_EQ(kFocusedFixtureCount, harness.delete_config_ids().size());
+  EXPECT_NE(harness.delete_config_ids()[0], harness.delete_config_ids()[1]);
+  instrumentation.task_creates.store(0, std::memory_order_relaxed);
+  instrumentation.config_creates.store(0, std::memory_order_relaxed);
+
+  EXPECT_TRUE(ExecuteAllDeleteFixtures(&harness, kFocusedFixtureCount));
+
+  ExpectNoFixtureSetup(instrumentation);
+}
+
+TEST(PerformanceScenarioIsolationTest, DeleteWarmupCannotConsumeMeasuredFixtures) {
+  ScenarioHarness harness(kInMemoryStore);
+  ASSERT_TRUE(harness.ok());
+  ASSERT_TRUE(harness.ExecuteFollowUpWarmup(kScenarioPushConfigDelete, 0));
+  ASSERT_TRUE(harness.PrepareMeasuredFixtures(kScenarioPushConfigDelete, kSingleRequest));
+  ASSERT_EQ(kSingleRequest, harness.delete_config_ids().size());
+  EXPECT_NE(BuildId(kDeleteWarmupConfigPrefix, 0), harness.delete_config_ids().front());
+
+  EXPECT_TRUE(harness.Execute(kScenarioPushConfigDelete, 0, 0).ok);
 }
 
 TEST(PerformanceFollowUpFixtureTest, CommonScenarioCreatesIndependentDepthOneTasks) {
