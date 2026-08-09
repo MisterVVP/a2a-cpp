@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import platform
+import secrets
 import socket
 import statistics
 import subprocess
@@ -94,6 +95,7 @@ SUT_READY_TIMEOUT_SECONDS = 30.0
 SUT_PORT_RANGE_START = 20_000
 SUT_PORT_RANGE_END = 30_000
 SUT_PORT_PAIR_STEP = 2
+SUT_PORT_PAIR_COUNT = (SUT_PORT_RANGE_END - SUT_PORT_RANGE_START) // SUT_PORT_PAIR_STEP
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
@@ -203,7 +205,12 @@ def wait_for_port(host: str, port: int, process: subprocess.Popen[str], log_path
 def find_available_sut_port(host: str = "127.0.0.1") -> int:
     # Do not ask the kernel for an ephemeral port here: after the probes close,
     # that port can immediately be reused before tck_sut binds its listeners.
-    for port in range(SUT_PORT_RANGE_START, SUT_PORT_RANGE_END, SUT_PORT_PAIR_STEP):
+    # Randomizing the first pair also prevents parallel runners from all probing
+    # the same free pair before any tck_sut process has had a chance to bind it.
+    start_pair = secrets.randbelow(SUT_PORT_PAIR_COUNT)
+    for offset in range(SUT_PORT_PAIR_COUNT):
+        pair = (start_pair + offset) % SUT_PORT_PAIR_COUNT
+        port = SUT_PORT_RANGE_START + (pair * SUT_PORT_PAIR_STEP)
         with (socket.socket(socket.AF_INET, socket.SOCK_STREAM) as http_probe,
               socket.socket(socket.AF_INET, socket.SOCK_STREAM) as grpc_probe):
             try:

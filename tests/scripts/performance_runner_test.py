@@ -262,6 +262,14 @@ class PerformanceRunnerTest(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as grpc_probe:
             grpc_probe.bind(("127.0.0.1", port + 1))
 
+    def test_find_available_sut_port_randomizes_starting_pair(self):
+        runner = load_runner_module()
+        with mock.patch.object(runner.secrets, "randbelow",
+                               wraps=runner.secrets.randbelow) as random_start:
+            runner.find_available_sut_port()
+
+        random_start.assert_called_once_with(runner.SUT_PORT_PAIR_COUNT)
+
     def test_find_available_sut_port_skips_occupied_pair(self):
         runner = load_runner_module()
         occupied_port = runner.find_available_sut_port()
