@@ -400,11 +400,6 @@ PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageI
   return PostgresStorageAuthority::kUncertain;
 }
 
-bool HasSamePostgresExecutionIdentity(const PostgresExecutionIdentity& lhs,
-                                      const PostgresExecutionIdentity& rhs) noexcept {
-  return lhs.storage == rhs.storage && lhs.effective_role == rhs.effective_role;
-}
-
 core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options) {
   if (options.connection_pool_size == 0U) {
     return core::Error::Validation(std::string(kPostgresConnectionPoolSizeValidationMessage));

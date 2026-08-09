@@ -364,7 +364,6 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
     : pool_(MakePool(options)),
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
-      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)),
       local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
       external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
       get_sql_(BuildPushGetSql(options_.schema)),
@@ -384,7 +383,6 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
     : pool_(std::move(pool)),
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
-      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)),
       local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
       external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
       get_sql_(BuildPushGetSql(options_.schema)),
@@ -560,7 +558,9 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> PostgresPushN
     return validation.error();
   }
   const auto* postgres_task_store = dynamic_cast<const PostgresTaskStore*>(&task_store);
-  if (postgres_task_store != nullptr && postgres_task_store->UsesExecutionIdentity(execution_identity_)) {
+  // Matching endpoint/role metadata does not prove equal RLS context across independent sessions.
+  if (postgres_task_store != nullptr && postgres_task_store->SharesConnectionPool(*pool_) &&
+      postgres_task_store->UsesStorage(storage_identity_)) {
     return ListInternal(task_id, page_size, page_token, true);
   }
   const auto task = task_store.Get(task_id);

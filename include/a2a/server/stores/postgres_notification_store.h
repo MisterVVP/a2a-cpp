@@ -71,7 +71,6 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   std::shared_ptr<PostgresConnectionPool> pool_;
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;
-  PostgresExecutionIdentity execution_identity_;
   bool task_aware_schema_available_ = false;
   std::string local_upsert_sql_;
   std::string external_upsert_sql_;

@@ -143,6 +143,7 @@ constexpr std::string_view kConninfoUser = "user";
 constexpr std::string_view kConninfoPort = "port";
 constexpr std::string_view kConninfoApplicationName = "application_name";
 constexpr std::string_view kConninfoTargetSessionAttributes = "target_session_attrs";
+constexpr std::string_view kConninfoOptions = "options";
 constexpr std::string_view kIdentityApplicationName = "a2a-identity-test";
 constexpr std::string_view kUriScheme = "postgresql://";
 constexpr std::string_view kHexDigits = "0123456789ABCDEF";
@@ -178,10 +179,22 @@ constexpr char kIdentityPrimaryTargetSessionAttributes[] = "primary";
 constexpr char kIdentityMultiHost[] = "primary.example,standby.example";
 constexpr char kReorderedIdentityMultiHost[] = "standby.example,primary.example";
 constexpr char kIdentityMultiPort[] = "5432,5432";
-constexpr char kIdentityRole[] = "a2a_role";
-constexpr char kOtherIdentityRole[] = "a2a_other_role";
 constexpr char kIdentityStorageAuthorityId[] = "storage-authority-a";
 constexpr char kOtherIdentityStorageAuthorityId[] = "storage-authority-b";
+constexpr std::string_view kSessionPolicySchemaSuffix = "push_list_session_policy";
+constexpr std::string_view kSessionPolicyName = "a2a_task_tenant_policy";
+constexpr std::string_view kSessionPolicySetting = "app.tenant";
+constexpr std::string_view kSessionPolicyOptionPrefix = "-c ";
+constexpr std::string_view kSessionPolicyVisibleTenant = "tenant-a";
+constexpr std::string_view kSessionPolicyHiddenTenant = "tenant-b";
+constexpr std::string_view kSessionPolicyTaskId = "session-policy-task";
+constexpr std::string_view kSessionPolicyConfigId = "session-policy-config";
+constexpr int kSessionPolicyExpectedConfigCount = 1;
+constexpr int kUnboundedPushListPageSize = 0;
+constexpr std::string_view kInstallSessionPolicyOperation = "install task session-context row security policy";
+constexpr std::string_view kDropSessionPolicyOperation = "drop task session-context row security policy";
+constexpr std::string_view kSharedPoolTaskSchemaSuffix = "shared_pool_task_authority";
+constexpr std::string_view kSharedPoolPushSchemaSuffix = "shared_pool_push_authority";
 constexpr std::string_view kUncertainAuthoritySchemaSuffix = "push_authority_uncertain";
 constexpr std::string_view kExternalTaskAuthoritySchemaSuffix = "task_authority_external";
 constexpr std::string_view kExternalPushAuthoritySchemaSuffix = "push_authority_external";
@@ -420,6 +433,15 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   AppendKeywordValue(role_dsn, kConninfoApplicationName, kIdentityApplicationName);
   AppendKeywordValue(role_dsn, kConninfoTargetSessionAttributes,
                      ConninfoValue(options.get(), kConninfoTargetSessionAttributes));
+  return role_dsn;
+}
+
+[[nodiscard]] std::string BuildRoleDsnWithStartupOption(std::string_view dsn, std::string_view role,
+                                                        std::string_view startup_option) {
+  std::string role_dsn = BuildRoleDsn(dsn, role);
+  if (!role_dsn.empty()) {
+    AppendKeywordValue(role_dsn, kConninfoOptions, startup_option);
+  }
   return role_dsn;
 }
 
@@ -726,6 +748,41 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   sql.append(a2a::server::stores::TaskTable(schema));
   sql.append(" ENABLE ROW LEVEL SECURITY;");
   return sql;
+}
+
+[[nodiscard]] std::string BuildTaskSessionPolicySql(std::string_view schema, std::string_view role) {
+  const std::string task_table = a2a::server::stores::TaskTable(schema);
+  std::string sql = "ALTER TABLE ";
+  sql.append(task_table);
+  sql.append(" ENABLE ROW LEVEL SECURITY; CREATE POLICY ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(kSessionPolicyName));
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append(" FOR SELECT TO ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.append(" USING (pg_catalog.current_setting('");
+  sql.append(kSessionPolicySetting);
+  sql.append("', true) = '");
+  sql.append(kSessionPolicyVisibleTenant);
+  sql.append("');");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDropTaskSessionPolicySql(std::string_view schema) {
+  std::string sql = "DROP POLICY ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(kSessionPolicyName));
+  sql.append(" ON ");
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildSessionPolicyStartupOption(std::string_view tenant) {
+  std::string option(kSessionPolicyOptionPrefix);
+  option.append(kSessionPolicySetting);
+  option.push_back('=');
+  option.append(tenant);
+  return option;
 }
 
 [[nodiscard]] std::string BuildEnablePushRowLevelSecuritySql(std::string_view schema) {
@@ -1254,6 +1311,16 @@ void ExpectSinglePushConfigUpsertWithoutTaskGet() {
       1U);
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
             0U);
+}
+
+void ExpectTaskFirstPushConfigListCommands() {
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
+            kSinglePostgresCommandCount);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigListSelect)],
+      kSinglePostgresCommandCount);
 }
 
 void ExpectPushConfigGetCommandCount(std::size_t expected_count) {
@@ -2312,30 +2379,6 @@ TEST(StoreConformanceTest, PostgresStorageAuthorityClassifiesIdentityDifferences
   EXPECT_EQ(ClassifyPostgresStorageAuthority(explicit_authority, different), PostgresStorageAuthority::kExternal);
 }
 
-TEST(StoreConformanceTest, PostgresExecutionIdentityRequiresLocalStorageAndMatchingRole) {
-  a2a::server::stores::PostgresExecutionIdentity identity{
-      .storage = {.host = kIdentityHost,
-                  .host_address = kIdentityHostAddress,
-                  .port = kIdentityPort,
-                  .database = kIdentityDatabase,
-                  .target_session_attributes = kIdentityTargetSessionAttributes,
-                  .schema = kIdentitySchemaName},
-      .effective_role = kIdentityRole};
-  EXPECT_TRUE(a2a::server::stores::HasSamePostgresExecutionIdentity(identity, identity));
-
-  auto different = identity;
-  different.effective_role = kOtherIdentityRole;
-  EXPECT_FALSE(a2a::server::stores::HasSamePostgresExecutionIdentity(identity, different));
-  different = identity;
-  different.storage.host = kOtherIdentityHost;
-  EXPECT_FALSE(a2a::server::stores::HasSamePostgresExecutionIdentity(identity, different));
-
-  identity.storage.storage_authority_id = kIdentityStorageAuthorityId;
-  different = identity;
-  different.storage.host = kOtherIdentityHost;
-  EXPECT_FALSE(a2a::server::stores::HasSamePostgresExecutionIdentity(identity, different));
-}
-
 TEST(StoreConformanceTest, ExplicitPostgresStorageAuthorityIdCanProveExternalAuthority) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -2408,6 +2451,42 @@ TEST(StoreConformanceTest, PostgresBundleSharesConfiguredConnectionPool) {
   ASSERT_NE(push_store, nullptr);
   ASSERT_EQ(task_store->connection_pool_for_testing(), push_store->connection_pool_for_testing());
   EXPECT_EQ(task_store->connection_pool_for_testing()->capacity(), kCustomPoolSize);
+
+  AddPostgresTask(*task_store, kSessionPolicyTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  ->CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kSessionPolicyTaskId),
+                                                                             std::string(kSessionPolicyConfigId)))
+                  .ok());
+  ResetPushConfigListDiagnostics();
+  ASSERT_TRUE(push_store->ListForTask(kSessionPolicyTaskId, kUnboundedPushListPageSize, {}, *task_store).ok());
+  ExpectSinglePushConfigListCommand();
+}
+
+TEST(StoreConformanceTest, SharedPostgresPoolWithDifferentSchemasUsesAuthoritativeTaskLookup) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const a2a::server::stores::PostgresStoreOptions task_options{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kSharedPoolTaskSchemaSuffix)};
+  const a2a::server::stores::PostgresStoreOptions push_options{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kSharedPoolPushSchemaSuffix)};
+  auto pool = std::make_shared<a2a::server::stores::PostgresConnectionPool>(dsn_value, kOwnerRolePoolSize);
+  a2a::server::stores::PostgresTaskStore task_store(pool, task_options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(pool, push_options);
+  AddPostgresTask(task_store, kSessionPolicyTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kSessionPolicyTaskId),
+                                                                            std::string(kSessionPolicyConfigId)))
+                  .ok());
+
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  const auto listed = push_store.ListForTask(kSessionPolicyTaskId, kUnboundedPushListPageSize, {}, task_store);
+  ASSERT_TRUE(listed.ok());
+  ASSERT_EQ(listed.value().configs_size(), kSessionPolicyExpectedConfigCount);
+  ExpectTaskFirstPushConfigListCommands();
 }
 
 TEST(StoreConformanceTest, PostgresTaskStore) {
@@ -2699,6 +2778,61 @@ TEST(StoreConformanceTest, PostgresTaskAwarePushListPreservesTaskFirstValidation
   ASSERT_FALSE(malformed_page_token.ok());
   EXPECT_EQ(malformed_page_token.error().code(), a2a::core::ErrorCode::kValidation);
   EXPECT_FALSE(malformed_page_token.error().protocol_code().has_value());
+}
+
+TEST(StoreConformanceTest, SeparatePostgresPoolsPreserveTaskSessionPolicyContext) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const std::string schema = MakePostgresTestSchema(kSessionPolicySchemaSuffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{
+      .connection_string = dsn_value, .schema = schema, .connection_pool_size = kOwnerRolePoolSize};
+  a2a::server::stores::PostgresTaskStore owner_task_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore owner_push_store(owner_options);
+  AddPostgresTask(owner_task_store, kSessionPolicyTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(owner_push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kSessionPolicyTaskId),
+                                                                            std::string(kSessionPolicyConfigId)))
+                  .ok());
+
+  auto admin_connection = owner_push_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(admin_connection.ok());
+  ScopedPostgresRole role(admin_connection.value().get(), MakePostgresTestRole(kSplitRolePrefix),
+                          owner_task_store.execution_identity().storage.database, schema);
+  ASSERT_TRUE(role.Create().ok());
+  ExpectPostgresExecOk(admin_connection.value().get(), BuildTaskSessionPolicySql(schema, role.role()),
+                       kInstallSessionPolicyOperation);
+  const std::string task_dsn = BuildRoleDsnWithStartupOption(
+      dsn_value, role.role(), BuildSessionPolicyStartupOption(kSessionPolicyVisibleTenant));
+  const std::string push_dsn = BuildRoleDsnWithStartupOption(
+      dsn_value, role.role(), BuildSessionPolicyStartupOption(kSessionPolicyHiddenTenant));
+  ASSERT_FALSE(task_dsn.empty());
+  ASSERT_FALSE(push_dsn.empty());
+
+  {
+    const a2a::server::stores::PostgresStoreOptions task_options{.connection_string = task_dsn,
+                                                                 .schema = schema,
+                                                                 .auto_create_schema = false,
+                                                                 .connection_pool_size = kPushOnlyRolePoolSize};
+    const a2a::server::stores::PostgresStoreOptions push_options{.connection_string = push_dsn,
+                                                                 .schema = schema,
+                                                                 .auto_create_schema = false,
+                                                                 .connection_pool_size = kPushOnlyRolePoolSize};
+    a2a::server::stores::PostgresTaskStore task_store(task_options);
+    a2a::server::stores::PostgresPushNotificationStore push_store(push_options);
+    ASSERT_TRUE(task_store.Get(kSessionPolicyTaskId).ok());
+
+    a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+    const auto listed = push_store.ListForTask(kSessionPolicyTaskId, kUnboundedPushListPageSize, {}, task_store);
+    ASSERT_TRUE(listed.ok());
+    ASSERT_EQ(listed.value().configs_size(), kSessionPolicyExpectedConfigCount);
+    EXPECT_EQ(listed.value().configs(0).id(), kSessionPolicyConfigId);
+    ExpectTaskFirstPushConfigListCommands();
+  }
+  ExpectPostgresExecOk(admin_connection.value().get(), BuildDropTaskSessionPolicySql(schema),
+                       kDropSessionPolicyOperation);
 }
 
 TEST(StoreConformanceTest, PostgresPushConfigCreateIsAtomicAndTaskAware) {

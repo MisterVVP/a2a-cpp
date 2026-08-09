@@ -46,8 +46,13 @@ remains uncertain. Database/schema differences still remain external. The ID is
 a stable, non-secret deployment identifier and must reflect the real storage
 authority because it affects provenance and cleanup. Passwords and raw
 connection strings are not part of the identity. The effective role is tracked
-separately: role differences still use the one-command local create path, while
-the one-command list shortcut requires identical storage coordinates and role.
+as pool-consistency metadata, but matching endpoint/schema/role metadata does
+not prove that independent sessions have the same row-security context. The
+one-command list shortcut therefore requires the task and push stores to share
+the exact connection pool and local storage authority. Separately constructed
+stores validate the task through the authoritative task store first, even when
+their DSNs and roles look equivalent. Do not leave pooled connections with
+out-of-band session state such as `SET ROLE` or custom policy GUCs.
 
 ### Task-aware PostgreSQL behavior
 
@@ -61,8 +66,9 @@ cleanup, or explicit multi-command transaction. Missing tasks return
 commands rather than sixteen.
 
 `GetConfig` remains push-store-only and uses one PostgreSQL statement. List uses
-one combined task/count/page statement when execution identities match; a
-different role or external task store uses the authoritative task lookup first
+one combined task/count/page statement when task and push stores share a
+connection pool and local storage authority; separate pools, different storage
+authority, or an external task store use the authoritative task lookup first
 and then one combined push-list statement. External-authority creates are marked
 with `local_postgres_task=FALSE`; direct non-task-aware `CreateOrUpdate` calls
 use the same external provenance. Only locally owned rows are removed by the

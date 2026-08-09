@@ -38,7 +38,7 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
                                                                   HistoryAppendPolicy policy) override;
   [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override;
   [[nodiscard]] bool UsesStorage(const PostgresStorageIdentity& identity) const noexcept;
-  [[nodiscard]] bool UsesExecutionIdentity(const PostgresExecutionIdentity& identity) const noexcept;
+  [[nodiscard]] bool SharesConnectionPool(const PostgresConnectionPool& pool) const noexcept;
   [[nodiscard]] const PostgresStorageIdentity& storage_identity() const noexcept;
   [[nodiscard]] const PostgresExecutionIdentity& execution_identity() const noexcept;
 #ifdef A2A_POSTGRES_STORE_TESTING

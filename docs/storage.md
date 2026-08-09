@@ -114,13 +114,19 @@ authority assertion: incorrect IDs can change provenance and cleanup semantics.
 Equivalent URI and keyword DSNs continue to take the local path when they resolve
 to the same active server target.
 
-The effective PostgreSQL role is tracked separately as part of the execution
-identity. Role differences do not make storage external and do not disable the
-one-command local create path. They do disable the same-execution list shortcut,
-which requires both equal storage coordinates and the same effective role. Each
-connection pool caches the first established execution identity and verifies
-other initial and reopened connections against it. Applications must not leave a
-pooled connection under an out-of-band `SET ROLE`.
+The effective PostgreSQL role is tracked as part of each pool's connection
+identity. This identity is used to keep connections inside a pool consistent;
+it is not used to prove that two independently constructed pools have equivalent
+session-policy context. PostgreSQL row-security policies can consult arbitrary
+session settings supplied through connection `options` or changed at runtime, so
+matching endpoint/schema/role metadata is insufficient for that proof.
+Consequently, the one-command task-aware list shortcut is used only when the task
+and push stores share the exact `PostgresConnectionPool` and resolve to the same
+local storage authority, as they do when created by
+`PostgresStoreFactory::CreateStoreBundle()`. Separately constructed stores
+perform the authoritative task-store lookup first even when their DSNs and roles
+otherwise appear equivalent. Applications must not leave pooled connections with
+out-of-band session state such as `SET ROLE` or custom policy GUCs.
 
 ### Task-aware PostgreSQL behavior
 
@@ -145,18 +151,22 @@ final PostgreSQL paths are:
 - **Get:** `GetConfig` remains push-store-only. PostgreSQL uses one statement and
   one push-store acquisition to distinguish a missing config from an absent
   push-config collection without consulting the authoritative `TaskStore`.
-- **List:** matching execution identities use one combined PostgreSQL statement
-  for task existence, count, and page rows. When execution identities differ,
-  the authoritative task lookup runs first and the push store then executes one
-  combined count/page statement.
+- **List:** task and push stores that share one connection pool and local storage
+  authority use one combined PostgreSQL statement for task existence, count,
+  and page rows. With separate
+  pools, the authoritative task lookup runs first and the push store then
+  executes one combined count/page statement. This fallback is intentional even
+  when endpoint and role metadata match, because independent sessions may carry
+  different RLS policy context.
 
 For the normal `PostgresStoreFactory::CreateStoreBundle()` layout, create, get,
 and list therefore use one PostgreSQL command and one pool acquisition per
 successful public operation. `PushConfig_CreateMany` with fan-out eight performs
 eight independent create commands, not sixteen; the task existence check is part
-of each atomic create statement. Split-role stores that resolve to the same
-storage coordinates use the same one-command create path. Split-role list calls
-use the task-first fallback because their execution identities differ.
+of each atomic create statement. Separately constructed stores that resolve to
+the same storage coordinates retain the same one-command create path. Their list
+calls use the task-first fallback unless they explicitly share one pool and local
+storage authority.
 
 When `auto_create_schema=true`, schema initialization creates or upgrades the
 task/push tables, provenance column, helper functions, cleanup trigger, sequences,

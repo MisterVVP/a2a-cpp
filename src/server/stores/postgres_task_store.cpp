@@ -202,8 +202,8 @@ bool PostgresTaskStore::UsesStorage(const PostgresStorageIdentity& identity) con
   return ClassifyPostgresStorageAuthority(storage_identity_, identity) == PostgresStorageAuthority::kLocal;
 }
 
-bool PostgresTaskStore::UsesExecutionIdentity(const PostgresExecutionIdentity& identity) const noexcept {
-  return HasSamePostgresExecutionIdentity(execution_identity_, identity);
+bool PostgresTaskStore::SharesConnectionPool(const PostgresConnectionPool& pool) const noexcept {
+  return pool_.get() == &pool;
 }
 
 const PostgresStorageIdentity& PostgresTaskStore::storage_identity() const noexcept { return storage_identity_; }

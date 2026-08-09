@@ -263,7 +263,8 @@ Focused scenario fixture preparation must occur before the measured window; setu
 
 PostgreSQL stores distinguish **storage coordinates** (effective libpq `host`,
 `hostaddr`, port, database, `target_session_attrs`, and schema) from
-**execution identity** (those coordinates plus the effective PostgreSQL role).
+**pool connection identity** (those coordinates plus the effective PostgreSQL
+role).
 Passwords and raw connection strings are excluded. Exact storage-coordinate
 equality confirms local authority, a different database or schema confirms
 external authority, and other endpoint differences are uncertain. Separately
@@ -276,12 +277,16 @@ keyword DSNs therefore share the local path when libpq reports the same effectiv
 logical options or when matching explicit authority IDs prove locality.
 
 The effective role does not participate in storage authority. Same-storage
-stores with different roles still use the local atomic create path. Matching
-roles matter only for the list shortcut, which still requires identical logical
-connection options, schema, explicit authority ID, and role. Each pool caches its
-established execution identity and checks other initial and reopened connections
-against it; persistent out-of-band
-`SET ROLE` on pooled connections is unsupported.
+stores with different roles still use the local atomic create path. Pool
+connection identity is used only to keep connections within one pool
+consistent; it does not establish policy equivalence between independent pools.
+PostgreSQL RLS expressions can depend on per-session settings, including custom
+GUCs supplied through libpq `options`, so the one-command list shortcut requires
+the task and push stores to share the exact pool and local storage authority.
+Separate pools always perform the authoritative task lookup first, even when
+endpoint and role metadata match.
+Persistent out-of-band session changes such as `SET ROLE` or custom policy GUCs
+on pooled connections are unsupported.
 
 ### Create/update
 
@@ -316,11 +321,14 @@ therefore remains on the external-provenance upsert path.
 missing config IDs, and an absent push-config collection; it does not perform
 an authoritative task-store lookup.
 
-For list, matching execution identities use one `push_config_list_select`
-statement and one lease. That statement combines task existence, total count,
-and page selection. When execution identities differ, `ListForTask` validates
-task authority first and then runs one combined push-list statement. The same
-task-first fallback is used for external/custom task stores.
+For list, task and push stores sharing one connection pool and local storage
+authority use one `push_config_list_select` statement and one lease. That
+statement combines task
+existence, total count, and page selection. With separate pools, `ListForTask`
+validates task authority first and then runs one combined push-list statement,
+regardless of matching endpoint/role metadata. A shared pool with different
+schema/authority coordinates also uses the fallback. The same task-first path is
+used for external/custom task stores.
 
 ### Command-count contract
 
@@ -330,8 +338,8 @@ valid request shapes are:
 | Path | Task-store commands | Push-store commands | Total PostgreSQL commands | Pool acquisitions |
 | --- | ---: | ---: | ---: | ---: |
 | same-storage create/update, any role | 0 | 1 | 1 | 1 |
-| same-execution list, valid request | 0 | 1 | 1 | 1 |
-| same-storage list, different role | 1 | 1 | 2 | 2 |
+| shared-pool list, valid request | 0 | 1 | 1 | 1 |
+| separate-pool PostgreSQL list | 1 | 1 | 2 | 2 |
 | external-authority create/update | 1 | 1 | 2 | 2 |
 | external-authority list | 1 | 1 | 2 | 2 |
 | direct get | 0 | 1 | 1 | 1 |

@@ -102,6 +102,8 @@ struct PostgresStorageCoordinates final {
   friend bool operator==(const PostgresStorageCoordinates&, const PostgresStorageCoordinates&) = default;
 };
 
+// Pool connection identity is for detecting drift within one pool. It must not
+// be used to prove that independent pools have equivalent RLS/session context.
 struct PostgresExecutionIdentity final {
   PostgresStorageCoordinates storage;
   std::string effective_role;
@@ -192,8 +194,6 @@ class Transaction final {
 [[nodiscard]] std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema);
 [[nodiscard]] PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
                                                                         const PostgresStorageIdentity& rhs) noexcept;
-[[nodiscard]] bool HasSamePostgresExecutionIdentity(const PostgresExecutionIdentity& lhs,
-                                                    const PostgresExecutionIdentity& rhs) noexcept;
 [[nodiscard]] core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& options);
 void ValidatePostgresStoreOptionsOrThrow(const PostgresStoreOptions& options);
 [[nodiscard]] core::Result<void> CheckCommand(PGconn* connection, PGresult* result, std::string_view operation);
