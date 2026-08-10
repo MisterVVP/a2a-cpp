@@ -198,8 +198,7 @@ bool IsFlatPayloadDescriptor(const google::protobuf::Descriptor& descriptor) {
   for (int index = 0; index < descriptor.field_count(); ++index) {
     const auto* field = descriptor.field(index);
     const auto type = field->cpp_type();
-    const auto* oneof = field->containing_oneof();
-    if (field->is_repeated() || (oneof != nullptr && !oneof->is_synthetic()) ||
+    if (field->is_repeated() || field->real_containing_oneof() != nullptr ||
         (type != google::protobuf::FieldDescriptor::CPPTYPE_STRING &&
          type != google::protobuf::FieldDescriptor::CPPTYPE_BOOL &&
          type != google::protobuf::FieldDescriptor::CPPTYPE_INT32)) {
