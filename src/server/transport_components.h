@@ -24,9 +24,9 @@ struct JsonRpcEnvelope final {
 [[nodiscard]] core::Result<std::string> SerializeJsonRpcSuccessEnvelope(const google::protobuf::Value& id,
                                                                         const google::protobuf::Value& result);
 
-[[nodiscard]] core::Result<void> ParseRestQueryString(
-    std::string_view query, std::unordered_map<std::string, std::string>* query_params);
-[[nodiscard]] HttpServerResponse BuildRestHttpResponse(
-    const RestResponse& response, const std::vector<std::string>& activated_extensions);
+[[nodiscard]] core::Result<void> ParseRestQueryString(std::string_view query,
+                                                      std::unordered_map<std::string, std::string>* query_params);
+[[nodiscard]] HttpServerResponse BuildRestHttpResponse(const RestResponse& response,
+                                                       const std::vector<std::string>& activated_extensions);
 
 }  // namespace a2a::server::internal
