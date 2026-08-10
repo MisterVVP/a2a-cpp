@@ -31,6 +31,7 @@
 #include "a2a/server/agent_card/agent_card_serializer.h"
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/http_server_response_builder.h"
+#include "transport_components.h"
 
 namespace a2a::server {
 namespace {
@@ -881,6 +882,15 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcEnvelope> JsonRpcServerTransport::ParseEnvelope(std::string_view body) {
+  const auto parsed = internal::ParseJsonRpcEnvelope(body);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  return JsonRpcEnvelope{
+      .id = ResponseId(parsed.value().id), .method = parsed.value().method, .params = parsed.value().params};
+}
+
+core::Result<internal::JsonRpcEnvelope> internal::ParseJsonRpcEnvelope(std::string_view body) {
   const auto envelope = ParseJsonObject(body);
   if (!envelope.ok()) {
     return envelope.error();
@@ -906,7 +916,7 @@ core::Result<JsonRpcServerTransport::JsonRpcEnvelope> JsonRpcServerTransport::Pa
     return params.error();
   }
 
-  return JsonRpcEnvelope{.id = ResponseId(id.value()), .method = method.value(), .params = params.value()};
+  return JsonRpcEnvelope{.id = id.value(), .method = method.value(), .params = params.value()};
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(
@@ -986,11 +996,16 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
 
 core::Result<std::string> JsonRpcServerTransport::SerializeSuccessEnvelope(const ResponseId& id,
                                                                            const google::protobuf::Value& result) {
+  return internal::SerializeJsonRpcSuccessEnvelope(id.value(), result);
+}
+
+core::Result<std::string> internal::SerializeJsonRpcSuccessEnvelope(const google::protobuf::Value& id,
+                                                                    const google::protobuf::Value& result) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
 
   (*fields)["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
-  (*fields)["id"] = id.value();
+  (*fields)["id"] = id;
   (*fields)["result"] = result;
 
   return core::MessageToJson(envelope);

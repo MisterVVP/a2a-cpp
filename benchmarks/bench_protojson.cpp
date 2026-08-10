@@ -3,6 +3,7 @@
 #include <benchmark/benchmark.h>
 
 #include <cstdint>
+#include <string>
 
 #include "a2a/core/protojson.h"
 #include "a2a/v1/a2a.pb.h"
@@ -11,6 +12,9 @@
 namespace {
 
 constexpr std::int32_t kSingleTask = 1;
+constexpr std::int64_t kSmallTaskList = 10;
+constexpr std::int64_t kMediumTaskList = 50;
+constexpr std::string_view kTaskIdPrefix = "task-";
 
 lf::a2a::v1::SendMessageResponse BuildSendMessageResponse() {
   lf::a2a::v1::SendMessageResponse response;
@@ -32,11 +36,16 @@ lf::a2a::v1::ListTaskPushNotificationConfigsResponse BuildPushConfigListResponse
   return response;
 }
 
-lf::a2a::v1::ListTasksResponse BuildListTasksResponse() {
+lf::a2a::v1::ListTasksResponse BuildListTasksResponse(std::int32_t task_count) {
   lf::a2a::v1::ListTasksResponse response;
-  *response.add_tasks() = a2a::bench::BuildTask();
-  response.set_page_size(kSingleTask);
-  response.set_total_size(kSingleTask);
+  response.mutable_tasks()->Reserve(task_count);
+  for (std::int32_t index = 0; index < task_count; ++index) {
+    std::string task_id(kTaskIdPrefix);
+    task_id.append(std::to_string(index));
+    *response.add_tasks() = a2a::bench::BuildTask(task_id);
+  }
+  response.set_page_size(task_count);
+  response.set_total_size(task_count);
   return response;
 }
 
@@ -79,13 +88,13 @@ void BM_ProtoJson_ResponseToJson_Task(benchmark::State& state) {
 BENCHMARK(BM_ProtoJson_ResponseToJson_Task);
 
 void BM_ProtoJson_ResponseToJson_TaskList(benchmark::State& state) {
-  const auto response = BuildListTasksResponse();
+  const auto response = BuildListTasksResponse(static_cast<std::int32_t>(state.range(0)));
   for (auto _ : state) {
     auto json = a2a::core::MessageToJson(response);
     benchmark::DoNotOptimize(json);
   }
 }
-BENCHMARK(BM_ProtoJson_ResponseToJson_TaskList);
+BENCHMARK(BM_ProtoJson_ResponseToJson_TaskList)->Arg(kSingleTask)->Arg(kSmallTaskList)->Arg(kMediumTaskList);
 
 void BM_ProtoJson_JsonToMessage_Task(benchmark::State& state) {
   const auto json = a2a::bench::JsonOrDie(a2a::bench::BuildTask());

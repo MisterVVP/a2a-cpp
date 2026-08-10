@@ -26,6 +26,7 @@
 #include "a2a/core/version.h"
 #include "a2a/server/agent_card/agent_card_serializer.h"
 #include "a2a/server/http_server_response_builder.h"
+#include "transport_components.h"
 
 namespace a2a::server {
 namespace {
@@ -296,7 +297,7 @@ core::Result<void> ParseQueryStringImpl(std::string_view raw, std::unordered_map
 
 core::Result<bool> HasExtendedAgentCardView(std::string_view query) {
   std::unordered_map<std::string, std::string> query_params;
-  const auto parsed = ParseQueryStringImpl(query, &query_params);
+  const auto parsed = internal::ParseRestQueryString(query, &query_params);
   if (!parsed.ok()) {
     return parsed.error();
   }
@@ -341,8 +342,8 @@ std::optional<std::string> ExtractTenantFromExtendedAgentCardPath(std::string_vi
 
 }  // namespace
 
-core::Result<void> RestServerTransport::ParseQueryString(std::string_view query,
-                                                         std::unordered_map<std::string, std::string>* query_params) {
+core::Result<void> internal::ParseRestQueryString(std::string_view query,
+                                                  std::unordered_map<std::string, std::string>* query_params) {
   return ParseQueryStringImpl(query, query_params);
 }
 
@@ -448,8 +449,8 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
   rest_request.context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   if (query_start != std::string::npos) {
-    const auto parsed =
-        ParseQueryStringImpl(std::string_view(request.target).substr(query_start + 1), &rest_request.query_params);
+    const auto parsed = internal::ParseRestQueryString(std::string_view(request.target).substr(query_start + 1),
+                                                       &rest_request.query_params);
     if (!parsed.ok()) {
       return parsed.error();
     }
@@ -545,6 +546,11 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
 
 HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response,
                                                        const std::vector<std::string>& activated_extensions) {
+  return internal::BuildRestHttpResponse(response, activated_extensions);
+}
+
+HttpServerResponse internal::BuildRestHttpResponse(const RestResponse& response,
+                                                   const std::vector<std::string>& activated_extensions) {
   return HttpServerResponseBuilder::FromRestResponse(response)
       .WithA2aVersion()
       .WithActivatedExtensions(activated_extensions)

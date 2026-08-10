@@ -41,4 +41,6 @@ target_link_libraries(a2a_benchmarks
     benchmark::benchmark
 )
 
+target_include_directories(a2a_benchmarks PRIVATE "${PROJECT_SOURCE_DIR}/src")
+
 target_compile_definitions(a2a_benchmarks PRIVATE A2A_BENCHMARK_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

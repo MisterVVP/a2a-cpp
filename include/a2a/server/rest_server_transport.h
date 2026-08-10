@@ -62,16 +62,13 @@ class RestServerTransport final {
 
   [[nodiscard]] core::Result<HttpServerResponse> Handle(const HttpServerRequest& request) const;
 
-  [[nodiscard]] static core::Result<void> ParseQueryString(std::string_view query,
-                                                           std::unordered_map<std::string, std::string>* query_params);
-  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
-                                                         const std::vector<std::string>& activated_extensions);
-
  private:
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleExtendedAgentCard(const HttpServerRequest& request,
                                                                          std::string_view tenant) const;
+  [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
+                                                         const std::vector<std::string>& activated_extensions);
   static std::string NormalizeBasePath(std::string_view path);
 
   Dispatcher* dispatcher_ = nullptr;

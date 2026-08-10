@@ -4,6 +4,7 @@
 
 #include "a2a/server/json_rpc_server_transport.h"
 #include "bench_common.h"
+#include "server/transport_components.h"
 
 namespace {
 
@@ -62,7 +63,7 @@ BENCHMARK(BM_JsonRpcTransport_SuccessEnvelope);
 
 void BM_JsonRpcEnvelope_ParseOnly(benchmark::State& state) {
   for (auto _ : state) {
-    auto envelope = a2a::server::JsonRpcServerTransport::ParseEnvelope(kGetBody);
+    auto envelope = a2a::server::internal::ParseJsonRpcEnvelope(kGetBody);
     benchmark::DoNotOptimize(envelope);
   }
 }
@@ -76,9 +77,8 @@ void BM_JsonRpcEnvelope_SerializeOnly(benchmark::State& state) {
   if (task_json.ok()) {
     benchmark::DoNotOptimize(a2a::core::JsonToMessage(task_json.value(), result.mutable_struct_value()));
   }
-  const a2a::server::JsonRpcServerTransport::ResponseId response_id(std::move(id));
   for (auto _ : state) {
-    auto envelope = a2a::server::JsonRpcServerTransport::SerializeSuccessEnvelope(response_id, result);
+    auto envelope = a2a::server::internal::SerializeJsonRpcSuccessEnvelope(id, result);
     benchmark::DoNotOptimize(envelope);
   }
 }
