@@ -7,6 +7,10 @@ The SDK includes C++ microbenchmarks for core hot paths. Benchmarks are run in C
 - **C++ / Google Benchmark** measures SDK internals directly. This avoids Go-to-C++ boundary costs, process startup costs, and HTTP socket overhead when the benchmark is intended to isolate serialization, routing, task store, task lifecycle, UUID generation, or transport handling logic.
 - **Go benchmark runner** handles orchestration/reporting. It consumes Google Benchmark JSON, validates fixed thresholds from `thresholds.json`, emits a Markdown summary, and returns deterministic CI exit codes.
 
+The Markdown summary groups results by component so the transport totals and their
+parse, conversion, projection, lifecycle, and response-building costs remain easy
+to compare as the suite grows.
+
 ## Build and run locally
 
 Benchmarks are not built by default. Use a Release build for meaningful numbers:
@@ -69,4 +73,8 @@ Do not compare Debug or sanitizer benchmark results against Release thresholds. 
 
 ## Coverage notes
 
-The current suite covers proto/JSON serialization, task store operations, task lifecycle operations, UUIDv7 task ID generation, transport mux routing, REST transport handling, JSON-RPC transport handling, Agent Card generation, and the HTTP adapter.
+The current suite covers proto/JSON serialization for every protobuf response shape,
+JSON-RPC envelope parsing and serialization, REST query parsing and response building,
+task-store projection, serialization-free task lifecycle operations, UUIDv7 task ID
+generation, transport mux routing, REST and JSON-RPC transport handling, Agent Card
+generation, and the HTTP adapter.

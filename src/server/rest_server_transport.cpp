@@ -256,7 +256,7 @@ core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
   return decoded;
 }
 
-core::Result<void> ParseQueryString(std::string_view raw, std::unordered_map<std::string, std::string>* out) {
+core::Result<void> ParseQueryStringImpl(std::string_view raw, std::unordered_map<std::string, std::string>* out) {
   if (out == nullptr) {
     return core::Error::Internal("Query output map is required");
   }
@@ -296,7 +296,7 @@ core::Result<void> ParseQueryString(std::string_view raw, std::unordered_map<std
 
 core::Result<bool> HasExtendedAgentCardView(std::string_view query) {
   std::unordered_map<std::string, std::string> query_params;
-  const auto parsed = ParseQueryString(query, &query_params);
+  const auto parsed = ParseQueryStringImpl(query, &query_params);
   if (!parsed.ok()) {
     return parsed.error();
   }
@@ -340,6 +340,11 @@ std::optional<std::string> ExtractTenantFromExtendedAgentCardPath(std::string_vi
 }
 
 }  // namespace
+
+core::Result<void> RestServerTransport::ParseQueryString(std::string_view query,
+                                                         std::unordered_map<std::string, std::string>* query_params) {
+  return ParseQueryStringImpl(query, query_params);
+}
 
 RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                                          RestServerTransportOptions options)
@@ -444,7 +449,7 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
 
   if (query_start != std::string::npos) {
     const auto parsed =
-        ParseQueryString(std::string_view(request.target).substr(query_start + 1), &rest_request.query_params);
+        ParseQueryStringImpl(std::string_view(request.target).substr(query_start + 1), &rest_request.query_params);
     if (!parsed.ok()) {
       return parsed.error();
     }

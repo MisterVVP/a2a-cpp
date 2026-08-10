@@ -19,6 +19,7 @@ inline constexpr std::string_view kInvalidMethodBody =
     R"({"jsonrpc":"2.0","id":"req-5","method":"tasks/unknown","params":{}})";
 inline constexpr std::string_view kInvalidParamsBody =
     R"({"jsonrpc":"2.0","id":"req-6","method":"tasks/get","params":[1,2,3]})";
+inline constexpr std::string_view kResponseId = "req-2";
 
 struct JsonRpcFixture final {
   a2a::bench::StaticExecutor executor;
@@ -58,5 +59,29 @@ BENCHMARK(BM_JsonRpcTransport_ErrorEnvelope);
 
 void BM_JsonRpcTransport_SuccessEnvelope(benchmark::State& state) { RunJsonRpcBenchmark(state, kGetBody); }
 BENCHMARK(BM_JsonRpcTransport_SuccessEnvelope);
+
+void BM_JsonRpcEnvelope_ParseOnly(benchmark::State& state) {
+  for (auto _ : state) {
+    auto envelope = a2a::server::JsonRpcServerTransport::ParseEnvelope(kGetBody);
+    benchmark::DoNotOptimize(envelope);
+  }
+}
+BENCHMARK(BM_JsonRpcEnvelope_ParseOnly);
+
+void BM_JsonRpcEnvelope_SerializeOnly(benchmark::State& state) {
+  google::protobuf::Value id;
+  id.set_string_value(std::string(kResponseId));
+  google::protobuf::Value result;
+  const auto task_json = a2a::core::MessageToJson(a2a::bench::BuildTask());
+  if (task_json.ok()) {
+    benchmark::DoNotOptimize(a2a::core::JsonToMessage(task_json.value(), result.mutable_struct_value()));
+  }
+  const a2a::server::JsonRpcServerTransport::ResponseId response_id(std::move(id));
+  for (auto _ : state) {
+    auto envelope = a2a::server::JsonRpcServerTransport::SerializeSuccessEnvelope(response_id, result);
+    benchmark::DoNotOptimize(envelope);
+  }
+}
+BENCHMARK(BM_JsonRpcEnvelope_SerializeOnly);
 
 }  // namespace

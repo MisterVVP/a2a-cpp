@@ -2,6 +2,9 @@
 
 #include <benchmark/benchmark.h>
 
+#include <unordered_map>
+
+#include "a2a/core/http_constants.h"
 #include "a2a/server/rest_server_transport.h"
 #include "bench_common.h"
 
@@ -93,5 +96,28 @@ void BM_RestTransport_QueryParsing(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_RestTransport_QueryParsing);
+
+void BM_RestQueryParser_ParseOnly(benchmark::State& state) {
+  constexpr std::string_view kQuery = "pageSize=1&pageToken=0&historyLength=1";
+  for (auto _ : state) {
+    std::unordered_map<std::string, std::string> query_params;
+    auto parsed = a2a::server::RestServerTransport::ParseQueryString(kQuery, &query_params);
+    benchmark::DoNotOptimize(parsed);
+    benchmark::DoNotOptimize(query_params);
+  }
+}
+BENCHMARK(BM_RestQueryParser_ParseOnly);
+
+void BM_RestResponseBuilder_BuildOnly(benchmark::State& state) {
+  constexpr std::string_view kResponseBody = R"({"id":"task-bench-1"})";
+  const a2a::server::RestResponse response{.http_status = a2a::core::http::kStatusOk,
+                                           .body = std::string(kResponseBody)};
+  const std::vector<std::string> extensions;
+  for (auto _ : state) {
+    auto http_response = a2a::server::RestServerTransport::ToHttpResponse(response, extensions);
+    benchmark::DoNotOptimize(http_response);
+  }
+}
+BENCHMARK(BM_RestResponseBuilder_BuildOnly);
 
 }  // namespace

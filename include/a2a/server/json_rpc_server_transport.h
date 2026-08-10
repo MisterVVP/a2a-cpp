@@ -32,7 +32,8 @@ class JsonRpcServerTransport final {
 
   [[nodiscard]] core::Result<HttpServerResponse> Handle(const HttpServerRequest& request) const;
 
- private:
+  // Component-level protocol operations are public so callers can measure and
+  // validate envelope processing independently from dispatch and HTTP routing.
   class ResponseId final {
    public:
     ResponseId() { value_.set_null_value(google::protobuf::NULL_VALUE); }
@@ -50,18 +51,22 @@ class JsonRpcServerTransport final {
     google::protobuf::Struct params;
   };
 
+  [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
+  [[nodiscard]] static core::Result<std::string> SerializeSuccessEnvelope(const ResponseId& id,
+                                                                          const google::protobuf::Value& result);
+  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
+                                                               const google::protobuf::Value& result,
+                                                               const std::vector<std::string>& activated_extensions);
+
+ private:
   struct JsonRpcRequest final {
     ResponseId id;
     DispatchRequest dispatch;
   };
 
-  [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
   [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(const JsonRpcEnvelope& envelope);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
                                                                                      const DispatchResponse& response);
-  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
-                                                               const google::protobuf::Value& result,
-                                                               const std::vector<std::string>& activated_extensions);
   [[nodiscard]] static HttpServerResponse BuildErrorResponse(int json_rpc_code, std::string_view message,
                                                              const ResponseId& id,
                                                              const std::optional<core::Error>& error, int http_status);

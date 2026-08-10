@@ -26,6 +26,12 @@
   "BM_HttpAdapter_SerializeResponse": {
     "max_time_ns": 500
   },
+  "BM_JsonRpcEnvelope_ParseOnly": {
+    "max_time_ns": 25000
+  },
+  "BM_JsonRpcEnvelope_SerializeOnly": {
+    "max_time_ns": 30000
+  },
   "BM_JsonRpcTransport_CancelTask": {
     "max_time_ns": 150000
   },
@@ -62,11 +68,26 @@
   "BM_ProtoJson_MessageToJson_SendMessageRequest": {
     "max_time_ns": 15000
   },
-  "BM_ProtoJson_MessageToJson_StreamResponse": {
+  "BM_ProtoJson_ResponseToJson_AgentCard": {
+    "max_time_ns": 36000
+  },
+  "BM_ProtoJson_ResponseToJson_PushConfig": {
+    "max_time_ns": 10000
+  },
+  "BM_ProtoJson_ResponseToJson_PushConfigList": {
+    "max_time_ns": 12000
+  },
+  "BM_ProtoJson_ResponseToJson_SendMessage": {
     "max_time_ns": 22000
   },
-  "BM_ProtoJson_MessageToJson_Task": {
+  "BM_ProtoJson_ResponseToJson_Stream": {
+    "max_time_ns": 22000
+  },
+  "BM_ProtoJson_ResponseToJson_Task": {
     "max_time_ns": 20000
+  },
+  "BM_ProtoJson_ResponseToJson_TaskList": {
+    "max_time_ns": 22000
   },
   "BM_PushNotificationService_Notify_ManyConfigs": {
     "max_time_ns": 900000
@@ -76,6 +97,12 @@
   },
   "BM_PushNotificationStore_List_ManyConfigs": {
     "max_time_ns": 350000
+  },
+  "BM_RestQueryParser_ParseOnly": {
+    "max_time_ns": 5000
+  },
+  "BM_RestResponseBuilder_BuildOnly": {
+    "max_time_ns": 5000
   },
   "BM_RestTransport_AgentCardResponse": {
     "max_time_ns": 90000

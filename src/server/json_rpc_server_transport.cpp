@@ -984,9 +984,8 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
   return core::protocol_errors::InvalidAgentResponse("Unsupported JSON-RPC dispatcher operation");
 }
 
-HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId& id,
-                                                                const google::protobuf::Value& result,
-                                                                const std::vector<std::string>& activated_extensions) {
+core::Result<std::string> JsonRpcServerTransport::SerializeSuccessEnvelope(const ResponseId& id,
+                                                                           const google::protobuf::Value& result) {
   google::protobuf::Struct envelope;
   auto* fields = envelope.mutable_fields();
 
@@ -994,6 +993,12 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
   (*fields)["id"] = id.value();
   (*fields)["result"] = result;
 
+  return core::MessageToJson(envelope);
+}
+
+HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId& id,
+                                                                const google::protobuf::Value& result,
+                                                                const std::vector<std::string>& activated_extensions) {
   auto response = HttpServerResponseBuilder()
                       .WithStatus(core::http::kStatusOk)
                       .WithJsonContentType()
@@ -1001,7 +1006,7 @@ HttpServerResponse JsonRpcServerTransport::BuildSuccessResponse(const ResponseId
                       .WithActivatedExtensions(activated_extensions)
                       .Build();
 
-  const auto body = core::MessageToJson(envelope);
+  const auto body = SerializeSuccessEnvelope(id, result);
   if (body.ok()) {
     response.body = body.value();
   } else {
