@@ -208,14 +208,12 @@ bool IsFlatPayloadDescriptor(const google::protobuf::Descriptor& descriptor) {
   return true;
 }
 
-bool RequiresProtoJsonFallback(const google::protobuf::Struct& params,
-                               const google::protobuf::Descriptor& descriptor) {
+bool RequiresProtoJsonFallback(const google::protobuf::Struct& params, const google::protobuf::Descriptor& descriptor) {
   const auto& fields = params.fields();
   for (int index = 0; index < descriptor.field_count(); ++index) {
     const auto* field = descriptor.field(index);
     const auto proto_name_it = fields.find(field->name());
-    const auto json_name_it =
-        field->json_name() == field->name() ? fields.end() : fields.find(field->json_name());
+    const auto json_name_it = field->json_name() == field->name() ? fields.end() : fields.find(field->json_name());
     if (proto_name_it != fields.end() && json_name_it != fields.end()) {
       return true;
     }

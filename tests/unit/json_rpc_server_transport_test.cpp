@@ -304,9 +304,8 @@ TEST(JsonRpcServerTransportTest, ParsesFlatGetTaskPayloadWithoutChangingUnknownF
 TEST(JsonRpcServerTransportTest, AcceptsQuotedFlatGetTaskIntegerField) {
   constexpr std::string_view kExpectedTaskId = "task-flat-quoted";
   constexpr std::int32_t kExpectedHistoryLength = 7;
-  constexpr std::string_view kRequestBody =
-      R"({"jsonrpc":"2.0","id":"req-flat-quoted","method":"a2a.getTask",)"
-      R"("params":{"id":"task-flat-quoted","historyLength":"7"}})";
+  constexpr std::string_view kRequestBody = R"({"jsonrpc":"2.0","id":"req-flat-quoted","method":"a2a.getTask",)"
+                                            R"("params":{"id":"task-flat-quoted","historyLength":"7"}})";
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(&dispatcher,
