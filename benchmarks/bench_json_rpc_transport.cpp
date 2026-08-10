@@ -4,7 +4,7 @@
 
 #include "a2a/server/json_rpc_server_transport.h"
 #include "bench_common.h"
-#include "server/transport_components.h"
+#include "server/transport/transport_components.h"
 
 namespace {
 

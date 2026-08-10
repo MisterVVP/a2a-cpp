@@ -76,10 +76,10 @@ add_library(a2a_client STATIC
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
-  client/grpc_transport.cpp
-  client/http_json_transport.cpp
-  client/json_rpc_transport.cpp
-  client/sse_parser.cpp
+  client/transport/grpc_transport.cpp
+  client/transport/http_json_transport.cpp
+  client/transport/json_rpc_transport.cpp
+  client/transport/sse_parser.cpp
 )
 add_library(a2a::client ALIAS a2a_client)
 set_target_properties(a2a_client PROPERTIES EXPORT_NAME client)
@@ -98,15 +98,15 @@ target_link_libraries(a2a_client
 
 add_library(a2a_server STATIC
   server/agent_card/agent_card_serializer.cpp
-  server/grpc_server_transport.cpp
-  server/stream_cancellation_watcher.cpp
-  server/http_adapter.cpp
-  server/http_server_response_builder.cpp
-  server/rest_server_transport.cpp
+  server/transport/grpc_server_transport.cpp
+  server/transport/stream_cancellation_watcher.cpp
+  server/transport/http_adapter.cpp
+  server/transport/http_server_response_builder.cpp
+  server/transport/rest_server_transport.cpp
   server/required_extensions_validator.cpp
   server/version_header_validator.cpp
-  server/rest_transport.cpp
-  server/json_rpc_server_transport.cpp
+  server/transport/rest_transport.cpp
+  server/transport/json_rpc_server_transport.cpp
   server/push_notifications/push_notification_delivery.cpp
   server/push_notifications/push_notification_service.cpp
   server/push_notifications/push_notification_store.cpp
@@ -114,7 +114,7 @@ add_library(a2a_server STATIC
   server/stores/sql_identifier.cpp
   server/task_id_generator.cpp
   server/task_subscription_service.cpp
-  server/transport_mux.cpp
+  server/transport/transport_mux.cpp
   server/dispatcher.cpp
   server/request_context.cpp
   server/tasks/in_memory_task_store.cpp

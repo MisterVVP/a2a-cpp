@@ -214,6 +214,11 @@ void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::
 }
 
 core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
+  constexpr std::string_view kEncodedCharacters = "+%";
+  if (raw.find_first_of(kEncodedCharacters) == std::string_view::npos) {
+    return std::string(raw);
+  }
+
   std::string decoded;
   decoded.reserve(raw.size());
 
@@ -265,6 +270,8 @@ core::Result<void> ParseQueryStringImpl(std::string_view raw, std::unordered_map
   if (raw.empty()) {
     return {};
   }
+
+  out->reserve(static_cast<std::size_t>(std::count(raw.begin(), raw.end(), '&')) + 1);
 
   std::size_t start = 0;
   while (start <= raw.size()) {
