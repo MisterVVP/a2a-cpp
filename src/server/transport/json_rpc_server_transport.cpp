@@ -208,6 +208,27 @@ bool IsFlatPayloadDescriptor(const google::protobuf::Descriptor& descriptor) {
   return true;
 }
 
+bool RequiresProtoJsonFallback(const google::protobuf::Struct& params,
+                               const google::protobuf::Descriptor& descriptor) {
+  const auto& fields = params.fields();
+  for (int index = 0; index < descriptor.field_count(); ++index) {
+    const auto* field = descriptor.field(index);
+    const auto proto_name_it = fields.find(field->name());
+    const auto json_name_it =
+        field->json_name() == field->name() ? fields.end() : fields.find(field->json_name());
+    if (proto_name_it != fields.end() && json_name_it != fields.end()) {
+      return true;
+    }
+
+    const auto value_it = proto_name_it != fields.end() ? proto_name_it : json_name_it;
+    if (value_it != fields.end() && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_INT32 &&
+        value_it->second.kind_case() == google::protobuf::Value::kStringValue) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const google::protobuf::FieldDescriptor* FindJsonField(const google::protobuf::Descriptor& descriptor,
                                                        std::string_view name) {
   if (const auto* field = descriptor.FindFieldByName(std::string(name)); field != nullptr) {
@@ -273,7 +294,7 @@ core::Result<T> ParseFlatPayload(const google::protobuf::Struct& params) {
 template <typename T>
 core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
   static const bool is_flat_payload = IsFlatPayloadDescriptor(*T::descriptor());
-  if (is_flat_payload) {
+  if (is_flat_payload && !RequiresProtoJsonFallback(params, *T::descriptor())) {
     return ParseFlatPayload<T>(params);
   }
 

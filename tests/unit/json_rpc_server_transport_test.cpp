@@ -301,6 +301,42 @@ TEST(JsonRpcServerTransportTest, ParsesFlatGetTaskPayloadWithoutChangingUnknownF
   EXPECT_EQ(executor.last_get_history_length, kExpectedHistoryLength);
 }
 
+TEST(JsonRpcServerTransportTest, AcceptsQuotedFlatGetTaskIntegerField) {
+  constexpr std::string_view kExpectedTaskId = "task-flat-quoted";
+  constexpr std::int32_t kExpectedHistoryLength = 7;
+  constexpr std::string_view kRequestBody =
+      R"({"jsonrpc":"2.0","id":"req-flat-quoted","method":"a2a.getTask",)"
+      R"("params":{"id":"task-flat-quoted","historyLength":"7"}})";
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(std::string(kRequestBody)));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(executor.last_get_task_id, kExpectedTaskId);
+  EXPECT_EQ(executor.last_get_history_length, kExpectedHistoryLength);
+}
+
+TEST(JsonRpcServerTransportTest, RejectsDuplicateFlatGetTaskFieldAliases) {
+  constexpr std::string_view kSerializationErrorCode = "-32700";
+  constexpr std::string_view kRequestBody =
+      R"({"jsonrpc":"2.0","id":"req-flat-alias","method":"a2a.getTask",)"
+      R"("params":{"id":"task-flat-alias","historyLength":7,"history_length":8}})";
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(std::string(kRequestBody)));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find(kSerializationErrorCode), std::string::npos) << response.value().body;
+}
+
 TEST(JsonRpcServerTransportTest, RejectsInvalidFlatGetTaskFieldType) {
   constexpr std::string_view kSerializationErrorCode = "-32700";
   JsonRpcEchoExecutor executor;

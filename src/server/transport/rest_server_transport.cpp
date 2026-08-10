@@ -36,6 +36,7 @@ constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 constexpr std::string_view kAgentCardViewQueryKey = "view";
 constexpr std::string_view kExtendedAgentCardViewQueryValue = "extended";
+constexpr std::size_t kExpectedRestQueryParameterCount = 4U;
 
 struct ErrorBodySpec final {
   int status_code = core::http::kStatusBadRequest;
@@ -271,7 +272,7 @@ core::Result<void> ParseQueryStringImpl(std::string_view raw, std::unordered_map
     return {};
   }
 
-  out->reserve(static_cast<std::size_t>(std::count(raw.begin(), raw.end(), '&')) + 1);
+  out->reserve(kExpectedRestQueryParameterCount);
 
   std::size_t start = 0;
   while (start <= raw.size()) {

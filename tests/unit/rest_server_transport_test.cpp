@@ -447,4 +447,17 @@ TEST(RestQueryParserTest, PreservesUrlDecodingSemantics) {
   EXPECT_EQ(query_params.at(std::string(kPageTokenQueryKey)), kExpectedPageToken);
 }
 
+TEST(RestQueryParserTest, CapsPreallocationForSeparatorHeavyQuery) {
+  constexpr std::size_t kSeparatorCount = 4096U;
+  constexpr std::size_t kMaximumExpectedBucketCount = 64U;
+  const std::string query(kSeparatorCount, '&');
+  std::unordered_map<std::string, std::string> query_params;
+
+  const auto parsed = a2a::server::internal::ParseRestQueryString(query, &query_params);
+
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_TRUE(query_params.empty());
+  EXPECT_LE(query_params.bucket_count(), kMaximumExpectedBucketCount);
+}
+
 }  // namespace
