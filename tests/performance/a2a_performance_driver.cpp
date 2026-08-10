@@ -40,6 +40,11 @@ using namespace a2a::tests::performance;
 constexpr std::chrono::milliseconds kStreamWaitTimeout{5000};
 constexpr int kNoFailingDelivery = std::numeric_limits<int>::max();
 constexpr std::string_view kRecordingDeliveryFailure = "recording push delivery failure";
+constexpr std::string_view kGetConfigId = "focused-get-config";
+constexpr std::string_view kListConfigPrefix = "focused-list-config";
+constexpr std::string_view kDeleteConfigPrefix = "focused-delete-config";
+constexpr std::string_view kDeleteWarmupConfigPrefix = "focused-delete-warmup-config";
+constexpr int kFocusedListConfigCount = 3;
 
 struct DeliveryStats final {
   int attempted = 0;
@@ -124,7 +129,13 @@ class ScenarioHarness final {
     subscribe_task_id_ = SeedTask("subscribe-seed");
     fanout_task_id_ = SeedTask("fanout-seed");
     create_many_task_id_ = SeedTask("create-many-seed");
+    get_config_task_id_ = SeedTask("focused-get-task-seed");
+    list_config_task_id_ = SeedTask("focused-list-task-seed");
     SeedFanoutConfigs(fanout_task_id_, "preloaded-fanout");
+    SeedPushConfig(get_config_task_id_, kGetConfigId);
+    for (int config = 0; config < kFocusedListConfigCount; ++config) {
+      SeedPushConfig(list_config_task_id_, BuildId(kListConfigPrefix, config));
+    }
     prebuilt_payload_ = BuildPushPayload(fanout_task_id_);
   }
 
@@ -153,6 +164,20 @@ class ScenarioHarness final {
   }
 
   [[nodiscard]] bool PrepareMeasuredFixtures(std::string_view scenario, int requests) {
+    if (scenario == kScenarioPushConfigDelete) {
+      delete_fixtures_.clear();
+      delete_fixtures_.reserve(static_cast<std::size_t>(requests));
+      for (int index = 0; index < requests; ++index) {
+        std::string task_id = SeedTask(BuildId(kDeleteConfigPrefix, index));
+        if (task_id.empty()) {
+          return false;
+        }
+        std::string config_id = BuildId(kDeleteConfigPrefix, index);
+        SeedPushConfig(task_id, config_id);
+        delete_fixtures_.push_back({.task_id = std::move(task_id), .config_id = std::move(config_id)});
+      }
+      return true;
+    }
     const int history_depth = ScenarioHistoryDepth(scenario);
     if (history_depth == 0) {
       return true;
@@ -171,6 +196,16 @@ class ScenarioHarness final {
 
   [[nodiscard]] bool ExecuteFollowUpWarmup(std::string_view scenario, int index) {
     const int history_depth = ScenarioHistoryDepth(scenario);
+    if (scenario == kScenarioPushConfigDelete) {
+      const std::string task_id = SeedTask(BuildId(kDeleteWarmupConfigPrefix, index));
+      if (task_id.empty()) {
+        return false;
+      }
+      const std::string config_id = BuildId(kDeleteWarmupConfigPrefix, index);
+      SeedPushConfig(task_id, config_id);
+      a2a::server::RequestContext context;
+      return DeletePushConfig(task_id, config_id, context);
+    }
     if (history_depth == 0) {
       return Execute(scenario, 0, index).ok;
     }
@@ -191,6 +226,7 @@ class ScenarioHarness final {
   }
 
   [[nodiscard]] const std::vector<std::string>& follow_up_task_ids() const noexcept { return follow_up_task_ids_; }
+  [[nodiscard]] const std::vector<DeleteFixture>& delete_fixtures() const noexcept { return delete_fixtures_; }
 
  private:
   static OperationOutcome OperationSucceeded(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
@@ -312,7 +348,11 @@ class ScenarioHarness final {
       return OperationSucceeded(ListPushConfigs(context));
     }
     if (scenario == kScenarioPushConfigDelete) {
-      return OperationSucceeded(DeletePushConfig(BuildId("cfg-delete", index), context));
+      if (index < 0 || static_cast<std::size_t>(index) >= delete_fixtures_.size()) {
+        return OperationSucceeded(false);
+      }
+      const DeleteFixture& fixture = delete_fixtures_[static_cast<std::size_t>(index)];
+      return OperationSucceeded(DeletePushConfig(fixture.task_id, fixture.config_id, context));
     }
     if (scenario == kScenarioPushNotifyEndToEndManyConfigs) {
       return NotifyPushConfigs(index, context);
@@ -405,24 +445,21 @@ class ScenarioHarness final {
   }
 
   bool GetPushConfig(a2a::server::RequestContext& context) {
-    SeedPushConfig(existing_task_id_, "cfg-get");
     lf::a2a::v1::GetTaskPushNotificationConfigRequest request;
-    request.set_task_id(existing_task_id_);
-    request.set_id("cfg-get");
+    request.set_task_id(get_config_task_id_);
+    request.set_id(std::string(kGetConfigId));
     return executor_->GetTaskPushNotificationConfig(request, context).ok();
   }
 
   bool ListPushConfigs(a2a::server::RequestContext& context) {
-    SeedPushConfig(existing_task_id_, "cfg-list");
     lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
-    request.set_task_id(existing_task_id_);
+    request.set_task_id(list_config_task_id_);
     return executor_->ListTaskPushNotificationConfigs(request, context).ok();
   }
 
-  bool DeletePushConfig(std::string_view config_id, a2a::server::RequestContext& context) {
-    SeedPushConfig(existing_task_id_, config_id);
+  bool DeletePushConfig(std::string_view task_id, std::string_view config_id, a2a::server::RequestContext& context) {
     lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request;
-    request.set_task_id(existing_task_id_);
+    request.set_task_id(std::string(task_id));
     request.set_id(std::string(config_id));
     return executor_->DeleteTaskPushNotificationConfig(request, context).ok();
   }
@@ -658,8 +695,11 @@ class ScenarioHarness final {
   std::string subscribe_task_id_;
   std::string fanout_task_id_;
   std::string create_many_task_id_;
+  std::string get_config_task_id_;
+  std::string list_config_task_id_;
   std::vector<lf::a2a::v1::TaskPushNotificationConfig> preloaded_configs_;
   std::vector<std::string> follow_up_task_ids_;
+  std::vector<DeleteFixture> delete_fixtures_;
   lf::a2a::v1::StreamResponse prebuilt_payload_;
   ScenarioInstrumentation* instrumentation_ = nullptr;
 };

@@ -165,6 +165,11 @@ struct OperationOutcome final {
   std::array<std::size_t, kPostgresDiagnosticPhaseCount> postgres_phase_call_count{};
 };
 
+struct DeleteFixture final {
+  std::string task_id;
+  std::string config_id;
+};
+
 [[nodiscard]] lf::a2a::v1::SendMessageRequest MakeSendRequest(std::string_view message_id,
                                                               std::string_view task_id = {});
 [[nodiscard]] lf::a2a::v1::TaskPushNotificationConfig MakePushConfig(std::string_view task_id,

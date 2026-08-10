@@ -102,6 +102,10 @@ Each row includes the required stable fields plus `driver_type` and
 
 The in-process push rows intentionally separate setup-heavy and delivery-only work:
 
+- `PushConfig_Get` uses one immutable config fixture, `PushConfig_List` uses a fixed three-config fixture, and
+  `PushConfig_Delete` uses one independently pre-seeded task/config pair per operation. Warmup deletes use separate
+  task/config pairs, so they cannot consume measured fixtures. `PushConfig_Create` retains one measured create against
+  a pre-existing task.
 - `PushNotify_EndToEndManyConfigs` creates a task, writes eight push-notification configs, sends one task update, lets the push service list configs from the configured store, builds the update payload, and invokes the local recording callback once per config.
 - `PushConfig_ListManyConfigs` uses a task and eight configs seeded before warmup and measures only the list operation for that fixed fan-out.
 - `PushDelivery_CallbackFanout` uses preloaded configs and a prebuilt payload seeded before warmup, then measures only the in-process callback delivery loop. It does not create tasks, create configs, query the store, or perform network I/O inside the timed operation.
@@ -135,6 +139,15 @@ handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
 JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
 seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
 the listed task set bounded in CI. Multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and callback fan-out remain SDK in-process rows in this implementation; they are not duplicated as transport rows and must not be interpreted as full `wire_tck_sut` coverage.
+
+Focused wire fixtures are also prepared before timing: existing-task lookup uses a shared task; push create uses a
+pre-existing task; push get uses a shared immutable config; push list uses a fixed three-config set; and every push
+delete operation owns a distinct single-config task. Warmup uses a separate fixture namespace. Consequently, lower latency in
+these rows reflects corrected benchmark attribution rather than an SDK runtime optimization.
+
+For PostgreSQL, each focused operation executes one matching store command: `task_get` for `GetTask_ExistingTask`,
+`push_config_upsert` for `PushConfig_Create`, `push_config_get` for `PushConfig_Get`, `push_config_list_select` for
+`PushConfig_List`, or `push_config_delete` for `PushConfig_Delete`.
 
 ## Store backend coverage
 
