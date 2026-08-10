@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -51,6 +52,7 @@ constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
+constexpr std::string_view kFlatPayloadTypeError = "JSON value does not match the request field type";
 
 bool HasJsonContentType(const HttpServerRequest& request) {
   const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
@@ -192,8 +194,108 @@ core::Result<void> ValidateJsonRpcVersion(const google::protobuf::Struct& envelo
   return {};
 }
 
+bool IsFlatPayloadDescriptor(const google::protobuf::Descriptor& descriptor) {
+  for (int index = 0; index < descriptor.field_count(); ++index) {
+    const auto* field = descriptor.field(index);
+    const auto type = field->cpp_type();
+    if (field->is_repeated() || field->real_containing_oneof() != nullptr ||
+        (type != google::protobuf::FieldDescriptor::CPPTYPE_STRING &&
+         type != google::protobuf::FieldDescriptor::CPPTYPE_BOOL &&
+         type != google::protobuf::FieldDescriptor::CPPTYPE_INT32)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool RequiresProtoJsonFallback(const google::protobuf::Struct& params, const google::protobuf::Descriptor& descriptor) {
+  const auto& fields = params.fields();
+  for (int index = 0; index < descriptor.field_count(); ++index) {
+    const auto* field = descriptor.field(index);
+    const auto proto_name_it = fields.find(field->name());
+    const auto json_name_it = field->json_name() == field->name() ? fields.end() : fields.find(field->json_name());
+    if (proto_name_it != fields.end() && json_name_it != fields.end()) {
+      return true;
+    }
+
+    const auto value_it = proto_name_it != fields.end() ? proto_name_it : json_name_it;
+    if (value_it != fields.end() && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_INT32 &&
+        value_it->second.kind_case() == google::protobuf::Value::kStringValue) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const google::protobuf::FieldDescriptor* FindJsonField(const google::protobuf::Descriptor& descriptor,
+                                                       std::string_view name) {
+  if (const auto* field = descriptor.FindFieldByName(std::string(name)); field != nullptr) {
+    return field;
+  }
+  for (int index = 0; index < descriptor.field_count(); ++index) {
+    const auto* field = descriptor.field(index);
+    if (field->json_name() == name) {
+      return field;
+    }
+  }
+  return nullptr;
+}
+
+core::Result<void> SetFlatPayloadField(google::protobuf::Message* payload,
+                                       const google::protobuf::FieldDescriptor& field,
+                                       const google::protobuf::Value& value) {
+  const auto invalid_type = [] { return core::Error::Serialization(std::string(kFlatPayloadTypeError)); };
+  const auto* reflection = payload->GetReflection();
+  if (field.cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_STRING) {
+    if (value.kind_case() != google::protobuf::Value::kStringValue) {
+      return invalid_type();
+    }
+    reflection->SetString(payload, &field, value.string_value());
+    return {};
+  }
+  if (field.cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_BOOL) {
+    if (value.kind_case() != google::protobuf::Value::kBoolValue) {
+      return invalid_type();
+    }
+    reflection->SetBool(payload, &field, value.bool_value());
+    return {};
+  }
+
+  const double number = value.number_value();
+  if (field.cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_INT32 ||
+      value.kind_case() != google::protobuf::Value::kNumberValue || !std::isfinite(number) ||
+      std::trunc(number) != number || number < std::numeric_limits<std::int32_t>::min() ||
+      number > std::numeric_limits<std::int32_t>::max()) {
+    return invalid_type();
+  }
+  reflection->SetInt32(payload, &field, static_cast<std::int32_t>(number));
+  return {};
+}
+
+template <typename T>
+core::Result<T> ParseFlatPayload(const google::protobuf::Struct& params) {
+  T payload;
+  const auto* descriptor = T::descriptor();
+  for (const auto& [name, value] : params.fields()) {
+    const auto* field = FindJsonField(*descriptor, name);
+    if (field == nullptr || value.kind_case() == google::protobuf::Value::kNullValue) {
+      continue;
+    }
+    const auto set_field = SetFlatPayloadField(&payload, *field, value);
+    if (!set_field.ok()) {
+      return set_field.error();
+    }
+  }
+  return payload;
+}
+
 template <typename T>
 core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
+  static const bool is_flat_payload = IsFlatPayloadDescriptor(*T::descriptor());
+  if (is_flat_payload && !RequiresProtoJsonFallback(params, *T::descriptor())) {
+    return ParseFlatPayload<T>(params);
+  }
+
   const auto params_json = core::MessageToJson(params);
   if (!params_json.ok()) {
     return params_json.error();

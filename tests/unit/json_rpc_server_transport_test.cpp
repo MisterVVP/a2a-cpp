@@ -161,6 +161,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                a2a::server::RequestContext& context) override {
     (void)context;
+    last_get_task_id = request.id();
+    last_get_history_length = request.history_length();
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     task.mutable_status()->set_state(task_state);
@@ -230,6 +232,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
   std::string last_push_url;
   std::string last_push_auth_scheme;
   std::string last_deleted_push_config_id;
+  std::string last_get_task_id;
+  std::int32_t last_get_history_length = 0;
   bool fail_streaming = false;
   std::shared_ptr<std::atomic_bool> heartbeat_cancellation;
   lf::a2a::v1::TaskState task_state = lf::a2a::v1::TASK_STATE_WORKING;
@@ -278,6 +282,73 @@ TEST(JsonRpcServerTransportTest, HandlesSendMessageEnvelope) {
   EXPECT_EQ(executor.last_version_header, "1.0");
   EXPECT_NE(response.value().body.find("\"id\":\"req-1\""), std::string::npos);
   EXPECT_NE(response.value().body.find("task-1"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, ParsesFlatGetTaskPayloadWithoutChangingUnknownFieldSemantics) {
+  constexpr std::string_view kExpectedTaskId = "task-flat-payload";
+  constexpr std::int32_t kExpectedHistoryLength = 7;
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(
+      R"({"jsonrpc":"2.0","id":"req-flat","method":"a2a.getTask","params":{"id":"task-flat-payload","historyLength":7,"unknownField":"ignored"}})"));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(executor.last_get_task_id, kExpectedTaskId);
+  EXPECT_EQ(executor.last_get_history_length, kExpectedHistoryLength);
+}
+
+TEST(JsonRpcServerTransportTest, AcceptsQuotedFlatGetTaskIntegerField) {
+  constexpr std::string_view kExpectedTaskId = "task-flat-quoted";
+  constexpr std::int32_t kExpectedHistoryLength = 7;
+  constexpr std::string_view kRequestBody = R"({"jsonrpc":"2.0","id":"req-flat-quoted","method":"a2a.getTask",)"
+                                            R"("params":{"id":"task-flat-quoted","historyLength":"7"}})";
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(std::string(kRequestBody)));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_EQ(executor.last_get_task_id, kExpectedTaskId);
+  EXPECT_EQ(executor.last_get_history_length, kExpectedHistoryLength);
+}
+
+TEST(JsonRpcServerTransportTest, RejectsDuplicateFlatGetTaskFieldAliases) {
+  constexpr std::string_view kSerializationErrorCode = "-32700";
+  constexpr std::string_view kRequestBody =
+      R"({"jsonrpc":"2.0","id":"req-flat-alias","method":"a2a.getTask",)"
+      R"("params":{"id":"task-flat-alias","historyLength":7,"history_length":8}})";
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(std::string(kRequestBody)));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find(kSerializationErrorCode), std::string::npos) << response.value().body;
+}
+
+TEST(JsonRpcServerTransportTest, RejectsInvalidFlatGetTaskFieldType) {
+  constexpr std::string_view kSerializationErrorCode = "-32700";
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(BuildJsonRpcRequest(
+      R"({"jsonrpc":"2.0","id":"req-flat-invalid","method":"a2a.getTask","params":{"id":"task-flat-payload","historyLength":"seven"}})"));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_NE(response.value().body.find(kSerializationErrorCode), std::string::npos) << response.value().body;
 }
 
 TEST(JsonRpcServerTransportTest, RejectsMalformedEnvelope) {

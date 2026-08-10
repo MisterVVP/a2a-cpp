@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
@@ -16,12 +17,16 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "server/transport/transport_components.h"
 
 namespace {
 
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 constexpr std::string_view kTenantId = "tenant-1";
+constexpr std::string_view kPageSizeQueryKey = "pageSize";
+constexpr std::string_view kPageTokenQueryKey = "pageToken";
+constexpr std::string_view kHistoryLengthQueryKey = "historyLength";
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -414,6 +419,45 @@ TEST(RestServerTransportTest, ExtendedAgentCardPreservesProviderErrorReason) {
   EXPECT_EQ(response.value().status_code, 502);
   EXPECT_NE(response.value().body.find(kExpectedReason), std::string::npos);
   EXPECT_EQ(response.value().body.find(kUnexpectedReason), std::string::npos);
+}
+
+TEST(RestQueryParserTest, ParsesUnescapedKnownParameters) {
+  constexpr std::string_view kQuery = "pageSize=15&pageToken=page-2&historyLength=3";
+  constexpr std::string_view kExpectedPageSize = "15";
+  constexpr std::string_view kExpectedPageToken = "page-2";
+  constexpr std::string_view kExpectedHistoryLength = "3";
+  std::unordered_map<std::string, std::string> query_params;
+
+  const auto parsed = a2a::server::internal::ParseRestQueryString(kQuery, &query_params);
+
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_EQ(query_params.at(std::string(kPageSizeQueryKey)), kExpectedPageSize);
+  EXPECT_EQ(query_params.at(std::string(kPageTokenQueryKey)), kExpectedPageToken);
+  EXPECT_EQ(query_params.at(std::string(kHistoryLengthQueryKey)), kExpectedHistoryLength);
+}
+
+TEST(RestQueryParserTest, PreservesUrlDecodingSemantics) {
+  constexpr std::string_view kQuery = "pageToken=next%2Fpage+one";
+  constexpr std::string_view kExpectedPageToken = "next/page one";
+  std::unordered_map<std::string, std::string> query_params;
+
+  const auto parsed = a2a::server::internal::ParseRestQueryString(kQuery, &query_params);
+
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_EQ(query_params.at(std::string(kPageTokenQueryKey)), kExpectedPageToken);
+}
+
+TEST(RestQueryParserTest, CapsPreallocationForSeparatorHeavyQuery) {
+  constexpr std::size_t kSeparatorCount = 4096U;
+  constexpr std::size_t kMaximumExpectedBucketCount = 64U;
+  const std::string query(kSeparatorCount, '&');
+  std::unordered_map<std::string, std::string> query_params;
+
+  const auto parsed = a2a::server::internal::ParseRestQueryString(query, &query_params);
+
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_TRUE(query_params.empty());
+  EXPECT_LE(query_params.bucket_count(), kMaximumExpectedBucketCount);
 }
 
 }  // namespace

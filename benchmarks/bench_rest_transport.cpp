@@ -7,7 +7,7 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/server/rest_server_transport.h"
 #include "bench_common.h"
-#include "server/transport_components.h"
+#include "server/transport/transport_components.h"
 
 namespace {
 

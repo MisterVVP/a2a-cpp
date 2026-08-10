@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "server/stream_cancellation_watcher.h"
+#include "server/transport/stream_cancellation_watcher.h"
 
 #include <gtest/gtest.h>
 

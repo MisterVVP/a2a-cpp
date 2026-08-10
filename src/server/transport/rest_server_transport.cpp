@@ -36,6 +36,7 @@ constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 constexpr std::string_view kAgentCardViewQueryKey = "view";
 constexpr std::string_view kExtendedAgentCardViewQueryValue = "extended";
+constexpr std::size_t kExpectedRestQueryParameterCount = 4U;
 
 struct ErrorBodySpec final {
   int status_code = core::http::kStatusBadRequest;
@@ -214,6 +215,11 @@ void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::
 }
 
 core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
+  constexpr std::string_view kEncodedCharacters = "+%";
+  if (raw.find_first_of(kEncodedCharacters) == std::string_view::npos) {
+    return std::string(raw);
+  }
+
   std::string decoded;
   decoded.reserve(raw.size());
 
@@ -265,6 +271,8 @@ core::Result<void> ParseQueryStringImpl(std::string_view raw, std::unordered_map
   if (raw.empty()) {
     return {};
   }
+
+  out->reserve(kExpectedRestQueryParameterCount);
 
   std::size_t start = 0;
   while (start <= raw.size()) {
