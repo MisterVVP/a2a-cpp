@@ -69,7 +69,6 @@ class RestServerTransport final {
                                                                          std::string_view tenant) const;
   [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
                                                          const std::vector<std::string>& activated_extensions);
-
   static std::string NormalizeBasePath(std::string_view path);
 
   Dispatcher* dispatcher_ = nullptr;

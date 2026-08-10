@@ -69,9 +69,15 @@ func Markdown(evaluation Evaluation, timeField string) string {
 	var builder strings.Builder
 	builder.WriteString("# Benchmark threshold check\n\n")
 	builder.WriteString(fmt.Sprintf("Measured field: `%s`. Thresholds are in nanoseconds.\n\n", timeField))
-	builder.WriteString(fmt.Sprintf("| Benchmark | Actual %s, ns | Median %s, ns | Threshold, ns | Ratio | Status |\n", timeField, timeField))
-	builder.WriteString("|---|---:|---:|---:|---:|---|\n")
+	component := ""
 	for _, row := range evaluation.Rows {
+		rowComponent := benchmarkComponent(row.Benchmark)
+		if rowComponent != component {
+			component = rowComponent
+			builder.WriteString(fmt.Sprintf("## %s\n\n", component))
+			builder.WriteString(fmt.Sprintf("| Benchmark | Actual %s, ns | Median %s, ns | Threshold, ns | Ratio | Status |\n", timeField, timeField))
+			builder.WriteString("|---|---:|---:|---:|---:|---|\n")
+		}
 		median := ""
 		if row.MedianNS != nil {
 			median = FormatInt(*row.MedianNS)
@@ -98,6 +104,15 @@ func Markdown(evaluation Evaluation, timeField string) string {
 		}
 	}
 	return builder.String()
+}
+
+func benchmarkComponent(name string) string {
+	const prefix = "BM_"
+	trimmed := strings.TrimPrefix(name, prefix)
+	if separator := strings.IndexByte(trimmed, '_'); separator >= 0 {
+		return trimmed[:separator]
+	}
+	return trimmed
 }
 
 func FormatInt(value int64) string {

@@ -38,6 +38,7 @@
 
 namespace {
 
+#ifdef A2A_ENABLE_POSTGRES_STORE
 constexpr std::string_view kMissingTaskAwareListTaskId = "missing-task-aware-list";
 constexpr std::string_view kMalformedTaskAwareListPageToken = "invalid-page-token";
 constexpr int kInvalidTaskAwareListPageSize = -1;
@@ -57,6 +58,7 @@ void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAware
   EXPECT_EQ(malformed_page_token.error().protocol_code().value_or(std::string{}),
             a2a::core::protocol_codes::kTaskNotFound);
 }
+#endif
 
 TEST(StoreConformanceTest, InMemoryTaskStore) {
   a2a::tests::store_conformance::RunTaskStoreConformance(

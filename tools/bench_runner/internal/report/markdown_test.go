@@ -43,6 +43,23 @@ func TestMarkdownFormatsThresholdColumnAndThousandsSeparators(t *testing.T) {
 	if !strings.Contains(summary, "14,200") || !strings.Contains(summary, "20,000") {
 		t.Fatalf("summary does not contain formatted values: %s", summary)
 	}
+	if !strings.Contains(summary, "## Test\n") {
+		t.Fatalf("summary does not group benchmarks by component: %s", summary)
+	}
+}
+
+func TestMarkdownStartsATableForEachComponent(t *testing.T) {
+	evaluation := Evaluation{Rows: []Row{
+		{Benchmark: "BM_JsonRpcEnvelope_ParseOnly", ThresholdNS: 100, Status: "PASS"},
+		{Benchmark: "BM_RestQueryParser_ParseOnly", ThresholdNS: 100, Status: "PASS"},
+	}}
+	summary := Markdown(evaluation, results.RealTimeField)
+	if strings.Count(summary, "| Benchmark |") != 2 {
+		t.Fatalf("summary does not contain one table per component: %s", summary)
+	}
+	if !strings.Contains(summary, "## JsonRpcEnvelope\n") || !strings.Contains(summary, "## RestQueryParser\n") {
+		t.Fatalf("summary does not contain component headings: %s", summary)
+	}
 }
 
 func TestEvaluateCanFailOnUntracked(t *testing.T) {

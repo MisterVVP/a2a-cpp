@@ -55,16 +55,18 @@ class JsonRpcServerTransport final {
     DispatchRequest dispatch;
   };
 
-  [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
   [[nodiscard]] static core::Result<JsonRpcRequest> ParseRequest(const JsonRpcEnvelope& envelope);
+  [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
+  [[nodiscard]] static core::Result<std::string> SerializeSuccessEnvelope(const ResponseId& id,
+                                                                          const google::protobuf::Value& result);
   [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
                                                                                      const DispatchResponse& response);
-  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
-                                                               const google::protobuf::Value& result,
-                                                               const std::vector<std::string>& activated_extensions);
   [[nodiscard]] static HttpServerResponse BuildErrorResponse(int json_rpc_code, std::string_view message,
                                                              const ResponseId& id,
                                                              const std::optional<core::Error>& error, int http_status);
+  [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
+                                                               const google::protobuf::Value& result,
+                                                               const std::vector<std::string>& activated_extensions);
   [[nodiscard]] static std::string NormalizePath(std::string path);
 
   Dispatcher* dispatcher_ = nullptr;
