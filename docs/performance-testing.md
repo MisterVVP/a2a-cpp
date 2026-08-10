@@ -103,8 +103,9 @@ Each row includes the required stable fields plus `driver_type` and
 The in-process push rows intentionally separate setup-heavy and delivery-only work:
 
 - `PushConfig_Get` uses one immutable config fixture, `PushConfig_List` uses a fixed three-config fixture, and
-  `PushConfig_Delete` uses one independently pre-seeded config per operation. Warmup deletes use separate config IDs,
-  so they cannot consume measured fixtures. `PushConfig_Create` retains one measured create against a pre-existing task.
+  `PushConfig_Delete` uses one independently pre-seeded task/config pair per operation. Warmup deletes use separate
+  task/config pairs, so they cannot consume measured fixtures. `PushConfig_Create` retains one measured create against
+  a pre-existing task.
 - `PushNotify_EndToEndManyConfigs` creates a task, writes eight push-notification configs, sends one task update, lets the push service list configs from the configured store, builds the update payload, and invokes the local recording callback once per config.
 - `PushConfig_ListManyConfigs` uses a task and eight configs seeded before warmup and measures only the list operation for that fixed fan-out.
 - `PushDelivery_CallbackFanout` uses preloaded configs and a prebuilt payload seeded before warmup, then measures only the in-process callback delivery loop. It does not create tasks, create configs, query the store, or perform network I/O inside the timed operation.
@@ -141,13 +142,12 @@ the listed task set bounded in CI. Multi-subscriber subscription, disconnect iso
 
 Focused wire fixtures are also prepared before timing: existing-task lookup uses a shared task; push create uses a
 pre-existing task; push get uses a shared immutable config; push list uses a fixed three-config set; and every push
-delete operation owns a distinct config. Warmup uses a separate fixture namespace. Consequently, lower latency in
+delete operation owns a distinct single-config task. Warmup uses a separate fixture namespace. Consequently, lower latency in
 these rows reflects corrected benchmark attribution rather than an SDK runtime optimization.
 
-For PostgreSQL, the expected calls per measured operation are `task_get` once for `GetTask_ExistingTask`;
-`task_get` and `push_config_upsert` once each for `PushConfig_Create`; `push_config_get` once for `PushConfig_Get`;
-`task_get`, `push_config_list_count`, and `push_config_list_select` once each for `PushConfig_List`; and
-`push_config_delete` once for `PushConfig_Delete`.
+For PostgreSQL, each focused operation executes one matching store command: `task_get` for `GetTask_ExistingTask`,
+`push_config_upsert` for `PushConfig_Create`, `push_config_get` for `PushConfig_Get`, `push_config_list_select` for
+`PushConfig_List`, or `push_config_delete` for `PushConfig_Delete`.
 
 ## Store backend coverage
 

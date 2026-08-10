@@ -165,12 +165,16 @@ class ScenarioHarness final {
 
   [[nodiscard]] bool PrepareMeasuredFixtures(std::string_view scenario, int requests) {
     if (scenario == kScenarioPushConfigDelete) {
-      delete_config_ids_.clear();
-      delete_config_ids_.reserve(static_cast<std::size_t>(requests));
+      delete_fixtures_.clear();
+      delete_fixtures_.reserve(static_cast<std::size_t>(requests));
       for (int index = 0; index < requests; ++index) {
+        std::string task_id = SeedTask(BuildId(kDeleteConfigPrefix, index));
+        if (task_id.empty()) {
+          return false;
+        }
         std::string config_id = BuildId(kDeleteConfigPrefix, index);
-        SeedPushConfig(existing_task_id_, config_id);
-        delete_config_ids_.push_back(std::move(config_id));
+        SeedPushConfig(task_id, config_id);
+        delete_fixtures_.push_back({.task_id = std::move(task_id), .config_id = std::move(config_id)});
       }
       return true;
     }
@@ -193,10 +197,14 @@ class ScenarioHarness final {
   [[nodiscard]] bool ExecuteFollowUpWarmup(std::string_view scenario, int index) {
     const int history_depth = ScenarioHistoryDepth(scenario);
     if (scenario == kScenarioPushConfigDelete) {
+      const std::string task_id = SeedTask(BuildId(kDeleteWarmupConfigPrefix, index));
+      if (task_id.empty()) {
+        return false;
+      }
       const std::string config_id = BuildId(kDeleteWarmupConfigPrefix, index);
-      SeedPushConfig(existing_task_id_, config_id);
+      SeedPushConfig(task_id, config_id);
       a2a::server::RequestContext context;
-      return DeletePushConfig(config_id, context);
+      return DeletePushConfig(task_id, config_id, context);
     }
     if (history_depth == 0) {
       return Execute(scenario, 0, index).ok;
@@ -218,7 +226,7 @@ class ScenarioHarness final {
   }
 
   [[nodiscard]] const std::vector<std::string>& follow_up_task_ids() const noexcept { return follow_up_task_ids_; }
-  [[nodiscard]] const std::vector<std::string>& delete_config_ids() const noexcept { return delete_config_ids_; }
+  [[nodiscard]] const std::vector<DeleteFixture>& delete_fixtures() const noexcept { return delete_fixtures_; }
 
  private:
   static OperationOutcome OperationSucceeded(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
@@ -340,10 +348,11 @@ class ScenarioHarness final {
       return OperationSucceeded(ListPushConfigs(context));
     }
     if (scenario == kScenarioPushConfigDelete) {
-      if (index < 0 || static_cast<std::size_t>(index) >= delete_config_ids_.size()) {
+      if (index < 0 || static_cast<std::size_t>(index) >= delete_fixtures_.size()) {
         return OperationSucceeded(false);
       }
-      return OperationSucceeded(DeletePushConfig(delete_config_ids_[static_cast<std::size_t>(index)], context));
+      const DeleteFixture& fixture = delete_fixtures_[static_cast<std::size_t>(index)];
+      return OperationSucceeded(DeletePushConfig(fixture.task_id, fixture.config_id, context));
     }
     if (scenario == kScenarioPushNotifyEndToEndManyConfigs) {
       return NotifyPushConfigs(index, context);
@@ -448,9 +457,9 @@ class ScenarioHarness final {
     return executor_->ListTaskPushNotificationConfigs(request, context).ok();
   }
 
-  bool DeletePushConfig(std::string_view config_id, a2a::server::RequestContext& context) {
+  bool DeletePushConfig(std::string_view task_id, std::string_view config_id, a2a::server::RequestContext& context) {
     lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request;
-    request.set_task_id(existing_task_id_);
+    request.set_task_id(std::string(task_id));
     request.set_id(std::string(config_id));
     return executor_->DeleteTaskPushNotificationConfig(request, context).ok();
   }
@@ -690,7 +699,7 @@ class ScenarioHarness final {
   std::string list_config_task_id_;
   std::vector<lf::a2a::v1::TaskPushNotificationConfig> preloaded_configs_;
   std::vector<std::string> follow_up_task_ids_;
-  std::vector<std::string> delete_config_ids_;
+  std::vector<DeleteFixture> delete_fixtures_;
   lf::a2a::v1::StreamResponse prebuilt_payload_;
   ScenarioInstrumentation* instrumentation_ = nullptr;
 };

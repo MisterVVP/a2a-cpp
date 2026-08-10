@@ -41,7 +41,7 @@ constexpr int kFocusedListConfigCount = 3;
 struct FocusedWireFixture final {
   std::string task_id;
   std::string config_id;
-  std::vector<std::string> delete_config_ids;
+  std::vector<DeleteFixture> delete_fixtures;
 };
 
 class CountingObserver final : public a2a::client::StreamObserver {
@@ -297,9 +297,23 @@ OperationOutcome MakeOutcome(bool ok) { return {.ok = ok, .event_count = ok ? 1 
 bool PrepareFocusedWireFixture(a2a::client::A2AClient* client, std::string_view scenario, int operation_count,
                                std::string_view fixture_prefix, const a2a::client::CallOptions& call_options,
                                FocusedWireFixture* fixture) {
+  if (scenario == kScenarioPushConfigDelete) {
+    fixture->delete_fixtures.reserve(static_cast<std::size_t>(operation_count));
+    for (int index = 0; index < operation_count; ++index) {
+      std::string task_id = SeedTask(client, BuildId(fixture_prefix, index), call_options);
+      if (task_id.empty()) {
+        return false;
+      }
+      std::string config_id = BuildId(fixture_prefix, index + 1);
+      if (!SeedWirePushConfig(client, task_id, config_id, call_options)) {
+        return false;
+      }
+      fixture->delete_fixtures.push_back({.task_id = std::move(task_id), .config_id = std::move(config_id)});
+    }
+    return true;
+  }
   const bool needs_task = scenario == kScenarioGetTaskExistingTask || scenario == kScenarioPushConfigCreate ||
-                          scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList ||
-                          scenario == kScenarioPushConfigDelete;
+                          scenario == kScenarioPushConfigGet || scenario == kScenarioPushConfigList;
   if (!needs_task) {
     return true;
   }
@@ -316,16 +330,6 @@ bool PrepareFocusedWireFixture(a2a::client::A2AClient* client, std::string_view 
       if (!SeedWirePushConfig(client, fixture->task_id, BuildId(fixture_prefix, index + 1), call_options)) {
         return false;
       }
-    }
-  }
-  if (scenario == kScenarioPushConfigDelete) {
-    fixture->delete_config_ids.reserve(static_cast<std::size_t>(operation_count));
-    for (int index = 0; index < operation_count; ++index) {
-      std::string config_id = BuildId(fixture_prefix, index + 1);
-      if (!SeedWirePushConfig(client, fixture->task_id, config_id, call_options)) {
-        return false;
-      }
-      fixture->delete_config_ids.push_back(std::move(config_id));
     }
   }
   return true;
@@ -398,11 +402,11 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
     return MakeOutcome(ExecuteWirePushList(client, fixture.task_id, call_options));
   }
   if (scenario == kScenarioPushConfigDelete) {
-    if (index < 0 || static_cast<std::size_t>(index) >= fixture.delete_config_ids.size()) {
+    if (index < 0 || static_cast<std::size_t>(index) >= fixture.delete_fixtures.size()) {
       return {};
     }
-    return MakeOutcome(ExecuteWirePushDelete(client, fixture.task_id,
-                                             fixture.delete_config_ids[static_cast<std::size_t>(index)], call_options));
+    const DeleteFixture& delete_fixture = fixture.delete_fixtures[static_cast<std::size_t>(index)];
+    return MakeOutcome(ExecuteWirePushDelete(client, delete_fixture.task_id, delete_fixture.config_id, call_options));
   }
   return {};
 }

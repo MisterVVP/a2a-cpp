@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <string>
+#include <unordered_set>
 
 #define A2A_PERFORMANCE_DRIVER_DISABLE_MAIN
 // White-box performance-driver tests intentionally include the implementation to
@@ -95,6 +96,19 @@ bool ExecuteAllDeleteFixtures(ScenarioHarness* harness, int fixture_count) {
 void ExpectNoFixtureSetup(const ScenarioInstrumentation& instrumentation) {
   EXPECT_EQ(0, AtomicValue(instrumentation.task_creates));
   EXPECT_EQ(0, AtomicValue(instrumentation.config_creates));
+}
+
+bool HasIndependentDeleteFixtures(const std::vector<DeleteFixture>& fixtures) {
+  std::unordered_set<std::string> task_ids;
+  std::unordered_set<std::string> config_ids;
+  task_ids.reserve(fixtures.size());
+  config_ids.reserve(fixtures.size());
+  for (const DeleteFixture& fixture : fixtures) {
+    if (!task_ids.insert(fixture.task_id).second || !config_ids.insert(fixture.config_id).second) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -220,8 +234,8 @@ TEST(PerformanceScenarioIsolationTest, DeleteUsesIndependentMeasuredFixtures) {
   ScenarioHarness harness(kInMemoryStore, &instrumentation);
   ASSERT_TRUE(harness.ok());
   ASSERT_TRUE(harness.PrepareMeasuredFixtures(kScenarioPushConfigDelete, kFocusedFixtureCount));
-  ASSERT_EQ(kFocusedFixtureCount, harness.delete_config_ids().size());
-  EXPECT_NE(harness.delete_config_ids()[0], harness.delete_config_ids()[1]);
+  ASSERT_EQ(kFocusedFixtureCount, harness.delete_fixtures().size());
+  EXPECT_TRUE(HasIndependentDeleteFixtures(harness.delete_fixtures()));
   instrumentation.task_creates.store(0, std::memory_order_relaxed);
   instrumentation.config_creates.store(0, std::memory_order_relaxed);
 
@@ -235,8 +249,10 @@ TEST(PerformanceScenarioIsolationTest, DeleteWarmupCannotConsumeMeasuredFixtures
   ASSERT_TRUE(harness.ok());
   ASSERT_TRUE(harness.ExecuteFollowUpWarmup(kScenarioPushConfigDelete, 0));
   ASSERT_TRUE(harness.PrepareMeasuredFixtures(kScenarioPushConfigDelete, kSingleRequest));
-  ASSERT_EQ(kSingleRequest, harness.delete_config_ids().size());
-  EXPECT_NE(BuildId(kDeleteWarmupConfigPrefix, 0), harness.delete_config_ids().front());
+  ASSERT_EQ(kSingleRequest, harness.delete_fixtures().size());
+  const DeleteFixture& measured_fixture = harness.delete_fixtures().front();
+  EXPECT_NE(BuildId(kDeleteWarmupConfigPrefix, 0), measured_fixture.task_id);
+  EXPECT_NE(BuildId(kDeleteWarmupConfigPrefix, 0), measured_fixture.config_id);
 
   EXPECT_TRUE(harness.Execute(kScenarioPushConfigDelete, 0, 0).ok);
 }
