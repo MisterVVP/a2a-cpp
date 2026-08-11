@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import platform
+import re
 import secrets
 import socket
 import statistics
@@ -99,6 +100,10 @@ SUT_PORT_PAIR_COUNT = (SUT_PORT_RANGE_END - SUT_PORT_RANGE_START) // SUT_PORT_PA
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
+HTTP_DIAGNOSTICS_PATTERN = re.compile(
+    r"A2A_HTTP_DIAGNOSTICS accepted_connections=(\d+) completed_unary_operations=(\d+) "
+    r"operations_per_connection=([0-9.]+)"
+)
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
     "task_get",
@@ -228,6 +233,20 @@ def read_tail(path: Path) -> str:
     return "\n".join(lines[-80:])
 
 
+def read_http_diagnostics(path: Path) -> dict[str, int | float]:
+    if not path.exists():
+        return {}
+    matches = HTTP_DIAGNOSTICS_PATTERN.findall(path.read_text(encoding="utf-8", errors="replace"))
+    if not matches:
+        return {}
+    accepted, completed, reuse = matches[-1]
+    return {
+        "accepted_connections": int(accepted),
+        "completed_unary_http_operations": int(completed),
+        "operations_per_connection": float(reuse),
+    }
+
+
 def postgres_schema_name(transport: str, concurrency: int, port: int) -> str:
     safe_transport = "".join(ch if ch.isalnum() else "_" for ch in transport.lower())
     return f"a2a_perf_{safe_transport}_{concurrency}_{port}"
@@ -352,21 +371,26 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             "--concurrency", str(concurrency),
             "--warmup-seconds", str(config.warmup_seconds),
             "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(wire_scenarios_for_transport(transport)),
+            "--scenarios", ",".join(wire_scenarios_for_transport(transport, config.scenarios)),
         ]
         payload = run_command_json(
             command, config.wire_driver_timeout_seconds,
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
+    diagnostics = read_http_diagnostics(sut.log_path)
     for result in payload:
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
+        result.update(diagnostics)
     return payload
 
 
-def wire_scenarios_for_transport(transport: str) -> tuple[str, ...]:
-    return WIRE_SCENARIOS
+def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    del transport
+    if scenarios is None:
+        return WIRE_SCENARIOS
+    return tuple(scenario for scenario in scenarios if scenario in WIRE_SCENARIOS)
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -404,6 +428,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
     parser.add_argument("--concurrency", default=env_or_default("A2A_PERF_CONCURRENCY", ",".join(str(level) for level in DEFAULT_CONCURRENCY)))
+    parser.add_argument("--scenarios", default=os.environ.get("A2A_PERF_SCENARIOS"))
     parser.add_argument("--warmup-seconds", type=float, default=float(env_or_default("A2A_PERF_WARMUP_SECONDS", str(DEFAULT_WARMUP_SECONDS))))
     parser.add_argument("--duration-seconds", type=float, default=float(env_or_default("A2A_PERF_DURATION_SECONDS", str(DEFAULT_DURATION_SECONDS))))
     parser.add_argument("--report-dir", default=env_or_default("A2A_PERF_REPORT_DIR", DEFAULT_REPORT_DIR))
@@ -435,7 +460,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         scenarios = POSTGRES_TAIL_C1_SCENARIOS
     else:
         concurrency_levels = parse_positive_int_csv(args.concurrency, "concurrency levels")
-        scenarios = None
+        scenarios = None if args.scenarios is None else split_csv(args.scenarios, SCENARIOS)
     return RunnerConfig(
         profile=profile,
         transports=("grpc",) if is_postgres_tail else split_csv(args.transports, TRANSPORTS),
@@ -943,7 +968,7 @@ def log_workload_estimate(config: RunnerConfig) -> None:
     )
     store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
     in_process_rows = store_concurrency_rows * len(SCENARIOS)
-    wire_rows = sum(len(wire_scenarios_for_transport(transport)) for transport in config.transports) * store_concurrency_rows
+    wire_rows = sum(len(wire_scenarios_for_transport(transport, config.scenarios)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
     log_progress(
