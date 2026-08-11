@@ -241,6 +241,45 @@ bool HeaderContainsToken(const std::unordered_map<std::string, std::string>& hea
   return false;
 }
 
+core::Result<void> ValidateResponseContentLength(const HttpServerResponse& response, std::string_view value,
+                                                 bool is_streaming) {
+  if (is_streaming) {
+    return core::Error::Validation("Streaming responses cannot set Content-Length");
+  }
+  const auto parsed_length = ParseContentLength(value);
+  if (!parsed_length.ok()) {
+    return core::Error::Validation("Response Content-Length header is invalid");
+  }
+  if (parsed_length.value() != response.body.size()) {
+    return core::Error::Validation("Response Content-Length header does not match body size");
+  }
+  return {};
+}
+
+core::Result<bool> AppendResponseHeaders(const HttpServerResponse& response, bool is_streaming,
+                                         bool must_close_connection, bool response_requests_close,
+                                         std::string* payload) {
+  bool has_content_length = false;
+  for (const auto& [name, value] : response.headers) {
+    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
+      const auto validated = ValidateResponseContentLength(response, value, is_streaming);
+      if (!validated.ok()) {
+        return validated.error();
+      }
+      has_content_length = true;
+    }
+    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kConnectionHeader) && must_close_connection &&
+        !response_requests_close) {
+      continue;
+    }
+    *payload += name;
+    *payload += core::http::kHeaderNameValueSeparator;
+    *payload += value;
+    *payload += core::http::kLineTerminator;
+  }
+  return has_content_length;
+}
+
 }  // namespace
 
 HttpAdapter::HttpAdapter() = default;
@@ -374,42 +413,21 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   payload += core::http::kLineTerminator;
 
   const bool is_streaming = static_cast<bool>(response.stream_writer);
-  bool has_content_length = false;
   const bool response_requests_close =
       HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
   const bool must_close_connection = close_connection || is_streaming || response_requests_close;
-  bool has_connection_close = response_requests_close;
-  for (const auto& [name, value] : response.headers) {
-    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
-      if (is_streaming) {
-        return core::Error::Validation("Streaming responses cannot set Content-Length");
-      }
-      has_content_length = true;
-      const auto parsed_length = ParseContentLength(value);
-      if (!parsed_length.ok()) {
-        return core::Error::Validation("Response Content-Length header is invalid");
-      }
-      if (parsed_length.value() != response.body.size()) {
-        return core::Error::Validation("Response Content-Length header does not match body size");
-      }
-    }
-    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kConnectionHeader)) {
-      if (must_close_connection && !response_requests_close) {
-        continue;
-      }
-    }
-    payload += name;
-    payload += core::http::kHeaderNameValueSeparator;
-    payload += value;
-    payload += core::http::kLineTerminator;
+  const auto headers =
+      AppendResponseHeaders(response, is_streaming, must_close_connection, response_requests_close, &payload);
+  if (!headers.ok()) {
+    return headers.error();
   }
-  if (!has_content_length && !is_streaming) {
+  if (!headers.value() && !is_streaming) {
     payload += core::http::kContentLengthHeaderName;
     payload += core::http::kHeaderNameValueSeparator;
     payload += std::to_string(response.body.size());
     payload += core::http::kLineTerminator;
   }
-  if (must_close_connection && !has_connection_close) {
+  if (must_close_connection && !response_requests_close) {
     payload += core::http::kConnectionHeaderName;
     payload += core::http::kHeaderNameValueSeparator;
     payload += core::http::kConnectionCloseHeaderValue;
