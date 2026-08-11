@@ -400,6 +400,10 @@ std::string HttpAdapter::ReasonPhrase(int status_code) {
   }
 }
 
+core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response) {
+  return WriteResponse(transport, response, true);
+}
+
 core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response,
                                               bool close_connection) {
   const std::string reason_phrase = ReasonPhrase(response.status_code);

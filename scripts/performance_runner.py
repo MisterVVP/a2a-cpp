@@ -359,6 +359,9 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
                     postgres_pool_size: int, port: int) -> list[dict[str, object]]:
     if transport not in WIRE_TRANSPORT_PATHS:
         raise ValueError(f"unsupported wire transport: {transport}")
+    wire_scenarios = wire_scenarios_for_transport(transport, config.scenarios)
+    if not wire_scenarios:
+        return []
     wire_driver = ensure_wire_driver(config)
     with SutProcess(config, store_backend, port, transport, concurrency, postgres_pool_size) as sut:
         command = [
@@ -371,7 +374,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             "--concurrency", str(concurrency),
             "--warmup-seconds", str(config.warmup_seconds),
             "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(wire_scenarios_for_transport(transport, config.scenarios)),
+            "--scenarios", ",".join(wire_scenarios),
         ]
         payload = run_command_json(
             command, config.wire_driver_timeout_seconds,

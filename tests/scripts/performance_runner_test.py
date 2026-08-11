@@ -206,6 +206,19 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
         self.assertIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
 
+    def test_run_wire_driver_skips_selection_without_wire_scenarios(self):
+        runner = load_runner_module()
+        config = mock.Mock()
+        config.scenarios = ("PushNotify_EndToEndManyConfigs",)
+
+        with mock.patch.object(runner, "ensure_wire_driver") as ensure_wire_driver:
+            results = runner.run_wire_driver(
+                config, "http_json", "inmemory", 1, runner.DEFAULT_POSTGRES_POOL_SIZE, runner.SUT_PORT_RANGE_START
+            )
+
+        self.assertEqual([], results)
+        ensure_wire_driver.assert_not_called()
+
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             completed = subprocess.run([

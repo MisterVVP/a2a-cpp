@@ -322,6 +322,21 @@ TEST(HttpAdapterTest, WriteResponseAddsContentLengthAndStatusText) {
   EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
 }
 
+TEST(HttpAdapterTest, WriteResponseRetainsTwoArgumentFunctionSignature) {
+  using WriteResponseFunction =
+      a2a::core::Result<void> (*)(a2a::server::HttpByteTransport&, const a2a::server::HttpServerResponse&);
+  const WriteResponseFunction write_response = &a2a::server::HttpAdapter::WriteResponse;
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.body = std::string(kJsonBody);
+
+  const auto write = write_response(transport, response);
+
+  ASSERT_TRUE(write.ok());
+  EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
+}
+
 TEST(HttpAdapterTest, WriteResponseCanKeepConnectionAliveExplicitly) {
   BufferTransport transport("");
   a2a::server::HttpServerResponse response;
