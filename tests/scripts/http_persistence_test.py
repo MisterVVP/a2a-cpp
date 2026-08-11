@@ -164,11 +164,17 @@ def main() -> int:
     sut = sys.argv[1]
     port = available_port()
     creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("A2A_TCK_"):
+            del env[name]
+    env["A2A_TCK_STORE_BACKEND"] = "inmemory"
     process = subprocess.Popen(
         [sut, f"{HOST}:{port}"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         creationflags=creation_flags,
+        env=env,
     )
     idle_client: socket.socket | None = None
     try:

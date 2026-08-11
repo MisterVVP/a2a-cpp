@@ -154,6 +154,16 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
     *content_length = parsed_length.value();
   }
 
+  if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kConnectionHeader)) {
+    for (auto& [existing_name, existing_value] : *headers) {
+      if (core::strings::EqualsAsciiCaseInsensitive(existing_name, core::http::kConnectionHeader)) {
+        existing_value.append(", ");
+        existing_value.append(value);
+        return {};
+      }
+    }
+  }
+
   headers->insert_or_assign(name, value);
   return {};
 }

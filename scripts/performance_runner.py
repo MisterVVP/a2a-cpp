@@ -394,6 +394,11 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
+    if transport in {"http_json", "jsonrpc"} and not diagnostics:
+        raise ValueError(
+            f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
+            "did not emit HTTP reuse diagnostics"
+        )
     for result in payload:
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
@@ -989,7 +994,8 @@ def log_workload_estimate(config: RunnerConfig) -> None:
         for store_backend in config.store_backends
     )
     store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
-    in_process_rows = store_concurrency_rows * len(SCENARIOS)
+    in_process_scenarios = config.scenarios if config.scenarios is not None else SCENARIOS
+    in_process_rows = store_concurrency_rows * len(in_process_scenarios)
     wire_rows = sum(len(wire_scenarios_for_transport(transport, config.scenarios)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests

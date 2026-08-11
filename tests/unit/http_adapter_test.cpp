@@ -177,6 +177,19 @@ TEST(HttpAdapterTest, DetectsExplicitConnectionCloseTokenCaseInsensitively) {
   EXPECT_FALSE(a2a::server::HttpAdapter::IsConnectionReusable(request.value()));
 }
 
+TEST(HttpAdapterTest, DuplicateConnectionHeadersPreserveCloseToken) {
+  BufferTransport transport(
+      BuildRequest(kPostMethod, kRpcPath,
+                   {{a2a::core::http::kConnectionHeaderName, a2a::core::http::kConnectionCloseHeaderValue},
+                    {a2a::core::http::kConnectionHeaderName, a2a::core::http::kConnectionKeepAliveHeaderValue}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_TRUE(request.ok());
+  EXPECT_FALSE(a2a::server::HttpAdapter::IsConnectionReusable(request.value()));
+}
+
 TEST(HttpAdapterTest, RejectsTransferEncodingBeforePersistentReuse) {
   BufferTransport transport(
       BuildRequest(kPostMethod, kRpcPath,
