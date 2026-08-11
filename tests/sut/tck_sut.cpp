@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 
+#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <chrono>
@@ -60,7 +61,10 @@ constexpr std::string_view kMissingPostgresDsnMessage =
     "A2A_TCK_POSTGRES_DSN must be set when A2A_TCK_STORE_BACKEND=postgres";
 constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TCK_STORE_BACKEND: ";
 constexpr std::string_view kInvalidPostgresPoolSizeMessage = "A2A_TCK_POSTGRES_POOL_SIZE must be a positive integer";
+constexpr std::string_view kHttpDiagnosticsPrefix = "A2A_HTTP_DIAGNOSTICS";
 volatile std::sig_atomic_t kKeepRunning = 1;
+std::atomic<std::uint64_t> kAcceptedHttpConnections{0};
+std::atomic<std::uint64_t> kCompletedUnaryHttpOperations{0};
 
 void SignalHandler(int signal_number) {
   (void)signal_number;
@@ -176,12 +180,28 @@ class HttpConnectionRegistry final {
 void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConnectionRegistry& registry) {
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
-  auto parsed = adapter.ReadRequest(socket_transport, "localhost");
-  if (parsed.ok()) {
+  a2a::server::HttpConnectionState connection_state;
+  while (kKeepRunning != 0) {
+    auto parsed = adapter.ReadRequest(socket_transport, connection_state, "localhost");
+    if (!parsed.ok()) {
+      break;
+    }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
+    const bool request_reusable = a2a::server::HttpAdapter::IsConnectionReusable(request);
     auto response = mux.RouteRequest(request);
-    if (response.ok()) {
-      (void)a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value());
+    if (!response.ok()) {
+      break;
+    }
+    const bool is_streaming = static_cast<bool>(response.value().stream_writer);
+    const auto written = a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value(), !request_reusable);
+    if (!written.ok()) {
+      break;
+    }
+    if (!is_streaming) {
+      kCompletedUnaryHttpOperations.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!request_reusable || is_streaming) {
+      break;
     }
   }
   registry.Remove(fd);
@@ -336,6 +356,7 @@ int RunTckSut(int argc, char** argv) {
       break;
     }
     connection_registry.Add(fd);
+    kAcceptedHttpConnections.fetch_add(1, std::memory_order_relaxed);
     connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::ref(connection_registry));
   }
   executor.ShutdownSubscriptions();
@@ -347,6 +368,14 @@ int RunTckSut(int argc, char** argv) {
   }
   grpc_server->Shutdown();
   a2a::server::CloseSocketCrossPlatform(server_fd);
+  const std::uint64_t accepted_connections = kAcceptedHttpConnections.load(std::memory_order_relaxed);
+  const std::uint64_t completed_operations = kCompletedUnaryHttpOperations.load(std::memory_order_relaxed);
+  const double operations_per_connection =
+      accepted_connections == 0 ? 0.0
+                                : static_cast<double>(completed_operations) / static_cast<double>(accepted_connections);
+  std::cout << kHttpDiagnosticsPrefix << " accepted_connections=" << accepted_connections
+            << " completed_unary_operations=" << completed_operations
+            << " operations_per_connection=" << operations_per_connection << '\n';
 #ifdef _WIN32
   WSACleanup();
 #endif

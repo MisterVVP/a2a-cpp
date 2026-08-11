@@ -19,6 +19,16 @@ class HttpByteTransport {
   [[nodiscard]] virtual core::Result<std::size_t> Write(const char* buffer, std::size_t size) = 0;
 };
 
+// Retains bytes read beyond one request for the lifetime of an HTTP connection.
+class HttpConnectionState final {
+ public:
+  HttpConnectionState() = default;
+
+ private:
+  friend class HttpAdapter;
+  std::string buffered_bytes_;
+};
+
 class HttpAdapter final {
  public:
   struct Options final {
@@ -31,8 +41,12 @@ class HttpAdapter final {
 
   [[nodiscard]] core::Result<HttpServerRequest> ReadRequest(HttpByteTransport& transport,
                                                             std::string remote_address) const;
+  [[nodiscard]] core::Result<HttpServerRequest> ReadRequest(HttpByteTransport& transport, HttpConnectionState& state,
+                                                            std::string remote_address) const;
+  [[nodiscard]] static bool IsConnectionReusable(const HttpServerRequest& request);
   [[nodiscard]] static core::Result<void> WriteResponse(HttpByteTransport& transport,
-                                                        const HttpServerResponse& response);
+                                                        const HttpServerResponse& response,
+                                                        bool close_connection = false);
 
   [[nodiscard]] static std::string ReasonPhrase(int status_code);
 

@@ -43,6 +43,9 @@ class PerformanceRunnerTest(unittest.TestCase):
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
             self.assertEqual(14, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
+            self.assertTrue(all("accepted_connections" in result for result in wire_rows))
+            self.assertTrue(all("completed_unary_http_operations" in result for result in wire_rows))
+            self.assertTrue(all("operations_per_connection" in result for result in wire_rows))
             self.assertEqual({"in_process"}, {result["transport_path"] for result in payload["results"] if result["driver_type"] == "cpp_sdk_in_process"})
             ordered = sorted(payload["results"], key=lambda result: (result["scenario"], result["store_backend"], result["driver_type"], result["transport_path"], result["transport"], result["concurrency"]))
             self.assertEqual(ordered, payload["results"])

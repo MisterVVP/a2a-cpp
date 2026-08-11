@@ -68,6 +68,8 @@ constexpr std::string_view kInvalidContentLength = "not-a-number";
 constexpr std::string_view kMismatchedContentLength = "99";
 constexpr std::string_view kTestHeaderName = "X-Test";
 constexpr std::string_view kTrueHeaderValue = "true";
+constexpr std::string_view kConnectionHeaderValueWithClose = "keep-alive, close";
+constexpr std::string_view kConnectionCloseHeaderLine = "Connection: close";
 constexpr std::string_view kJsonContentType = "application/json";
 constexpr std::string_view kStatusOkSuffix = " 200 OK";
 constexpr std::string_view kHttp10Version = "HTTP/1.0";
@@ -144,6 +146,35 @@ TEST(HttpAdapterTest, ParsesContentLengthCaseInsensitive) {
   EXPECT_EQ(request.value().method, "POST");
   EXPECT_EQ(request.value().target, "/rpc");
   EXPECT_EQ(request.value().body, kBody);
+}
+
+TEST(HttpAdapterTest, RetainsOverReadBytesForBackToBackBodyRequests) {
+  std::string requests =
+      BuildRequest(kPostMethod, kRpcPath, {{a2a::core::http::kContentLengthHeaderName, kContentLengthFive}}, kBody);
+  requests.append(
+      BuildRequest(kPostMethod, kRpcPath, {{a2a::core::http::kContentLengthHeaderName, kContentLengthTwo}}, kJsonBody));
+  BufferTransport transport(std::move(requests));
+  const a2a::server::HttpAdapter adapter;
+  a2a::server::HttpConnectionState state;
+
+  const auto first = adapter.ReadRequest(transport, state, "127.0.0.1");
+  const auto second = adapter.ReadRequest(transport, state, "127.0.0.1");
+
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  EXPECT_EQ(first.value().body, kBody);
+  EXPECT_EQ(second.value().body, kJsonBody);
+}
+
+TEST(HttpAdapterTest, DetectsExplicitConnectionCloseTokenCaseInsensitively) {
+  BufferTransport transport(
+      BuildRequest(kPostMethod, kRpcPath, {{a2a::core::http::kConnectionHeaderName, kConnectionHeaderValueWithClose}}));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_TRUE(request.ok());
+  EXPECT_FALSE(a2a::server::HttpAdapter::IsConnectionReusable(request.value()));
 }
 
 TEST(HttpAdapterTest, RejectsOverflowContentLength) {
@@ -288,6 +319,19 @@ TEST(HttpAdapterTest, WriteResponseAddsContentLengthAndStatusText) {
   ASSERT_TRUE(write.ok());
   EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
   EXPECT_NE(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
+  EXPECT_EQ(transport.output().find(std::string(a2a::core::http::kConnectionHeaderName)), std::string::npos);
+}
+
+TEST(HttpAdapterTest, WriteResponseCanCloseConnectionExplicitly) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.body = std::string(kJsonBody);
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, true);
+
+  ASSERT_TRUE(write.ok());
+  EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
 }
 
 TEST(HttpAdapterTest, WriteResponseRejectsMismatchedContentLength) {
