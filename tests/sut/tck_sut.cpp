@@ -187,20 +187,20 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       break;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    const bool request_reusable = a2a::server::HttpAdapter::IsConnectionReusable(request);
     auto response = mux.RouteRequest(request);
     if (!response.ok()) {
       break;
     }
     const bool is_streaming = static_cast<bool>(response.value().stream_writer);
-    const auto written = a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value(), !request_reusable);
+    const bool close_connection = a2a::server::HttpAdapter::ShouldCloseConnection(request, response.value());
+    const auto written = a2a::server::HttpAdapter::WriteResponse(socket_transport, response.value(), close_connection);
     if (!written.ok()) {
       break;
     }
     if (!is_streaming) {
       kCompletedUnaryHttpOperations.fetch_add(1, std::memory_order_relaxed);
     }
-    if (!request_reusable || is_streaming) {
+    if (close_connection) {
       break;
     }
   }

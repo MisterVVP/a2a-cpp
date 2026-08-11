@@ -319,19 +319,43 @@ TEST(HttpAdapterTest, WriteResponseAddsContentLengthAndStatusText) {
   ASSERT_TRUE(write.ok());
   EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
   EXPECT_NE(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
-  EXPECT_EQ(transport.output().find(std::string(a2a::core::http::kConnectionHeaderName)), std::string::npos);
+  EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
 }
 
-TEST(HttpAdapterTest, WriteResponseCanCloseConnectionExplicitly) {
+TEST(HttpAdapterTest, WriteResponseCanKeepConnectionAliveExplicitly) {
   BufferTransport transport("");
   a2a::server::HttpServerResponse response;
   response.status_code = kHttpOk;
   response.body = std::string(kJsonBody);
 
-  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, true);
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_TRUE(write.ok());
+  EXPECT_EQ(transport.output().find(std::string(a2a::core::http::kConnectionHeaderName)), std::string::npos);
+}
+
+TEST(HttpAdapterTest, ShouldCloseConnectionHonorsResponseCloseHeader) {
+  a2a::server::HttpServerRequest request;
+  a2a::server::HttpServerResponse response;
+  response.headers[std::string(a2a::core::http::kConnectionHeaderName)] =
+      std::string(a2a::core::http::kConnectionCloseHeaderValue);
+
+  EXPECT_TRUE(a2a::server::HttpAdapter::ShouldCloseConnection(request, response));
+}
+
+TEST(HttpAdapterTest, WriteResponseOverridesKeepAliveWhenConnectionMustClose) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.body = std::string(kJsonBody);
+  response.headers[std::string(a2a::core::http::kConnectionHeaderName)] =
+      std::string(a2a::core::http::kConnectionKeepAliveHeaderValue);
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
 
   ASSERT_TRUE(write.ok());
   EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
+  EXPECT_EQ(transport.output().find(std::string(a2a::core::http::kConnectionKeepAliveHeaderValue)), std::string::npos);
 }
 
 TEST(HttpAdapterTest, WriteResponseRejectsMismatchedContentLength) {

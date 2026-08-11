@@ -44,9 +44,10 @@ class HttpAdapter final {
   [[nodiscard]] core::Result<HttpServerRequest> ReadRequest(HttpByteTransport& transport, HttpConnectionState& state,
                                                             std::string remote_address) const;
   [[nodiscard]] static bool IsConnectionReusable(const HttpServerRequest& request);
+  [[nodiscard]] static bool ShouldCloseConnection(const HttpServerRequest& request, const HttpServerResponse& response);
   [[nodiscard]] static core::Result<void> WriteResponse(HttpByteTransport& transport,
                                                         const HttpServerResponse& response,
-                                                        bool close_connection = false);
+                                                        bool close_connection = true);
 
   [[nodiscard]] static std::string ReasonPhrase(int status_code);
 

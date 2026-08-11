@@ -241,9 +241,9 @@ def read_http_diagnostics(path: Path) -> dict[str, int | float]:
         return {}
     accepted, completed, reuse = matches[-1]
     return {
-        "accepted_connections": int(accepted),
-        "completed_unary_http_operations": int(completed),
-        "operations_per_connection": float(reuse),
+        "http_coordinate_accepted_connections": int(accepted),
+        "http_coordinate_completed_unary_operations": int(completed),
+        "http_coordinate_operations_per_connection": float(reuse),
     }
 
 
@@ -377,12 +377,13 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             command, config.wire_driver_timeout_seconds,
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
-    diagnostics = read_http_diagnostics(sut.log_path)
+    diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
     for result in payload:
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
-        result.update(diagnostics)
+        if diagnostics:
+            result.update(diagnostics)
     return payload
 
 

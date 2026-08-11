@@ -313,6 +313,11 @@ bool HttpAdapter::IsConnectionReusable(const HttpServerRequest& request) {
   return !HeaderContainsToken(request.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
 }
 
+bool HttpAdapter::ShouldCloseConnection(const HttpServerRequest& request, const HttpServerResponse& response) {
+  return !IsConnectionReusable(request) || static_cast<bool>(response.stream_writer) ||
+         HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
+}
+
 std::string HttpAdapter::ReasonPhrase(int status_code) {
   switch (status_code) {
     case core::http::kStatusOk:
@@ -370,7 +375,10 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
 
   const bool is_streaming = static_cast<bool>(response.stream_writer);
   bool has_content_length = false;
-  bool has_connection_close = false;
+  const bool response_requests_close =
+      HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
+  const bool must_close_connection = close_connection || is_streaming || response_requests_close;
+  bool has_connection_close = response_requests_close;
   for (const auto& [name, value] : response.headers) {
     if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
       if (is_streaming) {
@@ -386,8 +394,9 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
       }
     }
     if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kConnectionHeader)) {
-      has_connection_close =
-          core::strings::EqualsAsciiCaseInsensitive(Trim(value), core::http::kConnectionCloseHeaderValue);
+      if (must_close_connection && !response_requests_close) {
+        continue;
+      }
     }
     payload += name;
     payload += core::http::kHeaderNameValueSeparator;
@@ -400,7 +409,7 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     payload += std::to_string(response.body.size());
     payload += core::http::kLineTerminator;
   }
-  if ((close_connection || is_streaming) && !has_connection_close) {
+  if (must_close_connection && !has_connection_close) {
     payload += core::http::kConnectionHeaderName;
     payload += core::http::kHeaderNameValueSeparator;
     payload += core::http::kConnectionCloseHeaderValue;
