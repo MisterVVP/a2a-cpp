@@ -139,6 +139,10 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
     return core::Error::Validation("HTTP header name cannot be empty");
   }
 
+  if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kTransferEncodingHeader)) {
+    return core::Error::Validation("Transfer-Encoding is not supported");
+  }
+
   if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
     const auto parsed_length = ParseContentLength(value);
     if (!parsed_length.ok()) {

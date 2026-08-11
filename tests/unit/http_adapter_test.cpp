@@ -177,6 +177,20 @@ TEST(HttpAdapterTest, DetectsExplicitConnectionCloseTokenCaseInsensitively) {
   EXPECT_FALSE(a2a::server::HttpAdapter::IsConnectionReusable(request.value()));
 }
 
+TEST(HttpAdapterTest, RejectsTransferEncodingBeforePersistentReuse) {
+  BufferTransport transport(
+      BuildRequest(kPostMethod, kRpcPath,
+                   {{a2a::core::http::kTransferEncodingHeaderName, a2a::core::http::kTransferEncodingChunked},
+                    {a2a::core::http::kContentLengthHeaderName, kContentLengthFive}},
+                   kBody));
+  const a2a::server::HttpAdapter adapter;
+
+  const auto request = adapter.ReadRequest(transport, "127.0.0.1");
+
+  ASSERT_FALSE(request.ok());
+  EXPECT_EQ(request.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
 TEST(HttpAdapterTest, RejectsOverflowContentLength) {
   BufferTransport transport(BuildRequest(
       kPostMethod, kRpcPath,

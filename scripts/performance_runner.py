@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import secrets
+import signal
 import socket
 import statistics
 import subprocess
@@ -276,7 +277,16 @@ class SutProcess:
             env["A2A_TCK_POSTGRES_SCHEMA"] = postgres_schema_name(self.transport, self.concurrency, self.port)
             env["A2A_TCK_POSTGRES_POOL_SIZE"] = str(self.postgres_pool_size)
         log_file = self.log_path.open("w", encoding="utf-8")
-        self.process = subprocess.Popen([str(self.sut), f"{self.host}:{self.port}"], cwd=Path(__file__).resolve().parents[1], env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True)
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        self.process = subprocess.Popen(
+            [str(self.sut), f"{self.host}:{self.port}"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=creation_flags,
+        )
         log_file.close()
         wait_for_port(self.host, self.port, self.process, self.log_path)
         wait_for_port(self.host, self.grpc_port, self.process, self.log_path)
@@ -286,7 +296,10 @@ class SutProcess:
         if self.process is None:
             return
         if self.process.poll() is None:
-            self.process.terminate()
+            if sys.platform == "win32":
+                os.kill(self.process.pid, signal.CTRL_BREAK_EVENT)
+            else:
+                self.process.terminate()
             try:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:

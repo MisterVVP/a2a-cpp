@@ -63,7 +63,7 @@ constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TC
 constexpr std::string_view kInvalidPostgresPoolSizeMessage = "A2A_TCK_POSTGRES_POOL_SIZE must be a positive integer";
 constexpr std::string_view kHttpDiagnosticsPrefix = "A2A_HTTP_DIAGNOSTICS";
 volatile std::sig_atomic_t kKeepRunning = 1;
-std::atomic<std::uint64_t> kAcceptedHttpConnections{0};
+std::atomic<std::uint64_t> kAcceptedUnaryHttpConnections{0};
 std::atomic<std::uint64_t> kCompletedUnaryHttpOperations{0};
 
 void SignalHandler(int signal_number) {
@@ -181,15 +181,11 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
   a2a::server::HttpConnectionState connection_state;
-  bool connection_counted = false;
-  while (kKeepRunning != 0) {
+  bool completed_unary_on_connection = false;
+  while (true) {
     auto parsed = adapter.ReadRequest(socket_transport, connection_state, "localhost");
     if (!parsed.ok()) {
       break;
-    }
-    if (!connection_counted) {
-      kAcceptedHttpConnections.fetch_add(1, std::memory_order_relaxed);
-      connection_counted = true;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
     auto response = mux.RouteRequest(request);
@@ -203,11 +199,15 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       break;
     }
     if (!is_streaming) {
+      completed_unary_on_connection = true;
       kCompletedUnaryHttpOperations.fetch_add(1, std::memory_order_relaxed);
     }
     if (close_connection) {
       break;
     }
+  }
+  if (completed_unary_on_connection) {
+    kAcceptedUnaryHttpConnections.fetch_add(1, std::memory_order_relaxed);
   }
   registry.Remove(fd);
   a2a::server::CloseSocketCrossPlatform(fd);
@@ -356,11 +356,20 @@ int RunTckSut(int argc, char** argv) {
     socklen_t len = sizeof(client);
     const int fd = accept(server_fd, reinterpret_cast<sockaddr*>(&client), &len);
     if (fd < 0) {
+#ifdef _WIN32
+      const int accept_error = WSAGetLastError();
+      if (accept_error == WSAEWOULDBLOCK || accept_error == WSAEINTR) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kAcceptRetryDelayMillis));
+        continue;
+      }
+      std::cerr << "TCK SUT HTTP accept failed with Winsock error: " << accept_error << '\n';
+#else
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kAcceptRetryDelayMillis));
         continue;
       }
       std::cerr << "TCK SUT HTTP accept failed: " << std::strerror(errno) << '\n';
+#endif
       break;
     }
     connection_registry.Add(fd);
@@ -375,7 +384,7 @@ int RunTckSut(int argc, char** argv) {
   }
   grpc_server->Shutdown();
   a2a::server::CloseSocketCrossPlatform(server_fd);
-  const std::uint64_t accepted_connections = kAcceptedHttpConnections.load(std::memory_order_relaxed);
+  const std::uint64_t accepted_connections = kAcceptedUnaryHttpConnections.load(std::memory_order_relaxed);
   const std::uint64_t completed_operations = kCompletedUnaryHttpOperations.load(std::memory_order_relaxed);
   const double operations_per_connection =
       accepted_connections == 0 ? 0.0

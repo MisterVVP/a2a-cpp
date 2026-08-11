@@ -63,8 +63,8 @@ a2a::core::Result<HostPortEndpoint> ParseHostPortEndpoint(std::string_view endpo
 
 bool SetSocketNonBlocking(int fd) noexcept {
 #ifdef _WIN32
-  (void)fd;
-  return true;
+  u_long mode = 1UL;
+  return ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &mode) == 0;
 #else
   const int flags = fcntl(fd, F_GETFL, 0);
   return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
