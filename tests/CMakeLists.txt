@@ -903,6 +903,10 @@ gtest_discover_tests(a2a_performance_driver_test)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(
+    NAME http_persistence_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:tck_sut>
+  )
+  add_test(
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
   )

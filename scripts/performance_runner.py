@@ -12,7 +12,9 @@ import csv
 import json
 import os
 import platform
+import re
 import secrets
+import signal
 import socket
 import statistics
 import subprocess
@@ -99,6 +101,10 @@ SUT_PORT_PAIR_COUNT = (SUT_PORT_RANGE_END - SUT_PORT_RANGE_START) // SUT_PORT_PA
 DEFAULT_DRIVER_TIMEOUT_SECONDS = 600.0
 DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
+HTTP_DIAGNOSTICS_PATTERN = re.compile(
+    r"A2A_HTTP_DIAGNOSTICS accepted_connections=(\d+) completed_unary_operations=(\d+) "
+    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?)(?=\s|$)"
+)
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
     "task_get",
@@ -228,6 +234,20 @@ def read_tail(path: Path) -> str:
     return "\n".join(lines[-80:])
 
 
+def read_http_diagnostics(path: Path) -> dict[str, int | float]:
+    if not path.exists():
+        return {}
+    matches = HTTP_DIAGNOSTICS_PATTERN.findall(path.read_text(encoding="utf-8", errors="replace"))
+    if not matches:
+        return {}
+    accepted, completed, reuse = matches[-1]
+    return {
+        "http_coordinate_accepted_connections": int(accepted),
+        "http_coordinate_completed_unary_operations": int(completed),
+        "http_coordinate_operations_per_connection": float(reuse),
+    }
+
+
 def postgres_schema_name(transport: str, concurrency: int, port: int) -> str:
     safe_transport = "".join(ch if ch.isalnum() else "_" for ch in transport.lower())
     return f"a2a_perf_{safe_transport}_{concurrency}_{port}"
@@ -257,7 +277,16 @@ class SutProcess:
             env["A2A_TCK_POSTGRES_SCHEMA"] = postgres_schema_name(self.transport, self.concurrency, self.port)
             env["A2A_TCK_POSTGRES_POOL_SIZE"] = str(self.postgres_pool_size)
         log_file = self.log_path.open("w", encoding="utf-8")
-        self.process = subprocess.Popen([str(self.sut), f"{self.host}:{self.port}"], cwd=Path(__file__).resolve().parents[1], env=env, stdout=log_file, stderr=subprocess.STDOUT, text=True)
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+        self.process = subprocess.Popen(
+            [str(self.sut), f"{self.host}:{self.port}"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=creation_flags,
+        )
         log_file.close()
         wait_for_port(self.host, self.port, self.process, self.log_path)
         wait_for_port(self.host, self.grpc_port, self.process, self.log_path)
@@ -267,7 +296,10 @@ class SutProcess:
         if self.process is None:
             return
         if self.process.poll() is None:
-            self.process.terminate()
+            if sys.platform == "win32":
+                os.kill(self.process.pid, signal.CTRL_BREAK_EVENT)
+            else:
+                self.process.terminate()
             try:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -340,6 +372,9 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
                     postgres_pool_size: int, port: int) -> list[dict[str, object]]:
     if transport not in WIRE_TRANSPORT_PATHS:
         raise ValueError(f"unsupported wire transport: {transport}")
+    wire_scenarios = wire_scenarios_for_transport(transport, config.scenarios)
+    if not wire_scenarios:
+        return []
     wire_driver = ensure_wire_driver(config)
     with SutProcess(config, store_backend, port, transport, concurrency, postgres_pool_size) as sut:
         command = [
@@ -352,21 +387,32 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             "--concurrency", str(concurrency),
             "--warmup-seconds", str(config.warmup_seconds),
             "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(wire_scenarios_for_transport(transport)),
+            "--scenarios", ",".join(wire_scenarios),
         ]
         payload = run_command_json(
             command, config.wire_driver_timeout_seconds,
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
+    diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
+    if transport in {"http_json", "jsonrpc"} and not diagnostics:
+        raise ValueError(
+            f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
+            "did not emit HTTP reuse diagnostics"
+        )
     for result in payload:
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
+        if diagnostics:
+            result.update(diagnostics)
     return payload
 
 
-def wire_scenarios_for_transport(transport: str) -> tuple[str, ...]:
-    return WIRE_SCENARIOS
+def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    del transport
+    if scenarios is None:
+        return WIRE_SCENARIOS
+    return tuple(scenario for scenario in scenarios if scenario in WIRE_SCENARIOS)
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -404,6 +450,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
     parser.add_argument("--concurrency", default=env_or_default("A2A_PERF_CONCURRENCY", ",".join(str(level) for level in DEFAULT_CONCURRENCY)))
+    parser.add_argument("--scenarios", default=os.environ.get("A2A_PERF_SCENARIOS"))
     parser.add_argument("--warmup-seconds", type=float, default=float(env_or_default("A2A_PERF_WARMUP_SECONDS", str(DEFAULT_WARMUP_SECONDS))))
     parser.add_argument("--duration-seconds", type=float, default=float(env_or_default("A2A_PERF_DURATION_SECONDS", str(DEFAULT_DURATION_SECONDS))))
     parser.add_argument("--report-dir", default=env_or_default("A2A_PERF_REPORT_DIR", DEFAULT_REPORT_DIR))
@@ -435,7 +482,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         scenarios = POSTGRES_TAIL_C1_SCENARIOS
     else:
         concurrency_levels = parse_positive_int_csv(args.concurrency, "concurrency levels")
-        scenarios = None
+        scenarios = None if args.scenarios is None else split_csv(args.scenarios, SCENARIOS)
     return RunnerConfig(
         profile=profile,
         transports=("grpc",) if is_postgres_tail else split_csv(args.transports, TRANSPORTS),
@@ -484,6 +531,11 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
     fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames.extend((
+        "http_coordinate_accepted_connections",
+        "http_coordinate_completed_unary_operations",
+        "http_coordinate_operations_per_connection",
+    ))
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms",
                            f"{phase}_call_count", f"{phase}_calls_per_operation"))
@@ -942,8 +994,9 @@ def log_workload_estimate(config: RunnerConfig) -> None:
         for store_backend in config.store_backends
     )
     store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
-    in_process_rows = store_concurrency_rows * len(SCENARIOS)
-    wire_rows = sum(len(wire_scenarios_for_transport(transport)) for transport in config.transports) * store_concurrency_rows
+    in_process_scenarios = config.scenarios if config.scenarios is not None else SCENARIOS
+    in_process_rows = store_concurrency_rows * len(in_process_scenarios)
+    wire_rows = sum(len(wire_scenarios_for_transport(transport, config.scenarios)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
     log_progress(

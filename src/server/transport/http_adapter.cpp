@@ -44,7 +44,7 @@ std::string Trim(std::string_view value) {
 [[nodiscard]] std::size_t ResponsePayloadReserveSize(const HttpServerResponse& response,
                                                      std::string_view reason_phrase) {
   std::size_t size = core::http::kHttpVersion11.size() + reason_phrase.size() + core::http::kLineTerminator.size() +
-                     response.body.size() + core::http::kConnectionCloseHeaderName.size() +
+                     response.body.size() + core::http::kConnectionHeaderName.size() +
                      core::http::kConnectionCloseHeaderValue.size() + core::http::kContentLengthHeaderName.size() +
                      (core::http::kLineTerminator.size() * kResponsePayloadReserveSlackLineCount) +
                      kResponsePayloadReserveSlackBytes;
@@ -98,7 +98,7 @@ core::Result<void> ReadUntilHeadersComplete(HttpByteTransport& transport, std::s
       return core::Error::Internal("Unexpected end of stream while reading HTTP headers");
     }
     raw.append(buffer.data(), read.value());
-    if (raw.size() > max_request_size) {
+    if (raw.find(core::http::kHeaderDelimiter) == std::string::npos && raw.size() > max_request_size) {
       return core::Error::Validation("HTTP request exceeds max_request_size before headers complete");
     }
   }
@@ -139,6 +139,10 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
     return core::Error::Validation("HTTP header name cannot be empty");
   }
 
+  if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kTransferEncodingHeader)) {
+    return core::Error::Validation("Transfer-Encoding is not supported");
+  }
+
   if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
     const auto parsed_length = ParseContentLength(value);
     if (!parsed_length.ok()) {
@@ -148,6 +152,16 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
       return core::Error::Validation("Conflicting Content-Length header values");
     }
     *content_length = parsed_length.value();
+  }
+
+  if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kConnectionHeader)) {
+    for (auto& [existing_name, existing_value] : *headers) {
+      if (core::strings::EqualsAsciiCaseInsensitive(existing_name, core::http::kConnectionHeader)) {
+        existing_value.append(", ");
+        existing_value.append(value);
+        return {};
+      }
+    }
   }
 
   headers->insert_or_assign(name, value);
@@ -211,11 +225,73 @@ core::Result<void> ReadRemainingBody(HttpByteTransport& transport, const BodyRea
       return core::Error::Internal("Unexpected end of stream while reading HTTP body");
     }
     raw.append(buffer.data(), read.value());
-    if (raw.size() > limits.max_request_size) {
+    if (limits.body_start + limits.expected_body_size > limits.max_request_size) {
       return core::Error::Validation("HTTP request exceeds max_request_size while reading body");
     }
   }
   return {};
+}
+
+bool HeaderContainsToken(const std::unordered_map<std::string, std::string>& headers, std::string_view header_name,
+                         std::string_view expected_token) {
+  for (const auto& [name, value] : headers) {
+    if (!core::strings::EqualsAsciiCaseInsensitive(name, header_name)) {
+      continue;
+    }
+    std::size_t offset = 0;
+    while (offset <= value.size()) {
+      const std::size_t separator = value.find(',', offset);
+      const std::size_t end = separator == std::string::npos ? value.size() : separator;
+      if (core::strings::EqualsAsciiCaseInsensitive(Trim(std::string_view(value).substr(offset, end - offset)),
+                                                    expected_token)) {
+        return true;
+      }
+      if (separator == std::string::npos) {
+        break;
+      }
+      offset = separator + 1;
+    }
+  }
+  return false;
+}
+
+core::Result<void> ValidateResponseContentLength(const HttpServerResponse& response, std::string_view value,
+                                                 bool is_streaming) {
+  if (is_streaming) {
+    return core::Error::Validation("Streaming responses cannot set Content-Length");
+  }
+  const auto parsed_length = ParseContentLength(value);
+  if (!parsed_length.ok()) {
+    return core::Error::Validation("Response Content-Length header is invalid");
+  }
+  if (parsed_length.value() != response.body.size()) {
+    return core::Error::Validation("Response Content-Length header does not match body size");
+  }
+  return {};
+}
+
+core::Result<bool> AppendResponseHeaders(const HttpServerResponse& response, bool is_streaming,
+                                         bool must_close_connection, bool response_requests_close,
+                                         std::string* payload) {
+  bool has_content_length = false;
+  for (const auto& [name, value] : response.headers) {
+    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
+      const auto validated = ValidateResponseContentLength(response, value, is_streaming);
+      if (!validated.ok()) {
+        return validated.error();
+      }
+      has_content_length = true;
+    }
+    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kConnectionHeader) && must_close_connection &&
+        !response_requests_close) {
+      continue;
+    }
+    *payload += name;
+    *payload += core::http::kHeaderNameValueSeparator;
+    *payload += value;
+    *payload += core::http::kLineTerminator;
+  }
+  return has_content_length;
 }
 
 }  // namespace
@@ -225,12 +301,20 @@ HttpAdapter::HttpAdapter(Options options) : options_(options) {}
 
 core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& transport,
                                                          std::string remote_address) const {
+  HttpConnectionState state;
+  return ReadRequest(transport, state, std::move(remote_address));
+}
+
+core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& transport, HttpConnectionState& state,
+                                                         std::string remote_address) const {
   if (options_.read_buffer_size == 0) {
     return core::Error::Internal("HTTP adapter read_buffer_size must be greater than zero");
   }
 
-  std::string raw;
-  raw.reserve(options_.read_buffer_size * 2U);
+  std::string& raw = state.buffered_bytes_;
+  if (raw.capacity() < options_.read_buffer_size * 2U) {
+    raw.reserve(options_.read_buffer_size * 2U);
+  }
   std::vector<char> buffer(options_.read_buffer_size);
 
   const auto headers_read = ReadUntilHeadersComplete(transport, options_.max_request_size, buffer, raw);
@@ -254,7 +338,7 @@ core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& tran
 
   const std::size_t body_start = header_end + core::http::kHeaderDelimiter.size();
   const std::size_t expected_body_size = content_length.value().value_or(0);
-  if (expected_body_size > options_.max_request_size) {
+  if (body_start > options_.max_request_size || expected_body_size > options_.max_request_size - body_start) {
     return core::Error::Validation("Content-Length exceeds max_request_size");
   }
 
@@ -274,7 +358,17 @@ core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& tran
   request.headers = std::move(headers);
   request.body = raw.substr(body_start, expected_body_size);
   request.remote_address = std::move(remote_address);
+  raw.erase(0, body_start + expected_body_size);
   return request;
+}
+
+bool HttpAdapter::IsConnectionReusable(const HttpServerRequest& request) {
+  return !HeaderContainsToken(request.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
+}
+
+bool HttpAdapter::ShouldCloseConnection(const HttpServerRequest& request, const HttpServerResponse& response) {
+  return !IsConnectionReusable(request) || static_cast<bool>(response.stream_writer) ||
+         HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
 }
 
 std::string HttpAdapter::ReasonPhrase(int status_code) {
@@ -321,6 +415,11 @@ std::string HttpAdapter::ReasonPhrase(int status_code) {
 }
 
 core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response) {
+  return WriteResponse(transport, response, true);
+}
+
+core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response,
+                                              bool close_connection) {
   const std::string reason_phrase = ReasonPhrase(response.status_code);
   std::string payload;
   payload.reserve(ResponsePayloadReserveSize(response, reason_phrase));
@@ -332,36 +431,26 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   payload += core::http::kLineTerminator;
 
   const bool is_streaming = static_cast<bool>(response.stream_writer);
-  bool has_content_length = false;
-  for (const auto& [name, value] : response.headers) {
-    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
-      if (is_streaming) {
-        return core::Error::Validation("Streaming responses cannot set Content-Length");
-      }
-      has_content_length = true;
-      const auto parsed_length = ParseContentLength(value);
-      if (!parsed_length.ok()) {
-        return core::Error::Validation("Response Content-Length header is invalid");
-      }
-      if (parsed_length.value() != response.body.size()) {
-        return core::Error::Validation("Response Content-Length header does not match body size");
-      }
-    }
-    payload += name;
-    payload += core::http::kHeaderNameValueSeparator;
-    payload += value;
-    payload += core::http::kLineTerminator;
+  const bool response_requests_close =
+      HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
+  const bool must_close_connection = close_connection || is_streaming || response_requests_close;
+  const auto headers =
+      AppendResponseHeaders(response, is_streaming, must_close_connection, response_requests_close, &payload);
+  if (!headers.ok()) {
+    return headers.error();
   }
-  if (!has_content_length && !is_streaming) {
+  if (!headers.value() && !is_streaming) {
     payload += core::http::kContentLengthHeaderName;
     payload += core::http::kHeaderNameValueSeparator;
     payload += std::to_string(response.body.size());
     payload += core::http::kLineTerminator;
   }
-  payload += core::http::kConnectionCloseHeaderName;
-  payload += core::http::kHeaderNameValueSeparator;
-  payload += core::http::kConnectionCloseHeaderValue;
-  payload += core::http::kLineTerminator;
+  if (must_close_connection && !response_requests_close) {
+    payload += core::http::kConnectionHeaderName;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += core::http::kConnectionCloseHeaderValue;
+    payload += core::http::kLineTerminator;
+  }
   payload += core::http::kLineTerminator;
   if (!is_streaming) {
     payload += response.body;

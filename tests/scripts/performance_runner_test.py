@@ -43,6 +43,9 @@ class PerformanceRunnerTest(unittest.TestCase):
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
             self.assertEqual(14, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
+            self.assertTrue(all("http_coordinate_accepted_connections" not in result for result in wire_rows))
+            self.assertTrue(all("http_coordinate_completed_unary_operations" not in result for result in wire_rows))
+            self.assertTrue(all("http_coordinate_operations_per_connection" not in result for result in wire_rows))
             self.assertEqual({"in_process"}, {result["transport_path"] for result in payload["results"] if result["driver_type"] == "cpp_sdk_in_process"})
             ordered = sorted(payload["results"], key=lambda result: (result["scenario"], result["store_backend"], result["driver_type"], result["transport_path"], result["transport"], result["concurrency"]))
             self.assertEqual(ordered, payload["results"])
@@ -203,6 +206,47 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
         self.assertIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
 
+    def test_run_wire_driver_skips_selection_without_wire_scenarios(self):
+        runner = load_runner_module()
+        config = mock.Mock()
+        config.scenarios = ("PushNotify_EndToEndManyConfigs",)
+
+        with mock.patch.object(runner, "ensure_wire_driver") as ensure_wire_driver:
+            results = runner.run_wire_driver(
+                config, "http_json", "inmemory", 1, runner.DEFAULT_POSTGRES_POOL_SIZE, runner.SUT_PORT_RANGE_START
+            )
+
+        self.assertEqual([], results)
+        ensure_wire_driver.assert_not_called()
+
+    def test_run_wire_driver_requires_http_reuse_diagnostics(self):
+        runner = load_runner_module()
+        config = mock.Mock()
+        config.scenarios = ("GetTask_ExistingTask",)
+        config.requests = 1
+        config.warmup_seconds = 0.0
+        config.duration_seconds = 0.0
+        config.wire_driver_timeout_seconds = 1.0
+
+        sut = mock.Mock()
+        sut.host = "127.0.0.1"
+        sut.port = runner.SUT_PORT_RANGE_START
+        sut.log_path = Path("missing-http-diagnostics.log")
+        sut_context = mock.MagicMock()
+        sut_context.__enter__.return_value = sut
+
+        with (
+            mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")),
+            mock.patch.object(runner, "SutProcess", return_value=sut_context),
+            mock.patch.object(runner, "run_command_json", return_value=[]),
+            mock.patch.object(runner, "read_http_diagnostics", return_value={}),
+            self.assertRaisesRegex(ValueError, "did not emit HTTP reuse diagnostics"),
+        ):
+            runner.run_wire_driver(
+                config, "http_json", "inmemory", 1,
+                runner.DEFAULT_POSTGRES_POOL_SIZE, runner.SUT_PORT_RANGE_START
+            )
+
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             completed = subprocess.run([
@@ -359,6 +403,25 @@ class PerformanceRunnerTest(unittest.TestCase):
             runner.log_workload_estimate(config)
 
         log_progress.assert_called_once_with(expected_message)
+
+    def test_normal_workload_estimate_honors_scenario_filter(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args([
+                "--transports", "grpc",
+                "--store-backends", "inmemory",
+                "--requests", "10",
+                "--concurrency", "1",
+                "--scenarios", "PushNotify_EndToEndManyConfigs",
+            ])
+
+        with mock.patch.object(runner, "log_progress") as log_progress:
+            runner.log_workload_estimate(config)
+
+        log_progress.assert_called_once_with(
+            "estimated_rows=1 estimated_operations=10 "
+            "transports=1 stores=1 concurrency_levels=1 requests=10"
+        )
 
     def test_postgres_tail_aggregates_and_reports(self):
         runner = load_runner_module()
