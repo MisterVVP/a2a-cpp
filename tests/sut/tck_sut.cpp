@@ -181,10 +181,15 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   SocketTransport socket_transport(fd);
   const a2a::server::HttpAdapter adapter;
   a2a::server::HttpConnectionState connection_state;
+  bool connection_counted = false;
   while (kKeepRunning != 0) {
     auto parsed = adapter.ReadRequest(socket_transport, connection_state, "localhost");
     if (!parsed.ok()) {
       break;
+    }
+    if (!connection_counted) {
+      kAcceptedHttpConnections.fetch_add(1, std::memory_order_relaxed);
+      connection_counted = true;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
     auto response = mux.RouteRequest(request);
@@ -224,6 +229,9 @@ int RunTckSut(int argc, char** argv) {
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
+#ifdef _WIN32
+  std::signal(SIGBREAK, SignalHandler);
+#endif
 
   const char* extended_card_mode_value = std::getenv(kExtendedCardModeEnv);
   const std::string_view extended_card_mode =
@@ -356,7 +364,6 @@ int RunTckSut(int argc, char** argv) {
       break;
     }
     connection_registry.Add(fd);
-    kAcceptedHttpConnections.fetch_add(1, std::memory_order_relaxed);
     connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::ref(connection_registry));
   }
   executor.ShutdownSubscriptions();

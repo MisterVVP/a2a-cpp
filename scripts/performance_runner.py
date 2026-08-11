@@ -102,7 +102,7 @@ DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
 HTTP_DIAGNOSTICS_PATTERN = re.compile(
     r"A2A_HTTP_DIAGNOSTICS accepted_connections=(\d+) completed_unary_operations=(\d+) "
-    r"operations_per_connection=([0-9.]+)"
+    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?)(?=\s|$)"
 )
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
@@ -513,6 +513,11 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
     fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames.extend((
+        "http_coordinate_accepted_connections",
+        "http_coordinate_completed_unary_operations",
+        "http_coordinate_operations_per_connection",
+    ))
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms",
                            f"{phase}_call_count", f"{phase}_calls_per_operation"))
