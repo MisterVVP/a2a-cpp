@@ -262,6 +262,22 @@ TEST(JsonRpcTransportUnitTest, ListTasksUsesListTasksMethodAndParsesResponse) {
   EXPECT_EQ(envelope.value().fields().at("method").string_value(), "a2a.listTasks");
 }
 
+TEST(JsonRpcTransportUnitTest, ListTasksRejectsMalformedTask) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[3]}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({});
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
+}
+
 TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope) {
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),

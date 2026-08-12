@@ -275,35 +275,12 @@ int ToHttpStatus(const core::Error& error) {
 }
 
 core::Result<std::string> BuildListTasksJson(const ListTasksResponse& response) {
-  google::protobuf::Struct payload;
-  auto* payload_fields = payload.mutable_fields();
-
-  google::protobuf::Value tasks_value;
-  auto* list_value = tasks_value.mutable_list_value();
+  lf::a2a::v1::ListTasksResponse payload;
+  payload.mutable_tasks()->Reserve(static_cast<int>(response.tasks.size()));
   for (const auto& task : response.tasks) {
-    const auto task_json = core::MessageToJson(task);
-    if (!task_json.ok()) {
-      return task_json.error();
-    }
-
-    google::protobuf::Struct task_struct;
-    const auto parsed_task_json = core::JsonToMessage(task_json.value(), &task_struct);
-    if (!parsed_task_json.ok()) {
-      return parsed_task_json.error();
-    }
-
-    google::protobuf::Value task_value;
-    *task_value.mutable_struct_value() = std::move(task_struct);
-    *list_value->add_values() = std::move(task_value);
+    *payload.add_tasks() = task;
   }
-  (*payload_fields)["tasks"] = std::move(tasks_value);
-
-  if (!response.next_page_token.empty()) {
-    google::protobuf::Value token_value;
-    token_value.set_string_value(response.next_page_token);
-    (*payload_fields)["nextPageToken"] = std::move(token_value);
-  }
-
+  payload.set_next_page_token(response.next_page_token);
   return core::MessageToJson(payload);
 }
 

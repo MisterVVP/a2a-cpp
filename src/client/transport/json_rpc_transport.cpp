@@ -149,13 +149,14 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
 }
 
 template <typename T>
-core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, int response_status_code) {
+core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, int response_status_code,
+                                   bool ignore_unknown_fields = false) {
   T message;
   const auto json = core::MessageToJson(result_value);
   if (!json.ok()) {
     return json.error().WithTransport("jsonrpc").WithHttpStatus(response_status_code);
   }
-  const auto parse = core::JsonToMessage(json.value(), &message);
+  const auto parse = core::JsonToMessage(json.value(), &message, {.ignore_unknown_fields = ignore_unknown_fields});
   if (!parse.ok()) {
     return parse.error().WithTransport("jsonrpc").WithHttpStatus(response_status_code);
   }
@@ -530,37 +531,16 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
   }
 
   ListTasksResponse parsed;
-  const auto& fields = result.value().struct_value().fields();
-  const auto tasks_it = fields.find("tasks");
-  if (tasks_it != fields.end()) {
-    if (!tasks_it->second.has_list_value()) {
-      return core::Error::Serialization("ListTasks JSON-RPC result field 'tasks' must be an array")
-          .WithTransport("jsonrpc")
-          .WithHttpStatus(kHttpOkMin);
-    }
-    for (const auto& task_value : tasks_it->second.list_value().values()) {
-      const auto task_json = core::MessageToJson(task_value);
-      if (!task_json.ok()) {
-        return task_json.error().WithTransport("jsonrpc").WithHttpStatus(kHttpOkMin);
-      }
-      lf::a2a::v1::Task task;
-      const auto task_parse = core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
-      if (!task_parse.ok()) {
-        return task_parse.error().WithTransport("jsonrpc").WithHttpStatus(kHttpOkMin);
-      }
-      parsed.tasks.push_back(std::move(task));
-    }
+  const auto typed_result = ParseResultMessage<lf::a2a::v1::ListTasksResponse>(result.value(), kHttpOkMin, true);
+  if (!typed_result.ok()) {
+    return typed_result.error();
   }
-
-  const auto next_page_token_it = fields.find("nextPageToken");
-  if (next_page_token_it != fields.end()) {
-    if (next_page_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Serialization("ListTasks JSON-RPC result field 'nextPageToken' must be a string")
-          .WithTransport("jsonrpc")
-          .WithHttpStatus(kHttpOkMin);
-    }
-    parsed.next_page_token = next_page_token_it->second.string_value();
+  auto payload = typed_result.value();
+  parsed.tasks.reserve(static_cast<std::size_t>(payload.tasks_size()));
+  for (auto& task : *payload.mutable_tasks()) {
+    parsed.tasks.push_back(std::move(task));
   }
+  parsed.next_page_token = std::move(*payload.mutable_next_page_token());
 
   return parsed;
 }

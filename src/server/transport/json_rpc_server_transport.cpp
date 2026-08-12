@@ -614,35 +614,15 @@ core::Result<google::protobuf::Value> BuildJsonValueFromMessage(const google::pr
 }
 
 core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksResponse& list_response) {
-  google::protobuf::Struct result;
-  auto* fields = result.mutable_fields();
-
-  google::protobuf::Value tasks_value;
-  auto* list = tasks_value.mutable_list_value();
+  lf::a2a::v1::ListTasksResponse result;
+  result.mutable_tasks()->Reserve(static_cast<int>(list_response.tasks.size()));
   for (const auto& task : list_response.tasks) {
-    const auto task_json_value = BuildJsonValueFromMessage(task);
-    if (!task_json_value.ok()) {
-      return task_json_value.error();
-    }
-    *list->add_values() = task_json_value.value();
+    *result.add_tasks() = task;
   }
-  (*fields)["tasks"] = std::move(tasks_value);
-
-  google::protobuf::Value page_size_value;
-  page_size_value.set_number_value(static_cast<double>(list_response.page_size));
-  (*fields)["pageSize"] = std::move(page_size_value);
-
-  google::protobuf::Value total_size_value;
-  total_size_value.set_number_value(static_cast<double>(list_response.total_size));
-  (*fields)["totalSize"] = std::move(total_size_value);
-
-  google::protobuf::Value token;
-  token.set_string_value(list_response.next_page_token);
-  (*fields)["nextPageToken"] = std::move(token);
-
-  google::protobuf::Value wrapper;
-  *wrapper.mutable_struct_value() = std::move(result);
-  return wrapper;
+  result.set_page_size(static_cast<std::int32_t>(list_response.page_size));
+  result.set_total_size(static_cast<std::int32_t>(list_response.total_size));
+  result.set_next_page_token(list_response.next_page_token);
+  return BuildJsonValueFromMessage(result);
 }
 
 int HttpStatusFromError(const core::Error& error) {
