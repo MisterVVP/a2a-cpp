@@ -32,6 +32,7 @@ namespace {
 
 constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
+constexpr std::string_view kEmptyJsonObject = "{}";
 constexpr std::size_t kJsonRpcRequestEnvelopeOverhead = 45U;
 constexpr std::string_view kStreamingSuccessRequiresSseMessage =
     "JSON-RPC streaming success response must use text/event-stream";
@@ -233,13 +234,19 @@ std::optional<std::pair<std::size_t, std::size_t>> FindTopLevelResultRange(std::
 
 core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
                                                                   std::string_view expected_id) {
-  const auto range = FindTopLevelResultRange(response.body);
+  const std::string_view response_body = response.body;
+  const auto range = FindTopLevelResultRange(response_body);
   if (!range.has_value()) {
     const auto result = ParseResponseResult(response, expected_id);
     return result.ok() ? core::Error::Serialization("ListTasks JSON-RPC result must be an object") : result.error();
   }
-  std::string validation_body = response.body;
-  validation_body.replace(range->first, range->second - range->first, "{}");
+  const std::string_view prefix = response_body.substr(0, range->first);
+  const std::string_view suffix = response_body.substr(range->second);
+  std::string validation_body;
+  validation_body.reserve(prefix.size() + suffix.size() + kEmptyJsonObject.size());
+  validation_body.append(prefix);
+  validation_body.append(kEmptyJsonObject);
+  validation_body.append(suffix);
   const HttpClientResponse validation_response{
       .status_code = response.status_code, .headers = response.headers, .body = std::move(validation_body)};
   const auto validated = ParseResponseResult(validation_response, expected_id);
@@ -247,8 +254,8 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
     return validated.error();
   }
   lf::a2a::v1::ListTasksResponse result;
-  const auto parsed = core::JsonToMessage(response.body.substr(range->first, range->second - range->first), &result,
-                                          {.ignore_unknown_fields = true});
+  const std::string_view result_json = response_body.substr(range->first, range->second - range->first);
+  const auto parsed = core::JsonToMessage(result_json, &result, {.ignore_unknown_fields = true});
   if (!parsed.ok()) {
     return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
   }
