@@ -8,8 +8,10 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -30,6 +32,8 @@ namespace {
 
 constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
+constexpr std::string_view kEmptyJsonObject = "{}";
+constexpr std::size_t kJsonRpcRequestEnvelopeOverhead = 45U;
 constexpr std::string_view kStreamingSuccessRequiresSseMessage =
     "JSON-RPC streaming success response must use text/event-stream";
 
@@ -148,6 +152,116 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
   return result_it->second;
 }
 
+bool ConsumeJsonStringCharacter(char character, bool* escaped) {
+  if (*escaped) {
+    *escaped = false;
+  } else if (character == '\\') {
+    *escaped = true;
+  } else if (character == '"') {
+    return true;
+  }
+  return false;
+}
+
+std::optional<std::size_t> FindResultValueBegin(std::string_view json) {
+  constexpr std::string_view kResultName = "\"result\"";
+  bool in_string = false;
+  bool escaped = false;
+  int depth = 0;
+  for (std::size_t index = 0; index < json.size(); ++index) {
+    const char character = json[index];
+    if (in_string) {
+      in_string = !ConsumeJsonStringCharacter(character, &escaped);
+      continue;
+    }
+    if (character == '"') {
+      if (depth != 1 || json.substr(index, kResultName.size()) != kResultName) {
+        in_string = true;
+        continue;
+      }
+      std::size_t begin = index + kResultName.size();
+      begin = json.find(':', begin);
+      if (begin == std::string_view::npos) {
+        return std::nullopt;
+      }
+      ++begin;
+      while (begin < json.size() && std::isspace(static_cast<unsigned char>(json[begin])) != 0) {
+        ++begin;
+      }
+      return begin;
+    }
+    if (character == '{' || character == '[') {
+      ++depth;
+    } else if (character == '}' || character == ']') {
+      --depth;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::size_t> FindResultValueEnd(std::string_view json, std::size_t begin) {
+  bool in_string = false;
+  bool escaped = false;
+  int depth = 0;
+  for (std::size_t end = begin; end < json.size(); ++end) {
+    const char character = json[end];
+    if (in_string) {
+      in_string = !ConsumeJsonStringCharacter(character, &escaped);
+    } else if (character == '"') {
+      in_string = true;
+    } else if (character == '{' || character == '[') {
+      ++depth;
+    } else if (character == '}' || character == ']') {
+      if (depth == 0) {
+        return end;
+      }
+      --depth;
+    } else if (character == ',' && depth == 0) {
+      return end;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<std::size_t, std::size_t>> FindTopLevelResultRange(std::string_view json) {
+  const auto begin = FindResultValueBegin(json);
+  if (!begin.has_value()) {
+    return std::nullopt;
+  }
+  const auto end = FindResultValueEnd(json, *begin);
+  return end.has_value() ? std::optional(std::pair{*begin, *end}) : std::nullopt;
+}
+
+core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
+                                                                  std::string_view expected_id) {
+  const std::string_view response_body = response.body;
+  const auto range = FindTopLevelResultRange(response_body);
+  if (!range.has_value()) {
+    const auto result = ParseResponseResult(response, expected_id);
+    return result.ok() ? core::Error::Serialization("ListTasks JSON-RPC result must be an object") : result.error();
+  }
+  const std::string_view prefix = response_body.substr(0, range->first);
+  const std::string_view suffix = response_body.substr(range->second);
+  std::string validation_body;
+  validation_body.reserve(prefix.size() + suffix.size() + kEmptyJsonObject.size());
+  validation_body.append(prefix);
+  validation_body.append(kEmptyJsonObject);
+  validation_body.append(suffix);
+  const HttpClientResponse validation_response{
+      .status_code = response.status_code, .headers = response.headers, .body = std::move(validation_body)};
+  const auto validated = ParseResponseResult(validation_response, expected_id);
+  if (!validated.ok()) {
+    return validated.error();
+  }
+  lf::a2a::v1::ListTasksResponse result;
+  const std::string_view result_json = response_body.substr(range->first, range->second - range->first);
+  const auto parsed = core::JsonToMessage(result_json, &result, {.ignore_unknown_fields = true});
+  if (!parsed.ok()) {
+    return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
+  }
+  return result;
+}
+
 template <typename T>
 core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, int response_status_code,
                                    bool ignore_unknown_fields = false) {
@@ -193,17 +307,26 @@ core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, con
   if (!request_json.ok()) {
     return request_json.error();
   }
-  google::protobuf::Value params;
-  const auto parse_params = core::JsonToMessage(request_json.value(), &params);
-  if (!parse_params.ok()) {
-    return parse_params.error();
+  google::protobuf::Value id;
+  id.set_string_value(std::string(request_id));
+  google::protobuf::Value method;
+  method.set_string_value(std::string(method_name));
+  const auto id_json = core::MessageToJson(id);
+  const auto method_json = core::MessageToJson(method);
+  if (!id_json.ok() || !method_json.ok()) {
+    return core::Error::Serialization("Failed to serialize JSON-RPC envelope fields");
   }
-  google::protobuf::Struct envelope;
-  (*envelope.mutable_fields())["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
-  (*envelope.mutable_fields())["id"].set_string_value(std::string(request_id));
-  (*envelope.mutable_fields())["method"].set_string_value(std::string(method_name));
-  (*envelope.mutable_fields())["params"] = params;
-  return core::MessageToJson(envelope);
+  std::string envelope;
+  envelope.reserve(request_json.value().size() + id_json.value().size() + method_json.value().size() +
+                   kJsonRpcRequestEnvelopeOverhead);
+  envelope.append(R"({"jsonrpc":"2.0","id":)");
+  envelope.append(id_json.value());
+  envelope.append(R"(,"method":)");
+  envelope.append(method_json.value());
+  envelope.append(R"(,"params":)");
+  envelope.append(request_json.value());
+  envelope.push_back('}');
+  return envelope;
 }
 
 core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_view request_id,
@@ -519,23 +642,30 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
     (*params.mutable_fields())["pageToken"].set_string_value(request.page_token);
   }
 
-  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kListTasks, params, options);
-  if (!result.ok()) {
-    return result.error();
+  const std::string request_id = id_generator_();
+  if (request_id.empty()) {
+    return core::Error::Internal("JSON-RPC request id generator returned an empty id");
   }
-
-  if (!result.value().has_struct_value()) {
-    return core::Error::Serialization("ListTasks JSON-RPC result must be an object")
-        .WithTransport("jsonrpc")
-        .WithHttpStatus(kHttpOkMin);
+  const auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kListTasks, params, request_id);
+  if (!envelope_json.ok()) {
+    return envelope_json.error();
   }
-
-  ListTasksResponse parsed;
-  const auto typed_result = ParseResultMessage<lf::a2a::v1::ListTasksResponse>(result.value(), kHttpOkMin, true);
+  const auto response = SendJsonRpcRequest(envelope_json.value(), options);
+  if (!response.ok()) {
+    return response.error();
+  }
+  auto typed_result = ParseListTasksResult(response.value(), request_id);
   if (!typed_result.ok()) {
     return typed_result.error();
   }
-  auto payload = typed_result.value();
+  if (response.value().status_code < kHttpOkMin || response.value().status_code > kHttpOkMax) {
+    return core::Error::RemoteProtocol("JSON-RPC response received with non-success HTTP status")
+        .WithTransport("jsonrpc")
+        .WithHttpStatus(response.value().status_code);
+  }
+
+  ListTasksResponse parsed;
+  auto payload = std::move(typed_result.value());
   parsed.tasks.reserve(static_cast<std::size_t>(payload.tasks_size()));
   for (auto& task : *payload.mutable_tasks()) {
     parsed.tasks.push_back(std::move(task));

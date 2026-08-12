@@ -37,6 +37,36 @@ constexpr int kHttpOk = 200;
 constexpr int kHttpServerError = 500;
 constexpr int kHttpBadGateway = 502;
 constexpr std::chrono::milliseconds kCustomTimeout{1200};
+constexpr std::string_view kExpectedListTaskId = "task-1";
+
+ResolvedInterface MakeResolvedJsonRpc();
+
+void ExpectListTasksEnvelopeSucceeds(std::string body) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [body = std::move(body)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = body};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-\"123\\path"; });
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({});
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  ASSERT_EQ(response.value().tasks.size(), 1U);
+  EXPECT_EQ(response.value().tasks.front().id(), kExpectedListTaskId);
+}
+
+void ExpectListTasksEnvelopeFails(std::string body, ErrorCode expected_code) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [body = std::move(body)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = body};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({});
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), expected_code);
+}
 
 ResolvedInterface MakeResolvedJsonRpc() {
   ResolvedInterface resolved;
@@ -276,6 +306,31 @@ TEST(JsonRpcTransportUnitTest, ListTasksRejectsMalformedTask) {
   const auto response = client.ListTasks({});
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksScannerHandlesResultPositionsAndWhitespace) {
+  ExpectListTasksEnvelopeSucceeds(R"({"result":{"tasks":[{"id":"task-1"}]},"jsonrpc":"2.0","id":"req-\"123\\path"})");
+  ExpectListTasksEnvelopeSucceeds(
+      R"({"jsonrpc":"2.0","id":"req-\"123\\path","result" 	 : {"tasks":[{"id":"task-1"}]}})");
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksScannerIgnoresNestedKeysAndStringContents) {
+  ExpectListTasksEnvelopeSucceeds(
+      R"({"jsonrpc":"2.0","id":"req-\"123\\path","note":"\"result\" { [ \\ ","nested":{"result":false},"result":{"tasks":[{"id":"task-1","metadata":{"result":"value"}}]}})");
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksScannerHandlesTrailingFieldAndFinalResult) {
+  ExpectListTasksEnvelopeSucceeds(
+      R"({"jsonrpc":"2.0","id":"req-\"123\\path","result":{"tasks":[{"id":"task-1"}]},"extra":true})");
+  ExpectListTasksEnvelopeSucceeds(
+      R"({"jsonrpc":"2.0","id":"req-\"123\\path","unknown":{"value":1},"result":{"tasks":[{"id":"task-1"}]}})");
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksScannerPreservesEnvelopeErrorValidation) {
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[]},"error":{"code":-32603}})",
+                               ErrorCode::kRemoteProtocol);
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123"})", ErrorCode::kRemoteProtocol);
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[)", ErrorCode::kSerialization);
 }
 
 TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope) {
