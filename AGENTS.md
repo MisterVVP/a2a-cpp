@@ -2,6 +2,7 @@
 
 ## Scope and intent
 These instructions apply to the entire repository. Follow them for all changes unless a more specific nested `AGENTS.md` overrides them.
+AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assisted-contributions) requirements in `CONTRIBUTING.md`.
 
 ## C++ conventions reference
 - Contributors and AI agents must follow `cpp_conventions.md` for additional C++ conventions and performance tips.

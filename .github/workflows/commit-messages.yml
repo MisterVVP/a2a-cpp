@@ -1,0 +1,23 @@
+name: Commit messages
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Conventional Commits
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate pull request commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/validate_commit_messages.py --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Test commit-message validator
+        run: python3 -m unittest tests/scripts/validate_commit_messages_test.py
