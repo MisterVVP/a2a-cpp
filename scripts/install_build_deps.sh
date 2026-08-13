@@ -51,6 +51,7 @@ install_debian_dependencies() {
     libprotobuf-dev
     protobuf-compiler-grpc
     libgrpc++-dev
+    libsimdjson-dev
     libcurl4-openssl-dev
     libpq-dev
     postgresql-client

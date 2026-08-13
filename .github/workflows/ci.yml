@@ -361,7 +361,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: |
-          brew install cmake ninja protobuf grpc re2 abseil curl
+          brew install cmake ninja protobuf grpc re2 abseil curl simdjson
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)"
           cmake --build build --parallel
 
