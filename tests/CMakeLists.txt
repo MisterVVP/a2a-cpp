@@ -361,6 +361,20 @@ target_link_libraries(json_rpc_transport_test
 
 gtest_discover_tests(json_rpc_transport_test)
 
+add_executable(list_tasks_client_parsing_test
+  unit/list_tasks_client_parsing_test.cpp
+)
+
+target_link_libraries(list_tasks_client_parsing_test
+  PRIVATE
+    a2a::client
+    a2a::core
+    a2a::proto_generated
+    GTest::gtest_main
+)
+
+gtest_discover_tests(list_tasks_client_parsing_test)
+
 add_executable(grpc_transport_test
   unit/grpc_transport_test.cpp
 )
