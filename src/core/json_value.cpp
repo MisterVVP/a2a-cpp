@@ -33,8 +33,9 @@ std::optional<ValueRange> FindTopLevelObjectMemberValue(std::string_view json, s
         return std::nullopt;
       }
       const char* const raw_key = key.value_unsafe().raw();
-      const bool key_matches =
-          std::memcmp(raw_key, member_name.data(), member_name.size()) == 0 && raw_key[member_name.size()] == '"';
+      const char* const key_contents = *raw_key == '"' ? raw_key + 1 : raw_key;
+      const bool key_matches = std::memcmp(key_contents, member_name.data(), member_name.size()) == 0 &&
+                               key_contents[member_name.size()] == '"';
       if (key_matches) {
         if (result.has_value()) {
           return std::nullopt;
