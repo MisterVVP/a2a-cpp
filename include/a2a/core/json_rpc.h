@@ -8,6 +8,7 @@
 namespace a2a::core::json_rpc {
 
 constexpr std::string_view kVersion = "2.0";
+constexpr std::string_view kResultMemberName = "result";
 
 struct MethodNames final {
   static constexpr std::string_view kSendMessage = "a2a.sendMessage";
