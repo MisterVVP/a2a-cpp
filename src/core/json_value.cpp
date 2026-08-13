@@ -11,11 +11,33 @@
 #include <string_view>
 
 namespace a2a::core::json {
+namespace {
+
+[[nodiscard]] bool IsJsonWhitespace(char value) noexcept {
+  return value == ' ' || value == '\t' || value == '\n' || value == '\r';
+}
+
+[[nodiscard]] std::string_view TrimTrailingJsonWhitespace(std::string_view value) noexcept {
+  while (!value.empty() && IsJsonWhitespace(value.back())) {
+    value.remove_suffix(1U);
+  }
+  return value;
+}
+
+}  // namespace
 
 std::optional<ValueRange> FindTopLevelObjectMemberValue(std::string_view json, std::string_view member_name) noexcept {
   try {
-    simdjson::ondemand::parser parser;
     const simdjson::padded_string padded(json);
+
+    // On-Demand intentionally validates lazily. Preserve this API's historical
+    // contract by validating the complete document before extracting a raw range.
+    simdjson::dom::parser validation_parser;
+    if (validation_parser.parse(padded).error()) {
+      return std::nullopt;
+    }
+
+    simdjson::ondemand::parser parser;
     auto document = parser.iterate(padded);
     auto object = document.get_object();
     if (object.error()) {
@@ -40,7 +62,7 @@ std::optional<ValueRange> FindTopLevelObjectMemberValue(std::string_view json, s
         if (result.has_value()) {
           return std::nullopt;
         }
-        const std::string_view raw = raw_json.value_unsafe();
+        const std::string_view raw = TrimTrailingJsonWhitespace(raw_json.value_unsafe());
         const auto offset = static_cast<std::size_t>(raw.data() - padded.data());
         result = ValueRange{.begin = offset, .end = offset + raw.size()};
       }
