@@ -333,6 +333,12 @@ TEST(JsonRpcTransportUnitTest, ListTasksScannerPreservesEnvelopeErrorValidation)
   ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[)", ErrorCode::kSerialization);
 }
 
+TEST(JsonRpcTransportUnitTest, ListTasksRejectsStructurallyBalancedInvalidResultPayloads) {
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[,]}})", ErrorCode::kSerialization);
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[],"pageSize":tru}})",
+                               ErrorCode::kSerialization);
+}
+
 TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope) {
   auto transport = std::make_unique<JsonRpcTransport>(
       MakeResolvedJsonRpc(),
