@@ -6,6 +6,7 @@
 #include <simdjson.h>
 
 #include <cstddef>
+#include <cstring>
 #include <optional>
 #include <string_view>
 
@@ -27,11 +28,19 @@ std::optional<ValueRange> FindTopLevelObjectMemberValue(std::string_view json, s
       if (key.error()) {
         return std::nullopt;
       }
+      auto unescaped_key = field.unescaped_key();
+      if (unescaped_key.error()) {
+        return std::nullopt;
+      }
       auto raw_json = field.value().raw_json();
       if (raw_json.error()) {
         return std::nullopt;
       }
-      if (key.value_unsafe().raw() == member_name) {
+      const char* const raw_key = key.value_unsafe().raw();
+      const bool key_matches = unescaped_key.value_unsafe().size() == member_name.size() &&
+                               std::memcmp(raw_key, member_name.data(), member_name.size()) == 0 &&
+                               raw_key[member_name.size()] == '"';
+      if (key_matches) {
         if (result.has_value()) {
           return std::nullopt;
         }
