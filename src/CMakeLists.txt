@@ -43,6 +43,8 @@ target_link_libraries(a2a_core
   PUBLIC
     a2a::proto_generated
     protobuf::libprotobuf
+  PRIVATE
+    simdjson::simdjson
 )
 
 add_library(a2a_http STATIC
@@ -95,6 +97,8 @@ target_link_libraries(a2a_client
   PUBLIC
     a2a::core
     a2a::http
+  PRIVATE
+    simdjson::simdjson
 )
 
 add_library(a2a_server STATIC

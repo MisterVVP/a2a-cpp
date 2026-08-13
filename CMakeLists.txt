@@ -23,6 +23,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 find_package(gRPC CONFIG REQUIRED)
+find_package(simdjson CONFIG REQUIRED)
 
 if(A2A_ENABLE_LIBCURL)
   find_package(CURL QUIET)

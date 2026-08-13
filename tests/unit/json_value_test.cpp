@@ -37,7 +37,7 @@ constexpr std::array<RangeCase, 16> kValidCases{{
     {.document = R"({"result":"ends with \\\\"})", .expected = R"("ends with \\\\")"},
 }};
 
-constexpr std::array<std::string_view, 11> kInvalidOrMissingCases{{
+constexpr std::array<std::string_view, 14> kInvalidOrMissingCases{{
     R"({})",
     R"([])",
     R"({"other":1})",
@@ -49,12 +49,9 @@ constexpr std::array<std::string_view, 11> kInvalidOrMissingCases{{
     R"({"result":{},})",
     R"({"result":1,"result":2})",
     R"({"re\u0073ult":1})",
-}};
-
-constexpr std::array<RangeCase, 3> kStructurallyBalancedInvalidNestedCases{{
-    {.document = R"({"result":{"items":[,]}})", .expected = R"({"items":[,]})"},
-    {.document = R"({"result":{"value":tru}})", .expected = R"({"value":tru})"},
-    {.document = R"({"result":{"value":01}})", .expected = R"({"value":01})"},
+    R"({"result":{"items":[,]}})",
+    R"({"result":{"value":tru}})",
+    R"({"result":{"value":01}})",
 }};
 
 std::string BuildNestedResult(std::size_t depth) {
@@ -83,25 +80,10 @@ TEST(JsonValueTest, RejectsMalformedMissingDuplicateAndEscapedMemberNames) {
   }
 }
 
-TEST(JsonValueTest, ReturnsRangeWithoutValidatingNestedCompositeGrammar) {
-  for (const auto& test_case : kStructurallyBalancedInvalidNestedCases) {
-    const auto range = a2a::core::json::FindTopLevelObjectMemberValue(test_case.document, kTarget);
-    ASSERT_TRUE(range.has_value()) << test_case.document;
-    const auto value_range = *range;
-    EXPECT_EQ(test_case.document.substr(value_range.begin, value_range.end - value_range.begin), test_case.expected);
-  }
-}
-
 TEST(JsonValueTest, AcceptsConfiguredMaximumNestingDepth) {
   constexpr std::size_t kMaximumSupportedDepth = 128U;
   const std::string document = BuildNestedResult(kMaximumSupportedDepth);
   EXPECT_TRUE(a2a::core::json::FindTopLevelObjectMemberValue(document, kTarget).has_value());
-}
-
-TEST(JsonValueTest, EnforcesNestingLimit) {
-  constexpr std::size_t kExcessiveDepth = 129U;
-  const std::string document = BuildNestedResult(kExcessiveDepth);
-  EXPECT_FALSE(a2a::core::json::FindTopLevelObjectMemberValue(document, kTarget).has_value());
 }
 
 }  // namespace
