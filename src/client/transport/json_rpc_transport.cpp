@@ -8,10 +8,8 @@
 
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -24,14 +22,13 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
+#include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 
 namespace a2a::client {
 namespace {
 
-constexpr int kHttpOkMin = 200;
-constexpr int kHttpOkMax = 299;
 constexpr std::string_view kEmptyJsonObject = "{}";
 constexpr std::size_t kJsonRpcRequestEnvelopeOverhead = 45U;
 constexpr std::string_view kStreamingSuccessRequiresSseMessage =
@@ -152,96 +149,16 @@ core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientRespon
   return result_it->second;
 }
 
-bool ConsumeJsonStringCharacter(char character, bool* escaped) {
-  if (*escaped) {
-    *escaped = false;
-  } else if (character == '\\') {
-    *escaped = true;
-  } else if (character == '"') {
-    return true;
-  }
-  return false;
-}
-
-std::optional<std::size_t> FindResultValueBegin(std::string_view json) {
-  constexpr std::string_view kResultName = "\"result\"";
-  bool in_string = false;
-  bool escaped = false;
-  int depth = 0;
-  for (std::size_t index = 0; index < json.size(); ++index) {
-    const char character = json[index];
-    if (in_string) {
-      in_string = !ConsumeJsonStringCharacter(character, &escaped);
-      continue;
-    }
-    if (character == '"') {
-      if (depth != 1 || json.substr(index, kResultName.size()) != kResultName) {
-        in_string = true;
-        continue;
-      }
-      std::size_t begin = index + kResultName.size();
-      begin = json.find(':', begin);
-      if (begin == std::string_view::npos) {
-        return std::nullopt;
-      }
-      ++begin;
-      while (begin < json.size() && std::isspace(static_cast<unsigned char>(json[begin])) != 0) {
-        ++begin;
-      }
-      return begin;
-    }
-    if (character == '{' || character == '[') {
-      ++depth;
-    } else if (character == '}' || character == ']') {
-      --depth;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::size_t> FindResultValueEnd(std::string_view json, std::size_t begin) {
-  bool in_string = false;
-  bool escaped = false;
-  int depth = 0;
-  for (std::size_t end = begin; end < json.size(); ++end) {
-    const char character = json[end];
-    if (in_string) {
-      in_string = !ConsumeJsonStringCharacter(character, &escaped);
-    } else if (character == '"') {
-      in_string = true;
-    } else if (character == '{' || character == '[') {
-      ++depth;
-    } else if (character == '}' || character == ']') {
-      if (depth == 0) {
-        return end;
-      }
-      --depth;
-    } else if (character == ',' && depth == 0) {
-      return end;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::pair<std::size_t, std::size_t>> FindTopLevelResultRange(std::string_view json) {
-  const auto begin = FindResultValueBegin(json);
-  if (!begin.has_value()) {
-    return std::nullopt;
-  }
-  const auto end = FindResultValueEnd(json, *begin);
-  return end.has_value() ? std::optional(std::pair{*begin, *end}) : std::nullopt;
-}
-
 core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
                                                                   std::string_view expected_id) {
   const std::string_view response_body = response.body;
-  const auto range = FindTopLevelResultRange(response_body);
+  const auto range = core::json::FindTopLevelObjectMemberValue(response_body, core::json_rpc::kResultMemberName);
   if (!range.has_value()) {
     const auto result = ParseResponseResult(response, expected_id);
     return result.ok() ? core::Error::Serialization("ListTasks JSON-RPC result must be an object") : result.error();
   }
-  const std::string_view prefix = response_body.substr(0, range->first);
-  const std::string_view suffix = response_body.substr(range->second);
+  const std::string_view prefix = response_body.substr(0, range->begin);
+  const std::string_view suffix = response_body.substr(range->end);
   std::string validation_body;
   validation_body.reserve(prefix.size() + suffix.size() + kEmptyJsonObject.size());
   validation_body.append(prefix);
@@ -254,7 +171,7 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
     return validated.error();
   }
   lf::a2a::v1::ListTasksResponse result;
-  const std::string_view result_json = response_body.substr(range->first, range->second - range->first);
+  const std::string_view result_json = response_body.substr(range->begin, range->end - range->begin);
   const auto parsed = core::JsonToMessage(result_json, &result, {.ignore_unknown_fields = true});
   if (!parsed.ok()) {
     return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
@@ -402,7 +319,8 @@ class JsonRpcSseSession final {
       metadata_validated_ = true;
       return {};
     }
-    if (response_metadata_.status_code < kHttpOkMin || response_metadata_.status_code > kHttpOkMax) {
+    if (response_metadata_.status_code < core::http::kSuccessStatusMin ||
+        response_metadata_.status_code > core::http::kSuccessStatusMax) {
       return BuildJsonRpcStreamStatusError(response_metadata_);
     }
     if (HasSseContentType(response_metadata_.headers)) {
@@ -462,7 +380,8 @@ class JsonRpcSseSession final {
       NotifyErrorAndStop(*state_, observer_, result.error());
       return;
     }
-    if (json_response.status_code < kHttpOkMin || json_response.status_code > kHttpOkMax) {
+    if (json_response.status_code < core::http::kSuccessStatusMin ||
+        json_response.status_code > core::http::kSuccessStatusMax) {
       NotifyErrorAndStop(*state_, observer_, BuildJsonRpcStreamStatusError(json_response));
       return;
     }
@@ -592,7 +511,8 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(std
     return result.error();
   }
 
-  if (response.value().status_code < kHttpOkMin || response.value().status_code > kHttpOkMax) {
+  if (response.value().status_code < core::http::kSuccessStatusMin ||
+      response.value().status_code > core::http::kSuccessStatusMax) {
     return core::Error::RemoteProtocol("JSON-RPC response received with non-success HTTP status")
         .WithTransport("jsonrpc")
         .WithHttpStatus(response.value().status_code);
@@ -608,7 +528,7 @@ core::Result<lf::a2a::v1::SendMessageResponse> JsonRpcTransport::SendMessage(
     return result.error();
   }
 
-  const auto response = ParseResultMessage<lf::a2a::v1::SendMessageResponse>(result.value(), kHttpOkMin);
+  const auto response = ParseResultMessage<lf::a2a::v1::SendMessageResponse>(result.value(), core::http::kStatusOk);
   if (!response.ok()) {
     return response.error();
   }
@@ -625,7 +545,7 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(const lf::a2a::v1::Get
   if (!result.ok()) {
     return result.error();
   }
-  const auto response = ParseResultMessage<lf::a2a::v1::Task>(result.value(), kHttpOkMin);
+  const auto response = ParseResultMessage<lf::a2a::v1::Task>(result.value(), core::http::kStatusOk);
   if (!response.ok()) {
     return response.error();
   }
@@ -658,7 +578,8 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
   if (!typed_result.ok()) {
     return typed_result.error();
   }
-  if (response.value().status_code < kHttpOkMin || response.value().status_code > kHttpOkMax) {
+  if (response.value().status_code < core::http::kSuccessStatusMin ||
+      response.value().status_code > core::http::kSuccessStatusMax) {
     return core::Error::RemoteProtocol("JSON-RPC response received with non-success HTTP status")
         .WithTransport("jsonrpc")
         .WithHttpStatus(response.value().status_code);
@@ -685,7 +606,7 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(const lf::a2a::v1::
   if (!result.ok()) {
     return result.error();
   }
-  const auto response = ParseResultMessage<lf::a2a::v1::Task>(result.value(), kHttpOkMin);
+  const auto response = ParseResultMessage<lf::a2a::v1::Task>(result.value(), core::http::kStatusOk);
   if (!response.ok()) {
     return response.error();
   }
@@ -699,7 +620,8 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::CreateTa
   if (!result.ok()) {
     return result.error();
   }
-  const auto response = ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), kHttpOkMin);
+  const auto response =
+      ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), core::http::kStatusOk);
   if (!response.ok()) {
     return response.error();
   }
@@ -717,7 +639,8 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::GetTaskP
   if (!result.ok()) {
     return result.error();
   }
-  const auto response = ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), kHttpOkMin);
+  const auto response =
+      ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result.value(), core::http::kStatusOk);
   if (!response.ok()) {
     return response.error();
   }
@@ -732,7 +655,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> JsonRpcTransp
     return result.error();
   }
   const auto response =
-      ParseResultMessage<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(result.value(), kHttpOkMin);
+      ParseResultMessage<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(result.value(), core::http::kStatusOk);
   if (!response.ok()) {
     return response.error();
   }
@@ -751,7 +674,7 @@ core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
     return result.error();
   }
 
-  const auto parsed_empty = ParseResultMessage<google::protobuf::Empty>(result.value(), kHttpOkMin);
+  const auto parsed_empty = ParseResultMessage<google::protobuf::Empty>(result.value(), core::http::kStatusOk);
   if (!parsed_empty.ok()) {
     return parsed_empty.error();
   }
