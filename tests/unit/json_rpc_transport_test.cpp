@@ -334,11 +334,9 @@ TEST(JsonRpcTransportUnitTest, ListTasksScannerPreservesEnvelopeErrorValidation)
 }
 
 TEST(JsonRpcTransportUnitTest, ListTasksRejectsStructurallyBalancedInvalidResultPayloads) {
-  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[,]}})",
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[,]}})", ErrorCode::kSerialization);
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[],"pageSize":tru}})",
                                ErrorCode::kSerialization);
-  ExpectListTasksEnvelopeFails(
-      R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[],"pageSize":tru}})",
-      ErrorCode::kSerialization);
 }
 
 TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope) {

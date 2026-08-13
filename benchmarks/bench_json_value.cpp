@@ -54,18 +54,14 @@ void RunFindMemberBenchmark(benchmark::State& state, std::string_view member_nam
   state.SetBytesProcessed(state.iterations() * static_cast<std::int64_t>(document.size()));
 }
 
-void BM_JsonValue_FindResult_ListTasks(benchmark::State& state) {
-  RunFindMemberBenchmark(state, kResultMemberName);
-}
+void BM_JsonValue_FindResult_ListTasks(benchmark::State& state) { RunFindMemberBenchmark(state, kResultMemberName); }
 BENCHMARK(BM_JsonValue_FindResult_ListTasks)
     ->Arg(kOneTask)
     ->Arg(kTypicalTaskCount)
     ->Arg(kLargeTaskCount)
     ->Arg(kVeryLargeTaskCount);
 
-void BM_JsonValue_FindMissing_ListTasks(benchmark::State& state) {
-  RunFindMemberBenchmark(state, kMissingMemberName);
-}
+void BM_JsonValue_FindMissing_ListTasks(benchmark::State& state) { RunFindMemberBenchmark(state, kMissingMemberName); }
 BENCHMARK(BM_JsonValue_FindMissing_ListTasks)
     ->Arg(kOneTask)
     ->Arg(kTypicalTaskCount)
