@@ -12,6 +12,9 @@ namespace a2a::core::json {
 namespace {
 
 constexpr std::size_t kMaximumNestingDepth = 128U;
+constexpr unsigned char kFirstNonControlCharacter = 0x20U;
+constexpr std::size_t kUnicodeEscapeHexDigitCount = 4U;
+constexpr std::string_view kSimpleEscapeCharacters = R"("\/bfnrt)";
 
 class Parser final {
  public:
@@ -45,84 +48,127 @@ class Parser final {
     return true;
   }
 
+  [[nodiscard]] bool IsAtEnd() const noexcept { return position_ >= input_.size(); }
+
+  [[nodiscard]] static bool IsDigit(char value) noexcept {
+    return std::isdigit(static_cast<unsigned char>(value)) != 0;
+  }
+
+  [[nodiscard]] static bool IsNonZeroDigit(char value) noexcept { return value >= '1' && value <= '9'; }
+
+  void ConsumeDigits() noexcept {
+    while (!IsAtEnd() && IsDigit(input_[position_])) {
+      ++position_;
+    }
+  }
+
+  [[nodiscard]] bool ConsumeRequiredDigits() noexcept {
+    if (IsAtEnd() || !IsDigit(input_[position_])) {
+      return false;
+    }
+    ConsumeDigits();
+    return true;
+  }
+
+  [[nodiscard]] bool ConsumeUnicodeEscape() noexcept {
+    for (std::size_t digit = 0U; digit < kUnicodeEscapeHexDigitCount; ++digit) {
+      if (IsAtEnd()) {
+        return false;
+      }
+      const auto character = static_cast<unsigned char>(input_[position_]);
+      ++position_;
+      if (std::isxdigit(character) == 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  [[nodiscard]] bool ConsumeEscapeSequence() noexcept {
+    if (IsAtEnd()) {
+      return false;
+    }
+    const char escape = input_[position_++];
+    if (escape == 'u') {
+      return ConsumeUnicodeEscape();
+    }
+    return kSimpleEscapeCharacters.find(escape) != std::string_view::npos;
+  }
+
+  void SetUnescapedContents(std::size_t contents_begin, bool has_escape,
+                            std::string_view* unescaped_contents) const noexcept {
+    if (unescaped_contents == nullptr) {
+      return;
+    }
+    if (has_escape) {
+      *unescaped_contents = {};
+      return;
+    }
+    *unescaped_contents = input_.substr(contents_begin, position_ - contents_begin - 1U);
+  }
+
   [[nodiscard]] bool ParseString(std::string_view* unescaped_contents = nullptr) noexcept {
     if (!Consume('"')) {
       return false;
     }
     const std::size_t contents_begin = position_;
     bool has_escape = false;
-    while (position_ < input_.size()) {
-      const unsigned char character = static_cast<unsigned char>(input_[position_++]);
+    while (!IsAtEnd()) {
+      const auto character = static_cast<unsigned char>(input_[position_]);
+      ++position_;
       if (character == '"') {
-        if (unescaped_contents != nullptr) {
-          *unescaped_contents =
-              has_escape ? std::string_view{} : input_.substr(contents_begin, position_ - contents_begin - 1U);
-        }
+        SetUnescapedContents(contents_begin, has_escape, unescaped_contents);
         return true;
       }
-      if (character < 0x20U) {
+      if (character < kFirstNonControlCharacter) {
         return false;
       }
       if (character != '\\') {
         continue;
       }
       has_escape = true;
-      if (position_ >= input_.size()) {
-        return false;
-      }
-      const char escape = input_[position_++];
-      if (escape == 'u') {
-        for (int digit = 0; digit < 4; ++digit) {
-          if (position_ >= input_.size() || std::isxdigit(static_cast<unsigned char>(input_[position_++])) == 0) {
-            return false;
-          }
-        }
-      } else if (std::string_view(R"("\/bfnrt)").find(escape) == std::string_view::npos) {
+      if (!ConsumeEscapeSequence()) {
         return false;
       }
     }
     return false;
   }
 
+  [[nodiscard]] bool ParseIntegerPart() noexcept {
+    if (IsAtEnd()) {
+      return false;
+    }
+    if (Consume('0')) {
+      return true;
+    }
+    if (!IsNonZeroDigit(input_[position_])) {
+      return false;
+    }
+    ConsumeDigits();
+    return true;
+  }
+
+  [[nodiscard]] bool ParseFractionPart() noexcept {
+    if (!Consume('.')) {
+      return true;
+    }
+    return ConsumeRequiredDigits();
+  }
+
+  [[nodiscard]] bool ParseExponentPart() noexcept {
+    if (IsAtEnd() || (input_[position_] != 'e' && input_[position_] != 'E')) {
+      return true;
+    }
+    ++position_;
+    if (!IsAtEnd() && (input_[position_] == '+' || input_[position_] == '-')) {
+      ++position_;
+    }
+    return ConsumeRequiredDigits();
+  }
+
   [[nodiscard]] bool ParseNumber() noexcept {
-    const std::size_t begin = position_;
-    if (position_ < input_.size() && input_[position_] == '-') {
-      ++position_;
-    }
-    if (position_ >= input_.size()) {
-      return false;
-    }
-    if (input_[position_] == '0') {
-      ++position_;
-    } else if (input_[position_] >= '1' && input_[position_] <= '9') {
-      while (position_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[position_])) != 0) {
-        ++position_;
-      }
-    } else {
-      return false;
-    }
-    if (position_ < input_.size() && input_[position_] == '.') {
-      ++position_;
-      if (position_ >= input_.size() || std::isdigit(static_cast<unsigned char>(input_[position_])) == 0) {
-        return false;
-      }
-      while (position_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[position_])) != 0) {
-        ++position_;
-      }
-    }
-    if (position_ < input_.size() && (input_[position_] == 'e' || input_[position_] == 'E')) {
-      ++position_;
-      if (position_ < input_.size() && (input_[position_] == '+' || input_[position_] == '-')) {
-        ++position_;
-      }
-      if (position_ >= input_.size() || std::isdigit(static_cast<unsigned char>(input_[position_])) == 0) {
-        return false;
-      }
-      while (position_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[position_])) != 0) {
-        ++position_;
-      }
-    }
-    return position_ > begin;
+    (void)Consume('-');
+    return ParseIntegerPart() && ParseFractionPart() && ParseExponentPart();
   }
 
   [[nodiscard]] bool ParseLiteral(std::string_view literal) noexcept {
