@@ -34,8 +34,7 @@ constexpr std::string_view kNextPageToken = "parsing-test-next-page";
 constexpr std::string_view kTaskIdPrefix = "task-parsing-";
 constexpr std::string_view kFirstTaskId = "task-parsing-0";
 constexpr std::string_view kContextId = "context-parsing";
-constexpr std::string_view kJsonRpcEnvelopePrefix =
-    R"({"jsonrpc":"2.0","id":"parsing-test-request","result":)";
+constexpr std::string_view kJsonRpcEnvelopePrefix = R"({"jsonrpc":"2.0","id":"parsing-test-request","result":)";
 constexpr std::size_t kEmptyTaskCount = 0U;
 constexpr std::size_t kSingleTaskCount = 1U;
 constexpr std::size_t kTypicalTaskCount = 20U;
@@ -83,8 +82,8 @@ std::string WrapJsonRpcResult(std::string_view payload) {
 }
 
 std::unique_ptr<ClientTransport> MakeTransport(ClientWireFormat format, std::string response_body) {
-  auto requester = [response_body = std::move(response_body)](const HttpRequest&)
-      -> a2a::core::Result<HttpClientResponse> {
+  auto requester = [response_body =
+                        std::move(response_body)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
     return HttpClientResponse{.status_code = kHttpOk, .body = response_body};
   };
 
@@ -93,8 +92,7 @@ std::unique_ptr<ClientTransport> MakeTransport(ClientWireFormat format, std::str
   }
 
   return std::make_unique<JsonRpcTransport>(MakeResolvedInterface(format), std::move(requester),
-                                            JsonRpcTransport::kDefaultTimeout,
-                                            [] { return std::string(kRequestId); });
+                                            JsonRpcTransport::kDefaultTimeout, [] { return std::string(kRequestId); });
 }
 
 void ExpectListTasksFixtureParses(ClientWireFormat format, std::size_t task_count) {

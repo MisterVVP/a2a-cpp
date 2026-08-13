@@ -81,8 +81,8 @@ std::string WrapJsonRpcResult(std::string_view payload) {
 std::unique_ptr<ClientTransport> MakeTransport(ClientWireFormat format, std::string response_body) {
   // Keep the network boundary in-memory while preserving the HttpRequester ownership contract.
   // Response materialization is therefore measured together with the real transport parsing path.
-  auto requester = [response_body = std::move(response_body)](const HttpRequest&)
-      -> a2a::core::Result<HttpClientResponse> {
+  auto requester = [response_body =
+                        std::move(response_body)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
     return HttpClientResponse{.status_code = kHttpOk, .body = response_body};
   };
 
@@ -91,8 +91,7 @@ std::unique_ptr<ClientTransport> MakeTransport(ClientWireFormat format, std::str
   }
 
   return std::make_unique<JsonRpcTransport>(MakeResolvedInterface(format), std::move(requester),
-                                            JsonRpcTransport::kDefaultTimeout,
-                                            [] { return std::string(kRequestId); });
+                                            JsonRpcTransport::kDefaultTimeout, [] { return std::string(kRequestId); });
 }
 
 void RunListTasksClientBenchmark(benchmark::State& state, ClientWireFormat format) {
