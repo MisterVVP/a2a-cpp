@@ -33,25 +33,25 @@ std::optional<ValueRange> FindTopLevelObjectMemberValue(std::string_view json, s
     // On-Demand intentionally validates lazily. Preserve this API's historical
     // contract by validating the complete document before extracting a raw range.
     simdjson::dom::parser validation_parser;
-    if (validation_parser.parse(padded).error()) {
+    if (validation_parser.parse(padded).error() != simdjson::SUCCESS) {
       return std::nullopt;
     }
 
     simdjson::ondemand::parser parser;
     auto document = parser.iterate(padded);
     auto object = document.get_object();
-    if (object.error()) {
+    if (object.error() != simdjson::SUCCESS) {
       return std::nullopt;
     }
 
     std::optional<ValueRange> result;
     for (auto field : object.value_unsafe()) {
       auto key = field.key();
-      if (key.error()) {
+      if (key.error() != simdjson::SUCCESS) {
         return std::nullopt;
       }
       auto raw_json = field.value().raw_json();
-      if (raw_json.error()) {
+      if (raw_json.error() != simdjson::SUCCESS) {
         return std::nullopt;
       }
       const char* const raw_key = key.value_unsafe().raw();
