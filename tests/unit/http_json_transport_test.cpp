@@ -197,8 +197,8 @@ TEST(HttpJsonTransportUnitTest, ListTasksRejectsWrongNextPageTokenType) {
 }
 
 TEST(HttpJsonTransportUnitTest, ListTasksRejectsNullBoundaryFields) {
-  constexpr std::array<std::string_view, 2> kInvalidResponses = {R"({"tasks":null})",
-                                                                 R"({"tasks":[],"nextPageToken":null})"};
+  constexpr std::array<std::string_view, 3> kInvalidResponses = {
+      R"({"tasks":null})", R"({"tasks":[],"nextPageToken":null})", R"({"tasks":[null]})"};
   for (const std::string_view body : kInvalidResponses) {
     auto transport = std::make_unique<HttpJsonTransport>(
         MakeResolvedRest(), [body](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {

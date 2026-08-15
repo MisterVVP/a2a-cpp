@@ -324,6 +324,8 @@ TEST(JsonRpcTransportUnitTest, ListTasksRejectsNullBoundaryFields) {
                                ErrorCode::kSerialization);
   ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[],"nextPageToken":null}})",
                                ErrorCode::kSerialization);
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[null]}})",
+                               ErrorCode::kSerialization);
 }
 
 TEST(JsonRpcTransportUnitTest, ListTasksScannerIgnoresNestedKeysAndStringContents) {
@@ -367,6 +369,23 @@ TEST(JsonRpcTransportUnitTest, RejectsNonSuccessHttpStatusEvenWithResultEnvelope
   const auto response = client.GetTask(request);
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksChecksHttpStatusBeforeDecodingMalformedResult) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpServerError,
+                                  .headers = {{"A2A-Version", "1.0"}},
+                                  .body = R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[3]}})"};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({});
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(response.error().http_status().value_or(0), kHttpServerError);
 }
 
 TEST(JsonRpcTransportUnitTest, ReturnsUnsupportedVersionOnInvalidA2AVersionHeader) {

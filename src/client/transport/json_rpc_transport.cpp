@@ -69,6 +69,13 @@ core::Error BuildJsonRpcEnvelopeError(std::string_view message, const HttpClient
       .WithHttpStatus(response.status_code);
 }
 
+core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response) {
+  if (response.status_code >= core::http::kSuccessStatusMin && response.status_code <= core::http::kSuccessStatusMax) {
+    return {};
+  }
+  return BuildJsonRpcEnvelopeError("JSON-RPC response received with non-success HTTP status", response);
+}
+
 core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value, const HttpClientResponse& response) {
   if (!error_value.has_struct_value()) {
     return BuildJsonRpcEnvelopeError("JSON-RPC error payload must be an object", response);
@@ -158,6 +165,10 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
     if (!result.ok()) {
       return result.error();
     }
+    const auto status = ValidateJsonRpcHttpStatus(response);
+    if (!status.ok()) {
+      return status.error();
+    }
     if (result.value().kind_case() != google::protobuf::Value::kStructValue) {
       return core::Error::Serialization("ListTasks JSON-RPC result must be an object");
     }
@@ -180,11 +191,14 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
   validation_body.append(prefix);
   validation_body.append(kEmptyJsonObject);
   validation_body.append(suffix);
-  const HttpClientResponse validation_response{
-      .status_code = response.status_code, .headers = response.headers, .body = std::move(validation_body)};
+  const HttpClientResponse validation_response{.status_code = response.status_code, .body = std::move(validation_body)};
   const auto validated = ParseResponseResult(validation_response, expected_id);
   if (!validated.ok()) {
     return validated.error();
+  }
+  const auto status = ValidateJsonRpcHttpStatus(response);
+  if (!status.ok()) {
+    return status.error();
   }
   lf::a2a::v1::ListTasksResponse result;
   const std::string_view result_json = response_body.substr(range->begin, range->end - range->begin);
@@ -253,11 +267,31 @@ core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, con
   std::string envelope;
   envelope.reserve(request_json.value().size() + id_json.value().size() + method_json.value().size() +
                    kJsonRpcRequestEnvelopeOverhead);
-  envelope.append(R"({"jsonrpc":"2.0","id":)");
+  envelope.push_back('{');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kVersionMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kVersion);
+  envelope.push_back('"');
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kIdMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
   envelope.append(id_json.value());
-  envelope.append(R"(,"method":)");
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kMethodMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
   envelope.append(method_json.value());
-  envelope.append(R"(,"params":)");
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kParamsMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
   envelope.append(request_json.value());
   envelope.push_back('}');
   return envelope;
@@ -528,11 +562,9 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(std
     return result.error();
   }
 
-  if (response.value().status_code < core::http::kSuccessStatusMin ||
-      response.value().status_code > core::http::kSuccessStatusMax) {
-    return core::Error::RemoteProtocol("JSON-RPC response received with non-success HTTP status")
-        .WithTransport("jsonrpc")
-        .WithHttpStatus(response.value().status_code);
+  const auto status = ValidateJsonRpcHttpStatus(response.value());
+  if (!status.ok()) {
+    return status.error();
   }
 
   return result.value();
@@ -594,12 +626,6 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
   auto typed_result = ParseListTasksResult(response.value(), request_id);
   if (!typed_result.ok()) {
     return typed_result.error();
-  }
-  if (response.value().status_code < core::http::kSuccessStatusMin ||
-      response.value().status_code > core::http::kSuccessStatusMax) {
-    return core::Error::RemoteProtocol("JSON-RPC response received with non-success HTTP status")
-        .WithTransport("jsonrpc")
-        .WithHttpStatus(response.value().status_code);
   }
 
   ListTasksResponse parsed;

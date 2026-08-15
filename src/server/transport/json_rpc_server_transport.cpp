@@ -622,9 +622,25 @@ core::Result<std::string> BuildSuccessEnvelopeFromJson(const google::protobuf::V
   }
   std::string envelope;
   envelope.reserve(id_json.value().size() + result_json.size() + kJsonRpcSuccessEnvelopeOverhead);
-  envelope.append(R"({"jsonrpc":"2.0","id":)");
+  envelope.push_back('{');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kVersionMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kVersion);
+  envelope.push_back('"');
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kIdMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
   envelope.append(id_json.value());
-  envelope.append(R"(,"result":)");
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kResultMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
   envelope.append(result_json);
   envelope.push_back('}');
   return envelope;

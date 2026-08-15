@@ -8,6 +8,10 @@
 namespace a2a::core::json_rpc {
 
 constexpr std::string_view kVersion = "2.0";
+constexpr std::string_view kVersionMemberName = "jsonrpc";
+constexpr std::string_view kIdMemberName = "id";
+constexpr std::string_view kMethodMemberName = "method";
+constexpr std::string_view kParamsMemberName = "params";
 constexpr std::string_view kResultMemberName = "result";
 
 struct MethodNames final {
