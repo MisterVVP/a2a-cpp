@@ -98,6 +98,10 @@ struct ListTasksResponse final {
   std::string next_page_token;
 };
 
+// Serializes the protocol response while guaranteeing its required top-level
+// fields without recursively emitting defaults in nested Task messages.
+[[nodiscard]] core::Result<std::string> SerializeListTasksResponse(const ListTasksResponse& response);
+
 [[nodiscard]] bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request);
 [[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);
 [[nodiscard]] core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size);

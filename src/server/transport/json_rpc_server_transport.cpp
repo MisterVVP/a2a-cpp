@@ -614,18 +614,6 @@ core::Result<google::protobuf::Value> BuildJsonValueFromMessage(const google::pr
   return value;
 }
 
-core::Result<std::string> BuildListTasksResultJson(const ListTasksResponse& list_response) {
-  lf::a2a::v1::ListTasksResponse result;
-  result.mutable_tasks()->Reserve(static_cast<int>(list_response.tasks.size()));
-  for (const auto& task : list_response.tasks) {
-    *result.add_tasks() = task;
-  }
-  result.set_page_size(static_cast<std::int32_t>(list_response.page_size));
-  result.set_total_size(static_cast<std::int32_t>(list_response.total_size));
-  result.set_next_page_token(list_response.next_page_token);
-  return core::MessageToJson(result);
-}
-
 core::Result<std::string> BuildSuccessEnvelopeFromJson(const google::protobuf::Value& id,
                                                        std::string_view result_json) {
   const auto id_json = core::MessageToJson(id);
@@ -649,7 +637,7 @@ core::Result<HttpServerResponse> BuildListTasksSuccessResponse(const DispatchRes
   if (payload == nullptr) {
     return InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForListTasks);
   }
-  const auto result_json = BuildListTasksResultJson(*payload);
+  const auto result_json = SerializeListTasksResponse(*payload);
   if (!result_json.ok()) {
     return result_json.error();
   }
@@ -1089,7 +1077,7 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
         return InvalidJsonRpcResponsePayload(
             core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForListTasks);
       }
-      const auto json = BuildListTasksResultJson(*payload);
+      const auto json = SerializeListTasksResponse(*payload);
       if (!json.ok()) {
         return json.error();
       }

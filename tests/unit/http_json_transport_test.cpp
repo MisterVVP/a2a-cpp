@@ -196,6 +196,21 @@ TEST(HttpJsonTransportUnitTest, ListTasksRejectsWrongNextPageTokenType) {
   EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
 }
 
+TEST(HttpJsonTransportUnitTest, ListTasksRejectsNullBoundaryFields) {
+  constexpr std::array<std::string_view, 2> kInvalidResponses = {R"({"tasks":null})",
+                                                                 R"({"tasks":[],"nextPageToken":null})"};
+  for (const std::string_view body : kInvalidResponses) {
+    auto transport = std::make_unique<HttpJsonTransport>(
+        MakeResolvedRest(), [body](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+          return HttpClientResponse{
+              .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = std::string(body)};
+        });
+    A2AClient client(std::move(transport));
+    const auto response = client.ListTasks({});
+    EXPECT_FALSE(response.ok());
+  }
+}
+
 TEST(HttpJsonTransportUnitTest, ListTasksRejectsMalformedTask) {
   auto transport = std::make_unique<HttpJsonTransport>(
       MakeResolvedRest(), [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {

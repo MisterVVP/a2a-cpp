@@ -274,16 +274,6 @@ int ToHttpStatus(const core::Error& error) {
   return core::http::kStatusInternalServerError;
 }
 
-core::Result<std::string> BuildListTasksJson(const ListTasksResponse& response) {
-  lf::a2a::v1::ListTasksResponse payload;
-  payload.mutable_tasks()->Reserve(static_cast<int>(response.tasks.size()));
-  for (const auto& task : response.tasks) {
-    *payload.add_tasks() = task;
-  }
-  payload.set_next_page_token(response.next_page_token);
-  return core::MessageToJson(payload);
-}
-
 core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& message) {
   const auto body = core::MessageToJson(message);
   if (!body.ok()) {
@@ -613,7 +603,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       if (payload == nullptr) {
         return InternalResponsePayloadMismatch(core::protocol_error_messages::kResponsePayloadMismatchForListTasks);
       }
-      const auto body = BuildListTasksJson(*payload);
+      const auto body = SerializeListTasksResponse(*payload);
       if (!body.ok()) {
         return body.error();
       }

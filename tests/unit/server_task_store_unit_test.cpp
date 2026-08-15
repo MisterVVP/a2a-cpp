@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -471,6 +472,20 @@ TEST(ServerTaskUtilitiesTest, OrdersTasksByTimestampWithNanosTiebreaker) {
   EXPECT_EQ(ordered[0]->id(), "task-new");
   EXPECT_EQ(ordered[1]->id(), "task-tie-high");
   EXPECT_EQ(ordered[2]->id(), "task-older");
+}
+
+TEST(ServerTaskUtilitiesTest, SerializesRequiredEmptyListTasksFields) {
+  const auto json = a2a::server::SerializeListTasksResponse({});
+  ASSERT_TRUE(json.ok()) << json.error().message();
+  EXPECT_EQ(json.value(), R"({"tasks":[],"pageSize":0,"totalSize":0,"nextPageToken":""})");
+}
+
+TEST(ServerTaskUtilitiesTest, RejectsListTasksTotalSizeOutsideProtoRange) {
+  a2a::server::ListTasksResponse response;
+  response.total_size = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) + 1U;
+  const auto json = a2a::server::SerializeListTasksResponse(response);
+  EXPECT_FALSE(json.ok());
+  EXPECT_EQ(json.error().code(), a2a::core::ErrorCode::kSerialization);
 }
 
 }  // namespace

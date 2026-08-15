@@ -314,6 +314,18 @@ TEST(JsonRpcTransportUnitTest, ListTasksScannerHandlesResultPositionsAndWhitespa
       R"({"jsonrpc":"2.0","id":"req-\"123\\path","result" 	 : {"tasks":[{"id":"task-1"}]}})");
 }
 
+TEST(JsonRpcTransportUnitTest, ListTasksAcceptsEscapedResultMemberName) {
+  ExpectListTasksEnvelopeSucceeds(
+      R"({"jsonrpc":"2.0","id":"req-\"123\\path","re\u0073ult":{"tasks":[{"id":"task-1"}]}})");
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksRejectsNullBoundaryFields) {
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":null}})",
+                               ErrorCode::kSerialization);
+  ExpectListTasksEnvelopeFails(R"({"jsonrpc":"2.0","id":"req-123","result":{"tasks":[],"nextPageToken":null}})",
+                               ErrorCode::kSerialization);
+}
+
 TEST(JsonRpcTransportUnitTest, ListTasksScannerIgnoresNestedKeysAndStringContents) {
   ExpectListTasksEnvelopeSucceeds(
       R"({"jsonrpc":"2.0","id":"req-\"123\\path","note":"\"result\" { [ \\ ","nested":{"result":false},"result":{"tasks":[{"id":"task-1","metadata":{"result":"value"}}]}})");

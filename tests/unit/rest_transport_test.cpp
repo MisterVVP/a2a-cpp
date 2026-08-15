@@ -308,6 +308,21 @@ TEST(RestTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted) {
   EXPECT_EQ(executor.observed_page_size, a2a::server::kDefaultListTasksPageSize);
 }
 
+TEST(RestTransportTest, ListTasksResponseIncludesRequiredTopLevelFields) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+  a2a::server::RestRequest request;
+  request.method = "GET";
+  request.path = "/tasks";
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_NE(response.value().body.find(R"("tasks":)"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("pageSize":0)"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("totalSize":0)"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("nextPageToken":)"), std::string::npos);
+}
+
 TEST(RestTransportTest, ListTasksRejectsPageSizesOutsideProtocolRange) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);

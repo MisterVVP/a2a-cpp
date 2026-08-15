@@ -209,7 +209,8 @@ core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientRe
   }
 
   lf::a2a::v1::ListTasksResponse payload;
-  const auto parse = core::JsonToMessage(response.body, &payload, {.ignore_unknown_fields = true});
+  const auto parse = core::JsonToMessage(response.body, &payload,
+                                         {.ignore_unknown_fields = true, .reject_top_level_null_fields = true});
   if (!parse.ok()) {
     return parse.error().WithTransport("http").WithHttpStatus(response.status_code);
   }
