@@ -22,9 +22,9 @@ constexpr std::string_view kPageMetadataPrefix = R"(],"pageSize":50,"totalSize":
 constexpr std::string_view kEnvelopeSuffix = "}}";
 constexpr std::size_t kReserveSlackBytes = 32U;
 constexpr std::int64_t kOneTask = 1;
-constexpr std::int64_t kTypicalTaskCount = 20;
-constexpr std::int64_t kLargeTaskCount = 200;
-constexpr std::int64_t kVeryLargeTaskCount = 2000;
+constexpr std::int64_t kTypicalTaskCount = 200;
+constexpr std::int64_t kLargeTaskCount = 200000;
+constexpr std::int64_t kVeryLargeTaskCount = 20000000;
 
 std::string BuildListTasksEnvelope(std::size_t task_count) {
   const std::size_t separator_count = task_count > 0U ? task_count - 1U : 0U;
