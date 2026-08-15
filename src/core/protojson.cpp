@@ -7,6 +7,7 @@
 #include <google/protobuf/struct.pb.h>
 #include <google/protobuf/util/json_util.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstring>
@@ -103,12 +104,9 @@ constexpr std::size_t kMaximumTrackedJsonDepth = 128U;
       value.kind_case() != google::protobuf::Value::kListValue) {
     return false;
   }
-  for (const auto& element : value.list_value().values()) {
-    if (element.kind_case() == google::protobuf::Value::kNullValue) {
-      return true;
-    }
-  }
-  return false;
+  return std::ranges::any_of(value.list_value().values(), [](const auto& element) {
+    return element.kind_case() == google::protobuf::Value::kNullValue;
+  });
 }
 
 [[nodiscard]] Error BuildNullFieldError(std::string_view name, bool repeated_element) {

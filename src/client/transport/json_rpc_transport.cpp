@@ -191,7 +191,11 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
   validation_body.append(prefix);
   validation_body.append(kEmptyJsonObject);
   validation_body.append(suffix);
-  const HttpClientResponse validation_response{.status_code = response.status_code, .body = std::move(validation_body)};
+  const HttpClientResponse validation_response{
+      .status_code = response.status_code,
+      .headers = {},
+      .body = std::move(validation_body),
+  };
   const auto validated = ParseResponseResult(validation_response, expected_id);
   if (!validated.ok()) {
     return validated.error();
