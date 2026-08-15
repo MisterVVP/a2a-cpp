@@ -38,6 +38,9 @@ constexpr int kHttpServerError = 500;
 constexpr int kHttpBadGateway = 502;
 constexpr std::chrono::milliseconds kCustomTimeout{1200};
 constexpr std::string_view kExpectedListTaskId = "task-1";
+constexpr std::string_view kJsonRpcTransportName = "jsonrpc";
+constexpr std::string_view kMalformedEscapedListTasksResult =
+    R"({"jsonrpc":"2.0","id":"req-123","re\u0073ult":{"tasks":[3]}})";
 
 ResolvedInterface MakeResolvedJsonRpc();
 
@@ -317,6 +320,25 @@ TEST(JsonRpcTransportUnitTest, ListTasksScannerHandlesResultPositionsAndWhitespa
 TEST(JsonRpcTransportUnitTest, ListTasksAcceptsEscapedResultMemberName) {
   ExpectListTasksEnvelopeSucceeds(
       R"({"jsonrpc":"2.0","id":"req-\"123\\path","re\u0073ult":{"tasks":[{"id":"task-1"}]}})");
+}
+
+TEST(JsonRpcTransportUnitTest, ListTasksFallbackParseErrorPreservesMetadata) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{
+            .status_code = kHttpOk, .headers = {}, .body = std::string(kMalformedEscapedListTasksResult)};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({});
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
+  ASSERT_TRUE(response.error().transport().has_value());
+  ASSERT_TRUE(response.error().http_status().has_value());
+  EXPECT_EQ(*response.error().transport(), kJsonRpcTransportName);
+  EXPECT_EQ(*response.error().http_status(), kHttpOk);
 }
 
 TEST(JsonRpcTransportUnitTest, ListTasksRejectsNullBoundaryFields) {

@@ -16,6 +16,11 @@
 namespace a2a::server {
 namespace {
 
+constexpr std::string_view kEmptyTasksJsonMember = R"("tasks":[])";
+constexpr std::string_view kZeroPageSizeJsonMember = R"("pageSize":0)";
+constexpr std::string_view kZeroTotalSizeJsonMember = R"("totalSize":0)";
+constexpr std::string_view kEmptyNextPageTokenJsonMember = R"("nextPageToken":"")";
+
 bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf::Timestamp& cutoff) {
   if (!task.status().has_timestamp()) {
     return false;
@@ -111,16 +116,16 @@ core::Result<std::string> SerializeListTasksResponse(const ListTasksResponse& re
     missing_fields.append(field);
   };
   if (response.tasks.empty()) {
-    append_field(R"("tasks":[])");
+    append_field(kEmptyTasksJsonMember);
   }
   if (response.page_size == 0U) {
-    append_field(R"("pageSize":0)");
+    append_field(kZeroPageSizeJsonMember);
   }
   if (response.total_size == 0U) {
-    append_field(R"("totalSize":0)");
+    append_field(kZeroTotalSizeJsonMember);
   }
   if (response.next_page_token.empty()) {
-    append_field(R"("nextPageToken":"")");
+    append_field(kEmptyNextPageTokenJsonMember);
   }
   if (missing_fields.empty()) {
     return json;

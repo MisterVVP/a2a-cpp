@@ -180,7 +180,7 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
     const auto parsed = core::JsonToMessage(result_json.value(), &decoded_result,
                                             {.ignore_unknown_fields = true, .reject_top_level_null_fields = true});
     if (!parsed.ok()) {
-      return parsed.error();
+      return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
     }
     return decoded_result;
   }
