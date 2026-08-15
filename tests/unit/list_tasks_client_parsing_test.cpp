@@ -84,7 +84,7 @@ std::string WrapJsonRpcResult(std::string_view payload) {
 std::unique_ptr<ClientTransport> MakeTransport(ClientWireFormat format, std::string response_body) {
   auto requester = [response_body =
                         std::move(response_body)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-    return HttpClientResponse{.status_code = kHttpOk, .body = response_body};
+    return HttpClientResponse{.status_code = kHttpOk, .headers = {}, .body = response_body};
   };
 
   if (format == ClientWireFormat::kHttpJson) {
@@ -93,6 +93,16 @@ std::unique_ptr<ClientTransport> MakeTransport(ClientWireFormat format, std::str
 
   return std::make_unique<JsonRpcTransport>(MakeResolvedInterface(format), std::move(requester),
                                             JsonRpcTransport::kDefaultTimeout, [] { return std::string(kRequestId); });
+}
+
+void ExpectTaskIdentifiers(const a2a::client::ListTasksResponse& response, std::size_t task_count) {
+  if (task_count == 0U) {
+    return;
+  }
+  EXPECT_EQ(response.tasks.front().id(), kFirstTaskId);
+  std::string expected_last_id(kTaskIdPrefix);
+  expected_last_id.append(std::to_string(task_count - 1U));
+  EXPECT_EQ(response.tasks.back().id(), expected_last_id);
 }
 
 void ExpectListTasksFixtureParses(ClientWireFormat format, std::size_t task_count) {
@@ -110,12 +120,7 @@ void ExpectListTasksFixtureParses(ClientWireFormat format, std::size_t task_coun
   ASSERT_EQ(response.value().tasks.size(), task_count);
   EXPECT_EQ(response.value().next_page_token, kNextPageToken);
 
-  if (task_count != 0U) {
-    EXPECT_EQ(response.value().tasks.front().id(), kFirstTaskId);
-    std::string expected_last_id(kTaskIdPrefix);
-    expected_last_id.append(std::to_string(task_count - 1U));
-    EXPECT_EQ(response.value().tasks.back().id(), expected_last_id);
-  }
+  ExpectTaskIdentifiers(response.value(), task_count);
 }
 
 TEST(ListTasksClientParsingTest, HttpJsonParsesBenchmarkSizedResponsesWithoutNetwork) {

@@ -523,6 +523,9 @@ TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("\"nextPageToken\":\"50\""), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("tasks":[])"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("pageSize":50)"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("totalSize":0)"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, ListTasksSuccessEnvelopeEscapesRequestId) {

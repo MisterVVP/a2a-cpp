@@ -3,7 +3,11 @@
 
 #include "a2a/core/protojson.h"
 
+#include <google/protobuf/struct.pb.h>
 #include <google/protobuf/util/json_util.h>
+
+#include <string_view>
+#include <utility>
 
 namespace a2a::core {
 
@@ -31,6 +35,30 @@ Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* mes
                            const ProtoJsonParseOptions& options) {
   if (message == nullptr) {
     return Error::Validation("ProtoJSON parse target cannot be null");
+  }
+
+  constexpr std::string_view kNullLiteral = "null";
+  if (options.reject_top_level_null_fields && json.find(kNullLiteral) != std::string_view::npos) {
+    google::protobuf::Struct object;
+    const auto object_status = google::protobuf::util::JsonStringToMessage(std::string(json), &object);
+    if (!object_status.ok()) {
+      return Error::Serialization(object_status.ToString());
+    }
+    const auto* descriptor = message->GetDescriptor();
+    for (const auto& [name, value] : object.fields()) {
+      if (value.kind_case() != google::protobuf::Value::kNullValue) {
+        continue;
+      }
+      const auto* field = descriptor->FindFieldByCamelcaseName(name);
+      if (field == nullptr) {
+        field = descriptor->FindFieldByName(name);
+      }
+      if (field != nullptr) {
+        std::string error_message = "ProtoJSON field must not be null: ";
+        error_message.append(name);
+        return Error::Serialization(std::move(error_message));
+      }
+    }
   }
 
   google::protobuf::util::JsonParseOptions parse_options;

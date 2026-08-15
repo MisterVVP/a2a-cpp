@@ -21,6 +21,7 @@ struct ProtoJsonWriteOptions {
 
 struct ProtoJsonParseOptions {
   bool ignore_unknown_fields = false;
+  bool reject_top_level_null_fields = false;
 };
 
 [[nodiscard]] Result<std::string> MessageToJson(const google::protobuf::Message& message,

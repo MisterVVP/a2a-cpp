@@ -86,7 +86,10 @@ TEST(JsonValueTest, RejectsMalformedMissingDuplicateAndEscapedMemberNames) {
 TEST(JsonValueTest, ReturnsRangeWithoutValidatingNestedCompositeGrammar) {
   for (const auto& test_case : kStructurallyBalancedInvalidNestedCases) {
     const auto range = a2a::core::json::FindTopLevelObjectMemberValue(test_case.document, kTarget);
-    ASSERT_TRUE(range.has_value()) << test_case.document;
+    if (!range.has_value()) {
+      ADD_FAILURE() << test_case.document;
+      continue;
+    }
     const auto value_range = *range;
     EXPECT_EQ(test_case.document.substr(value_range.begin, value_range.end - value_range.begin), test_case.expected);
   }
