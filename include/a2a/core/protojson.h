@@ -23,7 +23,7 @@ struct ProtoJsonParseOptions {
   bool ignore_unknown_fields = false;
   // Also rejects null elements in top-level repeated message fields.
   bool reject_top_level_null_fields = false;
-  // Rejects repeated top-level JSON members recognized by the target message.
+  // Rejects duplicate JSON members in the target message and nested message values.
   bool reject_duplicate_top_level_fields = false;
 };
 
