@@ -208,43 +208,20 @@ core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientRe
     return BuildHttpError(core::http::kMethodGet, endpoint, response);
   }
 
-  google::protobuf::Struct payload;
-  const auto parse = core::JsonToMessage(response.body, &payload, {.ignore_unknown_fields = true});
+  lf::a2a::v1::ListTasksResponse payload;
+  const auto parse = core::JsonToMessage(
+      response.body, &payload,
+      {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
   if (!parse.ok()) {
     return parse.error().WithTransport("http").WithHttpStatus(response.status_code);
   }
 
   ListTasksResponse parsed;
-  const auto tasks_it = payload.fields().find("tasks");
-  if (tasks_it != payload.fields().end()) {
-    if (!tasks_it->second.has_list_value()) {
-      return core::Error::Serialization("ListTasks response field 'tasks' must be an array")
-          .WithTransport("http")
-          .WithHttpStatus(response.status_code);
-    }
-    for (const auto& task_value : tasks_it->second.list_value().values()) {
-      const auto task_json = core::MessageToJson(task_value);
-      if (!task_json.ok()) {
-        return task_json.error().WithTransport("http").WithHttpStatus(response.status_code);
-      }
-      lf::a2a::v1::Task task;
-      const auto task_parse = core::JsonToMessage(task_json.value(), &task, {.ignore_unknown_fields = true});
-      if (!task_parse.ok()) {
-        return task_parse.error().WithTransport("http").WithHttpStatus(response.status_code);
-      }
-      parsed.tasks.push_back(std::move(task));
-    }
+  parsed.tasks.reserve(static_cast<std::size_t>(payload.tasks_size()));
+  for (auto& task : *payload.mutable_tasks()) {
+    parsed.tasks.push_back(std::move(task));
   }
-
-  const auto next_token_it = payload.fields().find("nextPageToken");
-  if (next_token_it != payload.fields().end()) {
-    if (next_token_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
-      return core::Error::Serialization("ListTasks response field 'nextPageToken' must be a string")
-          .WithTransport("http")
-          .WithHttpStatus(response.status_code);
-    }
-    parsed.next_page_token = next_token_it->second.string_value();
-  }
+  parsed.next_page_token = std::move(*payload.mutable_next_page_token());
 
   return parsed;
 }

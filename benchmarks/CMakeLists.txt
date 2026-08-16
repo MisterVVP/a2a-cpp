@@ -23,8 +23,10 @@ endif()
 add_executable(a2a_benchmarks
   benchmark_main.cpp
   bench_agent_card.cpp
+  bench_client_list_tasks_parsing.cpp
   bench_http_adapter.cpp
   bench_json_rpc_transport.cpp
+  bench_json_value.cpp
   bench_protojson.cpp
   bench_push_notifications.cpp
   bench_rest_transport.cpp
@@ -36,6 +38,7 @@ add_executable(a2a_benchmarks
 
 target_link_libraries(a2a_benchmarks
   PRIVATE
+    a2a::client
     a2a::core
     a2a::server
     benchmark::benchmark

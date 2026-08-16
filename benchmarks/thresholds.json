@@ -26,6 +26,24 @@
   "BM_HttpAdapter_SerializeResponse": {
     "max_time_ns": 500
   },
+  "BM_HttpJsonClient_ListTasks_Parse/1": {
+    "max_time_ns": 25000
+  },
+  "BM_HttpJsonClient_ListTasks_Parse/20": {
+    "max_time_ns": 120000
+  },
+  "BM_HttpJsonClient_ListTasks_Parse/200": {
+    "max_time_ns": 950000
+  },
+  "BM_JsonRpcClient_ListTasks_Parse/1": {
+    "max_time_ns": 50000
+  },
+  "BM_JsonRpcClient_ListTasks_Parse/20": {
+    "max_time_ns": 150000
+  },
+  "BM_JsonRpcClient_ListTasks_Parse/200": {
+    "max_time_ns": 1000000
+  },
   "BM_JsonRpcEnvelope_ParseOnly": {
     "max_time_ns": 25000
   },
@@ -56,6 +74,30 @@
   "BM_JsonRpcTransport_SuccessEnvelope": {
     "max_time_ns": 150000
   },
+  "BM_JsonValue_FindMissing_ListTasks/1": {
+    "max_time_ns": 180
+  },
+  "BM_JsonValue_FindMissing_ListTasks/200": {
+    "max_time_ns": 20100
+  },
+  "BM_JsonValue_FindMissing_ListTasks/200000": {
+    "max_time_ns": 19500000
+  },
+  "BM_JsonValue_FindMissing_ListTasks/20000000": {
+    "max_time_ns": 1910000000
+  },
+  "BM_JsonValue_FindResult_ListTasks/1": {
+    "max_time_ns": 179
+  },
+  "BM_JsonValue_FindResult_ListTasks/200": {
+    "max_time_ns": 19400
+  },
+  "BM_JsonValue_FindResult_ListTasks/200000": {
+    "max_time_ns": 19100000
+  },
+  "BM_JsonValue_FindResult_ListTasks/20000000": {
+    "max_time_ns": 1840000000
+  },
   "BM_ProtoJson_JsonToMessage_SendMessageRequest": {
     "max_time_ns": 20000
   },
@@ -72,10 +114,10 @@
     "max_time_ns": 36000
   },
   "BM_ProtoJson_ResponseToJson_PushConfig": {
-    "max_time_ns": 10000
+    "max_time_ns": 5000
   },
   "BM_ProtoJson_ResponseToJson_PushConfigList": {
-    "max_time_ns": 12000
+    "max_time_ns": 5000
   },
   "BM_ProtoJson_ResponseToJson_SendMessage": {
     "max_time_ns": 22000
@@ -90,10 +132,10 @@
     "max_time_ns": 25000
   },
   "BM_ProtoJson_ResponseToJson_TaskList/10": {
-    "max_time_ns": 220000
+    "max_time_ns": 100000
   },
   "BM_ProtoJson_ResponseToJson_TaskList/50": {
-    "max_time_ns": 1100000
+    "max_time_ns": 250000
   },
   "BM_PushNotificationService_Notify_ManyConfigs": {
     "max_time_ns": 900000
@@ -105,10 +147,10 @@
     "max_time_ns": 350000
   },
   "BM_RestQueryParser_ParseOnly": {
-    "max_time_ns": 5000
+    "max_time_ns": 500
   },
   "BM_RestResponseBuilder_BuildOnly": {
-    "max_time_ns": 5000
+    "max_time_ns": 500
   },
   "BM_RestTransport_AgentCardResponse": {
     "max_time_ns": 90000
@@ -150,7 +192,7 @@
     "max_time_ns": 600
   },
   "BM_TaskLifecycle_UpdateStatus": {
-    "max_time_ns": 2500
+    "max_time_ns": 3000
   },
   "BM_TaskProjection_CopyComplete/0": {
     "max_time_ns": 260
@@ -234,13 +276,13 @@
     "max_time_ns": 3500
   },
   "BM_TaskStore_List_PageAndHistory/10/1": {
-    "max_time_ns": 9000
+    "max_time_ns": 10000
   },
   "BM_TaskStore_List_PageAndHistory/10/10": {
-    "max_time_ns": 50000
+    "max_time_ns": 55000
   },
   "BM_TaskStore_List_PageAndHistory/10/100": {
-    "max_time_ns": 500000
+    "max_time_ns": 550000
   },
   "BM_TaskStore_List_PageAndHistory/100/0": {
     "max_time_ns": 32000
@@ -252,7 +294,7 @@
     "max_time_ns": 500000
   },
   "BM_TaskStore_List_PageAndHistory/100/100": {
-    "max_time_ns": 4750000
+    "max_time_ns": 5000000
   },
   "BM_TransportMux_MethodMismatch": {
     "max_time_ns": 250

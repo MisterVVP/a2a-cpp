@@ -22,6 +22,7 @@ add_library(a2a_core STATIC
   core/error.cpp
   core/extensions.cpp
   core/http_utils.cpp
+  core/json_value.cpp
   core/protojson.cpp
   core/response_builders.cpp
   core/string_utils.cpp

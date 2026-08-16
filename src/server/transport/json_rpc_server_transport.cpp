@@ -50,6 +50,7 @@ constexpr int kJsonRpcInternalError = -32603;
 constexpr int kJsonRpcVersionNotSupported = -32009;
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
+constexpr std::size_t kJsonRpcSuccessEnvelopeOverhead = 38U;
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 constexpr std::string_view kFlatPayloadTypeError = "JSON value does not match the request field type";
@@ -613,36 +614,61 @@ core::Result<google::protobuf::Value> BuildJsonValueFromMessage(const google::pr
   return value;
 }
 
-core::Result<google::protobuf::Value> BuildListTasksResult(const ListTasksResponse& list_response) {
-  google::protobuf::Struct result;
-  auto* fields = result.mutable_fields();
-
-  google::protobuf::Value tasks_value;
-  auto* list = tasks_value.mutable_list_value();
-  for (const auto& task : list_response.tasks) {
-    const auto task_json_value = BuildJsonValueFromMessage(task);
-    if (!task_json_value.ok()) {
-      return task_json_value.error();
-    }
-    *list->add_values() = task_json_value.value();
+core::Result<std::string> BuildSuccessEnvelopeFromJson(const google::protobuf::Value& id,
+                                                       std::string_view result_json) {
+  const auto id_json = core::MessageToJson(id);
+  if (!id_json.ok()) {
+    return id_json.error();
   }
-  (*fields)["tasks"] = std::move(tasks_value);
+  std::string envelope;
+  envelope.reserve(id_json.value().size() + result_json.size() + kJsonRpcSuccessEnvelopeOverhead);
+  envelope.push_back('{');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kVersionMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kVersion);
+  envelope.push_back('"');
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kIdMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
+  envelope.append(id_json.value());
+  envelope.push_back(',');
+  envelope.push_back('"');
+  envelope.append(core::json_rpc::kResultMemberName);
+  envelope.push_back('"');
+  envelope.push_back(':');
+  envelope.append(result_json);
+  envelope.push_back('}');
+  return envelope;
+}
 
-  google::protobuf::Value page_size_value;
-  page_size_value.set_number_value(static_cast<double>(list_response.page_size));
-  (*fields)["pageSize"] = std::move(page_size_value);
-
-  google::protobuf::Value total_size_value;
-  total_size_value.set_number_value(static_cast<double>(list_response.total_size));
-  (*fields)["totalSize"] = std::move(total_size_value);
-
-  google::protobuf::Value token;
-  token.set_string_value(list_response.next_page_token);
-  (*fields)["nextPageToken"] = std::move(token);
-
-  google::protobuf::Value wrapper;
-  *wrapper.mutable_struct_value() = std::move(result);
-  return wrapper;
+core::Result<HttpServerResponse> BuildListTasksSuccessResponse(const DispatchResponse& dispatch,
+                                                               const google::protobuf::Value& id,
+                                                               const std::vector<std::string>& activated_extensions) {
+  const auto* payload = std::get_if<ListTasksResponse>(&dispatch.payload());
+  if (payload == nullptr) {
+    return InvalidJsonRpcResponsePayload(core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForListTasks);
+  }
+  const auto result_json = SerializeListTasksResponse(*payload);
+  if (!result_json.ok()) {
+    return result_json.error();
+  }
+  const auto body = BuildSuccessEnvelopeFromJson(id, result_json.value());
+  if (!body.ok()) {
+    return body.error();
+  }
+  auto response = HttpServerResponseBuilder()
+                      .WithStatus(core::http::kStatusOk)
+                      .WithJsonContentType()
+                      .WithA2aVersion()
+                      .WithActivatedExtensions(activated_extensions)
+                      .Build();
+  response.body = body.value();
+  return response;
 }
 
 int HttpStatusFromError(const core::Error& error) {
@@ -973,6 +999,17 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
         .Build();
   }
 
+  if (parsed.value().dispatch.operation == DispatcherOperation::kListTasks) {
+    const auto response =
+        BuildListTasksSuccessResponse(dispatch.value(), parsed.value().id.value(), activated_extensions);
+    if (!response.ok()) {
+      const auto error = response.error().WithTransport("jsonrpc");
+      return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), parsed.value().id, error,
+                                            HttpStatusFromError(error));
+    }
+    return response.value();
+  }
+
   const auto result = SerializeDispatchResult(parsed.value().dispatch, dispatch.value());
   if (!result.ok()) {
     const auto tagged = result.error().WithTransport("jsonrpc");
@@ -1056,7 +1093,16 @@ core::Result<google::protobuf::Value> JsonRpcServerTransport::SerializeDispatchR
         return InvalidJsonRpcResponsePayload(
             core::protocol_error_messages::kJsonRpcResponsePayloadMismatchForListTasks);
       }
-      return BuildListTasksResult(*payload);
+      const auto json = SerializeListTasksResponse(*payload);
+      if (!json.ok()) {
+        return json.error();
+      }
+      google::protobuf::Value value;
+      const auto parsed = core::JsonToMessage(json.value(), &value);
+      if (!parsed.ok()) {
+        return parsed.error();
+      }
+      return value;
     }
     case DispatcherOperation::kCreateTaskPushNotificationConfig:
     case DispatcherOperation::kGetTaskPushNotificationConfig: {

@@ -8,11 +8,18 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdint>
+#include <limits>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protojson.h"
 
 namespace a2a::server {
 namespace {
+
+constexpr std::string_view kEmptyTasksJsonMember = R"("tasks":[])";
+constexpr std::string_view kZeroPageSizeJsonMember = R"("pageSize":0)";
+constexpr std::string_view kZeroTotalSizeJsonMember = R"("totalSize":0)";
+constexpr std::string_view kEmptyNextPageTokenJsonMember = R"("nextPageToken":"")";
 
 bool HasStatusAfterCutoff(const lf::a2a::v1::Task& task, const google::protobuf::Timestamp& cutoff) {
   if (!task.status().has_timestamp()) {
@@ -76,6 +83,58 @@ core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size) 
     return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
   }
   return {};
+}
+
+core::Result<std::string> SerializeListTasksResponse(const ListTasksResponse& response) {
+  constexpr std::size_t kClosingBraceSize = 1U;
+  constexpr auto kMaximumProtoSize = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+  if (response.tasks.size() > kMaximumProtoSize || response.page_size > kMaximumProtoSize ||
+      response.total_size > kMaximumProtoSize) {
+    return core::Error::Serialization("ListTasksResponse value exceeds the protobuf int32 range");
+  }
+
+  lf::a2a::v1::ListTasksResponse payload;
+  payload.mutable_tasks()->Reserve(static_cast<int>(response.tasks.size()));
+  for (const auto& task : response.tasks) {
+    *payload.add_tasks() = task;
+  }
+  payload.set_page_size(static_cast<std::int32_t>(response.page_size));
+  payload.set_total_size(static_cast<std::int32_t>(response.total_size));
+  payload.set_next_page_token(response.next_page_token);
+  auto json = core::MessageToJson(payload);
+  if (!json.ok()) {
+    return json.error();
+  }
+
+  // Only zero-valued fields are absent. Insert those top-level members rather
+  // than enabling protobuf's recursive default-field printing.
+  std::string missing_fields;
+  const auto append_field = [&missing_fields](std::string_view field) {
+    if (!missing_fields.empty()) {
+      missing_fields.push_back(',');
+    }
+    missing_fields.append(field);
+  };
+  if (response.tasks.empty()) {
+    append_field(kEmptyTasksJsonMember);
+  }
+  if (response.page_size == 0U) {
+    append_field(kZeroPageSizeJsonMember);
+  }
+  if (response.total_size == 0U) {
+    append_field(kZeroTotalSizeJsonMember);
+  }
+  if (response.next_page_token.empty()) {
+    append_field(kEmptyNextPageTokenJsonMember);
+  }
+  if (missing_fields.empty()) {
+    return json;
+  }
+  if (json.value().size() > kClosingBraceSize + 1U) {
+    missing_fields.insert(missing_fields.begin(), ',');
+  }
+  json.value().insert(json.value().size() - kClosingBraceSize, missing_fields);
+  return json;
 }
 
 void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts) {

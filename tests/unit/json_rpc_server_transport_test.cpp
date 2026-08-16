@@ -31,6 +31,7 @@ constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
 constexpr std::string_view kHeartbeatSubscribeRequestBody =
     R"({"jsonrpc":"2.0","id":"req-sub-heartbeat","method":"a2a.subscribeToTask","params":{"id":"task-sub"}})";
 constexpr std::string_view kTenantId = "tenant-1";
+constexpr std::string_view kEscapedRequestId = "request-\"line\\break";
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -522,6 +523,29 @@ TEST(JsonRpcServerTransportTest, ListTasksUsesDefaultPageSizeWhenOmitted) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_NE(response.value().body.find("\"nextPageToken\":\"50\""), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("tasks":[])"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("pageSize":50)"), std::string::npos);
+  EXPECT_NE(response.value().body.find(R"("totalSize":0)"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, ListTasksSuccessEnvelopeEscapesRequestId) {
+  JsonRpcEchoExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
+
+  const auto response =
+      server.Handle({.method = "POST",
+                     .target = "/rpc",
+                     .headers = {{"A2A-Version", "1.0"}},
+                     .body = R"({"jsonrpc":"2.0","id":"request-\"line\\break","method":"a2a.listTasks","params":{}})",
+                     .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  google::protobuf::Struct envelope;
+  const auto parsed = a2a::core::JsonToMessage(response.value().body, &envelope);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message();
+  EXPECT_EQ(envelope.fields().at("id").string_value(), kEscapedRequestId);
+  EXPECT_TRUE(envelope.fields().at("result").has_struct_value());
 }
 
 TEST(JsonRpcServerTransportTest, UnknownRouteUsesMethodNotFoundCode) {

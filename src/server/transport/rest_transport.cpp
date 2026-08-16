@@ -274,39 +274,6 @@ int ToHttpStatus(const core::Error& error) {
   return core::http::kStatusInternalServerError;
 }
 
-core::Result<std::string> BuildListTasksJson(const ListTasksResponse& response) {
-  google::protobuf::Struct payload;
-  auto* payload_fields = payload.mutable_fields();
-
-  google::protobuf::Value tasks_value;
-  auto* list_value = tasks_value.mutable_list_value();
-  for (const auto& task : response.tasks) {
-    const auto task_json = core::MessageToJson(task);
-    if (!task_json.ok()) {
-      return task_json.error();
-    }
-
-    google::protobuf::Struct task_struct;
-    const auto parsed_task_json = core::JsonToMessage(task_json.value(), &task_struct);
-    if (!parsed_task_json.ok()) {
-      return parsed_task_json.error();
-    }
-
-    google::protobuf::Value task_value;
-    *task_value.mutable_struct_value() = std::move(task_struct);
-    *list_value->add_values() = std::move(task_value);
-  }
-  (*payload_fields)["tasks"] = std::move(tasks_value);
-
-  if (!response.next_page_token.empty()) {
-    google::protobuf::Value token_value;
-    token_value.set_string_value(response.next_page_token);
-    (*payload_fields)["nextPageToken"] = std::move(token_value);
-  }
-
-  return core::MessageToJson(payload);
-}
-
 core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& message) {
   const auto body = core::MessageToJson(message);
   if (!body.ok()) {
@@ -636,7 +603,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       if (payload == nullptr) {
         return InternalResponsePayloadMismatch(core::protocol_error_messages::kResponsePayloadMismatchForListTasks);
       }
-      const auto body = BuildListTasksJson(*payload);
+      const auto body = SerializeListTasksResponse(*payload);
       if (!body.ok()) {
         return body.error();
       }
