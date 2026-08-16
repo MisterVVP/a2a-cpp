@@ -121,7 +121,7 @@ The repository includes an overlay port at `vcpkg-overlay-ports/a2a-cpp`. A down
 ```json
 {
   "name": "my-a2a-app",
-  "version-string": "0.4.0",
+  "version-string": "0.4.1",
   "dependencies": [
     "a2a-cpp"
   ]
@@ -158,7 +158,7 @@ The overlay port exposes a `postgres-store` feature. Enable it in manifest mode 
 ```json
 {
   "name": "my-a2a-app",
-  "version-string": "0.4.0",
+  "version-string": "0.4.1",
   "dependencies": [
     {
       "name": "a2a-cpp",

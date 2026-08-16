@@ -120,7 +120,7 @@ set(A2A_ENABLE_POSTGRES_STORE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   a2a_cpp
   GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
-  GIT_TAG v0.4.0
+  GIT_TAG v0.4.1
 )
 FetchContent_MakeAvailable(a2a_cpp)
 

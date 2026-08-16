@@ -73,6 +73,22 @@ void ExpectListTasksEnvelopeFails(std::string body, ErrorCode expected_code) {
   EXPECT_EQ(response.error().code(), expected_code);
 }
 
+void ExpectListTasksFallbackErrorPreservesMetadata(std::string_view payload) {
+  auto transport = std::make_unique<JsonRpcTransport>(
+      MakeResolvedJsonRpc(),
+      [body = std::string(payload)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
+        return HttpClientResponse{.status_code = kHttpOk, .headers = {}, .body = body};
+      },
+      JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
+
+  A2AClient client(std::move(transport));
+  const auto response = client.ListTasks({});
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
+  EXPECT_EQ(response.error().transport().value_or(""), kJsonRpcTransportName);
+  EXPECT_EQ(response.error().http_status().value_or(0), kHttpOk);
+}
+
 ResolvedInterface MakeResolvedJsonRpc() {
   ResolvedInterface resolved;
   resolved.transport = PreferredTransport::kJsonRpc;
@@ -326,21 +342,7 @@ TEST(JsonRpcTransportUnitTest, ListTasksAcceptsEscapedResultMemberName) {
 
 TEST(JsonRpcTransportUnitTest, ListTasksFallbackErrorsPreserveMetadata) {
   for (const std::string_view payload : kEscapedListTasksErrorPayloads) {
-    auto transport = std::make_unique<JsonRpcTransport>(
-        MakeResolvedJsonRpc(),
-        [body = std::string(payload)](const HttpRequest&) -> a2a::core::Result<HttpClientResponse> {
-          return HttpClientResponse{.status_code = kHttpOk, .headers = {}, .body = body};
-        },
-        JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
-
-    A2AClient client(std::move(transport));
-    const auto response = client.ListTasks({});
-    ASSERT_FALSE(response.ok());
-    EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
-    ASSERT_TRUE(response.error().transport().has_value());
-    ASSERT_TRUE(response.error().http_status().has_value());
-    EXPECT_EQ(*response.error().transport(), kJsonRpcTransportName);
-    EXPECT_EQ(*response.error().http_status(), kHttpOk);
+    ExpectListTasksFallbackErrorPreservesMetadata(payload);
   }
 }
 

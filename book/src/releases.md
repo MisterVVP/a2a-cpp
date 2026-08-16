@@ -4,54 +4,70 @@ This documentation is intended to stay version-aware without embedding a release
 
 ## Current documented release
 
-The current documented release is **v0.4.0** and is recommended for new consumers.
+The current documented release is **v0.4.1** and is recommended for new consumers.
 
-### Highlights since `v0.3.0`
+### Highlights since `v0.4.0`
 
-- Configurable PostgreSQL connection pool capacity through
-  `PostgresStoreOptions::connection_pool_size`, with the backward-compatible
-  default of `4`.
-- Shared configured PostgreSQL pools for task and push-notification stores
-  created through `CreateStoreBundle()`.
-- PostgreSQL operation-phase diagnostics, pool-size metadata, median
-  aggregates, and query-plan evidence in performance reports.
-- Removal of executor-wide request serialization that limited independent
-  concurrent operations.
-- Bounded protocol-facing `ListTasks` pagination across HTTP+JSON, JSON-RPC,
-  and gRPC, with a default page size of `50` and a maximum of `100`.
-- Optimized in-memory task listing, pagination, filtering, artifact exclusion,
-  and history projection, backed by expanded benchmark thresholds.
-- Interruptible gRPC stream cancellation watching, eliminating the previous
-  approximately 50 ms normal stream-completion floor.
-- Deterministic follow-up and decomposed push-notification performance
-  scenarios with clearer workload attribution.
-- Expanded normal and PostgreSQL-tail performance matrices, reports, tests,
-  and parallel CI execution.
-- Centralized HTTP server response construction and reusable server-side
-  `A2A-Version` header validation.
-- Corrected benchmark-runner module paths and refreshed README, installation,
-  storage, pagination, and performance documentation.
+- Optimized PostgreSQL push-configuration create, get, list, and cleanup paths,
+  reducing redundant task lookups, commands, and connection acquisitions while
+  preserving authoritative task validation and concurrent-deletion safety.
+- Added optimistic revision-aware task persistence to the built-in stores so
+  the example/TCK `SendMessage` path can persist complete task mutations with
+  fewer PostgreSQL round trips while preserving concurrent history updates.
+- Added HTTP/1.1 persistent connections and connection-scoped request buffering,
+  eliminating per-request connection churn for ordinary unary HTTP+JSON and
+  JSON-RPC operations.
+- Optimized REST query parsing and reorganized transport implementation sources
+  under dedicated client/server transport directories without changing public
+  include paths.
+- Optimized HTTP+JSON and JSON-RPC `ListTasks` parsing and serialization through
+  typed protobuf JSON paths, with focused parser/scanner benchmarks and CI
+  thresholds.
+- Hardened typed `ListTasks` compatibility validation for null values, duplicate
+  fields, protobuf-name aliases, nested duplicate message members, escaped
+  JSON-RPC result keys, HTTP-status classification, and protobuf integer ranges.
+- Added component-level transport benchmarks for JSON-RPC envelopes, ProtoJSON,
+  REST query parsing, response construction, and `ListTasks` client parsing.
+- Isolated performance fixtures from measured operations and restructured
+  reports around concrete workload coordinates rather than mixed scenario
+  averages.
+- Expanded PostgreSQL command-level diagnostics and documented storage,
+  performance, and transport behavior.
+- Added repository-wide Conventional Commit validation in CI.
 
 ### Compatibility notes
 
-There are no intentional public API removals in `v0.4.0`.
+There are no intentional public API removals in `v0.4.1`.
 
-Protocol-facing `ListTasks` requests are now bounded consistently across
-transports. An omitted page size returns at most `50` tasks, explicit values
-must be between `1` and `100`, and callers must follow `next_page_token` to
-retrieve additional pages. Internal store calls may still use the documented
-unbounded sentinel where appropriate.
+The transport source-tree reorganization is internal; installed public include
+paths and exported CMake targets remain unchanged.
 
-The PostgreSQL connection pool still defaults to `4`, so existing applications
-retain their previous capacity unless they explicitly configure a different
-value. Applications should size the pool for expected concurrent database
-operations while respecting PostgreSQL connection limits.
+HTTP+JSON and JSON-RPC unary traffic can now reuse HTTP/1.1 connections. Explicit
+`Connection: close` remains supported, and the existing streaming/SSE behavior
+is preserved.
 
-Built-in HTTP+JSON and JSON-RPC SSE clients continue to require libcurl support.
-Custom HTTP requester and streaming requester implementations remain supported
-for consumers that need alternative transport stacks.
+Valid `ListTasks` responses remain compatible across HTTP+JSON and JSON-RPC.
+Malformed or ambiguous JSON that protobuf 3.21 could otherwise accept with
+last-value-wins or null-as-unset behavior is now rejected consistently.
 
-## Previous release: `v0.3.0`
+PostgreSQL users should allow SDK-managed schemas to migrate and validate the
+task-aware push-configuration helpers. Externally managed schemas should follow
+the storage documentation for the required schema objects and privileges.
+
+## Previous release: `v0.4.0`
+
+`v0.4.0` focused on configurable PostgreSQL pool sizing, bounded protocol-facing
+`ListTasks` pagination, optimized in-memory task listing, interruptible gRPC
+stream cancellation, expanded performance validation, and centralized HTTP
+server response construction.
+
+Its important compatibility changes remain in effect:
+
+- omitted protocol-facing `ListTasks.page_size` defaults to `50`;
+- explicit page sizes must be between `1` and `100`;
+- the PostgreSQL connection pool defaults to `4` unless configured otherwise.
+
+## Earlier release: `v0.3.0`
 
 `v0.3.0` introduced production-ready SSE streaming for HTTP+JSON and JSON-RPC,
 end-to-end streaming and subscriptions across all supported transports,
@@ -67,12 +83,12 @@ Its TCK validation snapshot was:
 
 ## Versioning guidance
 
-- Pin CMake `FetchContent` integrations to a release tag such as `v0.4.0` or to
+- Pin CMake `FetchContent` integrations to a release tag such as `v0.4.1` or to
   a reviewed commit.
 - Prefer `find_package(a2a_cpp CONFIG REQUIRED)` for installed SDK packages.
 - Keep generated protobuf headers and linked SDK libraries from the same
   installed package or build tree.
-- Review release notes before upgrading between minor versions.
+- Review release notes before upgrading between versions.
 
 ## Documentation policy
 
