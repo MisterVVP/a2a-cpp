@@ -20,6 +20,7 @@ namespace {
 
 constexpr std::string_view kNullLiteral = "null";
 constexpr std::size_t kMaximumTrackedJsonDepth = 128U;
+constexpr std::size_t kMaximumTrackedProtoFields = 64U;
 
 [[nodiscard]] bool SkipJsonString(const char*& current, const char* end) noexcept {
   if (current == end || *current != '"') {
@@ -93,9 +94,92 @@ constexpr std::size_t kMaximumTrackedJsonDepth = 128U;
 }
 
 [[nodiscard]] const google::protobuf::FieldDescriptor* FindJsonField(const google::protobuf::Descriptor& descriptor,
-                                                                     const std::string& name) {
-  const auto* field = descriptor.FindFieldByCamelcaseName(name);
-  return field != nullptr ? field : descriptor.FindFieldByName(name);
+                                                                     std::string_view name) {
+  for (int index = 0; index < descriptor.field_count(); ++index) {
+    const auto* field = descriptor.field(index);
+    if (field->json_name() == name || field->name() == name) {
+      return field;
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] bool IsDuplicateKnownField(std::string_view name, const google::protobuf::Descriptor& descriptor,
+                                         std::array<std::string_view, kMaximumTrackedProtoFields>* seen_fields,
+                                         std::size_t* seen_field_count) {
+  if (FindJsonField(descriptor, name) == nullptr) {
+    return false;
+  }
+  if (std::ranges::find(*seen_fields, name) != seen_fields->end()) {
+    return true;
+  }
+  if (*seen_field_count == seen_fields->size()) {
+    return true;
+  }
+  (*seen_fields)[(*seen_field_count)++] = name;
+  return false;
+}
+
+[[nodiscard]] bool ScanTopLevelKey(const char*& current, const char* end, bool is_top_level_key,
+                                   const google::protobuf::Descriptor& descriptor,
+                                   std::array<std::string_view, kMaximumTrackedProtoFields>* seen_fields,
+                                   std::size_t* seen_field_count) {
+  const char* const key_begin = current + 1;
+  if (!SkipJsonString(current, end)) {
+    return true;
+  }
+  if (!is_top_level_key) {
+    return false;
+  }
+
+  const char* const key_end = current - 1;
+  const auto key_size = static_cast<std::size_t>(key_end - key_begin);
+  if (std::memchr(key_begin, '\\', key_size) != nullptr) {
+    return true;
+  }
+  return IsDuplicateKnownField(std::string_view(key_begin, key_size), descriptor, seen_fields, seen_field_count);
+}
+
+[[nodiscard]] bool HasDuplicateTopLevelFieldCandidate(std::string_view json,
+                                                      const google::protobuf::Descriptor& descriptor) {
+  std::array<std::string_view, kMaximumTrackedProtoFields> seen_fields{};
+  std::size_t depth = 0U;
+  std::size_t seen_field_count = 0U;
+  bool expect_top_level_key = false;
+  const char* current = json.data();
+  const char* const end = current + json.size();
+
+  while (current != end) {
+    if (*current == '"') {
+      const bool is_top_level_key = depth == 1U && expect_top_level_key;
+      expect_top_level_key = false;
+      if (ScanTopLevelKey(current, end, is_top_level_key, descriptor, &seen_fields, &seen_field_count)) {
+        return true;
+      }
+      continue;
+    }
+    if (*current == '{' || *current == '[') {
+      ++depth;
+      if (depth == 1U && current[0] == '{') {
+        expect_top_level_key = true;
+      }
+      ++current;
+      continue;
+    }
+    if (*current == '}' || *current == ']') {
+      if (depth == 0U) {
+        return true;
+      }
+      --depth;
+      ++current;
+      continue;
+    }
+    if (depth == 1U && *current == ',') {
+      expect_top_level_key = true;
+    }
+    ++current;
+  }
+  return false;
 }
 
 [[nodiscard]] bool RepeatedMessageContainsNull(const google::protobuf::FieldDescriptor& field,
@@ -116,8 +200,13 @@ constexpr std::size_t kMaximumTrackedJsonDepth = 128U;
   return Error::Serialization(std::move(message));
 }
 
-Result<void> ValidateRejectedNullFields(std::string_view json, const google::protobuf::Message& message) {
-  if (!HasBoundaryNullCandidate(json)) {
+Result<void> ValidateTopLevelFields(std::string_view json, const google::protobuf::Message& message,
+                                    const ProtoJsonParseOptions& options) {
+  const auto& descriptor = *message.GetDescriptor();
+  const bool null_candidate = options.reject_top_level_null_fields && HasBoundaryNullCandidate(json);
+  const bool duplicate_candidate =
+      options.reject_duplicate_top_level_fields && HasDuplicateTopLevelFieldCandidate(json, descriptor);
+  if (!null_candidate && !duplicate_candidate) {
     return {};
   }
 
@@ -127,7 +216,9 @@ Result<void> ValidateRejectedNullFields(std::string_view json, const google::pro
     return Error::Serialization(object_status.ToString());
   }
 
-  const auto& descriptor = *message.GetDescriptor();
+  if (!options.reject_top_level_null_fields) {
+    return {};
+  }
   for (const auto& [name, value] : object.fields()) {
     const auto* field = FindJsonField(descriptor, name);
     if (field == nullptr) {
@@ -171,10 +262,10 @@ Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* mes
     return Error::Validation("ProtoJSON parse target cannot be null");
   }
 
-  if (options.reject_top_level_null_fields) {
-    const auto null_validation = ValidateRejectedNullFields(json, *message);
-    if (!null_validation.ok()) {
-      return null_validation.error();
+  if (options.reject_top_level_null_fields || options.reject_duplicate_top_level_fields) {
+    const auto top_level_validation = ValidateTopLevelFields(json, *message, options);
+    if (!top_level_validation.ok()) {
+      return top_level_validation.error();
     }
   }
 

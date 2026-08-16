@@ -170,7 +170,9 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
       return status.error();
     }
     if (result.value().kind_case() != google::protobuf::Value::kStructValue) {
-      return core::Error::Serialization("ListTasks JSON-RPC result must be an object");
+      return core::Error::Serialization("ListTasks JSON-RPC result must be an object")
+          .WithTransport("jsonrpc")
+          .WithHttpStatus(response.status_code);
     }
     const auto result_json = core::MessageToJson(result.value());
     if (!result_json.ok()) {
@@ -178,7 +180,9 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
     }
     lf::a2a::v1::ListTasksResponse decoded_result;
     const auto parsed = core::JsonToMessage(result_json.value(), &decoded_result,
-                                            {.ignore_unknown_fields = true, .reject_top_level_null_fields = true});
+                                            {.ignore_unknown_fields = true,
+                                             .reject_top_level_null_fields = true,
+                                             .reject_duplicate_top_level_fields = true});
     if (!parsed.ok()) {
       return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
     }
@@ -206,8 +210,9 @@ core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClie
   }
   lf::a2a::v1::ListTasksResponse result;
   const std::string_view result_json = response_body.substr(range->begin, range->end - range->begin);
-  const auto parsed =
-      core::JsonToMessage(result_json, &result, {.ignore_unknown_fields = true, .reject_top_level_null_fields = true});
+  const auto parsed = core::JsonToMessage(
+      result_json, &result,
+      {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
   if (!parsed.ok()) {
     return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
   }

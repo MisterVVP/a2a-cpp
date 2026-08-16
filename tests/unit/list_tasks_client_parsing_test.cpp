@@ -14,6 +14,7 @@
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
+#include "a2a/core/error.h"
 #include "a2a/core/protojson.h"
 
 namespace {
@@ -25,6 +26,7 @@ using a2a::client::HttpRequest;
 using a2a::client::JsonRpcTransport;
 using a2a::client::PreferredTransport;
 using a2a::client::ResolvedInterface;
+using a2a::core::ErrorCode;
 
 constexpr int kHttpOk = 200;
 constexpr std::string_view kRestUrl = "https://agent.example.test/a2a";
@@ -40,6 +42,10 @@ constexpr std::size_t kSingleTaskCount = 1U;
 constexpr std::size_t kTypicalTaskCount = 20U;
 constexpr std::size_t kLargeTaskCount = 200U;
 constexpr std::array kTaskCounts{kEmptyTaskCount, kSingleTaskCount, kTypicalTaskCount, kLargeTaskCount};
+constexpr std::array<std::string_view, 2> kDuplicateFieldPayloads = {
+    R"({"tasks":[],"tasks":[{"id":"unexpected"}]})",
+    R"({"tasks":[],"nextPageToken":"first","nextPageToken":"second"})",
+};
 
 enum class ClientWireFormat : std::uint8_t {
   kHttpJson,
@@ -123,6 +129,18 @@ void ExpectListTasksFixtureParses(ClientWireFormat format, std::size_t task_coun
   ExpectTaskIdentifiers(response.value(), task_count);
 }
 
+void ExpectListTasksPayloadRejected(ClientWireFormat format, std::string_view payload) {
+  std::string response_body(payload);
+  if (format == ClientWireFormat::kJsonRpc) {
+    response_body = WrapJsonRpcResult(response_body);
+  }
+
+  auto transport = MakeTransport(format, std::move(response_body));
+  const auto response = transport->ListTasks({}, {});
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kSerialization);
+}
+
 TEST(ListTasksClientParsingTest, HttpJsonParsesBenchmarkSizedResponsesWithoutNetwork) {
   for (const std::size_t task_count : kTaskCounts) {
     ExpectListTasksFixtureParses(ClientWireFormat::kHttpJson, task_count);
@@ -132,6 +150,13 @@ TEST(ListTasksClientParsingTest, HttpJsonParsesBenchmarkSizedResponsesWithoutNet
 TEST(ListTasksClientParsingTest, JsonRpcParsesBenchmarkSizedResponsesWithoutNetwork) {
   for (const std::size_t task_count : kTaskCounts) {
     ExpectListTasksFixtureParses(ClientWireFormat::kJsonRpc, task_count);
+  }
+}
+
+TEST(ListTasksClientParsingTest, RejectsDuplicateKnownFieldsForBothJsonTransports) {
+  for (const std::string_view payload : kDuplicateFieldPayloads) {
+    ExpectListTasksPayloadRejected(ClientWireFormat::kHttpJson, payload);
+    ExpectListTasksPayloadRejected(ClientWireFormat::kJsonRpc, payload);
   }
 }
 
