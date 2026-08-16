@@ -1,6 +1,6 @@
 PROJECT_NAME           = "a2a-cpp"
 PROJECT_BRIEF          = "C++20 SDK implementing the Agent2Agent (A2A) protocol"
-PROJECT_NUMBER         = "0.1.0"
+PROJECT_NUMBER         = "0.4.1"
 OUTPUT_DIRECTORY       = build/doxygen
 CREATE_SUBDIRS         = NO
 OUTPUT_LANGUAGE        = English
