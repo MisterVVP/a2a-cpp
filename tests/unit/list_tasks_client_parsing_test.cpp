@@ -42,9 +42,10 @@ constexpr std::size_t kSingleTaskCount = 1U;
 constexpr std::size_t kTypicalTaskCount = 20U;
 constexpr std::size_t kLargeTaskCount = 200U;
 constexpr std::array kTaskCounts{kEmptyTaskCount, kSingleTaskCount, kTypicalTaskCount, kLargeTaskCount};
-constexpr std::array<std::string_view, 2> kDuplicateFieldPayloads = {
+constexpr std::array<std::string_view, 3> kDuplicateFieldPayloads = {
     R"({"tasks":[],"tasks":[{"id":"unexpected"}]})",
     R"({"tasks":[],"nextPageToken":"first","nextPageToken":"second"})",
+    R"({"tasks":[],"nextPageToken":"first","next_page_token":"second"})",
 };
 
 enum class ClientWireFormat : std::uint8_t {

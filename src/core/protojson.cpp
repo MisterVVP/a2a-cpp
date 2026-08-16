@@ -104,26 +104,28 @@ constexpr std::size_t kMaximumTrackedProtoFields = 64U;
   return nullptr;
 }
 
-[[nodiscard]] bool IsDuplicateKnownField(std::string_view name, const google::protobuf::Descriptor& descriptor,
-                                         std::array<std::string_view, kMaximumTrackedProtoFields>* seen_fields,
-                                         std::size_t* seen_field_count) {
-  if (FindJsonField(descriptor, name) == nullptr) {
+[[nodiscard]] bool IsDuplicateKnownField(
+    std::string_view name, const google::protobuf::Descriptor& descriptor,
+    std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields>* seen_fields,
+    std::size_t* seen_field_count) {
+  const auto* field = FindJsonField(descriptor, name);
+  if (field == nullptr) {
     return false;
   }
-  if (std::ranges::find(*seen_fields, name) != seen_fields->end()) {
+  if (std::ranges::find(*seen_fields, field) != seen_fields->end()) {
     return true;
   }
   if (*seen_field_count == seen_fields->size()) {
     return true;
   }
-  (*seen_fields)[(*seen_field_count)++] = name;
+  (*seen_fields)[(*seen_field_count)++] = field;
   return false;
 }
 
-[[nodiscard]] bool ScanTopLevelKey(const char*& current, const char* end, bool is_top_level_key,
-                                   const google::protobuf::Descriptor& descriptor,
-                                   std::array<std::string_view, kMaximumTrackedProtoFields>* seen_fields,
-                                   std::size_t* seen_field_count) {
+[[nodiscard]] bool ScanTopLevelKey(
+    const char*& current, const char* end, bool is_top_level_key, const google::protobuf::Descriptor& descriptor,
+    std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields>* seen_fields,
+    std::size_t* seen_field_count) {
   const char* const key_begin = current + 1;
   if (!SkipJsonString(current, end)) {
     return true;
@@ -142,7 +144,7 @@ constexpr std::size_t kMaximumTrackedProtoFields = 64U;
 
 [[nodiscard]] bool HasDuplicateTopLevelFieldCandidate(std::string_view json,
                                                       const google::protobuf::Descriptor& descriptor) {
-  std::array<std::string_view, kMaximumTrackedProtoFields> seen_fields{};
+  std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields> seen_fields{};
   std::size_t depth = 0U;
   std::size_t seen_field_count = 0U;
   bool expect_top_level_key = false;
