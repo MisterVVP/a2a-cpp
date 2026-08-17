@@ -355,6 +355,36 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(runner.POSTGRES_TAIL_C1_SCENARIOS, config.scenarios)
         self.assertEqual(5, runner.postgres_tail_expected_rows(config))
 
+    def test_postgres_write_profile_is_fixed_and_focused(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args(["--profile", "postgres-write"])
+        self.assertEqual(("grpc",), config.transports)
+        self.assertEqual(("postgres",), config.store_backends)
+        self.assertEqual((1, 4, 16, 64), config.concurrency_levels)
+        self.assertEqual((64,), config.postgres_pool_sizes)
+        self.assertEqual(5, config.repetitions)
+        self.assertEqual(runner.POSTGRES_WRITE_SCENARIOS, config.scenarios)
+        self.assertEqual(80, runner.postgres_tail_expected_rows(config))
+
+    def test_postgres_counter_delta_preserves_groups(self):
+        runner = load_runner_module()
+        before = {
+            "database": {"xact_commit": 10, "blks_hit": 100},
+            "wal": {"wal_bytes": 1000, "wal_sync": 20},
+        }
+        after = {
+            "database": {"xact_commit": 14, "blks_hit": 125},
+            "wal": {"wal_bytes": 1256, "wal_sync": 23},
+        }
+        self.assertEqual(
+            {
+                "database": {"xact_commit": 4.0, "blks_hit": 25.0},
+                "wal": {"wal_bytes": 256.0, "wal_sync": 3.0},
+            },
+            runner.subtract_postgres_counters(before, after),
+        )
+
     def test_postgres_tail_profile_allows_pool_size_override(self):
         runner = load_runner_module()
         with mock.patch.dict(os.environ, {"A2A_PERF_POSTGRES_POOL_SIZES": "8,32"}, clear=True):

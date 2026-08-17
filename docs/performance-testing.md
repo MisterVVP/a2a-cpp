@@ -171,6 +171,52 @@ comma-separated sizes create a comparison matrix without source changes. The
 `4,16,64`; an explicit `--postgres-pool-sizes` value or
 `A2A_PERF_POSTGRES_POOL_SIZES` overrides that profile default.
 
+### Attributed PostgreSQL write profile
+
+Use `--profile postgres-write` to reproduce the four write-saturation signals
+without wire-transport work. The profile fixes the pool size at 64, runs
+`SendMessage_CreateTask`, `SendMessage_FollowUpExistingTask`,
+`PushConfig_Create`, and `PushConfig_CreateMany` independently at concurrency
+1, 4, 16, and 64, and records five repetitions. A distinct schema is used for
+every scenario, coordinate, and repetition, preventing accumulated rows or
+another scenario's locks from changing the comparison.
+
+While each scenario runs, the runner samples `pg_stat_activity` and records
+session state, concurrent active sessions, idle transactions, and PostgreSQL
+wait-event type/event. It also takes before/after snapshots of
+`pg_stat_database` and `pg_stat_wal`. The resulting
+`postgres_database_diagnostics` object in `results.json` contains sampled wait
+counts and deltas for transactions, tuple writes, cache activity, WAL bytes,
+WAL writes/syncs, full WAL buffers, and PostgreSQL-reported block/WAL timing.
+These server observations complement the per-operation
+`connection_acquire_wait`, `task_upsert`, and `push_config_upsert` phase
+latencies already emitted by the SDK driver.
+
+```bash
+A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
+./scripts/run_performance_tests.sh --profile postgres-write \
+  --report-dir perf-artifacts/postgres-write
+```
+
+The profile also captures `EXPLAIN (ANALYZE, BUFFERS, WAL)` output for
+representative task and push-config conflict writes inside a rolled-back
+transaction. Interpret the evidence before changing production code:
+
+- increasing `WAL:WALWrite` or `IO:WALSync` samples, WAL sync time, and WAL
+  bytes with negligible acquisition wait indicates server durability
+  throughput, not pool starvation;
+- `Lock:transactionid` or tuple-lock samples concentrated on an update fixture
+  indicate same-row conflict contention;
+- rising buffer reads or read time and an unexpected scan in the captured plan
+  indicate a plan, index, or cache issue;
+- high `idle_in_transaction` is a transaction-scope defect and should remain
+  zero for these autocommit writes.
+
+The diagnostics use cumulative cluster counters, so run this profile against an
+otherwise idle PostgreSQL instance. Wait events are sampled observations rather
+than exact durations. Each scenario is isolated specifically so its counter
+delta and wait samples can be correlated with one performance row.
+
 ## CI behavior
 
 CI runs the broad performance matrix and focused PostgreSQL tail profile as

@@ -182,9 +182,13 @@ jobs:
         run: >-
           ./scripts/run_performance_tests.sh --profile postgres-tail-c1
           --report-dir perf-artifacts/postgres-tail-c1
+      - name: Run attributed PostgreSQL write profile
+        run: >-
+          ./scripts/run_performance_tests.sh --profile postgres-write
+          --report-dir perf-artifacts/postgres-write
       - name: Validate PostgreSQL tail reports
         run: |
-          for report_dir in perf-artifacts/postgres-tail perf-artifacts/postgres-tail-c1; do
+          for report_dir in perf-artifacts/postgres-tail perf-artifacts/postgres-tail-c1 perf-artifacts/postgres-write; do
             test -s "$report_dir/results.json"
             test -s "$report_dir/results.csv"
             test -s "$report_dir/median-aggregates.csv"
@@ -200,6 +204,7 @@ jobs:
           path: |
             perf-artifacts/postgres-tail
             perf-artifacts/postgres-tail-c1
+            perf-artifacts/postgres-write
           if-no-files-found: error
 
 

@@ -148,30 +148,30 @@ void SkipJsonWhitespace(const char*& current, const char* end) noexcept {
     std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields>* seen_fields,
     std::size_t* seen_field_count) {
   if (current == end || *current != '"') {
-    return {DuplicateFieldScanResult::kNeedsFallback, nullptr};
+    return {.result = DuplicateFieldScanResult::kNeedsFallback, .message_descriptor = nullptr};
   }
 
   const char* const key_begin = current + 1;
   if (!SkipJsonString(current, end)) {
-    return {DuplicateFieldScanResult::kNeedsFallback, nullptr};
+    return {.result = DuplicateFieldScanResult::kNeedsFallback, .message_descriptor = nullptr};
   }
   const char* const key_end = current - 1;
   const auto key_size = static_cast<std::size_t>(key_end - key_begin);
   if (std::memchr(key_begin, '\\', key_size) != nullptr) {
-    return {DuplicateFieldScanResult::kNeedsFallback, nullptr};
+    return {.result = DuplicateFieldScanResult::kNeedsFallback, .message_descriptor = nullptr};
   }
 
   const auto name = std::string_view(key_begin, key_size);
   const auto* field = descriptor != nullptr ? FindJsonField(*descriptor, name) : nullptr;
   const auto field_result = TrackKnownField(field, seen_fields, seen_field_count);
   if (field_result != DuplicateFieldScanResult::kClean) {
-    return {field_result, nullptr};
+    return {.result = field_result, .message_descriptor = nullptr};
   }
   const auto* message_descriptor =
       field != nullptr && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_MESSAGE
           ? field->message_type()
           : nullptr;
-  return {DuplicateFieldScanResult::kClean, message_descriptor};
+  return {.result = DuplicateFieldScanResult::kClean, .message_descriptor = message_descriptor};
 }
 
 [[nodiscard]] DuplicateFieldScanResult ScanJsonValue(const char*& current, const char* end,
