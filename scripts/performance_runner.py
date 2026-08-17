@@ -18,6 +18,7 @@ import signal
 import socket
 import statistics
 import subprocess
+import threading
 import time
 import sys
 from dataclasses import dataclass
@@ -61,7 +62,19 @@ DEFAULT_DURATION_SECONDS = 0.0
 DEFAULT_REPORT_DIR = "perf-artifacts"
 POSTGRES_TAIL_PROFILE = "postgres-tail"
 POSTGRES_TAIL_C1_PROFILE = "postgres-tail-c1"
+POSTGRES_WRITE_PROFILE = "postgres-write"
 POSTGRES_TAIL_PROFILES = (POSTGRES_TAIL_PROFILE, POSTGRES_TAIL_C1_PROFILE)
+POSTGRES_PROFILES = (*POSTGRES_TAIL_PROFILES, POSTGRES_WRITE_PROFILE)
+POSTGRES_WRITE_SCENARIOS = (
+    "SendMessage_CreateTask",
+    "SendMessage_FollowUpExistingTask",
+    "PushConfig_Create",
+    "PushConfig_CreateMany",
+)
+POSTGRES_WRITE_CONCURRENCY = (1, 4, 16, 64)
+POSTGRES_WRITE_POOL_SIZES = (64,)
+POSTGRES_WRITE_REPETITIONS = 5
+POSTGRES_SAMPLE_INTERVAL_SECONDS = 0.05
 POSTGRES_TAIL_SCENARIOS = (
     "PushNotify_EndToEndManyConfigs",
     "PushConfig_CreateMany",
@@ -143,6 +156,130 @@ class RunnerConfig:
     repetitions: int
     scenarios: tuple[str, ...] | None
     postgres_pool_sizes: tuple[int, ...]
+
+
+def run_psql_json(dsn: str, sql: str) -> object:
+    completed = subprocess.run(
+        ["psql", dsn, "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
+         "--command", f"SELECT json_build_object({sql});"],
+        check=True, capture_output=True, text=True,
+    )
+    output = completed.stdout.strip()
+    if not output:
+        raise ValueError("PostgreSQL diagnostic query returned no data")
+    return json.loads(output)
+
+
+POSTGRES_COUNTER_SQL = """
+'database', (SELECT row_to_json(s) FROM (
+  SELECT xact_commit, xact_rollback, blks_read, blks_hit, tup_inserted, tup_updated,
+         blk_read_time, blk_write_time
+  FROM pg_stat_database WHERE datname = current_database()) s),
+'wal', (SELECT row_to_json(s) FROM (
+  SELECT wal_records, wal_fpi, wal_bytes::text::numeric, wal_buffers_full,
+         wal_write, wal_sync, wal_write_time, wal_sync_time FROM pg_stat_wal) s)
+"""
+
+POSTGRES_ACTIVITY_SQL = """
+'activity', (SELECT json_build_object(
+  'sessions', count(*) FILTER (WHERE pid <> pg_backend_pid()),
+  'active', count(*) FILTER (WHERE pid <> pg_backend_pid() AND state = 'active'),
+  'idle_in_transaction', count(*) FILTER (
+    WHERE pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'),
+  'waiting', count(*) FILTER (WHERE pid <> pg_backend_pid() AND wait_event IS NOT NULL),
+  'waits', coalesce(json_object_agg(wait_name, samples) FILTER (WHERE wait_name IS NOT NULL), '{}'::json))
+ FROM (
+   SELECT pid, state, wait_event,
+          CASE WHEN wait_event IS NULL THEN NULL ELSE wait_event_type || ':' || wait_event END AS wait_name,
+          count(*) OVER (PARTITION BY wait_event_type, wait_event) AS samples
+   FROM pg_stat_activity WHERE datname = current_database()
+ ) activity),
+'lock_waits', (SELECT coalesce(json_object_agg(lock_name, samples), '{}'::json)
+ FROM (
+   SELECT locktype || ':' || mode AS lock_name, count(*) AS samples
+   FROM pg_locks
+   WHERE NOT granted AND (database IS NULL OR database = (SELECT oid FROM pg_database WHERE datname = current_database()))
+   GROUP BY locktype, mode
+ ) locks)
+"""
+
+
+def subtract_postgres_counters(before: object, after: object) -> dict[str, object]:
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ValueError("PostgreSQL counter snapshots must be objects")
+    delta: dict[str, object] = {}
+    for group in ("database", "wal"):
+        old_values = before.get(group, {})
+        new_values = after.get(group, {})
+        if not isinstance(old_values, dict) or not isinstance(new_values, dict):
+            raise ValueError(f"PostgreSQL {group} counter snapshot must be an object")
+        delta[group] = {
+            key: float(value) - float(old_values.get(key, 0))
+            for key, value in new_values.items()
+        }
+    return delta
+
+
+class PostgresDiagnosticsCollector:
+    def __init__(self, dsn: str, interval_seconds: float = POSTGRES_SAMPLE_INTERVAL_SECONDS) -> None:
+        self._dsn = dsn
+        self._interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._samples: list[dict[str, object]] = []
+        self._error: BaseException | None = None
+        self._before: object = {}
+
+    def __enter__(self) -> "PostgresDiagnosticsCollector":
+        self._before = run_psql_json(self._dsn, POSTGRES_COUNTER_SQL)
+        self._thread = threading.Thread(target=self._sample, name="postgres-diagnostics", daemon=True)
+        self._thread.start()
+        return self
+
+    def _sample(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            try:
+                sample = run_psql_json(self._dsn, POSTGRES_ACTIVITY_SQL)
+                if isinstance(sample, dict) and isinstance(sample.get("activity"), dict):
+                    activity = dict(sample["activity"])
+                    activity["lock_waits"] = sample.get("lock_waits", {})
+                    self._samples.append(activity)
+            except BaseException as error:  # Preserve failures for the orchestrating thread.
+                self._error = error
+                return
+
+    def __exit__(self, exception_type: object, exception: object, traceback: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+
+    def result(self) -> dict[str, object]:
+        if self._error is not None:
+            raise ValueError(f"PostgreSQL activity sampling failed: {self._error}") from self._error
+        after = run_psql_json(self._dsn, POSTGRES_COUNTER_SQL)
+        waits: dict[str, int] = {}
+        lock_waits: dict[str, int] = {}
+        for sample in self._samples:
+            sample_waits = sample.get("waits", {})
+            if isinstance(sample_waits, dict):
+                for name, count in sample_waits.items():
+                    waits[str(name)] = waits.get(str(name), 0) + int(count)
+            sample_lock_waits = sample.get("lock_waits", {})
+            if isinstance(sample_lock_waits, dict):
+                for name, count in sample_lock_waits.items():
+                    lock_waits[str(name)] = lock_waits.get(str(name), 0) + int(count)
+        return {
+            "sample_interval_ms": self._interval_seconds * 1000.0,
+            "sample_count": len(self._samples),
+            "max_sessions": max((int(row.get("sessions", 0)) for row in self._samples), default=0),
+            "max_active_writers": max((int(row.get("active", 0)) for row in self._samples), default=0),
+            "max_idle_in_transaction": max(
+                (int(row.get("idle_in_transaction", 0)) for row in self._samples), default=0),
+            "max_waiting": max((int(row.get("waiting", 0)) for row in self._samples), default=0),
+            "wait_event_samples": waits,
+            "lock_wait_samples": lock_waits,
+            "counter_delta": subtract_postgres_counters(self._before, after),
+        }
 
 
 
@@ -445,7 +582,7 @@ def env_or_default(name: str, default: str) -> str:
 
 def parse_args(argv: list[str]) -> RunnerConfig:
     parser = argparse.ArgumentParser(description="Run report-only A2A performance scenarios.")
-    parser.add_argument("--profile", choices=POSTGRES_TAIL_PROFILES)
+    parser.add_argument("--profile", choices=POSTGRES_PROFILES)
     parser.add_argument("--transports", default=env_or_default("A2A_PERF_TRANSPORTS", ",".join(TRANSPORTS)))
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
@@ -465,13 +602,15 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     if args.driver_timeout_seconds <= 0 or args.wire_driver_timeout_seconds <= 0:
         raise ValueError("driver timeouts must be positive")
     profile = args.profile
-    is_postgres_tail = profile in POSTGRES_TAIL_PROFILES
+    is_postgres_profile = profile in POSTGRES_PROFILES
     if args.postgres_pool_sizes is not None:
         postgres_pool_sizes = parse_positive_int_csv(args.postgres_pool_sizes, "PostgreSQL pool sizes")
     elif profile == POSTGRES_TAIL_PROFILE:
         postgres_pool_sizes = POSTGRES_TAIL_POOL_SIZES
     elif profile == POSTGRES_TAIL_C1_PROFILE:
         postgres_pool_sizes = POSTGRES_TAIL_C1_POOL_SIZES
+    elif profile == POSTGRES_WRITE_PROFILE:
+        postgres_pool_sizes = POSTGRES_WRITE_POOL_SIZES
     else:
         postgres_pool_sizes = (DEFAULT_POSTGRES_POOL_SIZE,)
     if profile == POSTGRES_TAIL_PROFILE:
@@ -480,21 +619,25 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     elif profile == POSTGRES_TAIL_C1_PROFILE:
         concurrency_levels = POSTGRES_TAIL_C1_CONCURRENCY
         scenarios = POSTGRES_TAIL_C1_SCENARIOS
+    elif profile == POSTGRES_WRITE_PROFILE:
+        concurrency_levels = POSTGRES_WRITE_CONCURRENCY
+        scenarios = POSTGRES_WRITE_SCENARIOS
     else:
         concurrency_levels = parse_positive_int_csv(args.concurrency, "concurrency levels")
         scenarios = None if args.scenarios is None else split_csv(args.scenarios, SCENARIOS)
     return RunnerConfig(
         profile=profile,
-        transports=("grpc",) if is_postgres_tail else split_csv(args.transports, TRANSPORTS),
-        store_backends=("postgres",) if is_postgres_tail else split_csv(args.store_backends, STORE_BACKENDS),
-        requests=DEFAULT_REQUESTS if is_postgres_tail else args.requests,
+        transports=("grpc",) if is_postgres_profile else split_csv(args.transports, TRANSPORTS),
+        store_backends=("postgres",) if is_postgres_profile else split_csv(args.store_backends, STORE_BACKENDS),
+        requests=DEFAULT_REQUESTS if is_postgres_profile else args.requests,
         concurrency_levels=concurrency_levels,
-        warmup_seconds=DEFAULT_WARMUP_SECONDS if is_postgres_tail else args.warmup_seconds,
-        duration_seconds=DEFAULT_DURATION_SECONDS if is_postgres_tail else args.duration_seconds,
+        warmup_seconds=DEFAULT_WARMUP_SECONDS if is_postgres_profile else args.warmup_seconds,
+        duration_seconds=DEFAULT_DURATION_SECONDS if is_postgres_profile else args.duration_seconds,
         report_dir=Path(args.report_dir),
         driver_timeout_seconds=args.driver_timeout_seconds,
         wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
-        repetitions=POSTGRES_TAIL_REPETITIONS if is_postgres_tail else 1,
+        repetitions=(POSTGRES_WRITE_REPETITIONS if profile == POSTGRES_WRITE_PROFILE
+                     else POSTGRES_TAIL_REPETITIONS if profile in POSTGRES_TAIL_PROFILES else 1),
         scenarios=scenarios,
         postgres_pool_sizes=postgres_pool_sizes,
     )
@@ -925,6 +1068,23 @@ INSERT INTO a2a_push_notification_configs (task_id, config_id, url, config_proto
 VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_CONFIG_ID}',
         '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex'))
 ON CONFLICT (task_id, config_id) DO NOTHING;
+EXPLAIN (ANALYZE, BUFFERS, WAL)
+INSERT INTO a2a_tasks AS target
+  (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto, updated_at)
+VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_TASK_ID}', 0, false, 0, 0,
+        decode('', 'hex'), now())
+ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDED.state,
+  has_status_timestamp = EXCLUDED.has_status_timestamp, status_seconds = EXCLUDED.status_seconds,
+  status_nanos = EXCLUDED.status_nanos, task_proto = EXCLUDED.task_proto,
+  revision = target.revision + 1, updated_at = now();
+EXPLAIN (ANALYZE, BUFFERS, WAL)
+INSERT INTO a2a_push_notification_configs AS target
+  (task_id, config_id, url, config_proto, local_postgres_task, updated_at)
+VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_CONFIG_ID}',
+        '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex'), true, now())
+ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url,
+  config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task,
+  updated_at = now();
 SELECT '{POSTGRES_COMBINED_PLAN_START}';
 EXPLAIN (ANALYZE, BUFFERS)
 WITH task AS MATERIALIZED (
@@ -979,6 +1139,30 @@ def log_progress(message: str) -> None:
 def postgres_tail_expected_rows(config: RunnerConfig) -> int:
     return (len(config.scenarios or ()) * len(config.concurrency_levels) *
             len(config.postgres_pool_sizes) * config.repetitions)
+
+
+def run_profile_coordinate(config: RunnerConfig, transport: str, concurrency: int,
+                           postgres_pool_size: int, schema: str, repetition: int,
+                           scenarios: tuple[str, ...]) -> list[dict[str, object]]:
+    if config.profile != POSTGRES_WRITE_PROFILE:
+        return run_driver(config, transport, "postgres", concurrency, postgres_pool_size, scenarios, schema)
+    dsn = os.environ.get("A2A_TEST_POSTGRES_DSN", "")
+    if not dsn:
+        raise ValueError("A2A_TEST_POSTGRES_DSN must be set for postgres-write")
+    collected: list[dict[str, object]] = []
+    for scenario_index, scenario in enumerate(scenarios):
+        scenario_schema = f"{schema}_s{scenario_index}"
+        with PostgresDiagnosticsCollector(dsn) as diagnostics:
+            rows = run_driver(
+                config, transport, "postgres", concurrency, postgres_pool_size,
+                (scenario,), scenario_schema,
+            )
+        database_diagnostics = diagnostics.result()
+        for row in rows:
+            row["postgres_database_diagnostics"] = database_diagnostics
+            row["repetition"] = repetition
+        collected.extend(rows)
+    return collected
 
 
 def log_workload_estimate(config: RunnerConfig) -> None:
@@ -1057,22 +1241,29 @@ def main(argv: list[str]) -> int:
                 for concurrency in config.concurrency_levels:
                     for repetition in range(1, config.repetitions + 1):
                         schema = None
-                        if config.profile in POSTGRES_TAIL_PROFILES:
-                            schema = f"a2a_tail_p{postgres_pool_size}_c{concurrency}_r{repetition}_{os.getpid()}"
+                        if config.profile in POSTGRES_PROFILES:
+                            profile_name = "write" if config.profile == POSTGRES_WRITE_PROFILE else "tail"
+                            schema = (f"a2a_{profile_name}_p{postgres_pool_size}_c{concurrency}_"
+                                      f"r{repetition}_{os.getpid()}")
                         run_results = run_with_progress(
                             "in-process",
-                            lambda schema=schema: run_driver(
-                                config, in_process_transport, store_backend, concurrency,
-                                postgres_pool_size, config.scenarios, schema,
+                            lambda schema=schema: (
+                                run_profile_coordinate(
+                                    config, in_process_transport, concurrency, postgres_pool_size,
+                                    schema or "", repetition, config.scenarios or (),
+                                ) if config.profile == POSTGRES_WRITE_PROFILE else
+                                run_driver(config, in_process_transport, store_backend, concurrency,
+                                           postgres_pool_size, config.scenarios, schema)
                             ),
                             in_process_transport, store_backend, concurrency, config.requests,
                         )
-                        if config.profile in POSTGRES_TAIL_PROFILES:
+                        if config.profile in POSTGRES_PROFILES:
                             for result in run_results:
                                 result["repetition"] = repetition
-                            last_schema = schema
+                            last_schema = (f"{schema}_s{len(config.scenarios or ()) - 1}"
+                                           if config.profile == POSTGRES_WRITE_PROFILE else schema)
                         results.extend(run_results)
-        if config.profile not in POSTGRES_TAIL_PROFILES:
+        if config.profile not in POSTGRES_PROFILES:
             for transport in config.transports:
                 for store_backend in config.store_backends:
                     pool_sizes = config.postgres_pool_sizes if store_backend == "postgres" else (DEFAULT_POSTGRES_POOL_SIZE,)
@@ -1091,7 +1282,7 @@ def main(argv: list[str]) -> int:
         results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"]), int(result.get("postgres_pool_size") or 0), int(result.get("repetition", 0))))
         aggregates = None
         query_plans = None
-        if config.profile in POSTGRES_TAIL_PROFILES:
+        if config.profile in POSTGRES_PROFILES:
             errors = sum(result_error_count(result) for result in results)
             expected_rows = postgres_tail_expected_rows(config)
             if len(results) != expected_rows or errors:

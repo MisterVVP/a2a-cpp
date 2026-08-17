@@ -71,12 +71,12 @@ TEST(StoreConformanceTest, InMemoryPushNotificationStore) {
 }
 
 #ifdef A2A_ENABLE_POSTGRES_STORE
-constexpr char kPostgresDsnEnvironmentVariable[] = "A2A_TEST_POSTGRES_DSN";
+constexpr auto kPostgresDsnEnvironmentVariable = std::to_array("A2A_TEST_POSTGRES_DSN");
 constexpr std::string_view kPostgresAcquireFailureMessage = "test postgres acquire failure";
 constexpr std::string_view kPostgresTestSchemaPrefix = "a2a_test_";
 constexpr std::string_view kPostgresTestNameSeparator = "_";
 
-[[nodiscard]] const char* GetPostgresDsn() { return std::getenv(kPostgresDsnEnvironmentVariable); }
+[[nodiscard]] const char* GetPostgresDsn() { return std::getenv(kPostgresDsnEnvironmentVariable.data()); }
 
 [[nodiscard]] a2a::core::Error MakePostgresAcquireFailureForTesting() {
   return a2a::core::Error::Internal(std::string(kPostgresAcquireFailureMessage));
@@ -165,24 +165,24 @@ constexpr std::string_view kSecretDsnPassword = "storage-identity-secret";
 constexpr std::string_view kUnexpectedSecretDsnConnection = "invalid PostgreSQL endpoint unexpectedly connected";
 constexpr std::string_view kIdentitySchema = "identity_schema";
 constexpr std::string_view kDefaultPortIdentitySchema = "default_port_identity_schema";
-constexpr char kIdentityHost[] = "database.example";
-constexpr char kOtherIdentityHost[] = "replica.example";
-constexpr char kIdentityHostAddress[] = "192.0.2.10";
-constexpr char kOtherIdentityHostAddress[] = "192.0.2.11";
-constexpr char kIdentityPort[] = "5432";
-constexpr char kOtherIdentityPort[] = "5433";
-constexpr char kIdentityDatabase[] = "a2a";
-constexpr char kOtherIdentityDatabase[] = "other";
-constexpr char kIdentitySchemaName[] = "public";
-constexpr char kOtherIdentitySchemaName[] = "tenant";
-constexpr char kIdentityTargetSessionAttributes[] = "read-write";
-constexpr char kOtherIdentityTargetSessionAttributes[] = "any";
-constexpr char kIdentityPrimaryTargetSessionAttributes[] = "primary";
-constexpr char kIdentityMultiHost[] = "primary.example,standby.example";
-constexpr char kReorderedIdentityMultiHost[] = "standby.example,primary.example";
-constexpr char kIdentityMultiPort[] = "5432,5432";
-constexpr char kIdentityStorageAuthorityId[] = "storage-authority-a";
-constexpr char kOtherIdentityStorageAuthorityId[] = "storage-authority-b";
+constexpr std::string_view kIdentityHost = "database.example";
+constexpr std::string_view kOtherIdentityHost = "replica.example";
+constexpr std::string_view kIdentityHostAddress = "192.0.2.10";
+constexpr std::string_view kOtherIdentityHostAddress = "192.0.2.11";
+constexpr std::string_view kIdentityPort = "5432";
+constexpr std::string_view kOtherIdentityPort = "5433";
+constexpr std::string_view kIdentityDatabase = "a2a";
+constexpr std::string_view kOtherIdentityDatabase = "other";
+constexpr std::string_view kIdentitySchemaName = "public";
+constexpr std::string_view kOtherIdentitySchemaName = "tenant";
+constexpr std::string_view kIdentityTargetSessionAttributes = "read-write";
+constexpr std::string_view kOtherIdentityTargetSessionAttributes = "any";
+constexpr std::string_view kIdentityPrimaryTargetSessionAttributes = "primary";
+constexpr std::string_view kIdentityMultiHost = "primary.example,standby.example";
+constexpr std::string_view kReorderedIdentityMultiHost = "standby.example,primary.example";
+constexpr std::string_view kIdentityMultiPort = "5432,5432";
+constexpr std::string_view kIdentityStorageAuthorityId = "storage-authority-a";
+constexpr std::string_view kOtherIdentityStorageAuthorityId = "storage-authority-b";
 constexpr std::string_view kSessionPolicySchemaSuffix = "push_list_session_policy";
 constexpr std::string_view kSessionPolicyName = "a2a_task_tenant_policy";
 constexpr std::string_view kSessionPolicySetting = "app.tenant";
@@ -205,7 +205,7 @@ constexpr std::string_view kAuthorityTaskId = "authority-task";
 constexpr std::string_view kAuthorityConfigId = "authority-config";
 constexpr std::string_view kPostgresDsnMissingSkipMessage = "A2A_TEST_POSTGRES_DSN is not set";
 constexpr std::string_view kNonDefaultPortSkipMessage = "PostgreSQL test DSN does not use the default port";
-constexpr char kPgPortEnvironmentVariable[] = "PGPORT";
+constexpr auto kPgPortEnvironmentVariable = std::to_array("PGPORT");
 constexpr std::string_view kNonDefaultPgPortSkipMessage = "PGPORT overrides the libpq default port";
 constexpr std::string_view kSplitRolePrefix = "a2a_push_split_role_";
 constexpr std::string_view kSplitRoleTaskId = "split-role-task";
@@ -1391,11 +1391,11 @@ constexpr std::string_view kCountWaitingPostgresLocksMissingRowMessage =
 constexpr std::string_view kPostgresLockWaitTimeoutMessage = "timed out waiting for PostgreSQL lock waiter";
 constexpr std::string_view kSetConcurrentStatementTimeoutOperation = "set concurrency test statement timeout";
 constexpr std::string_view kConcurrentTaskDeleteOperation = "delete task during concurrent push update";
-constexpr char kConcurrentStatementTimeoutSql[] = "SET statement_timeout = '5s'";
-constexpr char kCountWaitingPostgresLocksSql[] =
+constexpr std::string_view kConcurrentStatementTimeoutSql = "SET statement_timeout = '5s'";
+constexpr auto kCountWaitingPostgresLocksSql = std::to_array(
     "SELECT count(*)::text FROM pg_catalog.pg_stat_activity "
     "WHERE datname = current_database() AND usename = current_user "
-    "AND application_name = $1 AND wait_event_type = 'Lock'";
+    "AND application_name = $1 AND wait_event_type = 'Lock'");
 constexpr std::string_view kPostgresDeadlockSqlState = "40P01";
 constexpr std::string_view kPostgresDeadlockMessage = "deadlock detected";
 constexpr auto kLockWaitPollInterval = std::chrono::milliseconds(10);
@@ -1449,8 +1449,9 @@ constexpr int kDecimalRadix = 10;
 }
 
 [[nodiscard]] a2a::core::Result<std::size_t> CountWaitingPostgresLocks(PGconn* connection) {
-  const std::array<const char*, 1> values = {kIdentityApplicationName.data()};
-  a2a::server::stores::PgResult result(PQexecParams(connection, kCountWaitingPostgresLocksSql,
+  const std::string application_name(kIdentityApplicationName);
+  const std::array<const char*, 1> values = {application_name.c_str()};
+  a2a::server::stores::PgResult result(PQexecParams(connection, kCountWaitingPostgresLocksSql.data(),
                                                     static_cast<int>(values.size()), nullptr, values.data(), nullptr,
                                                     nullptr, 0));
   const auto checked = a2a::server::stores::CheckTuples(connection, result.get(), kCountWaitingPostgresLocksOperation);
@@ -2319,7 +2320,7 @@ TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesOmittedDefaultPort) 
   if (explicit_port.StorageIdentity(std::string(kDefaultPortIdentitySchema)).port != kDefaultPostgresPort) {
     GTEST_SKIP() << kNonDefaultPortSkipMessage;
   }
-  const char* environment_port = std::getenv(kPgPortEnvironmentVariable);
+  const char* environment_port = std::getenv(kPgPortEnvironmentVariable.data());
   if (environment_port != nullptr && std::string_view(environment_port) != kDefaultPostgresPort) {
     GTEST_SKIP() << kNonDefaultPgPortSkipMessage;
   }
@@ -2331,12 +2332,13 @@ TEST(StoreConformanceTest, PostgresStorageIdentityNormalizesOmittedDefaultPort) 
 TEST(StoreConformanceTest, PostgresStorageAuthorityClassifiesIdentityDifferencesConservatively) {
   using a2a::server::stores::ClassifyPostgresStorageAuthority;
   using a2a::server::stores::PostgresStorageAuthority;
-  a2a::server::stores::PostgresStorageIdentity identity{.host = kIdentityHost,
-                                                        .host_address = kIdentityHostAddress,
-                                                        .port = kIdentityPort,
-                                                        .database = kIdentityDatabase,
-                                                        .target_session_attributes = kIdentityTargetSessionAttributes,
-                                                        .schema = kIdentitySchemaName};
+  a2a::server::stores::PostgresStorageIdentity identity{
+      .host = std::string(kIdentityHost),
+      .host_address = std::string(kIdentityHostAddress),
+      .port = std::string(kIdentityPort),
+      .database = std::string(kIdentityDatabase),
+      .target_session_attributes = std::string(kIdentityTargetSessionAttributes),
+      .schema = std::string(kIdentitySchemaName)};
   EXPECT_EQ(ClassifyPostgresStorageAuthority(identity, identity), PostgresStorageAuthority::kLocal);
 
   auto different = identity;
@@ -2388,9 +2390,13 @@ TEST(StoreConformanceTest, ExplicitPostgresStorageAuthorityIdCanProveExternalAut
   }
   const std::string schema = MakePostgresTestSchema(kExplicitExternalAuthoritySchemaSuffix);
   const a2a::server::stores::PostgresStoreOptions task_options{
-      .connection_string = dsn_value, .schema = schema, .storage_authority_id = kIdentityStorageAuthorityId};
+      .connection_string = dsn_value,
+      .schema = schema,
+      .storage_authority_id = std::string(kIdentityStorageAuthorityId)};
   const a2a::server::stores::PostgresStoreOptions push_options{
-      .connection_string = dsn_value, .schema = schema, .storage_authority_id = kOtherIdentityStorageAuthorityId};
+      .connection_string = dsn_value,
+      .schema = schema,
+      .storage_authority_id = std::string(kOtherIdentityStorageAuthorityId)};
   a2a::server::stores::PostgresTaskStore task_store(task_options);
   a2a::server::stores::PostgresPushNotificationStore push_store(push_options);
   AddPostgresTask(task_store, kAuthorityTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,

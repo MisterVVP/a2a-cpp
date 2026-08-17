@@ -5,6 +5,7 @@
 
 #include <libpq-fe.h>
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -33,10 +34,10 @@ constexpr std::string_view kPostgresTaskRowLevelSecurityUnsupportedMessage =
     "PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks";
 constexpr std::string_view kPostgresPushTaskSelectRequiredMessage =
     "PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation";
-constexpr char kCurrentUserSql[] = "SELECT current_user";
-constexpr char kBeginSchemaTransactionSql[] = "BEGIN";
-constexpr char kCommitSchemaTransactionSql[] = "COMMIT";
-constexpr char kRollbackSchemaTransactionSql[] = "ROLLBACK";
+constexpr auto kCurrentUserSql = std::to_array("SELECT current_user");
+constinit const std::string kBeginSchemaTransactionSql = "BEGIN";
+constinit const std::string kCommitSchemaTransactionSql = "COMMIT";
+constinit const std::string kRollbackSchemaTransactionSql = "ROLLBACK";
 constexpr std::string_view kBeginSchemaTransactionOperation = "begin postgres schema transaction";
 constexpr std::string_view kCommitSchemaTransactionOperation = "commit postgres schema transaction";
 constexpr std::string_view kRollbackSchemaTransactionOperation = "rollback postgres schema transaction";
@@ -265,7 +266,7 @@ using Conninfo = std::unique_ptr<PQconninfoOption, ConninfoDeleter>;
   identity.storage.port = LibpqValue(PQport(connection));
   identity.storage.database = LibpqValue(PQdb(connection));
   identity.storage.target_session_attributes = ConninfoValue(options.get(), kConninfoTargetSessionAttributesKeyword);
-  PgResult role_result(PQexec(connection, kCurrentUserSql));
+  PgResult role_result(PQexec(connection, kCurrentUserSql.data()));
   const auto role_checked = CheckTuples(connection, role_result.get(), kReadPostgresEffectiveRoleOperation);
   if (!role_checked.ok()) {
     return role_checked.error();

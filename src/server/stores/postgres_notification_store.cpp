@@ -5,6 +5,7 @@
 
 #include <libpq-fe.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstdint>
@@ -50,7 +51,7 @@ constexpr int kPostgresPushSchemaCheckCount = 10;
 constexpr int kPostgresPushSchemaBaseCheckCount = 2;
 constexpr int kPostgresPushSchemaTaskAwarePresenceColumn = 2;
 constexpr int kPostgresPushSchemaTaskAwareFirstCheckColumn = 3;
-constexpr char kValidatePostgresPushSchemaSql[] =
+constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "WITH relations AS MATERIALIZED ("
     "SELECT schema_namespace.oid AS schema_oid, "
     "pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1::text, $2::text)) AS push_oid, "
@@ -143,7 +144,7 @@ constexpr char kValidatePostgresPushSchemaSql[] =
     "AND (cleanup_trigger.tgenabled = $10::pg_catalog.\"char\" "
     "OR cleanup_trigger.tgenabled = $11::pg_catalog.\"char\") "
     "AND cleanup_trigger.tgnargs = 0 AND cleanup_trigger.tgqual IS NULL) "
-    "FROM relations CROSS JOIN lock_function CROSS JOIN delete_function";
+    "FROM relations CROSS JOIN lock_function CROSS JOIN delete_function");
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -304,29 +305,31 @@ constexpr char kValidatePostgresPushSchemaSql[] =
   const std::string expected_cleanup_body = ExpectedDeleteTaskPushConfigsFunctionBody(options.schema);
   const std::string quoted_push_table = PushTable(options.schema);
   const std::string unquoted_push_table = UnquotedQualifiedIdentifier(options.schema, kPushTableName);
-  const std::array<const char*, kPostgresPushSchemaParameterCount> values = {
-      options.schema.c_str(),
-      kPushTableName.data(),
-      kPushConfigProvenanceColumnName.data(),
-      kTaskPushConfigLockFunction.data(),
-      kTaskPushConfigMigrationId.data(),
-      kDeleteTaskPushConfigsFunction.data(),
-      kDeleteTaskPushConfigsTrigger.data(),
-      kTaskTableName.data(),
-      kPostgresAfterDeleteRowTriggerType.data(),
-      kPostgresTriggerEnabledForOrigin.data(),
-      kPostgresTriggerEnabledAlways.data(),
-      expected_lock_body.c_str(),
-      quoted_task_table.c_str(),
-      unquoted_task_table.c_str(),
-      expected_cleanup_body.c_str(),
-      quoted_push_table.c_str(),
-      unquoted_push_table.c_str(),
-      kTaskLockExpectedTableReferenceCount.data(),
-      kCleanupExpectedTableReferenceCount.data(),
+  const std::array<std::string, kPostgresPushSchemaParameterCount> parameter_storage = {
+      options.schema,
+      std::string(kPushTableName),
+      std::string(kPushConfigProvenanceColumnName),
+      std::string(kTaskPushConfigLockFunction),
+      std::string(kTaskPushConfigMigrationId),
+      std::string(kDeleteTaskPushConfigsFunction),
+      std::string(kDeleteTaskPushConfigsTrigger),
+      std::string(kTaskTableName),
+      std::string(kPostgresAfterDeleteRowTriggerType),
+      std::string(kPostgresTriggerEnabledForOrigin),
+      std::string(kPostgresTriggerEnabledAlways),
+      expected_lock_body,
+      quoted_task_table,
+      unquoted_task_table,
+      expected_cleanup_body,
+      quoted_push_table,
+      unquoted_push_table,
+      std::string(kTaskLockExpectedTableReferenceCount),
+      std::string(kCleanupExpectedTableReferenceCount),
   };
-  PgResult result(PQexecParams(connection, kValidatePostgresPushSchemaSql, static_cast<int>(values.size()), nullptr,
-                               values.data(), nullptr, nullptr, 0));
+  std::array<const char*, kPostgresPushSchemaParameterCount> values{};
+  std::ranges::transform(parameter_storage, values.begin(), [](const std::string& value) { return value.c_str(); });
+  PgResult result(PQexecParams(connection, kValidatePostgresPushSchemaSql.data(), static_cast<int>(values.size()),
+                               nullptr, values.data(), nullptr, nullptr, 0));
   const auto checked = CheckTuples(connection, result.get(), kValidatePostgresPushSchemaOperation);
   if (!checked.ok()) {
     return checked.error();
