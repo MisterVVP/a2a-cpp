@@ -118,9 +118,10 @@ lf::a2a::v1::StreamResponse BuildRepresentativePushPayload(std::string_view task
 
 class ScenarioHarness final {
  public:
-  explicit ScenarioHarness(std::string_view store_backend, ScenarioInstrumentation* instrumentation = nullptr)
-      : instrumentation_(instrumentation) {
-    if (!ConfigureStores(store_backend)) {
+  explicit ScenarioHarness(std::string_view store_backend, ScenarioInstrumentation* instrumentation = nullptr,
+                           int push_config_fanout = kPushConfigFanout)
+      : instrumentation_(instrumentation), push_config_fanout_(push_config_fanout) {
+    if (push_config_fanout_ <= 0 || !ConfigureStores(store_backend)) {
       return;
     }
     options_.push_delivery = &delivery_;
@@ -471,7 +472,7 @@ class ScenarioHarness final {
     }
     SeedFanoutConfigs(task_id, BuildId("fanout", index));
     const bool ok = executor_->SendMessage(MakeSendRequest(BuildId("notify", index), task_id), context).ok();
-    return OutcomeFromDeliveryStats(ok, delivery_.TakeStats(task_id), kPushConfigFanout);
+    return OutcomeFromDeliveryStats(ok, delivery_.TakeStats(task_id), push_config_fanout_);
   }
 
   OperationOutcome ListManyPushConfigs(a2a::server::RequestContext& context) {
@@ -479,11 +480,11 @@ class ScenarioHarness final {
     request.set_task_id(fanout_task_id_);
     CountListConfig();
     const auto configs = executor_->ListTaskPushNotificationConfigs(request, context);
-    const bool ok = configs.ok() && configs.value().configs_size() == kPushConfigFanout;
+    const bool ok = configs.ok() && configs.value().configs_size() == push_config_fanout_;
     return {.ok = ok,
             .event_count = ok ? configs.value().configs_size() : 0,
-            .fanout_per_operation = kPushConfigFanout,
-            .total_fanout_count = kPushConfigFanout};
+            .fanout_per_operation = push_config_fanout_,
+            .total_fanout_count = push_config_fanout_};
   }
 
   OperationOutcome DeliverPreloadedCallbacks() {
@@ -510,20 +511,21 @@ class ScenarioHarness final {
       return {};
     }
     int created = 0;
-    for (int config = 0; config < kPushConfigFanout; ++config) {
+    for (int config = 0; config < push_config_fanout_; ++config) {
       const auto response = executor_->CreateTaskPushNotificationConfig(
           MakePushConfig(create_many_task_id_, BuildId(BuildId("create-many", index), config)), context);
       CountConfigCreate();
       if (!response.ok()) {
-        return {
-            .event_count = created, .fanout_per_operation = kPushConfigFanout, .total_fanout_count = kPushConfigFanout};
+        return {.event_count = created,
+                .fanout_per_operation = push_config_fanout_,
+                .total_fanout_count = push_config_fanout_};
       }
       ++created;
     }
     return {.ok = true,
             .event_count = created,
-            .fanout_per_operation = kPushConfigFanout,
-            .total_fanout_count = kPushConfigFanout};
+            .fanout_per_operation = push_config_fanout_,
+            .total_fanout_count = push_config_fanout_};
   }
 
   OperationOutcome BuildPushPayloadOnly() {
@@ -576,9 +578,9 @@ class ScenarioHarness final {
     const bool capture_preloaded = task_id == fanout_task_id_;
     if (capture_preloaded) {
       preloaded_configs_.clear();
-      preloaded_configs_.reserve(kPushConfigFanout);
+      preloaded_configs_.reserve(static_cast<std::size_t>(push_config_fanout_));
     }
-    for (int config = 0; config < kPushConfigFanout; ++config) {
+    for (int config = 0; config < push_config_fanout_; ++config) {
       lf::a2a::v1::TaskPushNotificationConfig push_config = MakePushConfig(task_id, BuildId(config_prefix, config));
       SeedPushConfig(task_id, push_config.id());
       if (capture_preloaded) {
@@ -702,13 +704,14 @@ class ScenarioHarness final {
   std::vector<DeleteFixture> delete_fixtures_;
   lf::a2a::v1::StreamResponse prebuilt_payload_;
   ScenarioInstrumentation* instrumentation_ = nullptr;
+  int push_config_fanout_ = kPushConfigFanout;
 };
 
 }  // namespace
 
 #ifndef A2A_PERFORMANCE_DRIVER_DISABLE_MAIN
 ScenarioResult RunScenario(const Options& options, const std::string& scenario) {
-  ScenarioHarness harness(options.store_backend);
+  ScenarioHarness harness(options.store_backend, nullptr, options.push_config_fanout);
   if (!harness.ok()) {
     ScenarioResult failed;
     failed.scenario = scenario;
@@ -782,6 +785,8 @@ bool ParseArgs(int argc, char** argv, Options* options) {
       options->requests = std::atoi(raw_value);
     } else if (arg == "--concurrency") {
       options->concurrency = std::atoi(raw_value);
+    } else if (arg == "--push-config-fanout") {
+      options->push_config_fanout = std::atoi(raw_value);
     } else if (arg == "--warmup-seconds") {
       options->warmup_seconds = std::atof(raw_value);
     } else if (arg == "--duration-seconds") {
@@ -795,7 +800,7 @@ bool ParseArgs(int argc, char** argv, Options* options) {
       return false;
     }
   }
-  return options->requests > 0 && options->concurrency > 0;
+  return options->requests > 0 && options->concurrency > 0 && options->push_config_fanout > 0;
 }
 
 google::protobuf::Struct BuildResultObject(const Options& options, const ScenarioResult& result) {
@@ -804,6 +809,7 @@ google::protobuf::Struct BuildResultObject(const Options& options, const Scenari
                              result);
   SetNumberField(&object, "warmup_seconds", options.warmup_seconds);
   SetIntegerField(&object, "configured_requests", options.requests);
+  SetIntegerField(&object, "push_config_fanout", options.push_config_fanout);
   const int history_depth = ScenarioHistoryDepth(result.scenario);
   if (history_depth > 0) {
     SetIntegerField(&object, "history_depth", history_depth);

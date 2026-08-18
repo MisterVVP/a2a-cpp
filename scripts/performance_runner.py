@@ -53,6 +53,7 @@ SCENARIOS = (
 )
 DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
+DEFAULT_PUSH_CONFIG_FANOUT = 8
 DEFAULT_BUILD_DIR = "build/performance"
 DRIVER_NAME = "a2a_performance_driver"
 WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
@@ -136,8 +137,6 @@ POSTGRES_QUERY_PLAN_CONFIG_ID = "a2a-query-plan-probe-config"
 POSTGRES_QUERY_PLAN_URL = "https://example.invalid/a2a-query-plan"
 POSTGRES_COMBINED_PLAN_START = "A2A_COMBINED_PLAN_START"
 POSTGRES_COMBINED_PLAN_END = "A2A_COMBINED_PLAN_END"
-POSTGRES_TASK_PRIMARY_INDEX = "a2a_tasks_pkey"
-POSTGRES_PUSH_TASK_INDEX = "idx_a2a_push_configs_task"
 POSTGRES_PUSH_ORDER_INDEX = "idx_a2a_push_configs_created_sequence"
 
 
@@ -147,6 +146,7 @@ class RunnerConfig:
     transports: tuple[str, ...]
     store_backends: tuple[str, ...]
     requests: int
+    push_config_fanout: int
     concurrency_levels: tuple[int, ...]
     warmup_seconds: float
     duration_seconds: float
@@ -504,6 +504,7 @@ def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurr
         "--store-backend", store_backend,
         "--requests", str(config.requests),
         "--concurrency", str(concurrency),
+        "--push-config-fanout", str(config.push_config_fanout),
         "--warmup-seconds", str(config.warmup_seconds),
         "--duration-seconds", str(config.duration_seconds),
     ]
@@ -603,6 +604,8 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
     parser.add_argument("--concurrency", default=env_or_default("A2A_PERF_CONCURRENCY", ",".join(str(level) for level in DEFAULT_CONCURRENCY)))
+    parser.add_argument("--push-config-fanout", type=int,
+                        default=int(env_or_default("A2A_PERF_PUSH_CONFIG_FANOUT", str(DEFAULT_PUSH_CONFIG_FANOUT))))
     parser.add_argument("--scenarios", default=os.environ.get("A2A_PERF_SCENARIOS"))
     parser.add_argument("--warmup-seconds", type=float, default=float(env_or_default("A2A_PERF_WARMUP_SECONDS", str(DEFAULT_WARMUP_SECONDS))))
     parser.add_argument("--duration-seconds", type=float, default=float(env_or_default("A2A_PERF_DURATION_SECONDS", str(DEFAULT_DURATION_SECONDS))))
@@ -613,6 +616,8 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     args = parser.parse_args(argv)
     if args.requests <= 0:
         raise ValueError("requests must be positive")
+    if args.push_config_fanout <= 0:
+        raise ValueError("push-config fanout must be positive")
     if args.warmup_seconds < 0 or args.duration_seconds < 0:
         raise ValueError("durations must be non-negative")
     if args.driver_timeout_seconds <= 0 or args.wire_driver_timeout_seconds <= 0:
@@ -646,6 +651,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         transports=("grpc",) if is_postgres_profile else split_csv(args.transports, TRANSPORTS),
         store_backends=("postgres",) if is_postgres_profile else split_csv(args.store_backends, STORE_BACKENDS),
         requests=DEFAULT_REQUESTS if is_postgres_profile else args.requests,
+        push_config_fanout=args.push_config_fanout,
         concurrency_levels=concurrency_levels,
         warmup_seconds=DEFAULT_WARMUP_SECONDS if is_postgres_profile else args.warmup_seconds,
         duration_seconds=DEFAULT_DURATION_SECONDS if is_postgres_profile else args.duration_seconds,
@@ -674,7 +680,11 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
                   aggregates: list[dict[str, object]] | None = None,
                   query_plans: str | None = None) -> None:
     config.report_dir.mkdir(parents=True, exist_ok=True)
-    metadata = {"sdk_commit_sha": commit_sha(), "host": host_metadata()}
+    metadata = {
+        "sdk_commit_sha": commit_sha(),
+        "host": host_metadata(),
+        "push_config_fanout": config.push_config_fanout,
+    }
     payload: dict[str, object] = {"metadata": metadata, "results": results}
     if aggregates is not None:
         payload["median_aggregates"] = aggregates
@@ -689,7 +699,7 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 
 
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
-    fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
+    fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "push_config_fanout", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     fieldnames.extend((
         "http_coordinate_accepted_connections",
         "http_coordinate_completed_unary_operations",
@@ -904,6 +914,7 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
         f"* SDK commit: `{metadata['sdk_commit_sha']}`",
         f"* Host: {host['os']} ({host['cpu']})",
         f"* Result rows: {len(results)}",
+        f"* Push-config fanout fixture: {metadata.get('push_config_fanout', DEFAULT_PUSH_CONFIG_FANOUT)}",
         "* Mode: report-only; no performance thresholds are enforced.",
         "",
         "## Execution summary",
@@ -1072,17 +1083,17 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
     append_collapsible_end(lines)
 
 
-def explain_postgres_queries(dsn: str, schema: str) -> str:
+def explain_postgres_queries(dsn: str, schema: str, push_config_fanout: int = DEFAULT_PUSH_CONFIG_FANOUT) -> str:
     sql = f'''SET search_path TO "{schema}";
-SET enable_seqscan = off;
-SET enable_sort = off;
 BEGIN;
 INSERT INTO a2a_tasks (id, context_id, state, task_proto)
 VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_TASK_ID}', 0, decode('', 'hex'))
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO a2a_push_notification_configs (task_id, config_id, url, config_proto)
-VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_CONFIG_ID}',
-        '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex'))
+SELECT '{POSTGRES_QUERY_PLAN_TASK_ID}',
+       '{POSTGRES_QUERY_PLAN_CONFIG_ID}-' || generated.config_number::text,
+       '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex')
+FROM generate_series(1, {push_config_fanout}) AS generated(config_number)
 ON CONFLICT (task_id, config_id) DO NOTHING;
 EXPLAIN (ANALYZE, BUFFERS, WAL)
 INSERT INTO a2a_tasks AS target
@@ -1115,7 +1126,7 @@ FROM task CROSS JOIN config_count
 LEFT JOIN LATERAL (
  SELECT config_proto FROM a2a_push_notification_configs
  WHERE task_id = '{POSTGRES_QUERY_PLAN_TASK_ID}' AND 0 <= config_count.total
- ORDER BY created_sequence ASC LIMIT 1 OFFSET 0
+ ORDER BY created_sequence ASC LIMIT ALL OFFSET 0
 ) AS page ON true;
 SELECT '{POSTGRES_COMBINED_PLAN_END}';
 ROLLBACK;
@@ -1131,20 +1142,10 @@ ROLLBACK;
     except IndexError as error:
         raise ValueError("query-plan review did not capture the combined query plan") from error
 
-    required_indexes = (POSTGRES_TASK_PRIMARY_INDEX, POSTGRES_PUSH_ORDER_INDEX)
-    missing = [index for index in required_indexes if index not in combined_plan]
-
-    # Both the count and ordered-page branches must execute an index-backed
-    # push-config scan. The task-only or composite index may serve the count,
-    # while the ordered page must use the composite index.
-    push_index_uses = sum(
-        combined_plan.count(index)
-        for index in (POSTGRES_PUSH_TASK_INDEX, POSTGRES_PUSH_ORDER_INDEX)
-    )
-    if push_index_uses < 2:
-        missing.append("index-backed push-config count and page branches")
-    if missing:
-        raise ValueError(f"query-plan review did not use required indexes: {', '.join(missing)}")
+    if POSTGRES_PUSH_ORDER_INDEX in combined_plan:
+        raise ValueError("query-plan review unexpectedly used the removed push ordering index")
+    if "Sort" not in combined_plan or "created_sequence" not in combined_plan:
+        raise ValueError("query-plan review did not expose the required created_sequence sort")
     return completed.stdout
 
 
@@ -1309,7 +1310,7 @@ def main(argv: list[str]) -> int:
             dsn = os.environ.get("A2A_TEST_POSTGRES_DSN", "")
             if not dsn or last_schema is None:
                 raise ValueError("A2A_TEST_POSTGRES_DSN must be set for postgres-tail")
-            query_plans = explain_postgres_queries(dsn, last_schema)
+            query_plans = explain_postgres_queries(dsn, last_schema, config.push_config_fanout)
         write_reports(results, config, aggregates, query_plans)
         if any(result_error_count(result) > 0 for result in results):
             print(f"error: {format_error_summary(results)}", file=sys.stderr)

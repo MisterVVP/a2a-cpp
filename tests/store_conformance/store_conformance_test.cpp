@@ -2609,7 +2609,7 @@ TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcr
   ExpectPushConfigPaginationOrder(stores.front(), kTaskId);
 }
 
-TEST(StoreConformanceTest, PostgresPushSchemaAvoidsRedundantTaskPrefixIndex) {
+TEST(StoreConformanceTest, PostgresPushSchemaDropsPushSecondaryIndexes) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
@@ -2632,7 +2632,7 @@ TEST(StoreConformanceTest, PostgresPushSchemaAvoidsRedundantTaskPrefixIndex) {
       a2a::server::stores::CheckTuples(connection.value().get(), result.get(), kInspectPushIndexesOperation).ok());
   ASSERT_EQ(PQntuples(result.get()), 1);
   EXPECT_NE(PQgetisnull(result.get(), 0, 0), 0);
-  EXPECT_EQ(PQgetisnull(result.get(), 0, 1), 0);
+  EXPECT_NE(PQgetisnull(result.get(), 0, 1), 0);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {

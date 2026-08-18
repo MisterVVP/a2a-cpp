@@ -126,6 +126,7 @@ struct Options final {
   std::string store_backend = std::string(kInMemoryStore);
   int requests = kDefaultRequests;
   int concurrency = kDefaultConcurrency;
+  int push_config_fanout = kPushConfigFanout;
   double warmup_seconds = 0.0;
   double duration_seconds = 0.0;
   std::vector<std::string> scenarios;

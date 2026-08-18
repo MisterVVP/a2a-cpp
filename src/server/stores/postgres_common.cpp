@@ -672,11 +672,13 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string add_push_configs_created_sequence =
       "ALTER TABLE " + push_configs + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       push_created_sequence_regclass + ");";
-  const std::string create_push_configs_created_sequence_index =
-      CreateIndexStatement(kPushConfigsCreatedSequenceIndex, push_configs, kPushConfigsCreatedSequenceIndexColumns);
   std::string drop_redundant_push_configs_task_index = "DROP INDEX IF EXISTS ";
   drop_redundant_push_configs_task_index.append(QualifiedSqlIdentifier(options.schema, kPushConfigsTaskIndex));
   drop_redundant_push_configs_task_index.push_back(';');
+  std::string drop_push_configs_created_sequence_index = "DROP INDEX IF EXISTS ";
+  drop_push_configs_created_sequence_index.append(
+      QualifiedSqlIdentifier(options.schema, kPushConfigsCreatedSequenceIndex));
+  drop_push_configs_created_sequence_index.push_back(';');
 
   const std::vector<std::string> schema_statements = {create_task_created_sequence,
                                                       create_push_created_sequence,
@@ -697,8 +699,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       revoke_delete_task_push_configs_function,
                                                       create_delete_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
-                                                      create_push_configs_created_sequence_index,
                                                       drop_redundant_push_configs_task_index,
+                                                      drop_push_configs_created_sequence_index,
                                                       mark_delete_task_push_configs_migration,
                                                       mark_task_push_config_migration};
   return ExecuteSchemaStatements(connection, schema_statements);
