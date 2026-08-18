@@ -170,7 +170,10 @@ storage authority.
 
 When `auto_create_schema=true`, schema initialization creates or upgrades the
 task/push tables, provenance column, helper functions, cleanup trigger, sequences,
-and indexes, and removes the legacy push-to-task foreign key. The migration
+and indexes, and removes the legacy push-to-task foreign key. The composite
+`(task_id, created_sequence)` push index also serves task-only lookups, so schema
+initialization removes the redundant legacy `idx_a2a_push_configs_task` index to
+avoid maintaining two equivalent index prefixes on every push write. The migration
 objects are installed transactionally and the `task-aware-push-config-v2`
 markers are written last.
 
@@ -221,6 +224,10 @@ ALTER TABLE public.a2a_push_notification_configs
 
 ALTER TABLE public.a2a_push_notification_configs
   DROP CONSTRAINT IF EXISTS a2a_push_configs_task_fk;
+
+CREATE INDEX IF NOT EXISTS idx_a2a_push_configs_created_sequence
+  ON public.a2a_push_notification_configs (task_id, created_sequence ASC);
+DROP INDEX IF EXISTS public.idx_a2a_push_configs_task;
 
 CREATE OR REPLACE FUNCTION public.a2a_lock_task_for_push_config(requested_task_id TEXT)
 RETURNS BOOLEAN

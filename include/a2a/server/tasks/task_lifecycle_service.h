@@ -20,10 +20,12 @@ class TaskLifecycleService final {
   explicit TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator = nullptr);
 
   [[nodiscard]] core::Result<lf::a2a::v1::Task> CreateOrUpdateTask(const lf::a2a::v1::Task& task) const;
-  // Returns an owning string because the id may be newly generated and must outlive this call.
-  // Returning string_view would be unsafe for generated values due to temporary lifetime.
+  // Resolves only the identifier. Callers must validate an authoritative task
+  // snapshot after taking their task-level synchronization.
   [[nodiscard]] core::Result<std::string> ResolveTaskIdForSendRequest(const lf::a2a::v1::SendMessageRequest& request,
                                                                       const RequestContext& context) const;
+  [[nodiscard]] static core::Result<void> ValidateTaskForSendRequest(const lf::a2a::v1::SendMessageRequest& request,
+                                                                     const lf::a2a::v1::Task& task);
   [[nodiscard]] core::Result<lf::a2a::v1::Task> TransitionTaskStatus(std::string_view task_id,
                                                                      lf::a2a::v1::TaskState next_state) const;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> AppendHistory(std::string_view task_id,

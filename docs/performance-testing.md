@@ -184,10 +184,12 @@ another scenario's locks from changing the comparison.
 While each scenario runs, the runner samples `pg_stat_activity` and records
 session state, concurrent active sessions, idle transactions, and PostgreSQL
 wait-event type/event. It also takes before/after snapshots of
-`pg_stat_database` and `pg_stat_wal`. The resulting
+`pg_stat_database`, `pg_stat_wal`, and the `MultiXactMember` and
+`MultiXactOffset` rows from `pg_stat_slru`. The resulting
 `postgres_database_diagnostics` object in `results.json` contains sampled wait
 counts and deltas for transactions, tuple writes, cache activity, WAL bytes,
-WAL writes/syncs, full WAL buffers, and PostgreSQL-reported block/WAL timing.
+WAL writes/syncs, full WAL buffers, PostgreSQL-reported block/WAL timing, and
+MultiXact SLRU block activity caused by concurrent task row locks.
 These server observations complement the per-operation
 `connection_acquire_wait`, `task_upsert`, and `push_config_upsert` phase
 latencies already emitted by the SDK driver.
@@ -199,7 +201,7 @@ A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
 ```
 
 The profile also captures `EXPLAIN (ANALYZE, BUFFERS, WAL)` output for
-representative task and push-config conflict writes inside a rolled-back
+representative task-conflict and push-config insert writes inside a rolled-back
 transaction. Interpret the evidence before changing production code:
 
 - increasing `WAL:WALWrite` or `IO:WALSync` samples, WAL sync time, and WAL

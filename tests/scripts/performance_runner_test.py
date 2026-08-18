@@ -372,15 +372,18 @@ class PerformanceRunnerTest(unittest.TestCase):
         before = {
             "database": {"xact_commit": 10, "blks_hit": 100},
             "wal": {"wal_bytes": 1000, "wal_sync": 20},
+            "slru": {"MultiXactMember": {"blks_hit": 40, "blks_written": 2}},
         }
         after = {
             "database": {"xact_commit": 14, "blks_hit": 125},
             "wal": {"wal_bytes": 1256, "wal_sync": 23},
+            "slru": {"MultiXactMember": {"blks_hit": 52, "blks_written": 3}},
         }
         self.assertEqual(
             {
                 "database": {"xact_commit": 4.0, "blks_hit": 25.0},
                 "wal": {"wal_bytes": 256.0, "wal_sync": 3.0},
+                "slru": {"MultiXactMember": {"blks_hit": 12.0, "blks_written": 1.0}},
             },
             runner.subtract_postgres_counters(before, after),
         )
@@ -505,6 +508,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("BEGIN;", sql)
         self.assertIn("INSERT INTO a2a_tasks", sql)
         self.assertIn("INSERT INTO a2a_push_notification_configs", sql)
+        self.assertIn(f"'{runner.POSTGRES_QUERY_PLAN_CONFIG_ID}-insert'", sql)
         self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_START}'", sql)
         self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_END}'", sql)
         self.assertIn("WITH task AS MATERIALIZED", sql)

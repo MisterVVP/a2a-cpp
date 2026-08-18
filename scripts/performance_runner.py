@@ -177,7 +177,10 @@ POSTGRES_COUNTER_SQL = """
   FROM pg_stat_database WHERE datname = current_database()) s),
 'wal', (SELECT row_to_json(s) FROM (
   SELECT wal_records, wal_fpi, wal_bytes::text::numeric, wal_buffers_full,
-         wal_write, wal_sync, wal_write_time, wal_sync_time FROM pg_stat_wal) s)
+         wal_write, wal_sync, wal_write_time, wal_sync_time FROM pg_stat_wal) s),
+'slru', (SELECT coalesce(json_object_agg(name, row_to_json(s)), '{}'::json) FROM (
+  SELECT name, blks_zeroed, blks_hit, blks_read, blks_written, flushes, truncates
+  FROM pg_stat_slru WHERE name IN ('MultiXactMember', 'MultiXactOffset')) s)
 """
 
 POSTGRES_ACTIVITY_SQL = """
@@ -216,6 +219,19 @@ def subtract_postgres_counters(before: object, after: object) -> dict[str, objec
         delta[group] = {
             key: float(value) - float(old_values.get(key, 0))
             for key, value in new_values.items()
+        }
+    old_slru = before.get("slru", {})
+    new_slru = after.get("slru", {})
+    if not isinstance(old_slru, dict) or not isinstance(new_slru, dict):
+        raise ValueError("PostgreSQL slru counter snapshot must be an object")
+    delta["slru"] = {}
+    for name, values in new_slru.items():
+        old_values = old_slru.get(name, {})
+        if not isinstance(values, dict) or not isinstance(old_values, dict):
+            raise ValueError("PostgreSQL slru counter row must be an object")
+        delta["slru"][name] = {
+            key: float(value) - float(old_values.get(key, 0))
+            for key, value in values.items() if key != "name"
         }
     return delta
 
@@ -1080,7 +1096,7 @@ ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDE
 EXPLAIN (ANALYZE, BUFFERS, WAL)
 INSERT INTO a2a_push_notification_configs AS target
   (task_id, config_id, url, config_proto, local_postgres_task, updated_at)
-VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_CONFIG_ID}',
+VALUES ('{POSTGRES_QUERY_PLAN_TASK_ID}', '{POSTGRES_QUERY_PLAN_CONFIG_ID}-insert',
         '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex'), true, now())
 ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url,
   config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task,

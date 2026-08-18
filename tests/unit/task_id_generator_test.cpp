@@ -200,7 +200,7 @@ TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdPreservesExplicitTaskId) {
   EXPECT_EQ(result.value(), "task-existing");
 }
 
-TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdRejectsContextMismatchAndTerminalTask) {
+TEST(TaskIdGeneratorTest, LifecycleValidatesAuthoritativeTaskForSendRequest) {
   a2a::server::InMemoryTaskStore store;
   lf::a2a::v1::Task working;
   working.set_id("task-context");
@@ -220,13 +220,17 @@ TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdRejectsContextMismatchAndTermina
   mismatch.mutable_message()->set_task_id("task-context");
   mismatch.mutable_message()->set_context_id("ctx-wrong");
   mismatch.mutable_message()->set_message_id("m-1");
-  EXPECT_FALSE(lifecycle.ResolveTaskIdForSendRequest(mismatch, context).ok());
+  const auto mismatch_id = lifecycle.ResolveTaskIdForSendRequest(mismatch, context);
+  ASSERT_TRUE(mismatch_id.ok());
+  EXPECT_FALSE(lifecycle.ValidateTaskForSendRequest(mismatch, working).ok());
 
   lf::a2a::v1::SendMessageRequest follow_up;
   follow_up.mutable_message()->set_task_id("task-terminal");
   follow_up.mutable_message()->set_context_id("ctx-t");
   follow_up.mutable_message()->set_message_id("m-2");
-  EXPECT_FALSE(lifecycle.ResolveTaskIdForSendRequest(follow_up, context).ok());
+  const auto terminal_id = lifecycle.ResolveTaskIdForSendRequest(follow_up, context);
+  ASSERT_TRUE(terminal_id.ok());
+  EXPECT_FALSE(lifecycle.ValidateTaskForSendRequest(follow_up, terminal).ok());
 }
 
 }  // namespace

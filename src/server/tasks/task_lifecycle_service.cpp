@@ -36,23 +36,27 @@ core::Result<std::string> TaskLifecycleService::ResolveTaskIdForSendRequest(
   }
   const auto& message = request.message();
   if (!message.task_id().empty()) {
-    const auto existing = store_->Get(message.task_id());
-    if (!existing.ok()) {
-      return core::protocol_errors::TaskNotFound();
-    }
-    if (!message.context_id().empty() && !existing.value().context_id().empty() &&
-        message.context_id() != existing.value().context_id()) {
-      return core::protocol_errors::UnsupportedOperation("contextId does not match task");
-    }
-    if (core::IsTerminalTaskState(existing.value().status().state())) {
-      return core::protocol_errors::UnsupportedOperation("task is already terminal");
-    }
     return message.task_id();
   }
   if (message.message_id().empty()) {
     return core::Error::Validation("message.messageId is required when message.taskId is absent");
   }
   return task_id_generator_->GenerateTaskId(request, context);
+}
+
+core::Result<void> TaskLifecycleService::ValidateTaskForSendRequest(const lf::a2a::v1::SendMessageRequest& request,
+                                                                    const lf::a2a::v1::Task& task) {
+  if (!request.has_message()) {
+    return core::Error::Validation("message is required");
+  }
+  const auto& message = request.message();
+  if (!message.context_id().empty() && !task.context_id().empty() && message.context_id() != task.context_id()) {
+    return core::protocol_errors::UnsupportedOperation("contextId does not match task");
+  }
+  if (core::IsTerminalTaskState(task.status().state())) {
+    return core::protocol_errors::UnsupportedOperation("task is already terminal");
+  }
+  return {};
 }
 
 core::Result<lf::a2a::v1::Task> TaskLifecycleService::TransitionTaskStatus(std::string_view task_id,

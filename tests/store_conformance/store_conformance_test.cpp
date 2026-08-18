@@ -43,6 +43,8 @@ constexpr std::string_view kMissingTaskAwareListTaskId = "missing-task-aware-lis
 constexpr std::string_view kMalformedTaskAwareListPageToken = "invalid-page-token";
 constexpr int kInvalidTaskAwareListPageSize = -1;
 constexpr int kValidTaskAwareListPageSize = 1;
+constexpr auto kIndexPresenceSql = std::to_array("SELECT pg_catalog.to_regclass($1), pg_catalog.to_regclass($2)");
+constexpr std::string_view kInspectPushIndexesOperation = "inspect push indexes";
 
 void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAwarePushNotificationStore& push_store,
                                                           const a2a::server::TaskStore& task_store) {
@@ -2605,6 +2607,32 @@ TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcr
   }));
   ExpectPushConfigListOrder(stores.front(), kTaskId);
   ExpectPushConfigPaginationOrder(stores.front(), kTaskId);
+}
+
+TEST(StoreConformanceTest, PostgresPushSchemaAvoidsRedundantTaskPrefixIndex) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+  }
+  const std::string schema = MakePostgresTestSchema("push_index_amplification");
+  a2a::server::stores::PostgresPushNotificationStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
+  auto connection = store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+
+  const std::string legacy_index =
+      a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kPushConfigsTaskIndex);
+  const std::string ordering_index =
+      a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kPushConfigsCreatedSequenceIndex);
+  const std::array<const char*, 2> values = {legacy_index.c_str(), ordering_index.c_str()};
+  a2a::server::stores::PgResult result(PQexecParams(connection.value().get(), kIndexPresenceSql.data(),
+                                                    static_cast<int>(values.size()), nullptr, values.data(), nullptr,
+                                                    nullptr, 0));
+  ASSERT_TRUE(
+      a2a::server::stores::CheckTuples(connection.value().get(), result.get(), kInspectPushIndexesOperation).ok());
+  ASSERT_EQ(PQntuples(result.get()), 1);
+  EXPECT_NE(PQgetisnull(result.get(), 0, 0), 0);
+  EXPECT_EQ(PQgetisnull(result.get(), 0, 1), 0);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
