@@ -133,11 +133,13 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
                privilege_error_code.size() + privilege_error_message.size() +
                kTaskPushConfigLockFunctionSqlReserveSlack);
   body.append(
-      "DECLARE caller_role name; BEGIN PERFORM pg_catalog.pg_advisory_xact_lock_shared("
+      "DECLARE caller_role name; lock_key bigint; BEGIN lock_key := "
       "pg_catalog.hashtextextended(requested_task_id, ");
   body.append(kTaskAdvisoryLockHashSeed);
   body.append(
-      ")); caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
+      "); IF NOT pg_catalog.pg_try_advisory_xact_lock_shared(lock_key) THEN "
+      "PERFORM pg_catalog.pg_advisory_xact_lock_shared(lock_key); END IF; "
+      "caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
       "IF caller_role IS NULL THEN caller_role := session_user; END IF; IF EXISTS ("
       "SELECT 1 FROM pg_catalog.pg_class AS relation WHERE relation.oid = pg_catalog.to_regclass(");
   body.append(task_table_literal);
