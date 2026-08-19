@@ -45,6 +45,7 @@ constexpr std::string_view kListConfigPrefix = "focused-list-config";
 constexpr std::string_view kDeleteConfigPrefix = "focused-delete-config";
 constexpr std::string_view kDeleteWarmupConfigPrefix = "focused-delete-warmup-config";
 constexpr int kFocusedListConfigCount = 3;
+constexpr int kWarmupIndexStart = std::numeric_limits<int>::max();
 
 struct DeliveryStats final {
   int attempted = 0;
@@ -228,6 +229,17 @@ class ScenarioHarness final {
 
   [[nodiscard]] const std::vector<std::string>& follow_up_task_ids() const noexcept { return follow_up_task_ids_; }
   [[nodiscard]] const std::vector<DeleteFixture>& delete_fixtures() const noexcept { return delete_fixtures_; }
+
+  [[nodiscard]] int ExistingTaskPushConfigCount() {
+    lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
+    request.set_task_id(existing_task_id_);
+    a2a::server::RequestContext context;
+    const auto configs = executor_->ListTaskPushNotificationConfigs(request, context);
+    if (!configs.ok()) {
+      return -1;
+    }
+    return configs.value().configs_size();
+  }
 
  private:
   static OperationOutcome OperationSucceeded(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
@@ -720,9 +732,9 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
     return failed;
   }
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
-  int warmup_index = 0;
+  int warmup_index = kWarmupIndexStart;
   while (std::chrono::steady_clock::now() < warmup_end) {
-    (void)harness.ExecuteFollowUpWarmup(scenario, warmup_index++);
+    (void)harness.ExecuteFollowUpWarmup(scenario, warmup_index--);
   }
   if (!harness.PrepareMeasuredFixtures(scenario, options.requests)) {
     ScenarioResult failed;

@@ -229,6 +229,20 @@ TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
 }
 
+TEST(PerformanceScenarioIsolationTest, PushCreateWarmupDoesNotReuseMeasuredConfigIds) {
+  ScenarioHarness harness(kInMemoryStore);
+  ASSERT_TRUE(harness.ok());
+  ASSERT_EQ(harness.ExistingTaskPushConfigCount(), 0);
+
+  ASSERT_TRUE(harness.ExecuteFollowUpWarmup(kScenarioPushConfigCreate, kWarmupIndexStart));
+  EXPECT_EQ(harness.ExistingTaskPushConfigCount(), 1);
+
+  const OperationOutcome measured = harness.Execute(kScenarioPushConfigCreate, 0, 0);
+
+  ASSERT_TRUE(measured.ok);
+  EXPECT_EQ(harness.ExistingTaskPushConfigCount(), 2);
+}
+
 TEST(PerformanceScenarioIsolationTest, FocusedGetAndListDoNotCreateSetupData) {
   ScenarioInstrumentation instrumentation;
   ScenarioHarness harness(kInMemoryStore, &instrumentation);
