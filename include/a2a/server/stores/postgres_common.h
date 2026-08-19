@@ -84,8 +84,10 @@ constexpr std::string_view kPushConfigsCreatedSequenceIndexColumns = "(task_id, 
 constexpr std::string_view kPushConfigsTaskForeignKey = "a2a_push_configs_task_fk";
 constexpr std::string_view kDeleteTaskPushConfigsFunction = "a2a_delete_task_push_configs";
 constexpr std::string_view kTaskPushConfigLockFunction = "a2a_lock_task_for_push_config";
-constexpr std::string_view kTaskPushConfigMigrationId = "task-aware-push-config-v2";
+constexpr std::string_view kTaskDeleteLockFunction = "a2a_lock_task_for_delete";
+constexpr std::string_view kTaskPushConfigMigrationId = "task-aware-push-config-v3";
 constexpr std::string_view kDeleteTaskPushConfigsTrigger = "a2a_delete_task_push_configs_trigger";
+constexpr std::string_view kTaskDeleteLockTrigger = "a2a_lock_task_for_delete_trigger";
 constexpr std::size_t kDeleteTaskPushConfigsFunctionSqlReserveSlack = 160U;
 constexpr std::size_t kDeleteTaskPushConfigsTriggerSqlReserveSlack = 192U;
 constexpr std::size_t kRevokeDeleteTaskPushConfigsFunctionSqlReserveSlack = 48U;
@@ -190,7 +192,9 @@ class Transaction final {
 [[nodiscard]] std::string TaskTable(std::string_view schema);
 [[nodiscard]] std::string PushTable(std::string_view schema);
 [[nodiscard]] std::string TaskPushConfigLockFunction(std::string_view schema);
+[[nodiscard]] std::string TaskDeleteLockFunction(std::string_view schema);
 [[nodiscard]] std::string ExpectedTaskPushConfigLockFunctionBody(std::string_view schema);
+[[nodiscard]] std::string ExpectedTaskDeleteLockFunctionBody();
 [[nodiscard]] std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema);
 [[nodiscard]] PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
                                                                         const PostgresStorageIdentity& rhs) noexcept;

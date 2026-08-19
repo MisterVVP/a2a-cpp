@@ -28,6 +28,9 @@ constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
 constexpr std::size_t kTaskPushConfigLockFunctionSqlReserveSlack = 768U;
 constexpr std::size_t kTaskPushConfigLockFunctionPrivilegeSqlReserveSlack = 64U;
 constexpr std::size_t kTaskPushConfigMigrationMarkerSqlReserveSlack = 96U;
+constexpr std::size_t kTaskDeleteLockFunctionSqlReserveSlack = 192U;
+constexpr std::size_t kTaskDeleteLockTriggerSqlReserveSlack = 192U;
+constexpr std::string_view kTaskAdvisoryLockHashSeed = "0";
 constexpr std::string_view kFeatureNotSupportedSqlState = "0A000";
 constexpr std::string_view kInsufficientPrivilegeSqlState = "42501";
 constexpr std::string_view kPostgresTaskRowLevelSecurityUnsupportedMessage =
@@ -130,7 +133,11 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
                privilege_error_code.size() + privilege_error_message.size() +
                kTaskPushConfigLockFunctionSqlReserveSlack);
   body.append(
-      "DECLARE caller_role name; BEGIN caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
+      "DECLARE caller_role name; BEGIN PERFORM pg_catalog.pg_advisory_xact_lock_shared("
+      "pg_catalog.hashtextextended(requested_task_id, ");
+  body.append(kTaskAdvisoryLockHashSeed);
+  body.append(
+      ")); caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
       "IF caller_role IS NULL THEN caller_role := session_user; END IF; IF EXISTS ("
       "SELECT 1 FROM pg_catalog.pg_class AS relation WHERE relation.oid = pg_catalog.to_regclass(");
   body.append(task_table_literal);
@@ -146,7 +153,7 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   body.append(privilege_error_message);
   body.append("; END IF; PERFORM 1 FROM ");
   body.append(task_table);
-  body.append(" WHERE id = requested_task_id FOR KEY SHARE; RETURN FOUND; END");
+  body.append(" WHERE id = requested_task_id; RETURN FOUND; END");
   return body;
 }
 
@@ -190,6 +197,66 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   sql.append("(text) IS ");
   sql.append(SqlStringLiteral(kTaskPushConfigMigrationId));
   sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildTaskDeleteLockFunctionBody() {
+  std::string body;
+  body.reserve(kTaskDeleteLockFunctionSqlReserveSlack);
+  body.append("BEGIN PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(OLD.id, ");
+  body.append(kTaskAdvisoryLockHashSeed);
+  body.append(")); RETURN OLD; END");
+  return body;
+}
+
+[[nodiscard]] std::string BuildTaskDeleteLockFunctionSql(std::string_view function) {
+  const std::string body = BuildTaskDeleteLockFunctionBody();
+  std::string sql;
+  sql.reserve(function.size() + body.size() + kTaskDeleteLockFunctionSqlReserveSlack);
+  sql.append("CREATE OR REPLACE FUNCTION ");
+  sql.append(function);
+  sql.append("() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ ");
+  sql.append(body);
+  sql.append(" $a2a$;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildRevokeTaskDeleteLockFunctionSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kRevokeDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  sql.append("REVOKE ALL ON FUNCTION ");
+  sql.append(function);
+  sql.append("() FROM PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildTaskDeleteLockMigrationMarkerSql(std::string_view function) {
+  std::string sql;
+  sql.reserve(function.size() + kTaskPushConfigMigrationMarkerSqlReserveSlack);
+  sql.append("COMMENT ON FUNCTION ");
+  sql.append(function);
+  sql.append("() IS ");
+  sql.append(SqlStringLiteral(kTaskPushConfigMigrationId));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildTaskDeleteLockTriggerSql(std::string_view function, std::string_view task_table) {
+  const std::string trigger = QuoteSqlIdentifier(kTaskDeleteLockTrigger);
+  std::string sql;
+  sql.reserve((2U * trigger.size()) + function.size() + (2U * task_table.size()) +
+              kTaskDeleteLockTriggerSqlReserveSlack);
+  sql.append("DROP TRIGGER IF EXISTS ");
+  sql.append(trigger);
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append("; CREATE TRIGGER ");
+  sql.append(trigger);
+  sql.append(" BEFORE DELETE ON ");
+  sql.append(task_table);
+  sql.append(" FOR EACH ROW EXECUTE FUNCTION ");
+  sql.append(function);
+  sql.append("();");
   return sql;
 }
 
@@ -371,9 +438,15 @@ std::string TaskPushConfigLockFunction(std::string_view schema) {
   return QualifiedSqlIdentifier(schema, kTaskPushConfigLockFunction);
 }
 
+std::string TaskDeleteLockFunction(std::string_view schema) {
+  return QualifiedSqlIdentifier(schema, kTaskDeleteLockFunction);
+}
+
 std::string ExpectedTaskPushConfigLockFunctionBody(std::string_view schema) {
   return BuildTaskPushConfigLockFunctionBody(TaskTable(schema));
 }
+
+std::string ExpectedTaskDeleteLockFunctionBody() { return BuildTaskDeleteLockFunctionBody(); }
 
 std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema) {
   return BuildDeleteTaskPushConfigsFunctionBody(PushTable(schema));
@@ -609,6 +682,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string delete_task_push_configs_function =
       QualifiedSqlIdentifier(options.schema, kDeleteTaskPushConfigsFunction);
   const std::string task_push_config_lock_function = TaskPushConfigLockFunction(options.schema);
+  const std::string task_delete_lock_function = TaskDeleteLockFunction(options.schema);
   const std::string task_created_sequence_regclass = SqlStringLiteral(task_created_sequence);
   const std::string push_created_sequence_regclass = SqlStringLiteral(push_created_sequence);
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
@@ -661,6 +735,10 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       BuildGrantTaskPushConfigLockFunctionSql(task_push_config_lock_function);
   const std::string mark_task_push_config_migration =
       BuildTaskPushConfigMigrationMarkerSql(task_push_config_lock_function);
+  const std::string create_task_delete_lock_function = BuildTaskDeleteLockFunctionSql(task_delete_lock_function);
+  const std::string revoke_task_delete_lock_function = BuildRevokeTaskDeleteLockFunctionSql(task_delete_lock_function);
+  const std::string create_task_delete_lock_trigger = BuildTaskDeleteLockTriggerSql(task_delete_lock_function, tasks);
+  const std::string mark_task_delete_lock_migration = BuildTaskDeleteLockMigrationMarkerSql(task_delete_lock_function);
   const std::string create_delete_task_push_configs_function =
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
@@ -695,12 +773,16 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_push_configs,
                                                       add_push_config_provenance,
                                                       remove_push_configs_task_foreign_key,
+                                                      create_task_delete_lock_function,
+                                                      revoke_task_delete_lock_function,
+                                                      create_task_delete_lock_trigger,
                                                       create_delete_task_push_configs_function,
                                                       revoke_delete_task_push_configs_function,
                                                       create_delete_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
                                                       drop_redundant_push_configs_task_index,
                                                       drop_push_configs_created_sequence_index,
+                                                      mark_task_delete_lock_migration,
                                                       mark_delete_task_push_configs_migration,
                                                       mark_task_push_config_migration};
   return ExecuteSchemaStatements(connection, schema_statements);

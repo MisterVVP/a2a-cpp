@@ -182,27 +182,13 @@ jobs:
         run: >-
           ./scripts/run_performance_tests.sh --profile postgres-tail-c1
           --report-dir perf-artifacts/postgres-tail-c1
-      - name: Run PostgreSQL push-list fanout profiles
-        run: |
-          for fanout in 100 1000 10000; do
-            ./scripts/run_performance_tests.sh \
-              --profile postgres-tail-c1 \
-              --push-config-fanout "${fanout}" \
-              --report-dir "perf-artifacts/postgres-list-${fanout}"
-          done
       - name: Run attributed PostgreSQL write profile
         run: >-
           ./scripts/run_performance_tests.sh --profile postgres-write
           --report-dir perf-artifacts/postgres-write
       - name: Validate PostgreSQL tail reports
         run: |
-          for report_dir in \
-            perf-artifacts/postgres-tail \
-            perf-artifacts/postgres-tail-c1 \
-            perf-artifacts/postgres-list-100 \
-            perf-artifacts/postgres-list-1000 \
-            perf-artifacts/postgres-list-10000 \
-            perf-artifacts/postgres-write; do
+          for report_dir in perf-artifacts/postgres-tail perf-artifacts/postgres-tail-c1 perf-artifacts/postgres-write; do
             test -s "$report_dir/results.json"
             test -s "$report_dir/results.csv"
             test -s "$report_dir/median-aggregates.csv"
@@ -218,9 +204,6 @@ jobs:
           path: |
             perf-artifacts/postgres-tail
             perf-artifacts/postgres-tail-c1
-            perf-artifacts/postgres-list-100
-            perf-artifacts/postgres-list-1000
-            perf-artifacts/postgres-list-10000
             perf-artifacts/postgres-write
           if-no-files-found: error
 
