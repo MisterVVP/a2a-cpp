@@ -8,6 +8,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <future>
 #include <iostream>
@@ -48,12 +49,23 @@ constexpr std::string_view kDeleteConfigPrefix = "focused-delete-config";
 constexpr std::string_view kDeleteWarmupConfigPrefix = "focused-delete-warmup-config";
 constexpr int kFocusedListConfigCount = 3;
 constexpr int kWarmupIndexStart = std::numeric_limits<int>::max();
+constexpr std::uint64_t kConfigIdPermutationMultiplier = 11400714819323198485ULL;
 
 struct DeliveryStats final {
   int attempted = 0;
   int succeeded = 0;
   int failed = 0;
 };
+
+[[nodiscard]] std::string BuildDistributedConfigId(std::string_view prefix, std::uint64_t sequence) {
+  const std::uint64_t permuted = sequence * kConfigIdPermutationMultiplier;
+  std::string value;
+  value.reserve(prefix.size() + 1U + std::numeric_limits<std::uint64_t>::digits10 + 1U);
+  value.append(prefix);
+  value.push_back('-');
+  value.append(std::to_string(permuted));
+  return value;
+}
 
 struct ScenarioInstrumentation final {
   std::atomic<int> task_creates{0};
@@ -356,6 +368,13 @@ class ScenarioHarness final {
                                         MakePushConfig(existing_task_id_, BuildId("cfg-create", index)), context)
                                     .ok());
     }
+    if (scenario == kScenarioPushConfigCreateDistributedIds) {
+      return OperationSucceeded(
+          executor_
+              ->CreateTaskPushNotificationConfig(
+                  MakePushConfig(existing_task_id_, BuildDistributedConfigId("cfg-create-distributed", index)), context)
+              .ok());
+    }
     if (scenario == kScenarioPushConfigGet) {
       return OperationSucceeded(GetPushConfig(context));
     }
@@ -379,7 +398,10 @@ class ScenarioHarness final {
       return DeliverPreloadedCallbacks();
     }
     if (scenario == kScenarioPushConfigCreateMany) {
-      return CreateManyPushConfigs(index, context);
+      return CreateManyPushConfigs(index, context, false);
+    }
+    if (scenario == kScenarioPushConfigCreateManyDistributedIds) {
+      return CreateManyPushConfigs(index, context, true);
     }
     if (scenario == kScenarioPushDeliveryBuildPayload) {
       return BuildPushPayloadOnly();
@@ -520,7 +542,7 @@ class ScenarioHarness final {
             .total_fanout_count = successful_deliveries + failed_deliveries};
   }
 
-  OperationOutcome CreateManyPushConfigs(int index, a2a::server::RequestContext& context) {
+  OperationOutcome CreateManyPushConfigs(int index, a2a::server::RequestContext& context, bool distributed_ids) {
     if (create_many_task_id_.empty()) {
       return {};
     }
@@ -532,7 +554,15 @@ class ScenarioHarness final {
       std::vector<lf::a2a::v1::TaskPushNotificationConfig> configs;
       configs.reserve(static_cast<std::size_t>(push_config_fanout_));
       for (int config = 0; config < push_config_fanout_; ++config) {
-        configs.push_back(MakePushConfig(create_many_task_id_, BuildId(BuildId("create-many", index), config)));
+        std::string config_id;
+        if (distributed_ids) {
+          const auto sequence = static_cast<std::uint64_t>(index) * static_cast<std::uint64_t>(push_config_fanout_) +
+                                static_cast<std::uint64_t>(config);
+          config_id = BuildDistributedConfigId("create-many-distributed", sequence);
+        } else {
+          config_id = BuildId(BuildId("create-many", index), config);
+        }
+        configs.push_back(MakePushConfig(create_many_task_id_, config_id));
         CountConfigCreate();
       }
       const auto created = postgres_push_store->CreateOrUpdateManyForTask(configs, *postgres_task_store);
@@ -544,8 +574,16 @@ class ScenarioHarness final {
 #endif
     int created = 0;
     for (int config = 0; config < push_config_fanout_; ++config) {
-      const auto response = executor_->CreateTaskPushNotificationConfig(
-          MakePushConfig(create_many_task_id_, BuildId(BuildId("create-many", index), config)), context);
+      std::string config_id;
+      if (distributed_ids) {
+        const auto sequence = static_cast<std::uint64_t>(index) * static_cast<std::uint64_t>(push_config_fanout_) +
+                              static_cast<std::uint64_t>(config);
+        config_id = BuildDistributedConfigId("create-many-distributed", sequence);
+      } else {
+        config_id = BuildId(BuildId("create-many", index), config);
+      }
+      const auto response =
+          executor_->CreateTaskPushNotificationConfig(MakePushConfig(create_many_task_id_, config_id), context);
       CountConfigCreate();
       if (!response.ok()) {
         return {.event_count = created,

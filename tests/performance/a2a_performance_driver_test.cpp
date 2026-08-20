@@ -229,6 +229,27 @@ TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
 }
 
+TEST(PerformanceScenarioIsolationTest, DistributedCreateManyConfigsUsesPreseededTask) {
+  ScenarioInstrumentation instrumentation;
+  ScenarioHarness harness(kInMemoryStore, &instrumentation);
+  ASSERT_TRUE(harness.ok());
+  instrumentation.task_creates.store(0, std::memory_order_relaxed);
+  instrumentation.config_creates.store(0, std::memory_order_relaxed);
+  instrumentation.config_lists.store(0, std::memory_order_relaxed);
+  instrumentation.payload_builds.store(0, std::memory_order_relaxed);
+
+  const OperationOutcome outcome = harness.Execute(kScenarioPushConfigCreateManyDistributedIds, 0, 0);
+
+  EXPECT_TRUE(outcome.ok);
+  EXPECT_EQ(0, AtomicValue(instrumentation.task_creates));
+  EXPECT_EQ(kPushConfigFanout, AtomicValue(instrumentation.config_creates));
+  EXPECT_EQ(0, AtomicValue(instrumentation.config_lists));
+  EXPECT_EQ(0, AtomicValue(instrumentation.payload_builds));
+  EXPECT_EQ(kPushConfigFanout, outcome.event_count);
+  EXPECT_EQ(kPushConfigFanout, outcome.fanout_per_operation);
+  EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
+}
+
 TEST(PerformanceScenarioIsolationTest, PushCreateWarmupDoesNotReuseMeasuredConfigIds) {
   ScenarioHarness harness(kInMemoryStore);
   ASSERT_TRUE(harness.ok());
