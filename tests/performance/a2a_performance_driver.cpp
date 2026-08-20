@@ -372,7 +372,9 @@ class ScenarioHarness final {
       return OperationSucceeded(
           executor_
               ->CreateTaskPushNotificationConfig(
-                  MakePushConfig(existing_task_id_, BuildDistributedConfigId("cfg-create-distributed", index)), context)
+                  MakePushConfig(existing_task_id_,
+                                 BuildDistributedConfigId("cfg-create-distributed", static_cast<std::uint64_t>(index))),
+                  context)
               .ok());
     }
     if (scenario == kScenarioPushConfigGet) {
