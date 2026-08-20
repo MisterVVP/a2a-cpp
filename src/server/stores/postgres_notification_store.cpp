@@ -15,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
@@ -255,6 +256,40 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
       "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
       "updated_at = now() ");
   sql.append("RETURNING 1");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildPushBatchUpsertSql(std::string_view schema, std::size_t config_count) {
+  const std::string push_table = PushTable(schema);
+  const std::string task_lock_function = TaskPushConfigLockFunction(schema);
+  std::string sql;
+  sql.reserve(push_table.size() + task_lock_function.size() + (config_count * 48U) + kPushUpsertSqlReserveSlack);
+  sql.append("WITH task AS MATERIALIZED (SELECT ");
+  sql.append(task_lock_function);
+  sql.append("($1) AS task_exists), input(config_id, url, config_proto) AS (VALUES ");
+  for (std::size_t index = 0; index < config_count; ++index) {
+    if (index != 0U) {
+      sql.append(", ");
+    }
+    const std::size_t first_parameter = 2U + (index * 3U);
+    sql.push_back('(');
+    sql.push_back('$');
+    sql.append(std::to_string(first_parameter));
+    sql.append("::text, $");
+    sql.append(std::to_string(first_parameter + 1U));
+    sql.append("::text, $");
+    sql.append(std::to_string(first_parameter + 2U));
+    sql.append("::bytea)");
+  }
+  sql.append(") INSERT INTO ");
+  sql.append(push_table);
+  sql.append(
+      " (task_id, config_id, url, config_proto, local_postgres_task, updated_at) "
+      "SELECT $1, input.config_id, input.url, input.config_proto, TRUE, now() "
+      "FROM task CROSS JOIN input WHERE task.task_exists "
+      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
+      "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
+      "updated_at = now() RETURNING 1");
   return sql;
 }
 
@@ -529,6 +564,84 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
     return core::Error::Internal(std::string(kPostgresTaskAuthorityUncertainMessage));
   }
   return Upsert(config, UpsertPath::kExternal);
+}
+
+core::Result<void> PostgresPushNotificationStore::CreateOrUpdateManyForTask(
+    const std::vector<lf::a2a::v1::TaskPushNotificationConfig>& configs, const PostgresTaskStore& task_store) {
+  if (configs.empty()) {
+    return {};
+  }
+  const std::string_view task_id = configs.front().task_id();
+  for (const auto& config : configs) {
+    const auto validation = ValidatePushConfig(config);
+    if (!validation.ok()) {
+      const auto task = task_store.Get(task_id);
+      if (!task.ok()) {
+        return task.error();
+      }
+      return validation.error();
+    }
+    if (config.task_id() != task_id) {
+      return core::Error::Validation("PostgreSQL push-config batch requires one task_id");
+    }
+  }
+  if (!task_store.UsesStorage(storage_identity_)) {
+    return core::Error::Internal(std::string(kPostgresTaskAuthorityUncertainMessage));
+  }
+  if (!task_aware_schema_available_) {
+    const auto task = task_store.Get(task_id);
+    if (!task.ok()) {
+      return task.error();
+    }
+    return core::Error::Internal(std::string(kPostgresTaskAwarePushSchemaRequiredMessage));
+  }
+
+  auto lease = pool_->Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  const std::string sql = BuildPushBatchUpsertSql(options_.schema, configs.size());
+  std::vector<std::string> payloads;
+  payloads.reserve(configs.size());
+  for (const auto& config : configs) {
+    payloads.push_back(config.SerializeAsString());
+  }
+
+  const std::size_t parameter_count = 1U + (configs.size() * 3U);
+  std::vector<const char*> values(parameter_count);
+  std::vector<int> lengths(parameter_count);
+  std::vector<int> formats(parameter_count);
+  values[0] = configs.front().task_id().c_str();
+  for (std::size_t index = 0; index < configs.size(); ++index) {
+    const std::size_t first_parameter = 1U + (index * 3U);
+    values[first_parameter] = configs[index].id().c_str();
+    values[first_parameter + 1U] = configs[index].url().c_str();
+    values[first_parameter + 2U] = payloads[index].data();
+    lengths[first_parameter + 2U] = static_cast<int>(payloads[index].size());
+    formats[first_parameter + 2U] = 1;
+  }
+
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kPushConfigUpsert);
+#endif
+    result.reset(PQexecParams(lease.value().get(), sql.c_str(), static_cast<int>(parameter_count), nullptr,
+                              values.data(), lengths.data(), formats.data(), 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
+  const auto checked = CheckTuples(lease.value().get(), result.get(), kPushConfigUpsertOperation);
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) == 0) {
+    return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
+  }
+  if (static_cast<std::size_t>(PQntuples(result.get())) != configs.size()) {
+    return core::Error::Internal("PostgreSQL push-config batch returned an unexpected row count");
+  }
+  return {};
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::Get(
