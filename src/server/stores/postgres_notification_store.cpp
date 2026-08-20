@@ -27,6 +27,7 @@ namespace {
 constexpr std::uint64_t kPostgresBigintMaximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
 constexpr std::size_t kPushGetSqlReserveSlack = 256U;
 constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
+constexpr std::size_t kPushBatchUpsertSqlBytesPerConfigEstimate = 48U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
 constexpr std::string_view kPushConfigUpsertOperation = "upsert postgres push notification config";
@@ -263,7 +264,8 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
   const std::string push_table = PushTable(schema);
   const std::string task_lock_function = TaskPushConfigLockFunction(schema);
   std::string sql;
-  sql.reserve(push_table.size() + task_lock_function.size() + (config_count * 48U) + kPushUpsertSqlReserveSlack);
+  sql.reserve(push_table.size() + task_lock_function.size() +
+              (config_count * kPushBatchUpsertSqlBytesPerConfigEstimate) + kPushUpsertSqlReserveSlack);
   sql.append("WITH task AS MATERIALIZED (SELECT ");
   sql.append(task_lock_function);
   sql.append("($1) AS task_exists), input(config_id, url, config_proto) AS (VALUES ");
