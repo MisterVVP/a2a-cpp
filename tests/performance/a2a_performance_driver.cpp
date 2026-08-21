@@ -4,6 +4,7 @@
 
 #include <google/protobuf/struct.pb.h>
 
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -50,6 +51,8 @@ constexpr std::string_view kDeleteWarmupConfigPrefix = "focused-delete-warmup-co
 constexpr int kFocusedListConfigCount = 3;
 constexpr int kWarmupIndexStart = std::numeric_limits<int>::max();
 constexpr std::uint64_t kConfigIdPermutationMultiplier = 11400714819323198485ULL;
+constexpr std::size_t kFixedWidthConfigIdDigits = 16U;
+constexpr int kHexRadix = 16;
 
 struct DeliveryStats final {
   int attempted = 0;
@@ -57,14 +60,25 @@ struct DeliveryStats final {
   int failed = 0;
 };
 
-[[nodiscard]] std::string BuildDistributedConfigId(std::string_view prefix, std::uint64_t sequence) {
-  const std::uint64_t permuted = sequence * kConfigIdPermutationMultiplier;
+[[nodiscard]] std::string BuildFixedWidthConfigId(std::string_view prefix, std::uint64_t numeric_value) {
+  std::array<char, kFixedWidthConfigIdDigits> encoded{};
+  const auto [end, error] = std::to_chars(encoded.data(), encoded.data() + encoded.size(), numeric_value, kHexRadix);
+  if (error != std::errc{}) {
+    return {};
+  }
+  const auto encoded_size = static_cast<std::size_t>(end - encoded.data());
+
   std::string value;
-  value.reserve(prefix.size() + 1U + std::numeric_limits<std::uint64_t>::digits10 + 1U);
+  value.reserve(prefix.size() + 1U + kFixedWidthConfigIdDigits);
   value.append(prefix);
   value.push_back('-');
-  value.append(std::to_string(permuted));
+  value.append(kFixedWidthConfigIdDigits - encoded_size, '0');
+  value.append(encoded.data(), encoded_size);
   return value;
+}
+
+[[nodiscard]] std::string BuildFixedWidthScrambledConfigId(std::string_view prefix, std::uint64_t sequence) {
+  return BuildFixedWidthConfigId(prefix, sequence * kConfigIdPermutationMultiplier);
 }
 
 struct ScenarioInstrumentation final {
@@ -363,17 +377,20 @@ class ScenarioHarness final {
   std::optional<OperationOutcome> ExecutePushScenario(std::string_view scenario, int index,
                                                       a2a::server::RequestContext& context) {
     if (scenario == kScenarioPushConfigCreate) {
-      return OperationSucceeded(executor_
-                                    ->CreateTaskPushNotificationConfig(
-                                        MakePushConfig(existing_task_id_, BuildId("cfg-create", index)), context)
-                                    .ok());
-    }
-    if (scenario == kScenarioPushConfigCreateDistributedIds) {
       return OperationSucceeded(
           executor_
               ->CreateTaskPushNotificationConfig(
                   MakePushConfig(existing_task_id_,
-                                 BuildDistributedConfigId("cfg-create-distributed", static_cast<std::uint64_t>(index))),
+                                 BuildFixedWidthConfigId("cfg-create", static_cast<std::uint64_t>(index))),
+                  context)
+              .ok());
+    }
+    if (scenario == kScenarioPushConfigCreateFixedWidthScrambledIds) {
+      return OperationSucceeded(
+          executor_
+              ->CreateTaskPushNotificationConfig(
+                  MakePushConfig(existing_task_id_,
+                                 BuildFixedWidthScrambledConfigId("cfg-create", static_cast<std::uint64_t>(index))),
                   context)
               .ok());
     }
@@ -402,7 +419,7 @@ class ScenarioHarness final {
     if (scenario == kScenarioPushConfigCreateMany) {
       return CreateManyPushConfigs(index, context, false);
     }
-    if (scenario == kScenarioPushConfigCreateManyDistributedIds) {
+    if (scenario == kScenarioPushConfigCreateManyFixedWidthScrambledIds) {
       return CreateManyPushConfigs(index, context, true);
     }
     if (scenario == kScenarioPushDeliveryBuildPayload) {
@@ -557,12 +574,12 @@ class ScenarioHarness final {
       configs.reserve(static_cast<std::size_t>(push_config_fanout_));
       for (int config = 0; config < push_config_fanout_; ++config) {
         std::string config_id;
+        const auto sequence = static_cast<std::uint64_t>(index) * static_cast<std::uint64_t>(push_config_fanout_) +
+                              static_cast<std::uint64_t>(config);
         if (distributed_ids) {
-          const auto sequence = static_cast<std::uint64_t>(index) * static_cast<std::uint64_t>(push_config_fanout_) +
-                                static_cast<std::uint64_t>(config);
-          config_id = BuildDistributedConfigId("create-many-distributed", sequence);
+          config_id = BuildFixedWidthScrambledConfigId("create-many", sequence);
         } else {
-          config_id = BuildId(BuildId("create-many", index), config);
+          config_id = BuildFixedWidthConfigId("create-many", sequence);
         }
         configs.push_back(MakePushConfig(create_many_task_id_, config_id));
         CountConfigCreate();
@@ -577,12 +594,12 @@ class ScenarioHarness final {
     int created = 0;
     for (int config = 0; config < push_config_fanout_; ++config) {
       std::string config_id;
+      const auto sequence = static_cast<std::uint64_t>(index) * static_cast<std::uint64_t>(push_config_fanout_) +
+                            static_cast<std::uint64_t>(config);
       if (distributed_ids) {
-        const auto sequence = static_cast<std::uint64_t>(index) * static_cast<std::uint64_t>(push_config_fanout_) +
-                              static_cast<std::uint64_t>(config);
-        config_id = BuildDistributedConfigId("create-many-distributed", sequence);
+        config_id = BuildFixedWidthScrambledConfigId("create-many", sequence);
       } else {
-        config_id = BuildId(BuildId("create-many", index), config);
+        config_id = BuildFixedWidthConfigId("create-many", sequence);
       }
       const auto response =
           executor_->CreateTaskPushNotificationConfig(MakePushConfig(create_many_task_id_, config_id), context);

@@ -229,7 +229,23 @@ TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
 }
 
-TEST(PerformanceScenarioIsolationTest, DistributedCreateManyConfigsUsesPreseededTask) {
+TEST(PerformanceScenarioIdLayoutTest, FixedWidthScramblingChangesOrderingWithoutChangingWidth) {
+  const std::string sequential_one = BuildFixedWidthConfigId("probe", 1U);
+  const std::string sequential_two = BuildFixedWidthConfigId("probe", 2U);
+  const std::string scrambled_one = BuildFixedWidthScrambledConfigId("probe", 1U);
+  const std::string scrambled_two = BuildFixedWidthScrambledConfigId("probe", 2U);
+
+  ASSERT_FALSE(sequential_one.empty());
+  ASSERT_FALSE(sequential_two.empty());
+  ASSERT_FALSE(scrambled_one.empty());
+  ASSERT_FALSE(scrambled_two.empty());
+  EXPECT_EQ(sequential_one.size(), scrambled_one.size());
+  EXPECT_EQ(sequential_two.size(), scrambled_two.size());
+  EXPECT_LT(sequential_one, sequential_two);
+  EXPECT_GT(scrambled_one, scrambled_two);
+}
+
+TEST(PerformanceScenarioIsolationTest, FixedWidthScrambledCreateManyConfigsUsesPreseededTask) {
   ScenarioInstrumentation instrumentation;
   ScenarioHarness harness(kInMemoryStore, &instrumentation);
   ASSERT_TRUE(harness.ok());
@@ -238,7 +254,7 @@ TEST(PerformanceScenarioIsolationTest, DistributedCreateManyConfigsUsesPreseeded
   instrumentation.config_lists.store(0, std::memory_order_relaxed);
   instrumentation.payload_builds.store(0, std::memory_order_relaxed);
 
-  const OperationOutcome outcome = harness.Execute(kScenarioPushConfigCreateManyDistributedIds, 0, 0);
+  const OperationOutcome outcome = harness.Execute(kScenarioPushConfigCreateManyFixedWidthScrambledIds, 0, 0);
 
   EXPECT_TRUE(outcome.ok);
   EXPECT_EQ(0, AtomicValue(instrumentation.task_creates));

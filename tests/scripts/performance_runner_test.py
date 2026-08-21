@@ -366,8 +366,8 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual((64,), config.postgres_pool_sizes)
         self.assertEqual(5, config.repetitions)
         self.assertEqual(runner.POSTGRES_WRITE_SCENARIOS, config.scenarios)
-        self.assertIn("PushConfig_CreateDistributedIds", config.scenarios)
-        self.assertIn("PushConfig_CreateManyDistributedIds", config.scenarios)
+        self.assertIn("PushConfig_CreateFixedWidthScrambledIds", config.scenarios)
+        self.assertIn("PushConfig_CreateManyFixedWidthScrambledIds", config.scenarios)
         self.assertEqual(120, runner.postgres_tail_expected_rows(config))
 
     def test_push_config_fanout_can_be_overridden_for_list_scaling(self):

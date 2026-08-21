@@ -77,7 +77,7 @@ constexpr std::string_view kScenarioSubscribeToTaskTerminalCompletionLatency =
     "SubscribeToTask_TerminalCompletionLatency";
 constexpr std::string_view kScenarioSubscribeToTaskDisconnectOneSubscriber = "SubscribeToTask_DisconnectOneSubscriber";
 constexpr std::string_view kScenarioPushConfigCreate = "PushConfig_Create";
-constexpr std::string_view kScenarioPushConfigCreateDistributedIds = "PushConfig_CreateDistributedIds";
+constexpr std::string_view kScenarioPushConfigCreateFixedWidthScrambledIds = "PushConfig_CreateFixedWidthScrambledIds";
 constexpr std::string_view kScenarioPushConfigGet = "PushConfig_Get";
 constexpr std::string_view kScenarioPushConfigList = "PushConfig_List";
 constexpr std::string_view kScenarioPushConfigDelete = "PushConfig_Delete";
@@ -85,7 +85,8 @@ constexpr std::string_view kScenarioPushNotifyEndToEndManyConfigs = "PushNotify_
 constexpr std::string_view kScenarioPushConfigListManyConfigs = "PushConfig_ListManyConfigs";
 constexpr std::string_view kScenarioPushDeliveryCallbackFanout = "PushDelivery_CallbackFanout";
 constexpr std::string_view kScenarioPushConfigCreateMany = "PushConfig_CreateMany";
-constexpr std::string_view kScenarioPushConfigCreateManyDistributedIds = "PushConfig_CreateManyDistributedIds";
+constexpr std::string_view kScenarioPushConfigCreateManyFixedWidthScrambledIds =
+    "PushConfig_CreateManyFixedWidthScrambledIds";
 constexpr std::string_view kScenarioPushDeliveryBuildPayload = "PushDelivery_BuildPayload";
 
 constexpr std::array<std::string_view, 24> kScenarios = {
@@ -103,7 +104,7 @@ constexpr std::array<std::string_view, 24> kScenarios = {
     kScenarioSubscribeToTaskTerminalCompletionLatency,
     kScenarioSubscribeToTaskDisconnectOneSubscriber,
     kScenarioPushConfigCreate,
-    kScenarioPushConfigCreateDistributedIds,
+    kScenarioPushConfigCreateFixedWidthScrambledIds,
     kScenarioPushConfigGet,
     kScenarioPushConfigList,
     kScenarioPushConfigDelete,
@@ -111,7 +112,7 @@ constexpr std::array<std::string_view, 24> kScenarios = {
     kScenarioPushConfigListManyConfigs,
     kScenarioPushDeliveryCallbackFanout,
     kScenarioPushConfigCreateMany,
-    kScenarioPushConfigCreateManyDistributedIds,
+    kScenarioPushConfigCreateManyFixedWidthScrambledIds,
     kScenarioPushDeliveryBuildPayload,
 };
 
