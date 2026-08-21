@@ -234,8 +234,7 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
   return sql;
 }
 
-[[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task,
-                                             bool use_hash_index) {
+[[nodiscard]] std::string BuildPushUpsertSql(std::string_view schema, bool validate_postgres_task) {
   const std::string push_table = PushTable(schema);
   const std::string task_lock_function = validate_postgres_task ? TaskPushConfigLockFunction(schema) : std::string{};
   std::string sql;
@@ -253,21 +252,15 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
   } else {
     sql.append("VALUES ($1, $2, $3, $4, FALSE, now()) ");
   }
-  if (use_hash_index) {
-    sql.append("ON CONFLICT (task_id, config_hash, config_id) ");
-  } else {
-    sql.append("ON CONFLICT (task_id, config_id) ");
-  }
   sql.append(
-      "DO UPDATE SET url = EXCLUDED.url, "
+      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
       "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
       "updated_at = now() ");
   sql.append("RETURNING 1");
   return sql;
 }
 
-[[nodiscard]] std::string BuildPushBatchUpsertSql(std::string_view schema, std::size_t config_count,
-                                                  bool use_hash_index) {
+[[nodiscard]] std::string BuildPushBatchUpsertSql(std::string_view schema, std::size_t config_count) {
   const std::string push_table = PushTable(schema);
   const std::string task_lock_function = TaskPushConfigLockFunction(schema);
   std::string sql;
@@ -295,46 +288,34 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
   sql.append(
       " (task_id, config_id, url, config_proto, local_postgres_task, updated_at) "
       "SELECT $1, input.config_id, input.url, input.config_proto, TRUE, now() "
-      "FROM task CROSS JOIN input WHERE task.task_exists ");
-  if (use_hash_index) {
-    sql.append("ON CONFLICT (task_id, config_hash, config_id) ");
-  } else {
-    sql.append("ON CONFLICT (task_id, config_id) ");
-  }
-  sql.append(
-      "DO UPDATE SET url = EXCLUDED.url, "
+      "FROM task CROSS JOIN input WHERE task.task_exists "
+      "ON CONFLICT (task_id, config_id) DO UPDATE SET url = EXCLUDED.url, "
       "config_proto = EXCLUDED.config_proto, local_postgres_task = EXCLUDED.local_postgres_task, "
       "updated_at = now() RETURNING 1");
   return sql;
 }
 
-[[nodiscard]] std::string BuildPushGetSql(std::string_view schema, bool use_hash_index) {
+[[nodiscard]] std::string BuildPushGetSql(std::string_view schema) {
   const std::string push_table = PushTable(schema);
   std::string sql;
   sql.reserve((2U * push_table.size()) + kPushGetSqlReserveSlack);
   sql.append("WITH config AS MATERIALIZED (SELECT config_proto FROM ");
   sql.append(push_table);
-  sql.append(" WHERE task_id = $1 AND ");
-  if (use_hash_index) {
-    sql.append("config_hash = pg_catalog.hashtextextended($2, 0) AND ");
-  }
-  sql.append("config_id = $2) SELECT config_proto FROM config UNION ALL SELECT NULL::bytea FROM ");
+  sql.append(
+      " WHERE task_id = $1 AND config_id = $2) SELECT config_proto FROM config UNION ALL "
+      "SELECT NULL::bytea FROM ");
   sql.append(push_table);
   sql.append(" WHERE task_id = $1 AND NOT EXISTS (SELECT 1 FROM config) LIMIT 1");
   return sql;
 }
 
-[[nodiscard]] std::string BuildPushDeleteSql(std::string_view schema, bool use_hash_index) {
+[[nodiscard]] std::string BuildPushDeleteSql(std::string_view schema) {
   const std::string push_table = PushTable(schema);
   std::string sql;
   sql.reserve(push_table.size() + kPushDeleteSqlReserveSlack);
   sql.append("DELETE FROM ");
   sql.append(push_table);
-  sql.append(" WHERE task_id = $1 AND ");
-  if (use_hash_index) {
-    sql.append("config_hash = pg_catalog.hashtextextended($2, 0) AND ");
-  }
-  sql.append("config_id = $2");
+  sql.append(" WHERE task_id = $1 AND config_id = $2");
   return sql;
 }
 
@@ -459,12 +440,12 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
     : pool_(MakePool(options)),
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
-      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, options_.auto_create_schema)),
-      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, options_.auto_create_schema)),
-      get_sql_(BuildPushGetSql(options_.schema, options_.auto_create_schema)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
+      get_sql_(BuildPushGetSql(options_.schema)),
       task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
       existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
-      delete_sql_(BuildPushDeleteSql(options_.schema, options_.auto_create_schema)) {
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto prepared = PreparePushSchema(lease.get(), options_);
   if (!prepared.ok()) {
@@ -478,12 +459,12 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
     : pool_(std::move(pool)),
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
-      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true, options_.auto_create_schema)),
-      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false, options_.auto_create_schema)),
-      get_sql_(BuildPushGetSql(options_.schema, options_.auto_create_schema)),
+      local_upsert_sql_(BuildPushUpsertSql(options_.schema, true)),
+      external_upsert_sql_(BuildPushUpsertSql(options_.schema, false)),
+      get_sql_(BuildPushGetSql(options_.schema)),
       task_aware_list_sql_(BuildPushListSql(options_.schema, true)),
       existing_task_list_sql_(BuildPushListSql(options_.schema, false)),
-      delete_sql_(BuildPushDeleteSql(options_.schema, options_.auto_create_schema)) {
+      delete_sql_(BuildPushDeleteSql(options_.schema)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto prepared = PreparePushSchema(lease.get(), options_);
@@ -621,7 +602,7 @@ core::Result<void> PostgresPushNotificationStore::CreateOrUpdateManyForTask(
   if (!lease.ok()) {
     return lease.error();
   }
-  const std::string sql = BuildPushBatchUpsertSql(options_.schema, configs.size(), options_.auto_create_schema);
+  const std::string sql = BuildPushBatchUpsertSql(options_.schema, configs.size());
   std::vector<std::string> payloads;
   payloads.reserve(configs.size());
   for (const auto& config : configs) {
