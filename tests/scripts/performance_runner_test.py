@@ -352,6 +352,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual((1,), config.concurrency_levels)
         self.assertEqual((64,), config.postgres_pool_sizes)
         self.assertEqual(5, config.repetitions)
+        self.assertEqual(runner.DEFAULT_PUSH_CONFIG_FANOUT, config.push_config_fanout)
         self.assertEqual(runner.POSTGRES_TAIL_C1_SCENARIOS, config.scenarios)
         self.assertEqual(5, runner.postgres_tail_expected_rows(config))
 
@@ -366,6 +367,18 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(5, config.repetitions)
         self.assertEqual(runner.POSTGRES_WRITE_SCENARIOS, config.scenarios)
         self.assertEqual(80, runner.postgres_tail_expected_rows(config))
+
+    def test_push_config_fanout_can_be_overridden_for_list_scaling(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {"A2A_PERF_PUSH_CONFIG_FANOUT": "100"}, clear=True):
+            config = runner.parse_args(["--profile", "postgres-tail-c1"])
+            cli_config = runner.parse_args([
+                "--profile", "postgres-tail-c1", "--push-config-fanout", "1000",
+            ])
+        self.assertEqual(100, config.push_config_fanout)
+        self.assertEqual(1000, cli_config.push_config_fanout)
+        with self.assertRaisesRegex(ValueError, "push-config fanout must be positive"):
+            runner.parse_args(["--push-config-fanout", "0"])
 
     def test_postgres_counter_delta_preserves_groups(self):
         runner = load_runner_module()
@@ -486,13 +499,13 @@ class PerformanceRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "4/5 repetitions"):
             runner.median_aggregates(self.make_postgres_tail_rows(runner)[:-1], 5)
 
-    def test_query_plan_requires_task_and_push_indexes(self):
+    def test_query_plan_captures_sort_without_ordering_index(self):
         runner = load_runner_module()
         valid_stdout = (
             f"{runner.POSTGRES_COMBINED_PLAN_START}\n"
-            f"Index Scan using {runner.POSTGRES_TASK_PRIMARY_INDEX}\n"
-            f"Index Only Scan using {runner.POSTGRES_PUSH_TASK_INDEX}\n"
-            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
+            "Bitmap Heap Scan on a2a_push_notification_configs\n"
+            "Sort Key: a2a_push_notification_configs.created_sequence\n"
+            "Sort Method: quicksort  Memory: 25kB\n"
             f"{runner.POSTGRES_COMBINED_PLAN_END}\n"
         )
         completed = subprocess.CompletedProcess(
@@ -502,60 +515,45 @@ class PerformanceRunnerTest(unittest.TestCase):
         )
         with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
             plans = runner.explain_postgres_queries("postgresql://test", "schema")
-        self.assertIn(runner.POSTGRES_PUSH_ORDER_INDEX, plans)
+        self.assertIn("Sort Key", plans)
+        self.assertNotIn(runner.POSTGRES_PUSH_ORDER_INDEX, plans)
         command = run.call_args.args[0]
         sql = command[-1]
         self.assertIn("BEGIN;", sql)
         self.assertIn("INSERT INTO a2a_tasks", sql)
         self.assertIn("INSERT INTO a2a_push_notification_configs", sql)
         self.assertIn(f"'{runner.POSTGRES_QUERY_PLAN_CONFIG_ID}-insert'", sql)
+        self.assertIn(f"generate_series(1, {runner.DEFAULT_PUSH_CONFIG_FANOUT})", sql)
         self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_START}'", sql)
         self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_END}'", sql)
         self.assertIn("WITH task AS MATERIALIZED", sql)
         self.assertIn("config_count AS MATERIALIZED", sql)
         self.assertIn("LEFT JOIN LATERAL", sql)
         self.assertIn("AND 0 <= config_count.total", sql)
-        self.assertIn("ORDER BY created_sequence ASC LIMIT 1 OFFSET 0", sql)
+        self.assertIn("ORDER BY created_sequence ASC LIMIT ALL OFFSET 0", sql)
         self.assertIn(
             f"WHERE task_id = '{runner.POSTGRES_QUERY_PLAN_TASK_ID}'",
             sql,
         )
-        self.assertIn("SET enable_sort = off", sql)
+        self.assertNotIn("SET enable_seqscan = off", sql)
+        self.assertNotIn("SET enable_sort = off", sql)
         self.assertNotIn("SELECT task_id FROM", sql)
         self.assertNotIn("WHERE task_id = ''", sql)
         self.assertIn("ROLLBACK;", sql)
 
-        completed.stdout = (
-            f"{runner.POSTGRES_COMBINED_PLAN_START}\n"
-            f"Index Scan using {runner.POSTGRES_TASK_PRIMARY_INDEX}\n"
-            f"Index Only Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
-            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
-            f"{runner.POSTGRES_COMBINED_PLAN_END}\n"
+        completed.stdout = valid_stdout.replace(
+            "Sort Key: a2a_push_notification_configs.created_sequence\n", ""
+        ).replace("Sort Method: quicksort  Memory: 25kB\n", "")
+        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "created_sequence sort"):
+                runner.explain_postgres_queries("postgresql://test", "schema")
+
+        completed.stdout = valid_stdout.replace(
+            "Bitmap Heap Scan on a2a_push_notification_configs\n",
+            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n",
         )
         with mock.patch.object(runner.subprocess, "run", return_value=completed):
-            runner.explain_postgres_queries("postgresql://test", "schema")
-
-        for missing_index in (
-            runner.POSTGRES_TASK_PRIMARY_INDEX,
-            runner.POSTGRES_PUSH_ORDER_INDEX,
-        ):
-            completed.stdout = valid_stdout.replace(
-                f"Index Scan using {missing_index}\n", ""
-            ).replace(
-                f"Index Only Scan using {missing_index}\n", ""
-            )
-            with mock.patch.object(runner.subprocess, "run", return_value=completed):
-                with self.assertRaisesRegex(ValueError, missing_index):
-                    runner.explain_postgres_queries("postgresql://test", "schema")
-
-        completed.stdout = (
-            f"{runner.POSTGRES_COMBINED_PLAN_START}\n"
-            f"Index Scan using {runner.POSTGRES_TASK_PRIMARY_INDEX}\n"
-            f"Index Scan using {runner.POSTGRES_PUSH_ORDER_INDEX}\n"
-            f"{runner.POSTGRES_COMBINED_PLAN_END}\n"
-        )
-        with mock.patch.object(runner.subprocess, "run", return_value=completed):
-            with self.assertRaisesRegex(ValueError, "count and page branches"):
+            with self.assertRaisesRegex(ValueError, "removed push ordering index"):
                 runner.explain_postgres_queries("postgresql://test", "schema")
 
         completed.stdout = "standalone plans only"

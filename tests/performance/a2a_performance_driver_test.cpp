@@ -26,6 +26,7 @@ constexpr int kConcurrentRequests = 16;
 constexpr int kConcurrentWorkers = 4;
 constexpr int kFollowUpFixtureCount = 3;
 constexpr int kFocusedFixtureCount = 3;
+constexpr int kConfiguredPushConfigFanout = 100;
 constexpr double kDiagnosticTaskUpsertMs = 1.25;
 constexpr std::size_t kTaskUpsertPhaseIndex = 2U;
 constexpr std::size_t kFailedDiagnosticCallCount = 2U;
@@ -195,6 +196,18 @@ TEST(PerformanceScenarioIsolationTest, ListManyConfigsUsesOnlyOneConfigList) {
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
 }
 
+TEST(PerformanceScenarioIsolationTest, ListManyConfigsSupportsConfiguredFanout) {
+  ScenarioHarness harness(kInMemoryStore, nullptr, kConfiguredPushConfigFanout);
+  ASSERT_TRUE(harness.ok());
+
+  const OperationOutcome outcome = harness.Execute(kScenarioPushConfigListManyConfigs, 0, 0);
+
+  EXPECT_TRUE(outcome.ok);
+  EXPECT_EQ(kConfiguredPushConfigFanout, outcome.event_count);
+  EXPECT_EQ(kConfiguredPushConfigFanout, outcome.fanout_per_operation);
+  EXPECT_EQ(kConfiguredPushConfigFanout, outcome.total_fanout_count);
+}
+
 TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   ScenarioInstrumentation instrumentation;
   ScenarioHarness harness(kInMemoryStore, &instrumentation);
@@ -214,6 +227,20 @@ TEST(PerformanceScenarioIsolationTest, CreateManyConfigsUsesPreseededTask) {
   EXPECT_EQ(kPushConfigFanout, outcome.event_count);
   EXPECT_EQ(kPushConfigFanout, outcome.fanout_per_operation);
   EXPECT_EQ(kPushConfigFanout, outcome.total_fanout_count);
+}
+
+TEST(PerformanceScenarioIsolationTest, PushCreateWarmupDoesNotReuseMeasuredConfigIds) {
+  ScenarioHarness harness(kInMemoryStore);
+  ASSERT_TRUE(harness.ok());
+  ASSERT_EQ(harness.ExistingTaskPushConfigCount(), 0);
+
+  ASSERT_TRUE(harness.ExecuteFollowUpWarmup(kScenarioPushConfigCreate, kWarmupIndexStart));
+  EXPECT_EQ(harness.ExistingTaskPushConfigCount(), 1);
+
+  const OperationOutcome measured = harness.Execute(kScenarioPushConfigCreate, 0, 0);
+
+  ASSERT_TRUE(measured.ok);
+  EXPECT_EQ(harness.ExistingTaskPushConfigCount(), 2);
 }
 
 TEST(PerformanceScenarioIsolationTest, FocusedGetAndListDoNotCreateSetupData) {

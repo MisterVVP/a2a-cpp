@@ -22,9 +22,10 @@ page size passes a SQL `NULL` limit (unbounded), while positive sizes are bounde
 Count and page selection share one PostgreSQL statement snapshot, so a
 concurrent insert or delete cannot make the count disagree with the selected
 rows inside an operation. Offset tokens retain their existing behaviour between
-operations. Selection remains stable by `created_sequence ASC`. PostgreSQL can
-use the task primary key for the task CTE, the task-id push-config index for the
-count, and `(task_id, created_sequence ASC)` for the ordered page.
+operations. Selection remains stable by `created_sequence ASC`. During the issue
+#206 ordering-index experiment, both push secondary indexes are absent. PostgreSQL
+may use the push table primary key `(task_id, config_id)` for `task_id` filtering
+and then explicitly sort the selected rows by `created_sequence ASC`.
 
 PostgreSQL conformance validation covers existing tasks with zero configs,
 bounded and unbounded pages, stable creation order, a token equal to the total
@@ -33,8 +34,11 @@ count, an out-of-range token, and a missing task. Every case asserts one
 `push_config_list_count` call. It also covers rejection before query execution
 for tokens beyond PostgreSQL's `bigint` range. The performance runner reviews
 the complete combined CTE/lateral plan, including the invalid-offset gate, with
-`EXPLAIN (ANALYZE, BUFFERS)` and requires the task primary key, push-config task,
-and push-config creation-order indexes.
+`EXPLAIN (ANALYZE, BUFFERS)`. For this experiment it rejects use of the removed
+ordering index and requires the plan to expose the explicit `created_sequence`
+sort. The captured plan remains the source of truth for whether PostgreSQL chose
+the push primary key or a sequential scan, as well as sort method/memory and
+buffer activity.
 
 The baseline measurements from PR #184 used three commands per successful
 operation and reported operation p95 `12.10 ms`, task-get p95 `5.01 ms`, count
@@ -49,8 +53,21 @@ the focused single-client regression signal without repeating every scenario
 and pool-size coordinate serially. Both profiles require zero operation errors.
 
 `PushConfig_ListManyConfigs` remains the focused performance scenario because
-it exercises the optimized unbounded list over a fixed fan-out and isolates the
-database command reduction. Bounded-page variants use the same combined query
-and indexes and are covered as correctness and query-plan tests; adding them to
-the repeated performance matrix is deferred to a follow-up to avoid multiplying
-the matrix without evidence that `LIMIT` changes the performance conclusion.
+it exercises the optimized unbounded list and isolates the database command
+reduction. Its fixture fan-out defaults to 8 and can be overridden with
+`--push-config-fanout` without changing the production path. For the issue #206
+ordering-index experiment, run the existing five-repetition c1/pool-64 profile
+at each required fan-out:
+
+```bash
+for fanout in 8 100 1000 10000; do
+  A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
+  ./scripts/run_performance_tests.sh --profile postgres-tail-c1 \
+    --push-config-fanout "${fanout}" \
+    --report-dir "perf-artifacts/postgres-list-${fanout}"
+done
+```
+
+Each report records list throughput/latency and the representative
+`EXPLAIN (ANALYZE, BUFFERS)` plan for the same configured fan-out. Bounded-page
+variants use the same combined query and are covered as correctness tests.
