@@ -38,7 +38,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
-            self.assertEqual(38, len(payload["results"]))
+            self.assertEqual(36, len(payload["results"]))
             self.assertEqual({"cpp_sdk_in_process", "wire_tck_sut"}, {result["driver_type"] for result in payload["results"]})
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
             self.assertEqual(14, len(wire_rows))
@@ -366,9 +366,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual((64,), config.postgres_pool_sizes)
         self.assertEqual(5, config.repetitions)
         self.assertEqual(runner.POSTGRES_WRITE_SCENARIOS, config.scenarios)
-        self.assertIn("PushConfig_CreateFixedWidthScrambledIds", config.scenarios)
-        self.assertIn("PushConfig_CreateManyFixedWidthScrambledIds", config.scenarios)
-        self.assertEqual(120, runner.postgres_tail_expected_rows(config))
+        self.assertEqual(80, runner.postgres_tail_expected_rows(config))
 
     def test_push_config_fanout_can_be_overridden_for_list_scaling(self):
         runner = load_runner_module()

@@ -31,6 +31,9 @@ constexpr std::size_t kTaskPushConfigMigrationMarkerSqlReserveSlack = 96U;
 constexpr std::size_t kTaskDeleteLockFunctionSqlReserveSlack = 192U;
 constexpr std::size_t kTaskDeleteLockTriggerSqlReserveSlack = 192U;
 constexpr std::string_view kTaskAdvisoryLockHashSeed = "0";
+constexpr std::string_view kPushConfigHashColumn = "config_hash";
+constexpr std::string_view kPushConfigsHashUniqueIndex = "idx_a2a_push_configs_hash_unique";
+constexpr std::string_view kPushConfigsPrimaryKeyConstraint = "a2a_push_notification_configs_pkey";
 constexpr std::string_view kFeatureNotSupportedSqlState = "0A000";
 constexpr std::string_view kInsufficientPrivilegeSqlState = "42501";
 constexpr std::string_view kPostgresTaskRowLevelSecurityUnsupportedMessage =
@@ -720,10 +723,26 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   create_push_configs.append(push_created_sequence_regclass);
   create_push_configs.append(
       "), config_proto BYTEA NOT NULL, local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE, "
-      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (task_id, config_id));");
+      "config_hash BIGINT GENERATED ALWAYS AS (pg_catalog.hashtextextended(config_id, 0)) STORED, "
+      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now());");
   std::string add_push_config_provenance = "ALTER TABLE ";
   add_push_config_provenance.append(push_configs);
   add_push_config_provenance.append(" ADD COLUMN IF NOT EXISTS local_postgres_task BOOLEAN NOT NULL DEFAULT FALSE;");
+  std::string add_push_config_hash = "ALTER TABLE ";
+  add_push_config_hash.append(push_configs);
+  add_push_config_hash.append(" ADD COLUMN IF NOT EXISTS ");
+  add_push_config_hash.append(kPushConfigHashColumn);
+  add_push_config_hash.append(" BIGINT GENERATED ALWAYS AS (pg_catalog.hashtextextended(config_id, 0)) STORED;");
+  std::string drop_push_configs_primary_key = "ALTER TABLE ";
+  drop_push_configs_primary_key.append(push_configs);
+  drop_push_configs_primary_key.append(" DROP CONSTRAINT IF EXISTS ");
+  drop_push_configs_primary_key.append(QuoteSqlIdentifier(kPushConfigsPrimaryKeyConstraint));
+  drop_push_configs_primary_key.push_back(';');
+  std::string create_push_configs_hash_unique_index = "CREATE UNIQUE INDEX IF NOT EXISTS ";
+  create_push_configs_hash_unique_index.append(QuoteSqlIdentifier(kPushConfigsHashUniqueIndex));
+  create_push_configs_hash_unique_index.append(" ON ");
+  create_push_configs_hash_unique_index.append(push_configs);
+  create_push_configs_hash_unique_index.append(" (task_id, config_hash, config_id);");
   std::string remove_push_configs_task_foreign_key = "ALTER TABLE ";
   remove_push_configs_task_foreign_key.append(push_configs);
   remove_push_configs_task_foreign_key.append(" DROP CONSTRAINT IF EXISTS ");
@@ -774,6 +793,9 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_tasks_state_index,
                                                       create_push_configs,
                                                       add_push_config_provenance,
+                                                      add_push_config_hash,
+                                                      drop_push_configs_primary_key,
+                                                      create_push_configs_hash_unique_index,
                                                       remove_push_configs_task_foreign_key,
                                                       create_task_delete_lock_function,
                                                       revoke_task_delete_lock_function,

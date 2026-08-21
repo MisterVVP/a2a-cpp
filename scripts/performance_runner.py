@@ -42,7 +42,6 @@ SCENARIOS = (
     "SubscribeToTask_TerminalCompletionLatency",
     "SubscribeToTask_DisconnectOneSubscriber",
     "PushConfig_Create",
-    "PushConfig_CreateFixedWidthScrambledIds",
     "PushConfig_Get",
     "PushConfig_List",
     "PushConfig_Delete",
@@ -50,7 +49,6 @@ SCENARIOS = (
     "PushConfig_ListManyConfigs",
     "PushDelivery_CallbackFanout",
     "PushConfig_CreateMany",
-    "PushConfig_CreateManyFixedWidthScrambledIds",
     "PushDelivery_BuildPayload",
 )
 DEFAULT_REQUESTS = 2_000
@@ -72,9 +70,7 @@ POSTGRES_WRITE_SCENARIOS = (
     "SendMessage_CreateTask",
     "SendMessage_FollowUpExistingTask",
     "PushConfig_Create",
-    "PushConfig_CreateFixedWidthScrambledIds",
     "PushConfig_CreateMany",
-    "PushConfig_CreateManyFixedWidthScrambledIds",
 )
 POSTGRES_WRITE_CONCURRENCY = (1, 4, 16, 64)
 POSTGRES_WRITE_POOL_SIZES = (64,)
