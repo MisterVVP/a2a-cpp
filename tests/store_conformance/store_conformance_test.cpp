@@ -1443,6 +1443,7 @@ constexpr std::string_view kAdvisoryProgressSchemaSuffix = "push_advisory_progre
 constexpr std::string_view kAdvisorySchemaScopeSchemaSuffix = "push_advisory_schema_scope";
 constexpr std::string_view kAdvisorySchemaScopeOtherSchemaSuffix = "push_advisory_schema_scope_other";
 constexpr std::string_view kRepeatableReadDeleteSchemaSuffix = "push_repeatable_read_delete";
+constexpr std::string_view kDuplicatePushBatchSchemaSuffix = "push_duplicate_batch";
 constexpr std::string_view kConcurrentFirstUpdateUrl = "https://example.test/concurrent-first";
 constexpr std::string_view kConcurrentSecondUpdateUrl = "https://example.test/concurrent-second";
 constexpr std::string_view kConcurrentCycleUpdateUrl = "https://example.test/concurrent-cycle";
@@ -2879,6 +2880,33 @@ TEST(StoreConformanceTest, PostgresPushSchemaDropsPushSecondaryIndexes) {
   ASSERT_EQ(PQntuples(result.get()), 1);
   EXPECT_NE(PQgetisnull(result.get(), 0, 0), 0);
   EXPECT_NE(PQgetisnull(result.get(), 0, 1), 0);
+}
+
+TEST(StoreConformanceTest, PostgresPushBatchRejectsDuplicateConfigIdsBeforeQuery) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const std::string schema = MakePostgresTestSchema(kDuplicatePushBatchSchemaSuffix);
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  const auto config =
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId));
+  const std::vector<lf::a2a::v1::TaskPushNotificationConfig> configs = {config, config};
+
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  const auto created = push_store.CreateOrUpdateManyForTask(configs, task_store);
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+
+  ASSERT_FALSE(created.ok());
+  EXPECT_EQ(created.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(
+      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
+      kNoPostgresCommandCount);
+  ExpectPushConfigMissing(push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {

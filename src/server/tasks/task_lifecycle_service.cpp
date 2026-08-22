@@ -3,6 +3,7 @@
 
 #include "a2a/server/tasks/task_lifecycle_service.h"
 
+#include <string_view>
 #include <utility>
 
 #include "a2a/core/error.h"
@@ -10,6 +11,11 @@
 #include "a2a/core/task_states.h"
 
 namespace a2a::server {
+namespace {
+
+constexpr std::string_view kTaskSnapshotIdMismatchMessage = "task snapshot does not match message.taskId";
+
+}  // namespace
 
 TaskLifecycleService::TaskLifecycleService(TaskStore* store, std::shared_ptr<TaskIdGenerator> task_id_generator)
     : store_(store), task_id_generator_(std::move(task_id_generator)) {
@@ -50,6 +56,9 @@ core::Result<void> TaskLifecycleService::ValidateTaskForSendRequest(const lf::a2
     return core::Error::Validation("message is required");
   }
   const auto& message = request.message();
+  if (!message.task_id().empty() && task.id() != message.task_id()) {
+    return core::Error::Validation(std::string(kTaskSnapshotIdMismatchMessage));
+  }
   if (!message.context_id().empty() && !task.context_id().empty() && message.context_id() != task.context_id()) {
     return core::protocol_errors::UnsupportedOperation("contextId does not match task");
   }

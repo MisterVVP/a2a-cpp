@@ -35,6 +35,12 @@ constexpr std::string_view kCrossExecutorTaskId = "cross-executor-task";
 constexpr std::string_view kCrossExecutorCreateMessageId = "cross-executor-create";
 constexpr std::string_view kCrossExecutorFirstMessageId = "cross-executor-first";
 constexpr std::string_view kCrossExecutorSecondMessageId = "cross-executor-second";
+constexpr std::string_view kCollisionContextId = "collision-context";
+constexpr std::string_view kSingleSnapshotFollowUpMessageId = "single-snapshot-follow-up";
+constexpr std::string_view kMissingFollowUpMessageId = "missing-follow-up";
+constexpr std::string_view kMissingFollowUpTaskId = "missing-task";
+constexpr std::string_view kMismatchedFollowUpMessageId = "mismatched-follow-up";
+constexpr std::string_view kMismatchedFollowUpContextId = "different-context";
 constexpr std::size_t kSingleHistoryEntry = 1U;
 constexpr std::size_t kDuplicateHistorySize = 2U;
 constexpr std::size_t kCrossExecutorHistorySize = 3U;
@@ -535,7 +541,7 @@ TEST(ExampleSupportTest, GeneratedTaskCollisionFallsBackToSnapshotAndConditional
   CountingTaskStore task_store;
   lf::a2a::v1::Task existing;
   existing.set_id(std::string(kSingleUpsertTaskId));
-  existing.set_context_id("collision-context");
+  existing.set_context_id(std::string(kCollisionContextId));
   existing.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
   ASSERT_TRUE(task_store.CreateOrUpdate(existing).ok());
   task_store.ResetCounts();
@@ -562,7 +568,7 @@ TEST(ExampleSupportTest, FollowUpValidationUsesSingleAuthoritativeSnapshot) {
   a2a::server::RequestContext context;
   ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context).ok());
   task_store.ResetCounts();
-  auto follow_up = MakeValidSendRequest("single-snapshot-follow-up");
+  auto follow_up = MakeValidSendRequest(std::string(kSingleSnapshotFollowUpMessageId));
   follow_up.mutable_message()->set_task_id(std::string(kSingleUpsertTaskId));
 
   const auto result = executor.SendMessage(follow_up, context);
@@ -579,14 +585,14 @@ TEST(ExampleSupportTest, FollowUpValidationRejectsMissingAndMismatchedTasks) {
   options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kSingleUpsertTaskId));
   a2a::examples::ExampleExecutor executor(std::move(options));
   a2a::server::RequestContext context;
-  auto missing = MakeValidSendRequest("missing-follow-up");
-  missing.mutable_message()->set_task_id("missing-task");
+  auto missing = MakeValidSendRequest(std::string(kMissingFollowUpMessageId));
+  missing.mutable_message()->set_task_id(std::string(kMissingFollowUpTaskId));
   EXPECT_FALSE(executor.SendMessage(missing, context).ok());
 
   ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context).ok());
-  auto mismatch = MakeValidSendRequest("mismatched-follow-up");
+  auto mismatch = MakeValidSendRequest(std::string(kMismatchedFollowUpMessageId));
   mismatch.mutable_message()->set_task_id(std::string(kSingleUpsertTaskId));
-  mismatch.mutable_message()->set_context_id("different-context");
+  mismatch.mutable_message()->set_context_id(std::string(kMismatchedFollowUpContextId));
   EXPECT_FALSE(executor.SendMessage(mismatch, context).ok());
 }
 

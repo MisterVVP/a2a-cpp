@@ -23,6 +23,7 @@ namespace {
 
 constexpr std::string_view kTaskPrefix = "task-";
 constexpr std::string_view kFirstMessageId = "m-1";
+constexpr std::string_view kDifferentSnapshotTaskId = "task-different-snapshot";
 constexpr std::string_view kUuidPatternText = R"(^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$)";
 constexpr std::size_t kTaskPrefixSize = 5;
 constexpr std::size_t kUuidVersionOffset = 14;
@@ -223,6 +224,14 @@ TEST(TaskIdGeneratorTest, LifecycleValidatesAuthoritativeTaskForSendRequest) {
   const auto mismatch_id = lifecycle.ResolveTaskIdForSendRequest(mismatch, context);
   ASSERT_TRUE(mismatch_id.ok());
   EXPECT_FALSE(lifecycle.ValidateTaskForSendRequest(mismatch, working).ok());
+
+  auto different_snapshot = working;
+  different_snapshot.set_id(std::string(kDifferentSnapshotTaskId));
+  auto matching_context = mismatch;
+  matching_context.mutable_message()->set_context_id(working.context_id());
+  const auto different_snapshot_validation = lifecycle.ValidateTaskForSendRequest(matching_context, different_snapshot);
+  ASSERT_FALSE(different_snapshot_validation.ok());
+  EXPECT_EQ(different_snapshot_validation.error().code(), a2a::core::ErrorCode::kValidation);
 
   lf::a2a::v1::SendMessageRequest follow_up;
   follow_up.mutable_message()->set_task_id("task-terminal");

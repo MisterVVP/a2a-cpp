@@ -31,6 +31,8 @@ constexpr std::size_t kPushBatchUpsertSqlBytesPerConfigEstimate = 48U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
 constexpr std::string_view kPushConfigBatchSingleTaskMessage = "PostgreSQL push-config batch requires one task_id";
+constexpr std::string_view kPushConfigBatchDuplicateIdMessage =
+    "PostgreSQL push-config batch requires unique config_id values";
 constexpr std::string_view kPushConfigBatchUnexpectedRowCountMessage =
     "PostgreSQL push-config batch returned an unexpected row count";
 constexpr std::string_view kPushConfigUpsertOperation = "upsert postgres push notification config";
@@ -577,6 +579,8 @@ core::Result<void> PostgresPushNotificationStore::CreateOrUpdateManyForTask(
     return {};
   }
   const std::string_view task_id = configs.front().task_id();
+  std::vector<std::string_view> config_ids;
+  config_ids.reserve(configs.size());
   for (const auto& config : configs) {
     const auto validation = ValidatePushConfig(config);
     if (!validation.ok()) {
@@ -589,6 +593,11 @@ core::Result<void> PostgresPushNotificationStore::CreateOrUpdateManyForTask(
     if (config.task_id() != task_id) {
       return core::Error::Validation(std::string(kPushConfigBatchSingleTaskMessage));
     }
+    config_ids.push_back(config.id());
+  }
+  std::sort(config_ids.begin(), config_ids.end());
+  if (std::adjacent_find(config_ids.begin(), config_ids.end()) != config_ids.end()) {
+    return core::Error::Validation(std::string(kPushConfigBatchDuplicateIdMessage));
   }
   if (!task_store.UsesStorage(storage_identity_)) {
     return core::Error::Internal(std::string(kPostgresTaskAuthorityUncertainMessage));
