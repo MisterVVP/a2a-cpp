@@ -30,6 +30,9 @@ constexpr std::size_t kPushDeleteSqlReserveSlack = 64U;
 constexpr std::size_t kPushBatchUpsertSqlBytesPerConfigEstimate = 48U;
 constexpr std::string_view kPushListMissingCountMessage =
     "list postgres push notification configs: query returned no count row";
+constexpr std::string_view kPushConfigBatchSingleTaskMessage = "PostgreSQL push-config batch requires one task_id";
+constexpr std::string_view kPushConfigBatchUnexpectedRowCountMessage =
+    "PostgreSQL push-config batch returned an unexpected row count";
 constexpr std::string_view kPushConfigUpsertOperation = "upsert postgres push notification config";
 constexpr std::string_view kPushConfigGetOperation = "get postgres push notification config";
 constexpr std::string_view kPushConfigSerializationErrorMessage =
@@ -584,7 +587,7 @@ core::Result<void> PostgresPushNotificationStore::CreateOrUpdateManyForTask(
       return validation.error();
     }
     if (config.task_id() != task_id) {
-      return core::Error::Validation("PostgreSQL push-config batch requires one task_id");
+      return core::Error::Validation(std::string(kPushConfigBatchSingleTaskMessage));
     }
   }
   if (!task_store.UsesStorage(storage_identity_)) {
@@ -641,7 +644,7 @@ core::Result<void> PostgresPushNotificationStore::CreateOrUpdateManyForTask(
     return core::protocol_errors::TaskNotFound(std::string(kTaskConfigNotFoundMessage));
   }
   if (static_cast<std::size_t>(PQntuples(result.get())) != configs.size()) {
-    return core::Error::Internal("PostgreSQL push-config batch returned an unexpected row count");
+    return core::Error::Internal(std::string(kPushConfigBatchUnexpectedRowCountMessage));
   }
   return {};
 }
