@@ -1440,11 +1440,17 @@ constexpr std::string_view kConflictingWriterSchemaSuffix = "push_conflicting_wr
 constexpr std::string_view kExternalConcurrentSchemaSuffix = "push_external_concurrent";
 constexpr std::string_view kDatabaseLockCycleSchemaSuffix = "push_database_lock_cycle";
 constexpr std::string_view kAdvisoryProgressSchemaSuffix = "push_advisory_progress";
+constexpr std::string_view kAdvisorySchemaScopeSchemaSuffix = "push_advisory_schema_scope";
+constexpr std::string_view kAdvisorySchemaScopeOtherSchemaSuffix = "push_advisory_schema_scope_other";
+constexpr std::string_view kRepeatableReadDeleteSchemaSuffix = "push_repeatable_read_delete";
 constexpr std::string_view kConcurrentFirstUpdateUrl = "https://example.test/concurrent-first";
 constexpr std::string_view kConcurrentSecondUpdateUrl = "https://example.test/concurrent-second";
 constexpr std::string_view kConcurrentCycleUpdateUrl = "https://example.test/concurrent-cycle";
 constexpr std::string_view kConcurrentExternalUpdateUrl = "https://example.test/concurrent-external";
 constexpr std::string_view kLockConcurrentPushRowOperation = "lock concurrent push config row";
+constexpr std::string_view kSetRepeatableReadIsolationOperation = "set repeatable-read isolation";
+constexpr std::string_view kRepeatableReadIsolationSql = "SET default_transaction_isolation = 'repeatable read'";
+constexpr std::string_view kReadCommittedIsolationRequiredMessage = "requires read-committed transaction isolation";
 constexpr std::string_view kCountWaitingPostgresLocksOperation = "count waiting postgres locks";
 constexpr std::string_view kCountWaitingPostgresLocksMissingRowMessage =
     "count waiting postgres locks: query returned no row";
@@ -2122,6 +2128,92 @@ void ExpectAdvisoryProgressScenario(std::string_view dsn_value) {
     ExpectPushConfigPresent(push_store, kAtomicCreateTaskId, config_id);
   }
   ExpectPushConfigPresent(push_store, kMixedCreateTaskId, kMixedCreateConfigId);
+}
+
+void ExpectAdvisoryLocksScopedToSchema(std::string_view dsn_value) {
+  const std::string schema = MakePostgresTestSchema(kAdvisorySchemaScopeSchemaSuffix);
+  const std::string other_schema = MakePostgresTestSchema(kAdvisorySchemaScopeOtherSchemaSuffix);
+  const std::string push_dsn = BuildEquivalentKeywordDsn(dsn_value);
+  ASSERT_FALSE(push_dsn.empty());
+  const a2a::server::stores::PostgresStoreOptions first_options{
+      .connection_string = push_dsn, .schema = schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  const a2a::server::stores::PostgresStoreOptions second_options{
+      .connection_string = push_dsn, .schema = other_schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  a2a::server::stores::PostgresTaskStore first_task_store(first_options);
+  a2a::server::stores::PostgresPushNotificationStore first_push_store(first_options);
+  a2a::server::stores::PostgresTaskStore second_task_store(second_options);
+  a2a::server::stores::PostgresPushNotificationStore second_push_store(second_options);
+  ASSERT_TRUE(ConfigurePushPoolStatementTimeout(second_push_store, kConcurrencyTaskPoolSize).ok());
+  AddPostgresTask(first_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(second_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  auto deletion = first_push_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(deletion.ok());
+  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
+  ASSERT_TRUE(deletion_transaction.Begin().ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(
+                  deletion.value().get(),
+                  BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(schema), kTaskIdColumn, kAtomicCreateTaskId),
+                  kHoldConcurrentDeleteOperation)
+                  .ok());
+
+  const auto created = second_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      second_task_store);
+  ASSERT_TRUE(deletion_transaction.Commit().ok());
+  ASSERT_TRUE(created.ok());
+  EXPECT_FALSE(first_task_store.Get(kAtomicCreateTaskId).ok());
+  EXPECT_TRUE(second_task_store.Get(kAtomicCreateTaskId).ok());
+  ExpectPushConfigPresent(second_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
+}
+
+void ExpectRepeatableReadDeleteConflictRejected(std::string_view dsn_value) {
+  const std::string schema = MakePostgresTestSchema(kRepeatableReadDeleteSchemaSuffix);
+  const std::string push_dsn = BuildEquivalentKeywordDsn(dsn_value);
+  ASSERT_FALSE(push_dsn.empty());
+  const a2a::server::stores::PostgresStoreOptions owner_options{
+      .connection_string = push_dsn, .schema = schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  const a2a::server::stores::PostgresStoreOptions repeatable_read_options{
+      .connection_string = push_dsn,
+      .schema = schema,
+      .auto_create_schema = false,
+      .connection_pool_size = kConcurrencyTaskPoolSize};
+  a2a::server::stores::PostgresTaskStore task_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore owner_push_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore repeatable_read_push_store(repeatable_read_options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  {
+    auto connection = repeatable_read_push_store.AcquireConnectionForTesting();
+    ASSERT_TRUE(connection.ok());
+    ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), std::string(kConcurrentStatementTimeoutSql),
+                                          kSetConcurrentStatementTimeoutOperation)
+                    .ok());
+    ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), std::string(kRepeatableReadIsolationSql),
+                                          kSetRepeatableReadIsolationOperation)
+                    .ok());
+  }
+
+  auto deletion = owner_push_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(deletion.ok());
+  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
+  ASSERT_TRUE(deletion_transaction.Begin().ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(
+                  deletion.value().get(),
+                  BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(schema), kTaskIdColumn, kAtomicCreateTaskId),
+                  kHoldConcurrentDeleteOperation)
+                  .ok());
+
+  const auto created = repeatable_read_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      task_store);
+  ASSERT_TRUE(deletion_transaction.Commit().ok());
+  ASSERT_FALSE(created.ok());
+  EXPECT_NE(created.error().message().find(kReadCommittedIsolationRequiredMessage), std::string_view::npos);
+  EXPECT_FALSE(task_store.Get(kAtomicCreateTaskId).ok());
+  ExpectPushConfigMissing(repeatable_read_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
 }
 
 void ExpectDatabaseLockCycleScenario(std::string_view dsn_value) {
@@ -3288,6 +3380,22 @@ TEST(StoreConformanceTest, PostgresAdvisoryPushLocksAllowSameAndDifferentTaskPro
     GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
   }
   ExpectAdvisoryProgressScenario(dsn_value);
+}
+
+TEST(StoreConformanceTest, PostgresAdvisoryPushLocksAreScopedToSchema) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectAdvisoryLocksScopedToSchema(dsn_value);
+}
+
+TEST(StoreConformanceTest, PostgresRepeatableReadDeleteConflictCannotUseStaleTaskSnapshot) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectRepeatableReadDeleteConflictRejected(dsn_value);
 }
 
 TEST(StoreConformanceTest, PostgresDetectsLocalCreateDeleteDatabaseLockCycle) {

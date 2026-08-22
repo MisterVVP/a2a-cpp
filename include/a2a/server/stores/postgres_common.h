@@ -194,7 +194,7 @@ class Transaction final {
 [[nodiscard]] std::string TaskPushConfigLockFunction(std::string_view schema);
 [[nodiscard]] std::string TaskDeleteLockFunction(std::string_view schema);
 [[nodiscard]] std::string ExpectedTaskPushConfigLockFunctionBody(std::string_view schema);
-[[nodiscard]] std::string ExpectedTaskDeleteLockFunctionBody();
+[[nodiscard]] std::string ExpectedTaskDeleteLockFunctionBody(std::string_view schema);
 [[nodiscard]] std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema);
 [[nodiscard]] PostgresStorageAuthority ClassifyPostgresStorageAuthority(const PostgresStorageIdentity& lhs,
                                                                         const PostgresStorageIdentity& rhs) noexcept;

@@ -31,12 +31,17 @@ constexpr std::size_t kTaskPushConfigMigrationMarkerSqlReserveSlack = 96U;
 constexpr std::size_t kTaskDeleteLockFunctionSqlReserveSlack = 192U;
 constexpr std::size_t kTaskDeleteLockTriggerSqlReserveSlack = 192U;
 constexpr std::string_view kTaskAdvisoryLockHashSeed = "0";
+constexpr std::string_view kTransactionIsolationSetting = "transaction_isolation";
+constexpr std::string_view kRepeatableReadIsolation = "repeatable read";
+constexpr std::string_view kSerializableIsolation = "serializable";
 constexpr std::string_view kFeatureNotSupportedSqlState = "0A000";
 constexpr std::string_view kInsufficientPrivilegeSqlState = "42501";
 constexpr std::string_view kPostgresTaskRowLevelSecurityUnsupportedMessage =
     "PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks";
 constexpr std::string_view kPostgresPushTaskSelectRequiredMessage =
     "PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation";
+constexpr std::string_view kPostgresTaskAwarePushSnapshotIsolationUnsupportedMessage =
+    "PostgreSQL task-aware push configuration requires read-committed transaction isolation";
 constexpr auto kCurrentUserSql = std::to_array("SELECT current_user");
 constinit const std::string kBeginSchemaTransactionSql = "BEGIN";
 constinit const std::string kCommitSchemaTransactionSql = "COMMIT";
@@ -124,20 +129,38 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 
 [[nodiscard]] std::string BuildTaskPushConfigLockFunctionBody(std::string_view task_table) {
   const std::string task_table_literal = SqlStringLiteral(task_table);
+  const std::string transaction_isolation_setting = SqlStringLiteral(kTransactionIsolationSetting);
+  const std::string repeatable_read_isolation = SqlStringLiteral(kRepeatableReadIsolation);
+  const std::string serializable_isolation = SqlStringLiteral(kSerializableIsolation);
+  const std::string isolation_error_code = SqlStringLiteral(kFeatureNotSupportedSqlState);
+  const std::string isolation_error_message =
+      SqlStringLiteral(kPostgresTaskAwarePushSnapshotIsolationUnsupportedMessage);
   const std::string rls_error_code = SqlStringLiteral(kFeatureNotSupportedSqlState);
   const std::string rls_error_message = SqlStringLiteral(kPostgresTaskRowLevelSecurityUnsupportedMessage);
   const std::string privilege_error_code = SqlStringLiteral(kInsufficientPrivilegeSqlState);
   const std::string privilege_error_message = SqlStringLiteral(kPostgresPushTaskSelectRequiredMessage);
   std::string body;
-  body.reserve(task_table.size() + (2U * task_table_literal.size()) + rls_error_code.size() + rls_error_message.size() +
+  body.reserve(task_table.size() + (3U * task_table_literal.size()) + transaction_isolation_setting.size() +
+               repeatable_read_isolation.size() + serializable_isolation.size() + isolation_error_code.size() +
+               isolation_error_message.size() + rls_error_code.size() + rls_error_message.size() +
                privilege_error_code.size() + privilege_error_message.size() +
                kTaskPushConfigLockFunctionSqlReserveSlack);
-  body.append(
-      "DECLARE caller_role name; lock_key bigint; BEGIN lock_key := "
-      "pg_catalog.hashtextextended(requested_task_id, ");
+  body.append("DECLARE caller_role name; lock_key bigint; BEGIN IF pg_catalog.current_setting(");
+  body.append(transaction_isolation_setting);
+  body.append(") IN (");
+  body.append(repeatable_read_isolation);
+  body.append(", ");
+  body.append(serializable_isolation);
+  body.append(") THEN RAISE EXCEPTION USING ERRCODE = ");
+  body.append(isolation_error_code);
+  body.append(", MESSAGE = ");
+  body.append(isolation_error_message);
+  body.append("; END IF; lock_key := pg_catalog.hashtextextended(requested_task_id, pg_catalog.hashtextextended(");
+  body.append(task_table_literal);
+  body.append(", ");
   body.append(kTaskAdvisoryLockHashSeed);
   body.append(
-      "); IF NOT pg_catalog.pg_try_advisory_xact_lock_shared(lock_key) THEN "
+      ")); IF NOT pg_catalog.pg_try_advisory_xact_lock_shared(lock_key) THEN "
       "PERFORM pg_catalog.pg_advisory_xact_lock_shared(lock_key); END IF; "
       "caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none'); "
       "IF caller_role IS NULL THEN caller_role := session_user; END IF; IF EXISTS ("
@@ -202,17 +225,22 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
   return sql;
 }
 
-[[nodiscard]] std::string BuildTaskDeleteLockFunctionBody() {
+[[nodiscard]] std::string BuildTaskDeleteLockFunctionBody(std::string_view task_table) {
+  const std::string task_table_literal = SqlStringLiteral(task_table);
   std::string body;
-  body.reserve(kTaskDeleteLockFunctionSqlReserveSlack);
-  body.append("BEGIN PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(OLD.id, ");
+  body.reserve(task_table_literal.size() + kTaskDeleteLockFunctionSqlReserveSlack);
+  body.append(
+      "BEGIN PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(OLD.id, "
+      "pg_catalog.hashtextextended(");
+  body.append(task_table_literal);
+  body.append(", ");
   body.append(kTaskAdvisoryLockHashSeed);
-  body.append(")); RETURN OLD; END");
+  body.append("))); RETURN OLD; END");
   return body;
 }
 
-[[nodiscard]] std::string BuildTaskDeleteLockFunctionSql(std::string_view function) {
-  const std::string body = BuildTaskDeleteLockFunctionBody();
+[[nodiscard]] std::string BuildTaskDeleteLockFunctionSql(std::string_view function, std::string_view task_table) {
+  const std::string body = BuildTaskDeleteLockFunctionBody(task_table);
   std::string sql;
   sql.reserve(function.size() + body.size() + kTaskDeleteLockFunctionSqlReserveSlack);
   sql.append("CREATE OR REPLACE FUNCTION ");
@@ -448,7 +476,9 @@ std::string ExpectedTaskPushConfigLockFunctionBody(std::string_view schema) {
   return BuildTaskPushConfigLockFunctionBody(TaskTable(schema));
 }
 
-std::string ExpectedTaskDeleteLockFunctionBody() { return BuildTaskDeleteLockFunctionBody(); }
+std::string ExpectedTaskDeleteLockFunctionBody(std::string_view schema) {
+  return BuildTaskDeleteLockFunctionBody(TaskTable(schema));
+}
 
 std::string ExpectedDeleteTaskPushConfigsFunctionBody(std::string_view schema) {
   return BuildDeleteTaskPushConfigsFunctionBody(PushTable(schema));
@@ -737,7 +767,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       BuildGrantTaskPushConfigLockFunctionSql(task_push_config_lock_function);
   const std::string mark_task_push_config_migration =
       BuildTaskPushConfigMigrationMarkerSql(task_push_config_lock_function);
-  const std::string create_task_delete_lock_function = BuildTaskDeleteLockFunctionSql(task_delete_lock_function);
+  const std::string create_task_delete_lock_function = BuildTaskDeleteLockFunctionSql(task_delete_lock_function, tasks);
   const std::string revoke_task_delete_lock_function = BuildRevokeTaskDeleteLockFunctionSql(task_delete_lock_function);
   const std::string create_task_delete_lock_trigger = BuildTaskDeleteLockTriggerSql(task_delete_lock_function, tasks);
   const std::string mark_task_delete_lock_migration = BuildTaskDeleteLockMigrationMarkerSql(task_delete_lock_function);

@@ -48,7 +48,7 @@ constexpr std::string_view kPostgresTriggerEnabledForOrigin = "O";
 constexpr std::string_view kPostgresTriggerEnabledAlways = "A";
 constexpr std::string_view kPostgresTrueValue = "t";
 constexpr int kPostgresPushSchemaParameterCount = 23;
-constexpr std::string_view kTaskLockExpectedTableReferenceCount = "3";
+constexpr std::string_view kTaskLockExpectedTableReferenceCount = "4";
 constexpr std::string_view kCleanupExpectedTableReferenceCount = "1";
 constexpr int kPostgresPushSchemaCheckCount = 14;
 constexpr int kPostgresPushSchemaBaseCheckCount = 2;
@@ -368,7 +368,7 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
 
 [[nodiscard]] core::Result<bool> ValidateManagedPushSchema(PGconn* connection, const PostgresStoreOptions& options) {
   const std::string expected_lock_body = ExpectedTaskPushConfigLockFunctionBody(options.schema);
-  const std::string expected_task_delete_lock_body = ExpectedTaskDeleteLockFunctionBody();
+  const std::string expected_task_delete_lock_body = ExpectedTaskDeleteLockFunctionBody(options.schema);
   const std::string quoted_task_table = TaskTable(options.schema);
   const std::string unquoted_task_table = UnquotedQualifiedIdentifier(options.schema, kTaskTableName);
   const std::string expected_cleanup_body = ExpectedDeleteTaskPushConfigsFunctionBody(options.schema);

@@ -137,16 +137,20 @@ final PostgreSQL paths are:
 - **Same storage, create/update:** one push-store pool acquisition and one
   `PQexecParams` command. The statement invokes the schema-qualified
   `SECURITY DEFINER` task-lock helper, takes a shared transaction-scoped
-  advisory lock derived from the complete task ID, validates task existence, and
-  performs `INSERT ... ON CONFLICT DO UPDATE ... RETURNING 1` in the same
-  statement. Task deletion takes the matching exclusive advisory lock in a
-  `BEFORE DELETE` trigger. There is no preliminary `task_get`, explicit
-  multi-command transaction, revalidation, or compensating cleanup. A missing
-  task returns `TaskNotFound`; a concurrent delete cannot leave a locally owned
-  orphan. The helper remains `VOLATILE`, so its task-existence query observes a
-  fresh snapshot after any advisory-lock wait. Advisory-key collisions can only
-  serialize unrelated task IDs; all task and push data access continues to use
-  the original task ID.
+  advisory lock derived from the schema-qualified task table and complete task
+  ID, validates task existence, and performs
+  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING 1` in the same statement. Task
+  deletion takes the matching exclusive advisory lock in a `BEFORE DELETE`
+  trigger. There is no preliminary `task_get`, explicit multi-command
+  transaction, revalidation, or compensating cleanup. A missing task returns
+  `TaskNotFound`; a concurrent delete cannot leave a locally owned orphan. The
+  local task-aware path rejects repeatable-read and serializable transaction
+  isolation before locking because their transaction-scoped snapshots can remain
+  stale after a concurrent delete commits. Under PostgreSQL read-committed
+  semantics, the `VOLATILE` helper rechecks task existence with a fresh snapshot
+  after any advisory-lock wait. Equal task IDs in different schemas use different
+  advisory keys. Hash collisions can still serialize unrelated task IDs; all task
+  and push data access continues to use the original task ID.
 - **External authority, create/update:** the supplied `TaskStore` remains
   authoritative. The service performs its task lookup first and then writes an
   externally owned push row (`local_postgres_task=FALSE`). A different database
@@ -246,9 +250,18 @@ SET search_path = pg_catalog
 AS $a2a$
 DECLARE
   caller_role NAME;
+  lock_key BIGINT;
 BEGIN
-  PERFORM pg_catalog.pg_advisory_xact_lock_shared(
-    pg_catalog.hashtextextended(requested_task_id, 0));
+  IF pg_catalog.current_setting('transaction_isolation') IN ('repeatable read', 'serializable') THEN
+    RAISE EXCEPTION USING ERRCODE = '0A000', MESSAGE =
+      'PostgreSQL task-aware push configuration requires read-committed transaction isolation';
+  END IF;
+  lock_key := pg_catalog.hashtextextended(
+    requested_task_id,
+    pg_catalog.hashtextextended('public.a2a_tasks', 0));
+  IF NOT pg_catalog.pg_try_advisory_xact_lock_shared(lock_key) THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock_shared(lock_key);
+  END IF;
   caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none');
   IF caller_role IS NULL THEN
     caller_role := session_user;
@@ -284,7 +297,9 @@ SET search_path = pg_catalog
 AS $a2a$
 BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(
-    pg_catalog.hashtextextended(OLD.id, 0));
+    pg_catalog.hashtextextended(
+      OLD.id,
+      pg_catalog.hashtextextended('public.a2a_tasks', 0)));
   RETURN OLD;
 END
 $a2a$;

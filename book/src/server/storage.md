@@ -59,14 +59,18 @@ out-of-band session state such as `SET ROLE` or custom policy GUCs.
 For same-storage task and push stores, create/update uses one push-store
 acquisition and one PostgreSQL command. That statement calls the
 `SECURITY DEFINER` task-lock helper, holds a shared transaction advisory lock
-derived from the complete task ID, validates task existence, and performs the
-upsert atomically. Task deletion obtains the matching exclusive advisory lock in
-a `BEFORE DELETE` trigger. It has no separate task precheck, revalidation,
-compensating cleanup, or explicit multi-command transaction. Missing tasks return
-`TaskNotFound`, and concurrent deletion cannot leave a locally owned orphan. The
-`VOLATILE` helper rechecks task existence with a fresh snapshot after a lock wait.
-Advisory-key collisions only serialize unrelated task IDs; data access still uses
-the original task ID.
+derived from the schema-qualified task table and complete task ID, validates task
+existence, and performs the upsert atomically. Task deletion obtains the matching
+exclusive advisory lock in a `BEFORE DELETE` trigger. It has no separate task
+precheck, revalidation, compensating cleanup, or explicit multi-command
+transaction. Missing tasks return `TaskNotFound`, and concurrent deletion cannot
+leave a locally owned orphan. The local task-aware path rejects repeatable-read
+and serializable transaction isolation before locking because their
+transaction-scoped snapshots can remain stale after a concurrent delete commits.
+Under PostgreSQL read-committed semantics, the `VOLATILE` helper rechecks task
+existence with a fresh snapshot after a lock wait. Equal task IDs in different
+schemas use different advisory keys. Hash collisions can still serialize
+unrelated task IDs; data access still uses the original task ID.
 `PushConfig_CreateMany` at fan-out eight therefore performs eight create
 commands rather than sixteen.
 
@@ -134,9 +138,18 @@ SET search_path = pg_catalog
 AS $a2a$
 DECLARE
   caller_role NAME;
+  lock_key BIGINT;
 BEGIN
-  PERFORM pg_catalog.pg_advisory_xact_lock_shared(
-    pg_catalog.hashtextextended(requested_task_id, 0));
+  IF pg_catalog.current_setting('transaction_isolation') IN ('repeatable read', 'serializable') THEN
+    RAISE EXCEPTION USING ERRCODE = '0A000', MESSAGE =
+      'PostgreSQL task-aware push configuration requires read-committed transaction isolation';
+  END IF;
+  lock_key := pg_catalog.hashtextextended(
+    requested_task_id,
+    pg_catalog.hashtextextended('public.a2a_tasks', 0));
+  IF NOT pg_catalog.pg_try_advisory_xact_lock_shared(lock_key) THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock_shared(lock_key);
+  END IF;
   caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none');
   IF caller_role IS NULL THEN
     caller_role := session_user;
@@ -172,7 +185,9 @@ SET search_path = pg_catalog
 AS $a2a$
 BEGIN
   PERFORM pg_catalog.pg_advisory_xact_lock(
-    pg_catalog.hashtextextended(OLD.id, 0));
+    pg_catalog.hashtextextended(
+      OLD.id,
+      pg_catalog.hashtextextended('public.a2a_tasks', 0)));
   RETURN OLD;
 END
 $a2a$;
