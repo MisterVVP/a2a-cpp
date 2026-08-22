@@ -49,8 +49,16 @@ void BM_TaskLifecycle_ContinueExistingTask(benchmark::State& state) {
   a2a::server::RequestContext context;
   const auto request = a2a::bench::BuildSendMessageRequest();
   for (auto _ : state) {
-    auto id = service.ResolveTaskIdForSendRequest(request, context);
+    const auto id = service.ResolveTaskIdForSendRequest(request, context);
     benchmark::DoNotOptimize(id);
+    if (id.ok()) {
+      const auto task = store.Get(id.value());
+      benchmark::DoNotOptimize(task);
+      if (task.ok()) {
+        const auto validated = service.ValidateTaskForSendRequest(request, task.value());
+        benchmark::DoNotOptimize(validated);
+      }
+    }
   }
 }
 BENCHMARK(BM_TaskLifecycle_ContinueExistingTask);
@@ -65,8 +73,16 @@ void BM_TaskLifecycle_RejectTerminalTask(benchmark::State& state) {
   a2a::server::RequestContext context;
   const auto request = a2a::bench::BuildSendMessageRequest();
   for (auto _ : state) {
-    auto id = service.ResolveTaskIdForSendRequest(request, context);
+    const auto id = service.ResolveTaskIdForSendRequest(request, context);
     benchmark::DoNotOptimize(id);
+    if (id.ok()) {
+      const auto current = store.Get(id.value());
+      benchmark::DoNotOptimize(current);
+      if (current.ok()) {
+        const auto validated = service.ValidateTaskForSendRequest(request, current.value());
+        benchmark::DoNotOptimize(validated);
+      }
+    }
   }
 }
 BENCHMARK(BM_TaskLifecycle_RejectTerminalTask);
@@ -80,8 +96,16 @@ void BM_TaskLifecycle_RejectContextMismatch(benchmark::State& state) {
   auto request = a2a::bench::BuildSendMessageRequest();
   request.mutable_message()->set_context_id("different-context");
   for (auto _ : state) {
-    auto id = service.ResolveTaskIdForSendRequest(request, context);
+    const auto id = service.ResolveTaskIdForSendRequest(request, context);
     benchmark::DoNotOptimize(id);
+    if (id.ok()) {
+      const auto task = store.Get(id.value());
+      benchmark::DoNotOptimize(task);
+      if (task.ok()) {
+        const auto validated = service.ValidateTaskForSendRequest(request, task.value());
+        benchmark::DoNotOptimize(validated);
+      }
+    }
   }
 }
 BENCHMARK(BM_TaskLifecycle_RejectContextMismatch);

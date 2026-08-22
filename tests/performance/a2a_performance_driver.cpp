@@ -524,24 +524,6 @@ class ScenarioHarness final {
     if (create_many_task_id_.empty()) {
       return {};
     }
-#ifdef A2A_ENABLE_POSTGRES_STORE
-    auto* postgres_push_store =
-        dynamic_cast<a2a::server::stores::PostgresPushNotificationStore*>(store_bundle_.push_store.get());
-    auto* postgres_task_store = dynamic_cast<a2a::server::stores::PostgresTaskStore*>(store_bundle_.task_store.get());
-    if (postgres_push_store != nullptr && postgres_task_store != nullptr) {
-      std::vector<lf::a2a::v1::TaskPushNotificationConfig> configs;
-      configs.reserve(static_cast<std::size_t>(push_config_fanout_));
-      for (int config = 0; config < push_config_fanout_; ++config) {
-        configs.push_back(MakePushConfig(create_many_task_id_, BuildId(BuildId("create-many", index), config)));
-        CountConfigCreate();
-      }
-      const auto created = postgres_push_store->CreateOrUpdateManyForTask(configs, *postgres_task_store);
-      return {.ok = created.ok(),
-              .event_count = created.ok() ? push_config_fanout_ : 0,
-              .fanout_per_operation = push_config_fanout_,
-              .total_fanout_count = push_config_fanout_};
-    }
-#endif
     int created = 0;
     for (int config = 0; config < push_config_fanout_; ++config) {
       const auto response = executor_->CreateTaskPushNotificationConfig(
