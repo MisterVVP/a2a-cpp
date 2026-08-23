@@ -2164,6 +2164,40 @@ void ExpectAdvisoryProgressScenario(std::string_view dsn_value) {
   ExpectPushConfigPresent(push_store, kMixedCreateTaskId, kMixedCreateConfigId);
 }
 
+[[nodiscard]] a2a::core::Result<void> CreateInOtherSchemaWhileTaskDeleteIsHeld(
+    a2a::server::stores::PostgresPushNotificationStore& deleting_push_store,
+    a2a::server::stores::PostgresPushNotificationStore& creating_push_store,
+    a2a::server::stores::PostgresTaskStore& creating_task_store, std::string_view deleting_schema) {
+  auto deletion = deleting_push_store.AcquireConnectionForTesting();
+  if (!deletion.ok()) {
+    return deletion.error();
+  }
+  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
+  auto begun = deletion_transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  auto deleted = a2a::server::stores::Exec(
+      deletion.value().get(),
+      BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(deleting_schema), kTaskIdColumn, kAtomicCreateTaskId),
+      kHoldConcurrentDeleteOperation);
+  if (!deleted.ok()) {
+    return deleted.error();
+  }
+
+  auto created = creating_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      creating_task_store);
+  auto committed = deletion_transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  if (!created.ok()) {
+    return created.error();
+  }
+  return {};
+}
+
 void ExpectAdvisoryLocksScopedToSchema(std::string_view dsn_value) {
   const std::string schema = MakePostgresTestSchema(kAdvisorySchemaScopeSchemaSuffix);
   const std::string other_schema = MakePostgresTestSchema(kAdvisorySchemaScopeOtherSchemaSuffix);
@@ -2183,21 +2217,9 @@ void ExpectAdvisoryLocksScopedToSchema(std::string_view dsn_value) {
   AddPostgresTask(second_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
                   kOldTargetTaskTimestampSeconds);
 
-  auto deletion = first_push_store.AcquireConnectionForTesting();
-  ASSERT_TRUE(deletion.ok());
-  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
-  ASSERT_TRUE(deletion_transaction.Begin().ok());
-  ASSERT_TRUE(a2a::server::stores::Exec(
-                  deletion.value().get(),
-                  BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(schema), kTaskIdColumn, kAtomicCreateTaskId),
-                  kHoldConcurrentDeleteOperation)
-                  .ok());
-
-  const auto created = second_push_store.CreateOrUpdateForTask(
-      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
-      second_task_store);
-  ASSERT_TRUE(deletion_transaction.Commit().ok());
-  ASSERT_TRUE(created.ok());
+  const auto create_while_delete_held =
+      CreateInOtherSchemaWhileTaskDeleteIsHeld(first_push_store, second_push_store, second_task_store, schema);
+  ASSERT_TRUE(create_while_delete_held.ok());
   EXPECT_FALSE(first_task_store.Get(kAtomicCreateTaskId).ok());
   EXPECT_TRUE(second_task_store.Get(kAtomicCreateTaskId).ok());
   ExpectPushConfigPresent(second_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
