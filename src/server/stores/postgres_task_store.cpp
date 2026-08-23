@@ -27,6 +27,38 @@ namespace {
 constexpr std::size_t kTaskUpsertSqlReserve = 520U;
 constexpr std::size_t kTaskSnapshotSqlReserve = 15U;
 constexpr std::size_t kConditionalTaskWriteSqlReserve = 300U;
+constexpr std::size_t kTaskHistoryUpdateSqlReserve = 120U;
+constexpr std::string_view kNoRowsAffected = "0";
+
+[[nodiscard]] std::string BuildTaskSnapshotSql(std::string_view schema) {
+  std::string sql = "SELECT task_proto, revision::text FROM ";
+  const std::string table = TaskTable(schema);
+  sql.reserve(sql.size() + table.size() + kTaskSnapshotSqlReserve);
+  sql.append(table);
+  sql.append(" WHERE id = $1");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildConditionalTaskCreateSql(std::string_view schema) {
+  std::string sql = "INSERT INTO ";
+  sql.reserve(sql.size() + schema.size() + kConditionalTaskWriteSqlReserve);
+  sql.append(TaskTable(schema));
+  sql.append(
+      " (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto) "
+      "VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING RETURNING revision");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildConditionalTaskUpdateSql(std::string_view schema) {
+  std::string sql = "UPDATE ";
+  sql.reserve(sql.size() + schema.size() + kConditionalTaskWriteSqlReserve);
+  sql.append(TaskTable(schema));
+  sql.append(
+      " SET context_id = $2, state = $3, has_status_timestamp = $4, status_seconds = $5, "
+      "status_nanos = $6, task_proto = $7, revision = revision + 1, updated_at = now() "
+      "WHERE id = $1 AND revision = $8 RETURNING revision");
+  return sql;
+}
 
 [[nodiscard]] core::Result<void> UpsertTask(PGconn* connection, const PostgresStoreOptions& options,
                                             const lf::a2a::v1::Task& task) {
@@ -66,6 +98,80 @@ constexpr std::size_t kConditionalTaskWriteSqlReserve = 300U;
   }
 #endif
   return CheckCommand(connection, result.get(), "upsert postgres task");
+}
+
+[[nodiscard]] core::Result<bool> UpdateTaskHistory(PGconn* connection, const PostgresStoreOptions& options,
+                                                   const lf::a2a::v1::Task& task, std::uint64_t expected_revision) {
+  const std::string payload = task.SerializeAsString();
+  const std::string revision = std::to_string(expected_revision);
+  const std::string table = TaskTable(options.schema);
+  std::string sql;
+  sql.reserve(table.size() + kTaskHistoryUpdateSqlReserve);
+  sql.append("UPDATE ");
+  sql.append(table);
+  sql.append(" SET task_proto = $2, revision = revision + 1, updated_at = now() WHERE id = $1 AND revision = $3");
+  constexpr int kTaskHistoryUpdateParameterCount = 3;
+  const std::array<const char*, kTaskHistoryUpdateParameterCount> values = {task.id().c_str(), payload.data(),
+                                                                            revision.c_str()};
+  const std::array<int, kTaskHistoryUpdateParameterCount> lengths = {0, static_cast<int>(payload.size()), 0};
+  const std::array<int, kTaskHistoryUpdateParameterCount> formats = {0, 1, 0};
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskUpsert);
+#endif
+    result.reset(PQexecParams(connection, sql.c_str(), kTaskHistoryUpdateParameterCount, nullptr, values.data(),
+                              lengths.data(), formats.data(), 0));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
+  const auto checked = CheckCommand(connection, result.get(), "update postgres task history");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  return std::string_view(PQcmdTuples(result.get())) != kNoRowsAffected;
+}
+
+struct TaskHistorySnapshot final {
+  lf::a2a::v1::Task task;
+  std::uint64_t revision = 0;
+};
+
+[[nodiscard]] core::Result<lf::a2a::v1::Task> ParseTaskRow(PGresult* result, int row);
+
+[[nodiscard]] core::Result<TaskHistorySnapshot> SelectTaskHistorySnapshot(PGconn* connection,
+                                                                          const PostgresStoreOptions& options,
+                                                                          std::string_view id) {
+  const std::string id_value(id);
+  const std::string sql = "SELECT task_proto, revision::text FROM " + TaskTable(options.schema) + " WHERE id = $1";
+  const std::array<const char*, 1> values = {id_value.c_str()};
+  PgResult result;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  {
+    const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskHistoryLockRead);
+#endif
+    result.reset(PQexecParams(connection, sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+#ifdef A2A_POSTGRES_STORE_TESTING
+  }
+#endif
+  const auto checked = CheckTuples(connection, result.get(), "select postgres task history snapshot");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) == 0) {
+    return core::protocol_errors::TaskNotFound(std::string(kTaskNotFoundMessage));
+  }
+  auto task = ParseTaskRow(result.get(), 0);
+  if (!task.ok()) {
+    return task.error();
+  }
+  std::uint64_t revision = 0;
+  const std::string_view raw_revision(PQgetvalue(result.get(), 0, 1));
+  const auto parsed = std::from_chars(raw_revision.data(), raw_revision.data() + raw_revision.size(), revision);
+  if (parsed.ec != std::errc() || parsed.ptr != raw_revision.data() + raw_revision.size()) {
+    return core::Error::Serialization("failed to parse postgres task history revision");
+  }
+  return TaskHistorySnapshot{.task = std::move(task.value()), .revision = revision};
 }
 
 [[nodiscard]] core::Result<lf::a2a::v1::Task> ParseTaskRow(PGresult* result, int row) {
@@ -175,7 +281,10 @@ PostgresTaskStore::PostgresTaskStore(PostgresStoreOptions options)
     : pool_(MakePool(options)),
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
-      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)) {
+      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)),
+      snapshot_sql_(BuildTaskSnapshotSql(options_.schema)),
+      conditional_create_sql_(BuildConditionalTaskCreateSql(options_.schema)),
+      conditional_update_sql_(BuildConditionalTaskUpdateSql(options_.schema)) {
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
   if (!initialized.ok()) {
@@ -187,7 +296,10 @@ PostgresTaskStore::PostgresTaskStore(std::shared_ptr<PostgresConnectionPool> poo
     : pool_(std::move(pool)),
       options_(std::move(options)),
       storage_identity_(pool_->StorageCoordinates(options_.schema, options_.storage_authority_id)),
-      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)) {
+      execution_identity_(pool_->ExecutionIdentity(options_.schema, options_.storage_authority_id)),
+      snapshot_sql_(BuildTaskSnapshotSql(options_.schema)),
+      conditional_create_sql_(BuildConditionalTaskCreateSql(options_.schema)),
+      conditional_update_sql_(BuildConditionalTaskUpdateSql(options_.schema)) {
   ValidatePostgresStoreOptionsOrThrow(options_);
   auto lease = AcquireOrThrow(*pool_);
   const auto initialized = InitializeSchema(lease.get(), options_);
@@ -230,11 +342,6 @@ core::Result<TaskStore::TaskSnapshot> PostgresTaskStore::GetSnapshot(std::string
     return core::Error::Validation(std::string(kTaskIdRequiredMessage));
   }
   const std::string id_value(id);
-  std::string sql = "SELECT task_proto, revision::text FROM ";
-  const std::string table = TaskTable(options_.schema);
-  sql.reserve(sql.size() + table.size() + kTaskSnapshotSqlReserve);
-  sql.append(table);
-  sql.append(" WHERE id = $1");
   const std::array<const char*, 1> values = {id_value.c_str()};
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
@@ -245,7 +352,8 @@ core::Result<TaskStore::TaskSnapshot> PostgresTaskStore::GetSnapshot(std::string
   {
     const PostgresDiagnosticTimerForTesting timer(PostgresDiagnosticPhase::kTaskGet);
 #endif
-    result.reset(PQexecParams(lease.value().get(), sql.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
+    result.reset(
+        PQexecParams(lease.value().get(), snapshot_sql_.c_str(), 1, nullptr, values.data(), nullptr, nullptr, 1));
 #ifdef A2A_POSTGRES_STORE_TESTING
   }
 #endif
@@ -281,24 +389,7 @@ core::Result<TaskStore::ConditionalWriteResult> PostgresTaskStore::CreateOrUpdat
   const std::string seconds = std::to_string(has_status_timestamp ? task.status().timestamp().seconds() : 0);
   const std::string nanos = std::to_string(has_status_timestamp ? task.status().timestamp().nanos() : 0);
   const std::string revision = std::to_string(expected_revision);
-  const std::string table = TaskTable(options_.schema);
-  std::string sql;
-  if (expected_revision == 0) {
-    sql.reserve(table.size() + kConditionalTaskWriteSqlReserve);
-    sql.append("INSERT INTO ");
-    sql.append(table);
-    sql.append(
-        " (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING RETURNING revision");
-  } else {
-    sql.reserve(table.size() + kConditionalTaskWriteSqlReserve);
-    sql.append("UPDATE ");
-    sql.append(table);
-    sql.append(
-        " SET context_id = $2, state = $3, has_status_timestamp = $4, status_seconds = $5, "
-        "status_nanos = $6, task_proto = $7, revision = revision + 1, updated_at = now() "
-        "WHERE id = $1 AND revision = $8 RETURNING revision");
-  }
+  const std::string& sql = expected_revision == 0 ? conditional_create_sql_ : conditional_update_sql_;
   constexpr int kCreateParameterCount = 7;
   constexpr int kUpdateParameterCount = 8;
   const std::array<const char*, kUpdateParameterCount> values = {task.id().c_str(), task.context_id().c_str(),
@@ -470,31 +561,26 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
   if (!lease.ok()) {
     return lease.error();
   }
-  Transaction transaction(lease.value().get());
-  auto begun = transaction.Begin();
-  if (!begun.ok()) {
-    return begun.error();
-  }
-  auto task = SelectTaskForUpdate(lease.value().get(), options_, task_id, true);
-  if (!task.ok()) {
-    return task.error();
-  }
-  const auto dedupe_reason = FindHistoryDedupeReason(task.value().history(), message, policy);
-  if (dedupe_reason.has_value()) {
-    std::lock_guard<std::mutex> lock(telemetry_mutex_);
-    UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
-  } else {
-    *task.value().add_history() = message;
-    auto updated = UpsertTask(lease.value().get(), options_, task.value());
+  for (;;) {
+    auto snapshot = SelectTaskHistorySnapshot(lease.value().get(), options_, task_id);
+    if (!snapshot.ok()) {
+      return snapshot.error();
+    }
+    const auto dedupe_reason = FindHistoryDedupeReason(snapshot.value().task.history(), message, policy);
+    if (dedupe_reason.has_value()) {
+      std::lock_guard<std::mutex> lock(telemetry_mutex_);
+      UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
+      return snapshot.value().task;
+    }
+    *snapshot.value().task.add_history() = message;
+    auto updated = UpdateTaskHistory(lease.value().get(), options_, snapshot.value().task, snapshot.value().revision);
     if (!updated.ok()) {
       return updated.error();
     }
+    if (updated.value()) {
+      return snapshot.value().task;
+    }
   }
-  auto committed = transaction.Commit();
-  if (!committed.ok()) {
-    return committed.error();
-  }
-  return task.value();
 }
 
 TaskStore::HistoryTelemetrySnapshot PostgresTaskStore::GetHistoryTelemetrySnapshot() const {

@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 
 #include "a2a/server/stores/postgres_common.h"
@@ -50,6 +51,9 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;
   PostgresExecutionIdentity execution_identity_;
+  std::string snapshot_sql_;
+  std::string conditional_create_sql_;
+  std::string conditional_update_sql_;
   mutable std::mutex telemetry_mutex_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
 };
