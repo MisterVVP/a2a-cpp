@@ -1084,6 +1084,7 @@ def append_aggregate_markdown(lines: list[str], aggregates: list[dict[str, objec
 
 
 def explain_postgres_queries(dsn: str, schema: str, push_config_fanout: int = DEFAULT_PUSH_CONFIG_FANOUT) -> str:
+    fixture_fanout = max(push_config_fanout - 1, 0)
     sql = f'''SET search_path TO "{schema}";
 BEGIN;
 INSERT INTO a2a_tasks (id, context_id, state, task_proto)
@@ -1093,7 +1094,7 @@ INSERT INTO a2a_push_notification_configs (task_id, config_id, url, config_proto
 SELECT '{POSTGRES_QUERY_PLAN_TASK_ID}',
        '{POSTGRES_QUERY_PLAN_CONFIG_ID}-' || generated.config_number::text,
        '{POSTGRES_QUERY_PLAN_URL}', decode('', 'hex')
-FROM generate_series(1, {push_config_fanout}) AS generated(config_number)
+FROM generate_series(1, {fixture_fanout}) AS generated(config_number)
 ON CONFLICT (task_id, config_id) DO NOTHING;
 EXPLAIN (ANALYZE, BUFFERS, WAL)
 INSERT INTO a2a_tasks AS target

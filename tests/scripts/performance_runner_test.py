@@ -523,7 +523,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("INSERT INTO a2a_tasks", sql)
         self.assertIn("INSERT INTO a2a_push_notification_configs", sql)
         self.assertIn(f"'{runner.POSTGRES_QUERY_PLAN_CONFIG_ID}-insert'", sql)
-        self.assertIn(f"generate_series(1, {runner.DEFAULT_PUSH_CONFIG_FANOUT})", sql)
+        self.assertIn(f"generate_series(1, {runner.DEFAULT_PUSH_CONFIG_FANOUT - 1})", sql)
         self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_START}'", sql)
         self.assertIn(f"SELECT '{runner.POSTGRES_COMBINED_PLAN_END}'", sql)
         self.assertIn("WITH task AS MATERIALIZED", sql)

@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "a2a/server/push_notification_store.h"
 #include "a2a/server/stores/postgres_common.h"
@@ -32,7 +31,6 @@ constexpr std::size_t kPushListSqlReserveSlack = 512U;
 constexpr std::size_t kPushUpsertSqlReserveSlack = 384U;
 
 class PostgresConnectionPool;
-class PostgresTaskStore;
 
 class PostgresPushNotificationStore final : public a2a::server::PushNotificationStore,
                                             public a2a::server::TaskAwarePushNotificationStore {
@@ -45,8 +43,6 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
       const lf::a2a::v1::TaskPushNotificationConfig& config) override;
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateOrUpdateForTask(
       const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) override;
-  [[nodiscard]] core::Result<void> CreateOrUpdateManyForTask(
-      const std::vector<lf::a2a::v1::TaskPushNotificationConfig>& configs, const PostgresTaskStore& task_store);
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> Get(std::string_view task_id,
                                                                           std::string_view config_id) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> List(

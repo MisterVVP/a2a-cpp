@@ -43,8 +43,12 @@ constexpr std::string_view kMissingTaskAwareListTaskId = "missing-task-aware-lis
 constexpr std::string_view kMalformedTaskAwareListPageToken = "invalid-page-token";
 constexpr int kInvalidTaskAwareListPageSize = -1;
 constexpr int kValidTaskAwareListPageSize = 1;
+constexpr int kSinglePostgresResultRowCount = 1;
+constexpr int kLegacyIndexPresenceColumn = 0;
+constexpr int kOrderingIndexPresenceColumn = 1;
 constexpr auto kIndexPresenceSql = std::to_array("SELECT pg_catalog.to_regclass($1), pg_catalog.to_regclass($2)");
 constexpr std::string_view kInspectPushIndexesOperation = "inspect push indexes";
+constexpr std::string_view kPushIndexAmplificationSchemaSuffix = "push_index_amplification";
 
 void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAwarePushNotificationStore& push_store,
                                                           const a2a::server::TaskStore& task_store) {
@@ -238,6 +242,7 @@ constexpr std::string_view kMissingDeleteLockTriggerSchemaSuffix = "push_externa
 constexpr std::string_view kLegacyForeignKeySchemaSuffix = "push_schema_legacy_fk";
 constexpr std::string_view kCleanupImplementationSchemaSuffix = "push_schema_cleanup_impl";
 constexpr std::string_view kCleanupIdentifierCaseSchemaSuffix = "PushSchemaCleanupCase";
+constexpr std::string_view kDeleteLockIdentifierCaseSchemaSuffix = "PushSchemaDeleteLockCase";
 constexpr std::string_view kLockImplementationSchemaSuffix = "push_schema_lock_impl";
 constexpr std::string_view kDeleteLockImplementationSchemaSuffix = "push_schema_delete_lock_impl";
 constexpr std::string_view kCleanupVersionSchemaSuffix = "push_schema_cleanup_ver";
@@ -677,6 +682,29 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   sql.append(
       "() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog "
       "AS $a2a$ BEGIN RETURN OLD; END $a2a$; COMMENT ON FUNCTION ");
+  sql.append(function);
+  sql.append("() IS '");
+  sql.append(a2a::server::stores::kTaskPushConfigMigrationId);
+  sql.append("';");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildWrongCaseTaskDeleteLockFunctionSql(std::string_view schema) {
+  std::string wrong_schema(schema);
+  for (char& symbol : wrong_schema) {
+    symbol = static_cast<char>(std::tolower(static_cast<unsigned char>(symbol)));
+  }
+  const std::string expected_task_table = a2a::server::stores::TaskTable(schema);
+  const std::string wrong_task_table = a2a::server::stores::TaskTable(wrong_schema);
+  std::string body = a2a::server::stores::ExpectedTaskDeleteLockFunctionBody(schema);
+  body.replace(body.find(expected_task_table), expected_task_table.size(), wrong_task_table);
+
+  const std::string function = TaskDeleteLockFunction(schema);
+  std::string sql = "CREATE OR REPLACE FUNCTION ";
+  sql.append(function);
+  sql.append("() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ ");
+  sql.append(body);
+  sql.append(" $a2a$; COMMENT ON FUNCTION ");
   sql.append(function);
   sql.append("() IS '");
   sql.append(a2a::server::stores::kTaskPushConfigMigrationId);
@@ -1443,7 +1471,6 @@ constexpr std::string_view kAdvisoryProgressSchemaSuffix = "push_advisory_progre
 constexpr std::string_view kAdvisorySchemaScopeSchemaSuffix = "push_advisory_schema_scope";
 constexpr std::string_view kAdvisorySchemaScopeOtherSchemaSuffix = "push_advisory_schema_scope_other";
 constexpr std::string_view kRepeatableReadDeleteSchemaSuffix = "push_repeatable_read_delete";
-constexpr std::string_view kDuplicatePushBatchSchemaSuffix = "push_duplicate_batch";
 constexpr std::string_view kConcurrentFirstUpdateUrl = "https://example.test/concurrent-first";
 constexpr std::string_view kConcurrentSecondUpdateUrl = "https://example.test/concurrent-second";
 constexpr std::string_view kConcurrentCycleUpdateUrl = "https://example.test/concurrent-cycle";
@@ -2859,9 +2886,9 @@ TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcr
 TEST(StoreConformanceTest, PostgresPushSchemaDropsPushSecondaryIndexes) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
   }
-  const std::string schema = MakePostgresTestSchema("push_index_amplification");
+  const std::string schema = MakePostgresTestSchema(kPushIndexAmplificationSchemaSuffix);
   a2a::server::stores::PostgresPushNotificationStore store(
       a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
   auto connection = store.AcquireConnectionForTesting();
@@ -2871,42 +2898,15 @@ TEST(StoreConformanceTest, PostgresPushSchemaDropsPushSecondaryIndexes) {
       a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kPushConfigsTaskIndex);
   const std::string ordering_index =
       a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kPushConfigsCreatedSequenceIndex);
-  const std::array<const char*, 2> values = {legacy_index.c_str(), ordering_index.c_str()};
+  const std::array values = {legacy_index.c_str(), ordering_index.c_str()};
   a2a::server::stores::PgResult result(PQexecParams(connection.value().get(), kIndexPresenceSql.data(),
                                                     static_cast<int>(values.size()), nullptr, values.data(), nullptr,
                                                     nullptr, 0));
   ASSERT_TRUE(
       a2a::server::stores::CheckTuples(connection.value().get(), result.get(), kInspectPushIndexesOperation).ok());
-  ASSERT_EQ(PQntuples(result.get()), 1);
-  EXPECT_NE(PQgetisnull(result.get(), 0, 0), 0);
-  EXPECT_NE(PQgetisnull(result.get(), 0, 1), 0);
-}
-
-TEST(StoreConformanceTest, PostgresPushBatchRejectsDuplicateConfigIdsBeforeQuery) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
-  }
-  const std::string schema = MakePostgresTestSchema(kDuplicatePushBatchSchemaSuffix);
-  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value, .schema = schema};
-  a2a::server::stores::PostgresTaskStore task_store(options);
-  a2a::server::stores::PostgresPushNotificationStore push_store(options);
-  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-  const auto config =
-      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId));
-  const std::vector<lf::a2a::v1::TaskPushNotificationConfig> configs = {config, config};
-
-  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
-  const auto created = push_store.CreateOrUpdateManyForTask(configs, task_store);
-  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
-
-  ASSERT_FALSE(created.ok());
-  EXPECT_EQ(created.error().code(), a2a::core::ErrorCode::kValidation);
-  EXPECT_EQ(
-      diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kPushConfigUpsert)],
-      kNoPostgresCommandCount);
-  ExpectPushConfigMissing(push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
+  ASSERT_EQ(PQntuples(result.get()), kSinglePostgresResultRowCount);
+  EXPECT_NE(PQgetisnull(result.get(), 0, kLegacyIndexPresenceColumn), 0);
+  EXPECT_NE(PQgetisnull(result.get(), 0, kOrderingIndexPresenceColumn), 0);
 }
 
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
@@ -3709,6 +3709,11 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskLockImplementa
 
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskDeleteLockImplementation) {
   ExpectManagedPushSchemaMutationRejected(kDeleteLockImplementationSchemaSuffix, BuildNoOpTaskDeleteLockFunctionSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaPreservesTaskDeleteLockIdentifierCase) {
+  ExpectManagedPushSchemaMutationRejected(kDeleteLockIdentifierCaseSchemaSuffix,
+                                          BuildWrongCaseTaskDeleteLockFunctionSql);
 }
 
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskDeleteLockTrigger) {

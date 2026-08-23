@@ -129,6 +129,9 @@ ALTER TABLE public.a2a_push_notification_configs
 ALTER TABLE public.a2a_push_notification_configs
   DROP CONSTRAINT IF EXISTS a2a_push_configs_task_fk;
 
+DROP INDEX IF EXISTS public.idx_a2a_push_configs_task;
+DROP INDEX IF EXISTS public.idx_a2a_push_configs_created_sequence;
+
 CREATE OR REPLACE FUNCTION public.a2a_lock_task_for_push_config(requested_task_id TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
