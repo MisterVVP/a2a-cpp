@@ -243,6 +243,16 @@ class ScenarioHarness final {
     return configs.value().configs_size();
   }
 
+  [[nodiscard]] a2a::server::TaskStore::MutationCacheTelemetrySnapshot MutationCacheTelemetry() const {
+    return options_.task_store == nullptr ? a2a::server::TaskStore::MutationCacheTelemetrySnapshot{}
+                                          : options_.task_store->GetMutationCacheTelemetrySnapshot();
+  }
+
+  [[nodiscard]] a2a::server::TaskStore::ConditionalBatchTelemetrySnapshot ConditionalBatchTelemetry() const {
+    return options_.task_store == nullptr ? a2a::server::TaskStore::ConditionalBatchTelemetrySnapshot{}
+                                          : options_.task_store->GetConditionalBatchTelemetrySnapshot();
+  }
+
  private:
   static OperationOutcome OperationSucceeded(bool ok) { return {.ok = ok, .event_count = ok ? 1 : 0}; }
 
@@ -277,8 +287,39 @@ class ScenarioHarness final {
         return false;
       }
     }
-    a2a::server::stores::PostgresStoreFactory factory(
-        {.connection_string = dsn, .schema = MakePostgresSchema(), .connection_pool_size = pool_size});
+    std::size_t mutation_cache_capacity = a2a::server::stores::kDefaultPostgresMutationCacheCapacity;
+    if (const char* value = std::getenv(kPostgresMutationCacheCapacityEnv); value != nullptr) {
+      const std::string_view text(value);
+      const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), mutation_cache_capacity);
+      if (error != std::errc{} || end != text.data() + text.size()) {
+        std::cerr << kPostgresMutationCacheCapacityEnv << " must be a non-negative integer\n";
+        return false;
+      }
+    }
+    std::size_t conditional_write_batch_size = a2a::server::stores::kDefaultPostgresConditionalWriteBatchSize;
+    if (const char* value = std::getenv(kPostgresConditionalWriteBatchSizeEnv); value != nullptr) {
+      const std::string_view text(value);
+      const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), conditional_write_batch_size);
+      if (error != std::errc{} || end != text.data() + text.size() || conditional_write_batch_size == 0U) {
+        std::cerr << kPostgresConditionalWriteBatchSizeEnv << " must be a positive integer\n";
+        return false;
+      }
+    }
+    std::size_t generated_task_batch_size = a2a::server::stores::kDefaultPostgresConditionalWriteBatchSize;
+    if (const char* value = std::getenv(kPostgresGeneratedTaskBatchSizeEnv); value != nullptr) {
+      const std::string_view text(value);
+      const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), generated_task_batch_size);
+      if (error != std::errc{} || end != text.data() + text.size() || generated_task_batch_size == 0U) {
+        std::cerr << kPostgresGeneratedTaskBatchSizeEnv << " must be a positive integer\n";
+        return false;
+      }
+    }
+    a2a::server::stores::PostgresStoreFactory factory({.connection_string = dsn,
+                                                       .schema = MakePostgresSchema(),
+                                                       .connection_pool_size = pool_size,
+                                                       .mutation_cache_capacity = mutation_cache_capacity,
+                                                       .conditional_write_batch_size = conditional_write_batch_size,
+                                                       .generated_task_batch_size = generated_task_batch_size});
     auto bundle = factory.CreateStoreBundle();
     if (!bundle.ok()) {
       std::cerr << "failed to create postgres performance stores: " << bundle.error().message() << '\n';
@@ -746,9 +787,25 @@ ScenarioResult RunScenario(const Options& options, const std::string& scenario) 
     return failed;
   }
 
-  return RunMeasuredScenario(
+  const auto cache_before = harness.MutationCacheTelemetry();
+  const auto batches_before = harness.ConditionalBatchTelemetry();
+  auto result = RunMeasuredScenario(
       scenario, options.requests, options.concurrency, options.duration_seconds,
       [&harness, &scenario](int worker_index, int index) { return harness.Execute(scenario, worker_index, index); });
+  const auto cache_after = harness.MutationCacheTelemetry();
+  const auto batches_after = harness.ConditionalBatchTelemetry();
+  result.mutation_cache = {
+      .hits = cache_after.hits - cache_before.hits,
+      .misses = cache_after.misses - cache_before.misses,
+      .conflict_invalidations = cache_after.conflict_invalidations - cache_before.conflict_invalidations,
+      .authoritative_reloads = cache_after.authoritative_reloads - cache_before.authoritative_reloads};
+  for (std::size_t index = 0; index < result.conditional_batches.batches_by_size.size(); ++index) {
+    result.conditional_batches.batches_by_size[index] =
+        batches_after.batches_by_size[index] - batches_before.batches_by_size[index];
+  }
+  result.conditional_batches.queued_nanoseconds = batches_after.queued_nanoseconds - batches_before.queued_nanoseconds;
+  result.conditional_batches.queued_writes = batches_after.queued_writes - batches_before.queued_writes;
+  return result;
 }
 
 bool IsSupportedScenario(std::string_view scenario) {

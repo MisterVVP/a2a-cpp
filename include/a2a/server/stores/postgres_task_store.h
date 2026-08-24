@@ -29,8 +29,11 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
   [[nodiscard]] core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override;
   [[nodiscard]] bool SupportsConditionalWrites() const noexcept override { return true; }
   [[nodiscard]] core::Result<TaskSnapshot> GetSnapshot(std::string_view id) const override;
+  [[nodiscard]] core::Result<TaskSnapshot> GetMutationSnapshot(std::string_view id) const override;
   [[nodiscard]] core::Result<ConditionalWriteResult> CreateOrUpdateIfRevision(const lf::a2a::v1::Task& task,
                                                                               std::uint64_t expected_revision) override;
+  [[nodiscard]] core::Result<ConditionalWriteResult> CreateGeneratedTaskIfAbsent(
+      const lf::a2a::v1::Task& task) override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override;
   [[nodiscard]] core::Result<ListTasksResponse> List(const ListTasksRequest& request) const override;
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Cancel(std::string_view id) override;
@@ -38,6 +41,8 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
                                                                   const lf::a2a::v1::Message& message,
                                                                   HistoryAppendPolicy policy) override;
   [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override;
+  [[nodiscard]] MutationCacheTelemetrySnapshot GetMutationCacheTelemetrySnapshot() const override;
+  [[nodiscard]] ConditionalBatchTelemetrySnapshot GetConditionalBatchTelemetrySnapshot() const override;
   [[nodiscard]] bool UsesStorage(const PostgresStorageIdentity& identity) const noexcept;
   [[nodiscard]] bool SharesConnectionPool(const PostgresConnectionPool& pool) const noexcept;
   [[nodiscard]] const PostgresStorageIdentity& storage_identity() const noexcept;
@@ -47,6 +52,12 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
 #endif
 
  private:
+  class MutationSnapshotCache;
+  class ConditionalWriteBatcher;
+
+  [[nodiscard]] core::Result<ConditionalWriteResult> PersistConditionalWrite(const lf::a2a::v1::Task& task,
+                                                                             std::uint64_t expected_revision);
+
   std::shared_ptr<PostgresConnectionPool> pool_;
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;
@@ -56,6 +67,9 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
   std::string conditional_update_sql_;
   mutable std::mutex telemetry_mutex_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
+  std::unique_ptr<MutationSnapshotCache> mutation_cache_;
+  std::unique_ptr<ConditionalWriteBatcher> conditional_write_batcher_;
+  std::unique_ptr<ConditionalWriteBatcher> generated_task_batcher_;
 };
 
 }  // namespace a2a::server::stores

@@ -23,6 +23,7 @@
 #define A2A_PERF_HAS_JTHREAD 0
 #endif
 
+#include "a2a/server/tasks/task_store.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::tests::performance {
@@ -58,6 +59,9 @@ constexpr std::array<std::string_view, kPostgresDiagnosticPhaseCount> kPostgresD
 constexpr char kPostgresDsnEnv[] = "A2A_TEST_POSTGRES_DSN";
 constexpr char kPostgresSchemaEnv[] = "A2A_PERF_POSTGRES_SCHEMA";
 constexpr char kPostgresPoolSizeEnv[] = "A2A_PERF_POSTGRES_POOL_SIZE";
+constexpr char kPostgresMutationCacheCapacityEnv[] = "A2A_PERF_POSTGRES_MUTATION_CACHE_CAPACITY";
+constexpr char kPostgresConditionalWriteBatchSizeEnv[] = "A2A_PERF_POSTGRES_CONDITIONAL_WRITE_BATCH_SIZE";
+constexpr char kPostgresGeneratedTaskBatchSizeEnv[] = "A2A_PERF_POSTGRES_GENERATED_TASK_BATCH_SIZE";
 constexpr std::string_view kPerfSchemaPrefix = "a2a_perf_";
 constexpr std::string_view kMessageText = "hello";
 constexpr std::string_view kPushCallbackUrl = "http://127.0.0.1/fake-push-callback";
@@ -150,6 +154,8 @@ struct ScenarioResult final {
   std::vector<double> completion_latencies;
   std::array<std::vector<double>, kPostgresDiagnosticPhaseCount> postgres_phase_latencies;
   std::array<std::size_t, kPostgresDiagnosticPhaseCount> postgres_phase_call_count{};
+  a2a::server::TaskStore::MutationCacheTelemetrySnapshot mutation_cache;
+  a2a::server::TaskStore::ConditionalBatchTelemetrySnapshot conditional_batches;
 };
 
 struct OperationOutcome final {

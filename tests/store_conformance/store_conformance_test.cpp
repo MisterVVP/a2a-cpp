@@ -55,6 +55,10 @@ constexpr std::string_view kConcurrentHistoryContextId = "concurrent-history-con
 constexpr std::string_view kConcurrentHistoryEntry = "concurrent-entry";
 constexpr std::string_view kConcurrentHistoryFirstMessageId = "concurrent-history-message-1";
 constexpr std::string_view kConcurrentHistorySecondMessageId = "concurrent-history-message-2";
+constexpr std::string_view kMutationCacheSchemaSuffix = "mutation_cache";
+constexpr std::string_view kMutationCacheTaskId = "mutation-cache-task";
+constexpr std::string_view kMutationCacheContextId = "mutation-cache-context";
+constexpr std::string_view kMutationCacheUpdatedContextId = "mutation-cache-updated-context";
 
 void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAwarePushNotificationStore& push_store,
                                                           const a2a::server::TaskStore& task_store) {
@@ -3041,6 +3045,47 @@ TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages)
   const auto stored = first_store.Get(kConcurrentHistoryTaskId);
   ASSERT_TRUE(stored.ok());
   EXPECT_EQ(stored.value().history_size(), before_append.value().history_size() + 2);
+}
+
+void ExpectMutationCacheConflictReload(a2a::server::stores::PostgresTaskStore& store,
+                                       const a2a::server::TaskStore::TaskSnapshot& cached) {
+  const auto stale_update = store.CreateOrUpdateIfRevision(cached.task, cached.revision);
+  ASSERT_TRUE(stale_update.ok());
+  EXPECT_EQ(stale_update.value(), a2a::server::TaskStore::ConditionalWriteResult::kConflict);
+  const auto reloaded = store.GetMutationSnapshot(kMutationCacheTaskId);
+  ASSERT_TRUE(reloaded.ok());
+  EXPECT_EQ(reloaded.value().task.context_id(), kMutationCacheUpdatedContextId);
+  EXPECT_GT(reloaded.value().revision, cached.revision);
+}
+
+void ExpectMutationCacheConflictTelemetry(const a2a::server::TaskStore::MutationCacheTelemetrySnapshot& telemetry) {
+  EXPECT_GE(telemetry.hits, 1U);
+  EXPECT_GE(telemetry.conflict_invalidations, 1U);
+  EXPECT_GE(telemetry.authoritative_reloads, 1U);
+}
+
+TEST(StoreConformanceTest, PostgresMutationCacheReloadsAfterExternalRevisionConflict) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const auto options = a2a::server::stores::PostgresStoreOptions{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kMutationCacheSchemaSuffix)};
+  a2a::server::stores::PostgresTaskStore first_store(options);
+  a2a::server::stores::PostgresTaskStore second_store(options);
+  AddPostgresTask(first_store, kMutationCacheTaskId, kMutationCacheContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  const auto cached = first_store.GetMutationSnapshot(kMutationCacheTaskId);
+  ASSERT_TRUE(cached.ok());
+
+  auto external_task = cached.value().task;
+  external_task.set_context_id(std::string(kMutationCacheUpdatedContextId));
+  const auto external_update = second_store.CreateOrUpdateIfRevision(external_task, cached.value().revision);
+  ASSERT_TRUE(external_update.ok());
+  ASSERT_EQ(external_update.value(), a2a::server::TaskStore::ConditionalWriteResult::kUpdated);
+
+  ExpectMutationCacheConflictReload(first_store, cached.value());
+  ExpectMutationCacheConflictTelemetry(first_store.GetMutationCacheTelemetrySnapshot());
 }
 
 TEST(StoreConformanceTest, PostgresPushNotificationStorePropagatesAcquireFailures) {

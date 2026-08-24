@@ -128,7 +128,7 @@ class ExampleExecutor final : public server::AgentExecutor {
           core::protocol_errors::TaskNotFound(std::string(kExampleTaskNotFoundMessage));
       const bool try_new_task_without_read = supports_conditional_writes && generated_task_id && attempt == 0U;
       if (supports_conditional_writes && !try_new_task_without_read) {
-        auto snapshot = task_store_->GetSnapshot(task_id);
+        auto snapshot = task_store_->GetMutationSnapshot(task_id);
         if (snapshot.ok()) {
           expected_revision = snapshot.value().revision;
           existing = std::move(snapshot.value().task);
@@ -218,7 +218,9 @@ class ExampleExecutor final : public server::AgentExecutor {
         *task.add_history() = request.message();
       }
       if (supports_conditional_writes) {
-        const auto stored = task_store_->CreateOrUpdateIfRevision(task, expected_revision);
+        const auto stored = generated_task_id && expected_revision == 0U
+                                ? task_store_->CreateGeneratedTaskIfAbsent(task)
+                                : task_store_->CreateOrUpdateIfRevision(task, expected_revision);
         if (!stored.ok()) {
           return stored.error();
         }

@@ -15,6 +15,9 @@
 namespace a2a::server::stores {
 
 constexpr std::size_t kDefaultPostgresConnectionPoolSize = 4U;
+constexpr std::size_t kDefaultPostgresMutationCacheCapacity = 4096U;
+constexpr std::size_t kDefaultPostgresConditionalWriteBatchSize = 4U;
+constexpr std::size_t kDefaultPostgresConditionalWriteBatchDelayMicroseconds = 50U;
 
 enum class StoreBackendKind {
   kInMemory,
@@ -26,6 +29,10 @@ struct PostgresStoreOptions final {
   std::string schema = "public";
   bool auto_create_schema = true;
   std::size_t connection_pool_size = kDefaultPostgresConnectionPoolSize;
+  std::size_t mutation_cache_capacity = kDefaultPostgresMutationCacheCapacity;
+  std::size_t conditional_write_batch_size = kDefaultPostgresConditionalWriteBatchSize;
+  std::size_t conditional_write_batch_delay_microseconds = kDefaultPostgresConditionalWriteBatchDelayMicroseconds;
+  std::size_t generated_task_batch_size = kDefaultPostgresConditionalWriteBatchSize;
   // Optional operator-provided identity for the physical PostgreSQL authority.
   // Matching non-empty IDs prove local storage; different non-empty IDs prove external storage.
   std::string storage_authority_id = {};

@@ -510,6 +510,13 @@ core::Result<void> ValidatePostgresStoreOptions(const PostgresStoreOptions& opti
   if (options.connection_pool_size == 0U) {
     return core::Error::Validation(std::string(kPostgresConnectionPoolSizeValidationMessage));
   }
+  constexpr std::size_t kMaximumBatchSize = 8U;
+  if (options.conditional_write_batch_size == 0U || options.conditional_write_batch_size > kMaximumBatchSize) {
+    return core::Error::Validation("PostgreSQL conditional_write_batch_size must be between 1 and 8");
+  }
+  if (options.generated_task_batch_size == 0U || options.generated_task_batch_size > kMaximumBatchSize) {
+    return core::Error::Validation("PostgreSQL generated_task_batch_size must be between 1 and 8");
+  }
   if (!IsValidSqlIdentifier(options.schema)) {
     return core::Error::Validation("PostgreSQL schema must be a simple SQL identifier");
   }

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -57,6 +58,20 @@ class TaskStore {
     std::size_t dedupe_dropped_by_fingerprint_without_message_id = 0;
   };
 
+  struct MutationCacheTelemetrySnapshot final {
+    std::size_t hits = 0;
+    std::size_t misses = 0;
+    std::size_t conflict_invalidations = 0;
+    std::size_t authoritative_reloads = 0;
+  };
+
+  struct ConditionalBatchTelemetrySnapshot final {
+    static constexpr std::size_t kBatchSizeBucketCount = 9U;
+    std::array<std::size_t, kBatchSizeBucketCount> batches_by_size{};
+    std::uint64_t queued_nanoseconds = 0;
+    std::size_t queued_writes = 0;
+  };
+
   virtual ~TaskStore() = default;
 
   [[nodiscard]] virtual core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) = 0;
@@ -65,11 +80,18 @@ class TaskStore {
     (void)id;
     return core::Error::Internal(std::string(kConditionalTaskPersistenceUnsupportedMessage));
   }
+  [[nodiscard]] virtual core::Result<TaskSnapshot> GetMutationSnapshot(std::string_view id) const {
+    return GetSnapshot(id);
+  }
   [[nodiscard]] virtual core::Result<ConditionalWriteResult> CreateOrUpdateIfRevision(const lf::a2a::v1::Task& task,
                                                                                       std::uint64_t expected_revision) {
     (void)task;
     (void)expected_revision;
     return core::Error::Internal(std::string(kConditionalTaskPersistenceUnsupportedMessage));
+  }
+  [[nodiscard]] virtual core::Result<ConditionalWriteResult> CreateGeneratedTaskIfAbsent(
+      const lf::a2a::v1::Task& task) {
+    return CreateOrUpdateIfRevision(task, 0U);
   }
   [[nodiscard]] virtual core::Result<lf::a2a::v1::Task> Get(std::string_view id) const = 0;
   [[nodiscard]] virtual core::Result<ListTasksResponse> List(const ListTasksRequest& request) const = 0;
@@ -78,6 +100,8 @@ class TaskStore {
                                                                           const lf::a2a::v1::Message& message,
                                                                           HistoryAppendPolicy policy) = 0;
   [[nodiscard]] virtual HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const = 0;
+  [[nodiscard]] virtual MutationCacheTelemetrySnapshot GetMutationCacheTelemetrySnapshot() const { return {}; }
+  [[nodiscard]] virtual ConditionalBatchTelemetrySnapshot GetConditionalBatchTelemetrySnapshot() const { return {}; }
 };
 
 }  // namespace a2a::server

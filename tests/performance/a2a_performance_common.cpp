@@ -149,6 +149,25 @@ void AddPostgresDiagnosticFields(google::protobuf::Struct* object, const Scenari
   (*object->mutable_fields())["postgres_phase_latency_ms"].mutable_struct_value()->Swap(&phases);
   (*object->mutable_fields())["postgres_phase_call_count"].mutable_struct_value()->Swap(&call_counts);
   (*object->mutable_fields())["postgres_phase_calls_per_operation"].mutable_struct_value()->Swap(&calls_per_operation);
+  google::protobuf::Struct cache;
+  SetNumberField(&cache, "hits", static_cast<double>(result.mutation_cache.hits));
+  SetNumberField(&cache, "misses", static_cast<double>(result.mutation_cache.misses));
+  SetNumberField(&cache, "conflict_invalidations", static_cast<double>(result.mutation_cache.conflict_invalidations));
+  SetNumberField(&cache, "authoritative_reloads", static_cast<double>(result.mutation_cache.authoritative_reloads));
+  const auto lookups = static_cast<double>(result.mutation_cache.hits + result.mutation_cache.misses);
+  SetNumberField(&cache, "hit_ratio", lookups == 0.0 ? 0.0 : static_cast<double>(result.mutation_cache.hits) / lookups);
+  (*object->mutable_fields())["mutation_cache"].mutable_struct_value()->Swap(&cache);
+  google::protobuf::Struct batches;
+  for (std::size_t batch_size = 1; batch_size < result.conditional_batches.batches_by_size.size(); ++batch_size) {
+    SetNumberField(&batches, std::to_string(batch_size),
+                   static_cast<double>(result.conditional_batches.batches_by_size[batch_size]));
+  }
+  const auto queued_writes = static_cast<double>(result.conditional_batches.queued_writes);
+  SetNumberField(&batches, "average_queue_ms",
+                 queued_writes == 0.0 ? 0.0
+                                      : static_cast<double>(result.conditional_batches.queued_nanoseconds) /
+                                            queued_writes / kNanosecondsPerMillisecond);
+  (*object->mutable_fields())["conditional_batches"].mutable_struct_value()->Swap(&batches);
 }
 
 }  // namespace a2a::tests::performance
