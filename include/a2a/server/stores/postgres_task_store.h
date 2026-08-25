@@ -8,6 +8,10 @@
 #include <string>
 #include <string_view>
 
+#ifdef A2A_POSTGRES_STORE_TESTING
+#include <functional>
+#endif
+
 #include "a2a/server/stores/postgres_common.h"
 #include "a2a/server/stores/store_factory.h"
 #include "a2a/server/tasks/task_store.h"
@@ -43,6 +47,7 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
   [[nodiscard]] const PostgresStorageIdentity& storage_identity() const noexcept;
   [[nodiscard]] const PostgresExecutionIdentity& execution_identity() const noexcept;
 #ifdef A2A_POSTGRES_STORE_TESTING
+  void SetHistorySnapshotHookForTesting(std::function<void()> hook);
   [[nodiscard]] const PostgresConnectionPool* connection_pool_for_testing() const noexcept;
 #endif
 
@@ -56,6 +61,9 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
   std::string conditional_update_sql_;
   mutable std::mutex telemetry_mutex_;
   HistoryTelemetrySnapshot telemetry_snapshot_;
+#ifdef A2A_POSTGRES_STORE_TESTING
+  std::function<void()> history_snapshot_hook_for_testing_;
+#endif
 };
 
 }  // namespace a2a::server::stores

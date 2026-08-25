@@ -28,7 +28,10 @@ constexpr std::size_t kTaskUpsertSqlReserve = 520U;
 constexpr std::size_t kTaskSnapshotSqlReserve = 15U;
 constexpr std::size_t kConditionalTaskWriteSqlReserve = 300U;
 constexpr std::size_t kTaskHistoryUpdateSqlReserve = 120U;
+constexpr std::size_t kTaskHistoryRevisionRetryLimit = 8U;
 constexpr std::string_view kNoRowsAffected = "0";
+constexpr std::string_view kTaskHistoryRevisionRetryLimitExceededMessage =
+    "task history append exceeded revision conflict retry limit";
 
 [[nodiscard]] std::string BuildTaskSnapshotSql(std::string_view schema) {
   std::string sql = "SELECT task_proto, revision::text FROM ";
@@ -139,11 +142,9 @@ struct TaskHistorySnapshot final {
 
 [[nodiscard]] core::Result<lf::a2a::v1::Task> ParseTaskRow(PGresult* result, int row);
 
-[[nodiscard]] core::Result<TaskHistorySnapshot> SelectTaskHistorySnapshot(PGconn* connection,
-                                                                          const PostgresStoreOptions& options,
+[[nodiscard]] core::Result<TaskHistorySnapshot> SelectTaskHistorySnapshot(PGconn* connection, const std::string& sql,
                                                                           std::string_view id) {
   const std::string id_value(id);
-  const std::string sql = "SELECT task_proto, revision::text FROM " + TaskTable(options.schema) + " WHERE id = $1";
   const std::array<const char*, 1> values = {id_value.c_str()};
   PgResult result;
 #ifdef A2A_POSTGRES_STORE_TESTING
@@ -323,6 +324,10 @@ const PostgresStorageIdentity& PostgresTaskStore::storage_identity() const noexc
 const PostgresExecutionIdentity& PostgresTaskStore::execution_identity() const noexcept { return execution_identity_; }
 
 #ifdef A2A_POSTGRES_STORE_TESTING
+void PostgresTaskStore::SetHistorySnapshotHookForTesting(std::function<void()> hook) {
+  history_snapshot_hook_for_testing_ = std::move(hook);
+}
+
 const PostgresConnectionPool* PostgresTaskStore::connection_pool_for_testing() const noexcept { return pool_.get(); }
 #endif
 
@@ -561,8 +566,8 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
   if (!lease.ok()) {
     return lease.error();
   }
-  for (;;) {
-    auto snapshot = SelectTaskHistorySnapshot(lease.value().get(), options_, task_id);
+  for (std::size_t attempt = 0; attempt < kTaskHistoryRevisionRetryLimit; ++attempt) {
+    auto snapshot = SelectTaskHistorySnapshot(lease.value().get(), snapshot_sql_, task_id);
     if (!snapshot.ok()) {
       return snapshot.error();
     }
@@ -572,6 +577,11 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
       UpdateDedupeSnapshot(&telemetry_snapshot_, *dedupe_reason);
       return snapshot.value().task;
     }
+#ifdef A2A_POSTGRES_STORE_TESTING
+    if (history_snapshot_hook_for_testing_) {
+      history_snapshot_hook_for_testing_();
+    }
+#endif
     *snapshot.value().task.add_history() = message;
     auto updated = UpdateTaskHistory(lease.value().get(), options_, snapshot.value().task, snapshot.value().revision);
     if (!updated.ok()) {
@@ -581,6 +591,7 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::AppendTaskHistory(std::string
       return snapshot.value().task;
     }
   }
+  return core::Error::Internal(std::string(kTaskHistoryRevisionRetryLimitExceededMessage));
 }
 
 TaskStore::HistoryTelemetrySnapshot PostgresTaskStore::GetHistoryTelemetrySnapshot() const {
