@@ -2225,6 +2225,65 @@ void ExpectAdvisoryLocksScopedToSchema(std::string_view dsn_value) {
   ExpectPushConfigPresent(second_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
 }
 
+struct RepeatableReadDeleteConflictOutcome final {
+  bool create_succeeded = false;
+  std::string error_message;
+};
+
+[[nodiscard]] a2a::core::Result<void> ConfigureRepeatableReadPushStore(
+    a2a::server::stores::PostgresPushNotificationStore& push_store) {
+  auto connection = push_store.AcquireConnectionForTesting();
+  if (!connection.ok()) {
+    return connection.error();
+  }
+  auto timeout = a2a::server::stores::Exec(connection.value().get(), std::string(kConcurrentStatementTimeoutSql),
+                                           kSetConcurrentStatementTimeoutOperation);
+  if (!timeout.ok()) {
+    return timeout.error();
+  }
+  return a2a::server::stores::Exec(connection.value().get(), std::string(kRepeatableReadIsolationSql),
+                                   kSetRepeatableReadIsolationOperation);
+}
+
+[[nodiscard]] a2a::core::Result<RepeatableReadDeleteConflictOutcome> RunRepeatableReadDeleteConflictScenario(
+    a2a::server::stores::PostgresPushNotificationStore& owner_push_store,
+    a2a::server::stores::PostgresPushNotificationStore& repeatable_read_push_store,
+    a2a::server::stores::PostgresTaskStore& task_store, std::string_view schema) {
+  auto deletion = owner_push_store.AcquireConnectionForTesting();
+  if (!deletion.ok()) {
+    return deletion.error();
+  }
+  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
+  auto begun = deletion_transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  auto deleted = a2a::server::stores::Exec(
+      deletion.value().get(),
+      BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(schema), kTaskIdColumn, kAtomicCreateTaskId),
+      kHoldConcurrentDeleteOperation);
+  if (!deleted.ok()) {
+    return deleted.error();
+  }
+
+  const auto created = repeatable_read_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      task_store);
+  auto committed = deletion_transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  if (created.ok()) {
+    return RepeatableReadDeleteConflictOutcome{.create_succeeded = true, .error_message = {}};
+  }
+  return RepeatableReadDeleteConflictOutcome{.create_succeeded = false, .error_message = created.error().message()};
+}
+
+void ExpectRepeatableReadDeleteConflictOutcome(const RepeatableReadDeleteConflictOutcome& outcome) {
+  EXPECT_FALSE(outcome.create_succeeded);
+  EXPECT_NE(outcome.error_message.find(kReadCommittedIsolationRequiredMessage), std::string_view::npos);
+}
+
 void ExpectRepeatableReadDeleteConflictRejected(std::string_view dsn_value) {
   const std::string schema = MakePostgresTestSchema(kRepeatableReadDeleteSchemaSuffix);
   const std::string push_dsn = BuildEquivalentKeywordDsn(dsn_value);
@@ -2241,33 +2300,13 @@ void ExpectRepeatableReadDeleteConflictRejected(std::string_view dsn_value) {
   a2a::server::stores::PostgresPushNotificationStore repeatable_read_push_store(repeatable_read_options);
   AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
                   kOldTargetTaskTimestampSeconds);
-  {
-    auto connection = repeatable_read_push_store.AcquireConnectionForTesting();
-    ASSERT_TRUE(connection.ok());
-    ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), std::string(kConcurrentStatementTimeoutSql),
-                                          kSetConcurrentStatementTimeoutOperation)
-                    .ok());
-    ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), std::string(kRepeatableReadIsolationSql),
-                                          kSetRepeatableReadIsolationOperation)
-                    .ok());
-  }
 
-  auto deletion = owner_push_store.AcquireConnectionForTesting();
-  ASSERT_TRUE(deletion.ok());
-  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
-  ASSERT_TRUE(deletion_transaction.Begin().ok());
-  ASSERT_TRUE(a2a::server::stores::Exec(
-                  deletion.value().get(),
-                  BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(schema), kTaskIdColumn, kAtomicCreateTaskId),
-                  kHoldConcurrentDeleteOperation)
-                  .ok());
-
-  const auto created = repeatable_read_push_store.CreateOrUpdateForTask(
-      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
-      task_store);
-  ASSERT_TRUE(deletion_transaction.Commit().ok());
-  ASSERT_FALSE(created.ok());
-  EXPECT_NE(created.error().message().find(kReadCommittedIsolationRequiredMessage), std::string_view::npos);
+  const auto configured = ConfigureRepeatableReadPushStore(repeatable_read_push_store);
+  ASSERT_TRUE(configured.ok());
+  const auto outcome =
+      RunRepeatableReadDeleteConflictScenario(owner_push_store, repeatable_read_push_store, task_store, schema);
+  ASSERT_TRUE(outcome.ok());
+  ExpectRepeatableReadDeleteConflictOutcome(outcome.value());
   EXPECT_FALSE(task_store.Get(kAtomicCreateTaskId).ok());
   ExpectPushConfigMissing(repeatable_read_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
 }
