@@ -60,8 +60,14 @@ constexpr std::string_view kConcurrentHistoryContextId = "concurrent-history-con
 constexpr std::string_view kConcurrentHistoryEntry = "concurrent-entry";
 constexpr std::string_view kConcurrentHistoryFirstMessageId = "concurrent-history-message-1";
 constexpr std::string_view kConcurrentHistorySecondMessageId = "concurrent-history-message-2";
+constexpr std::string_view kRecreatedHistorySchemaSuffix = "history_recreate_aba";
+constexpr std::string_view kRecreatedHistoryTaskId = "recreated-history-task";
+constexpr std::string_view kRecreatedHistoryOriginalContextId = "recreated-history-original-context";
+constexpr std::string_view kRecreatedHistoryReplacementContextId = "recreated-history-replacement-context";
+constexpr std::string_view kRecreatedHistoryMessageId = "recreated-history-message";
 constexpr std::ptrdiff_t kConcurrentHistoryWriterCount = 2;
 constexpr std::size_t kConcurrentHistoryMinimumSnapshotCountWithRetry = 3U;
+constexpr std::size_t kExpectedSingleHistoryMessageCount = 1U;
 
 void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAwarePushNotificationStore& push_store,
                                                           const a2a::server::TaskStore& task_store) {
@@ -3033,8 +3039,12 @@ void ExpectHistoryAppendMetadataPreserved(const lf::a2a::v1::Task& before_append
 void ExpectHistoryAppendWriteDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
   EXPECT_EQ(
       diagnostics
-          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistoryLockRead)],
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistorySnapshot)],
       1U);
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistoryLockRead)],
+      0U);
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
             0U);
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskUpsert)],
@@ -3086,11 +3096,25 @@ void ConfigureConcurrentHistorySnapshotBarrier(a2a::server::stores::PostgresTask
   second_store.SetHistorySnapshotHookForTesting(synchronize_initial_snapshots);
 }
 
-TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+[[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendConcurrentHistoryMessage(
+    a2a::server::stores::PostgresTaskStore* store, std::string_view message_id) {
+  return store->AppendTaskHistory(
+      kConcurrentHistoryTaskId,
+      a2a::tests::store_conformance::MakeMessage(std::string(message_id), std::string(kConcurrentHistoryEntry)),
+      a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+}
+
+[[nodiscard]] std::size_t CountHistoryMessagesById(const lf::a2a::v1::Task& task, std::string_view message_id) {
+  std::size_t count = 0U;
+  for (const auto& message : task.history()) {
+    if (message.message_id() == message_id) {
+      ++count;
+    }
   }
+  return count;
+}
+
+void ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(const char* dsn_value) {
   const auto options = a2a::server::stores::PostgresStoreOptions{
       .connection_string = dsn_value, .schema = MakePostgresTestSchema(kConcurrentHistorySchemaSuffix)};
   a2a::server::stores::PostgresTaskStore first_store(options);
@@ -3103,14 +3127,10 @@ TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages)
   std::barrier snapshots_ready(kConcurrentHistoryWriterCount);
   std::atomic<std::size_t> snapshot_count = 0U;
   ConfigureConcurrentHistorySnapshotBarrier(first_store, second_store, snapshots_ready, snapshot_count);
-  auto append = [&](a2a::server::stores::PostgresTaskStore* store, std::string_view message_id) {
-    return store->AppendTaskHistory(
-        kConcurrentHistoryTaskId,
-        a2a::tests::store_conformance::MakeMessage(std::string(message_id), std::string(kConcurrentHistoryEntry)),
-        a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
-  };
-  auto first_append = std::async(std::launch::async, append, &first_store, kConcurrentHistoryFirstMessageId);
-  auto second_append = std::async(std::launch::async, append, &second_store, kConcurrentHistorySecondMessageId);
+  auto first_append =
+      std::async(std::launch::async, AppendConcurrentHistoryMessage, &first_store, kConcurrentHistoryFirstMessageId);
+  auto second_append =
+      std::async(std::launch::async, AppendConcurrentHistoryMessage, &second_store, kConcurrentHistorySecondMessageId);
   ASSERT_TRUE(first_append.get().ok());
   ASSERT_TRUE(second_append.get().ok());
   EXPECT_GE(snapshot_count.load(std::memory_order_relaxed), kConcurrentHistoryMinimumSnapshotCountWithRetry);
@@ -3118,6 +3138,68 @@ TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages)
   const auto stored = first_store.Get(kConcurrentHistoryTaskId);
   ASSERT_TRUE(stored.ok());
   EXPECT_EQ(stored.value().history_size(), before_append.value().history_size() + 2);
+  EXPECT_EQ(CountHistoryMessagesById(stored.value(), kConcurrentHistoryFirstMessageId),
+            kExpectedSingleHistoryMessageCount);
+  EXPECT_EQ(CountHistoryMessagesById(stored.value(), kConcurrentHistorySecondMessageId),
+            kExpectedSingleHistoryMessageCount);
+}
+
+TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(dsn_value);
+}
+
+void ConfigureHistoryTaskReplacementAfterSnapshot(a2a::server::stores::PostgresTaskStore& store,
+                                                  a2a::server::stores::PostgresTaskStore& replacement_store,
+                                                  a2a::server::stores::PostgresPushNotificationStore& push_store,
+                                                  const a2a::server::stores::PostgresStoreOptions& options,
+                                                  bool& replaced) {
+  store.SetHistorySnapshotHookForTesting([&replacement_store, &push_store, &options, &replaced] {
+    if (replaced) {
+      return;
+    }
+    replaced = true;
+    ASSERT_TRUE(DeletePostgresTask(push_store, options, kRecreatedHistoryTaskId).ok());
+    AddPostgresTask(replacement_store, kRecreatedHistoryTaskId, kRecreatedHistoryReplacementContextId,
+                    lf::a2a::v1::TASK_STATE_WORKING, kNewTargetTaskTimestampSeconds);
+  });
+}
+
+void ExpectHistoryAppendPreservesRecreatedTaskIdentity(const char* dsn_value) {
+  const auto options = a2a::server::stores::PostgresStoreOptions{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kRecreatedHistorySchemaSuffix)};
+  a2a::server::stores::PostgresTaskStore store(options);
+  a2a::server::stores::PostgresTaskStore replacement_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(store, kRecreatedHistoryTaskId, kRecreatedHistoryOriginalContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  bool replaced = false;
+  ConfigureHistoryTaskReplacementAfterSnapshot(store, replacement_store, push_store, options, replaced);
+  const auto append =
+      store.AppendTaskHistory(kRecreatedHistoryTaskId,
+                              a2a::tests::store_conformance::MakeMessage(std::string(kRecreatedHistoryMessageId),
+                                                                         std::string(kConcurrentHistoryEntry)),
+                              a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+  ASSERT_TRUE(append.ok());
+  ASSERT_TRUE(replaced);
+  EXPECT_EQ(append.value().context_id(), kRecreatedHistoryReplacementContextId);
+
+  const auto stored = store.Get(kRecreatedHistoryTaskId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().context_id(), kRecreatedHistoryReplacementContextId);
+  EXPECT_EQ(CountHistoryMessagesById(stored.value(), kRecreatedHistoryMessageId), kExpectedSingleHistoryMessageCount);
+}
+
+TEST(StoreConformanceTest, PostgresAppendHistoryDoesNotOverwriteRecreatedTask) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectHistoryAppendPreservesRecreatedTaskIdentity(dsn_value);
 }
 
 TEST(StoreConformanceTest, PostgresPushNotificationStorePropagatesAcquireFailures) {

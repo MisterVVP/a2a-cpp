@@ -57,6 +57,7 @@ class PostgresTaskStore final : public a2a::server::TaskStore {
   PostgresStorageIdentity storage_identity_;
   PostgresExecutionIdentity execution_identity_;
   std::string snapshot_sql_;
+  std::string history_snapshot_sql_;
   std::string conditional_create_sql_;
   std::string conditional_update_sql_;
   mutable std::mutex telemetry_mutex_;
