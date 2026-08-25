@@ -184,13 +184,21 @@ another scenario's locks from changing the comparison.
 While each scenario runs, the runner samples `pg_stat_activity` and records
 session state, concurrent active sessions, idle transactions, and PostgreSQL
 wait-event type/event. It also takes before/after snapshots of
-`pg_stat_database` and `pg_stat_wal`. The resulting
+`pg_stat_database`, `pg_stat_wal`, and the `MultiXactMember` and
+`MultiXactOffset` rows from `pg_stat_slru`. The resulting
 `postgres_database_diagnostics` object in `results.json` contains sampled wait
 counts and deltas for transactions, tuple writes, cache activity, WAL bytes,
-WAL writes/syncs, full WAL buffers, and PostgreSQL-reported block/WAL timing.
+WAL writes/syncs, full WAL buffers, PostgreSQL-reported block/WAL timing, and
+MultiXact SLRU block activity. The local task-aware push path now coordinates
+create/delete with transaction-scoped advisory locks, so its MultiXact deltas
+should remain zero; non-zero activity points to other or legacy row-lock work.
 These server observations complement the per-operation
-`connection_acquire_wait`, `task_upsert`, and `push_config_upsert` phase
-latencies already emitted by the SDK driver.
+`connection_acquire_wait`, `task_upsert`, `task_history_snapshot`, and
+`push_config_upsert` phase latencies already emitted by the SDK driver.
+`task_history_snapshot` is the non-locking snapshot read used by optimistic
+history appends. `task_history_lock_read` remains a distinct legacy/locking
+phase so reports do not misattribute optimistic snapshot latency or retries to
+row-lock acquisition.
 
 ```bash
 A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
@@ -199,7 +207,7 @@ A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
 ```
 
 The profile also captures `EXPLAIN (ANALYZE, BUFFERS, WAL)` output for
-representative task and push-config conflict writes inside a rolled-back
+representative task-conflict and push-config insert writes inside a rolled-back
 transaction. Interpret the evidence before changing production code:
 
 - increasing `WAL:WALWrite` or `IO:WALSync` samples, WAL sync time, and WAL
@@ -295,7 +303,7 @@ transport-level coverage. In-process rows use
 PostgreSQL result rows expose `postgres_phase_latency_ms`,
 `postgres_phase_call_count`, and `postgres_phase_calls_per_operation`. The phase
 names are stable: `connection_acquire_wait`, `task_get`, `task_upsert`,
-`task_history_lock_read`,
+`task_history_snapshot`, `task_history_lock_read`,
 `push_config_upsert`, `push_config_get`, `push_config_delete`,
 `push_config_list_count`, `push_config_list_select`, `transaction_begin`, and
 `transaction_commit`. A command phase counts one invocation per `PQexecParams`
@@ -352,17 +360,23 @@ on pooled connections are unsupported.
 For local authority, `CreateOrUpdateForTask` validates the request and then
 executes one `push_config_upsert` statement on one push-store lease. The
 statement calls the schema-qualified `SECURITY DEFINER` lock helper, which
-checks caller `SELECT`, rejects row-level security, takes `FOR KEY SHARE` on the
-task, and feeds the result into `INSERT ... ON CONFLICT DO UPDATE ... RETURNING
-1`. The caller does not perform a separate `task_get`, explicit `BEGIN`/`COMMIT`,
-post-write revalidation, or compensating cleanup. If the task is absent, the
-statement returns no row and maps to `TaskNotFound`. Existing config IDs retain
-normal update semantics. The task lock and upsert are one PostgreSQL statement,
-so concurrent deletion cannot create a locally owned orphan.
+checks caller `SELECT`, rejects row-level security and snapshot-isolation modes,
+takes a shared transaction-scoped advisory lock derived from the
+schema-qualified task table and complete task ID, validates task existence, and
+feeds the result into `INSERT ... ON CONFLICT DO UPDATE ... RETURNING 1`. Task
+deletion takes the matching exclusive advisory lock in a `BEFORE DELETE`
+trigger. The caller does not perform a separate `task_get`, explicit
+`BEGIN`/`COMMIT`, post-write revalidation, or compensating cleanup. If the task
+is absent, the statement returns no row and maps to `TaskNotFound`. Existing
+config IDs retain normal update semantics. The advisory lock and upsert are one
+PostgreSQL statement, so concurrent deletion cannot create a locally owned
+orphan under the supported read-committed isolation.
 
 Role differences do not create a special split-role transaction path. A
 same-storage push role must have task-table `SELECT` and helper `EXECUTE`; the
-helper owner, not the caller, needs task-table `UPDATE` for `FOR KEY SHARE`.
+push-lock helper owner needs schema `USAGE` plus task-table `SELECT`, and the
+task-delete lock helper owner needs schema `USAGE`. Task-table `UPDATE` is not
+required for advisory locking.
 
 For confirmed external authority, the supplied `TaskStore` remains
 authoritative: the SDK performs its task lookup and then executes one external

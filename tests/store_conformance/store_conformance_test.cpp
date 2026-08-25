@@ -43,6 +43,31 @@ constexpr std::string_view kMissingTaskAwareListTaskId = "missing-task-aware-lis
 constexpr std::string_view kMalformedTaskAwareListPageToken = "invalid-page-token";
 constexpr int kInvalidTaskAwareListPageSize = -1;
 constexpr int kValidTaskAwareListPageSize = 1;
+constexpr int kSinglePostgresResultRowCount = 1;
+constexpr int kLegacyIndexPresenceColumn = 0;
+constexpr int kOrderingIndexPresenceColumn = 1;
+constexpr auto kIndexPresenceSql = std::to_array("SELECT pg_catalog.to_regclass($1), pg_catalog.to_regclass($2)");
+constexpr std::string_view kInspectPushIndexesOperation = "inspect push indexes";
+constexpr std::string_view kPushIndexAmplificationSchemaSuffix = "push_index_amplification";
+constexpr std::string_view kHistoryDiagnosticSchemaSuffix = "history_write_diagnostic";
+constexpr std::string_view kHistoryDiagnosticTaskId = "history-diagnostic-task";
+constexpr std::string_view kHistoryDiagnosticContextId = "history-diagnostic-context";
+constexpr std::string_view kHistoryDiagnosticMessageId = "history-diagnostic-message";
+constexpr std::string_view kHistoryDiagnosticEntry = "entry";
+constexpr std::string_view kConcurrentHistorySchemaSuffix = "concurrent_history_append";
+constexpr std::string_view kConcurrentHistoryTaskId = "concurrent-history-task";
+constexpr std::string_view kConcurrentHistoryContextId = "concurrent-history-context";
+constexpr std::string_view kConcurrentHistoryEntry = "concurrent-entry";
+constexpr std::string_view kConcurrentHistoryFirstMessageId = "concurrent-history-message-1";
+constexpr std::string_view kConcurrentHistorySecondMessageId = "concurrent-history-message-2";
+constexpr std::string_view kRecreatedHistorySchemaSuffix = "history_recreate_aba";
+constexpr std::string_view kRecreatedHistoryTaskId = "recreated-history-task";
+constexpr std::string_view kRecreatedHistoryOriginalContextId = "recreated-history-original-context";
+constexpr std::string_view kRecreatedHistoryReplacementContextId = "recreated-history-replacement-context";
+constexpr std::string_view kRecreatedHistoryMessageId = "recreated-history-message";
+constexpr std::ptrdiff_t kConcurrentHistoryWriterCount = 2;
+constexpr std::size_t kConcurrentHistoryMinimumSnapshotCountWithRetry = 3U;
+constexpr std::size_t kExpectedSingleHistoryMessageCount = 1U;
 
 void ExpectMissingTaskPrecedesTaskAwarePushListValidation(a2a::server::TaskAwarePushNotificationStore& push_store,
                                                           const a2a::server::TaskStore& task_store) {
@@ -232,12 +257,16 @@ constexpr std::string_view kSuppressedDeleteSchemaSuffix = "push_suppressed_task
 constexpr std::string_view kExternalMigrationSchemaSuffix = "push_external_schema_migration";
 constexpr std::string_view kManagedValidationSchemaSuffix = "push_managed_validation";
 constexpr std::string_view kMissingCleanupTriggerSchemaSuffix = "push_external_schema_missing_cleanup";
+constexpr std::string_view kMissingDeleteLockTriggerSchemaSuffix = "push_external_schema_missing_delete_lock";
 constexpr std::string_view kLegacyForeignKeySchemaSuffix = "push_schema_legacy_fk";
 constexpr std::string_view kCleanupImplementationSchemaSuffix = "push_schema_cleanup_impl";
 constexpr std::string_view kCleanupIdentifierCaseSchemaSuffix = "PushSchemaCleanupCase";
+constexpr std::string_view kDeleteLockIdentifierCaseSchemaSuffix = "PushSchemaDeleteLockCase";
 constexpr std::string_view kLockImplementationSchemaSuffix = "push_schema_lock_impl";
+constexpr std::string_view kDeleteLockImplementationSchemaSuffix = "push_schema_delete_lock_impl";
 constexpr std::string_view kCleanupVersionSchemaSuffix = "push_schema_cleanup_ver";
 constexpr std::string_view kLockPublicExecuteSchemaSuffix = "push_schema_lock_public";
+constexpr std::string_view kDeleteLockPublicExecuteSchemaSuffix = "push_schema_delete_lock_public";
 constexpr std::string_view kCleanupPublicExecuteSchemaSuffix = "push_schema_cleanup_public";
 constexpr std::string_view kCleanupTriggerWhenSchemaSuffix = "push_schema_cleanup_when";
 constexpr std::string_view kProvenanceTypeSchemaSuffix = "push_schema_prov_type";
@@ -263,6 +292,7 @@ constexpr std::string_view kGrantSchemaCreateOperation = "grant schema create to
 constexpr std::string_view kAlterSecurityDefinerOwnerOperation = "alter security definer owner";
 constexpr std::string_view kReassignSecurityDefinerOwnerOperation = "restore security definer owner";
 constexpr std::string_view kRevokePushDeleteOperation = "revoke push delete from security definer owner";
+constexpr std::string_view kRevokeTaskSelectOperation = "revoke task select from security definer owner";
 constexpr std::string_view kRevokeLocalTaskAwarePrivilegesOperation = "revoke local task-aware push privileges";
 constexpr std::string_view kOutdatedManagedPushSchemaAcceptedMessage =
     "outdated externally managed PostgreSQL schema was accepted";
@@ -601,6 +631,10 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kDeleteTaskPushConfigsFunction);
 }
 
+[[nodiscard]] std::string TaskDeleteLockFunction(std::string_view schema) {
+  return a2a::server::stores::TaskDeleteLockFunction(schema);
+}
+
 [[nodiscard]] std::string BuildClearCleanupMigrationSql(std::string_view schema) {
   std::string sql = "COMMENT ON FUNCTION ";
   sql.append(DeleteTaskPushConfigsFunction(schema));
@@ -660,14 +694,58 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return sql;
 }
 
+[[nodiscard]] std::string BuildNoOpTaskDeleteLockFunctionSql(std::string_view schema) {
+  const std::string function = TaskDeleteLockFunction(schema);
+  std::string sql = "CREATE OR REPLACE FUNCTION ";
+  sql.append(function);
+  sql.append(
+      "() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog "
+      "AS $a2a$ BEGIN RETURN OLD; END $a2a$; COMMENT ON FUNCTION ");
+  sql.append(function);
+  sql.append("() IS '");
+  sql.append(a2a::server::stores::kTaskPushConfigMigrationId);
+  sql.append("';");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildWrongCaseTaskDeleteLockFunctionSql(std::string_view schema) {
+  std::string wrong_schema(schema);
+  for (char& symbol : wrong_schema) {
+    symbol = static_cast<char>(std::tolower(static_cast<unsigned char>(symbol)));
+  }
+  const std::string expected_task_table = a2a::server::stores::TaskTable(schema);
+  const std::string wrong_task_table = a2a::server::stores::TaskTable(wrong_schema);
+  std::string body = a2a::server::stores::ExpectedTaskDeleteLockFunctionBody(schema);
+  body.replace(body.find(expected_task_table), expected_task_table.size(), wrong_task_table);
+
+  const std::string function = TaskDeleteLockFunction(schema);
+  std::string sql = "CREATE OR REPLACE FUNCTION ";
+  sql.append(function);
+  sql.append("() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $a2a$ ");
+  sql.append(body);
+  sql.append(" $a2a$; COMMENT ON FUNCTION ");
+  sql.append(function);
+  sql.append("() IS '");
+  sql.append(a2a::server::stores::kTaskPushConfigMigrationId);
+  sql.append("';");
+  return sql;
+}
+
 [[nodiscard]] std::string BuildDropTaskAwarePushSchemaSql(std::string_view schema) {
+  const std::string task_table = a2a::server::stores::TaskTable(schema);
   std::string sql = "DROP TRIGGER ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kTaskDeleteLockTrigger));
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append("; DROP TRIGGER ");
   sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kDeleteTaskPushConfigsTrigger));
   sql.append(" ON ");
-  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.append(task_table);
   sql.append("; DROP FUNCTION ");
   sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
   sql.append("(text); DROP FUNCTION ");
+  sql.append(TaskDeleteLockFunction(schema));
+  sql.append("(); DROP FUNCTION ");
   sql.append(DeleteTaskPushConfigsFunction(schema));
   sql.append("();");
   return sql;
@@ -684,6 +762,22 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   std::string sql = "GRANT EXECUTE ON FUNCTION ";
   sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
   sql.append("(text) TO PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildGrantPublicDeleteLockExecuteSql(std::string_view schema) {
+  std::string sql = "GRANT EXECUTE ON FUNCTION ";
+  sql.append(TaskDeleteLockFunction(schema));
+  sql.append("() TO PUBLIC;");
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDropTaskDeleteLockTriggerSql(std::string_view schema) {
+  std::string sql = "DROP TRIGGER ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kTaskDeleteLockTrigger));
+  sql.append(" ON ");
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.push_back(';');
   return sql;
 }
 
@@ -840,6 +934,15 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   return sql;
 }
 
+[[nodiscard]] std::string BuildRevokeTaskSelectSql(std::string_view schema, std::string_view role) {
+  std::string sql = "REVOKE SELECT ON ";
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.append(" FROM ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.push_back(';');
+  return sql;
+}
+
 [[nodiscard]] std::string BuildRevokeLocalTaskAwarePrivilegesSql(std::string_view schema, std::string_view role) {
   const std::string quoted_role = a2a::server::stores::QuoteSqlIdentifier(role);
   std::string sql = "REVOKE SELECT ON ";
@@ -950,7 +1053,10 @@ void ExpectSecurityDefinerOwnerPrivilegesRequired(std::string_view schema_suffix
   ASSERT_TRUE(role_created.ok());
   ExpectPostgresExecOk(connection.value().get(), BuildGrantSchemaCreateSql(role.role(), schema),
                        kGrantSchemaCreateOperation);
-  if (owner_case == SecurityDefinerOwnerCase::kCleanup) {
+  if (owner_case == SecurityDefinerOwnerCase::kTaskLock) {
+    ExpectPostgresExecOk(connection.value().get(), BuildRevokeTaskSelectSql(schema, role.role()),
+                         kRevokeTaskSelectOperation);
+  } else {
     ExpectPostgresExecOk(connection.value().get(), BuildRevokePushDeleteSql(schema, role.role()),
                          kRevokePushDeleteOperation);
   }
@@ -1380,11 +1486,18 @@ constexpr std::string_view kCreateFirstSchemaSuffix = "push_create_first";
 constexpr std::string_view kConflictingWriterSchemaSuffix = "push_conflicting_writer";
 constexpr std::string_view kExternalConcurrentSchemaSuffix = "push_external_concurrent";
 constexpr std::string_view kDatabaseLockCycleSchemaSuffix = "push_database_lock_cycle";
+constexpr std::string_view kAdvisoryProgressSchemaSuffix = "push_advisory_progress";
+constexpr std::string_view kAdvisorySchemaScopeSchemaSuffix = "push_advisory_schema_scope";
+constexpr std::string_view kAdvisorySchemaScopeOtherSchemaSuffix = "push_advisory_schema_scope_other";
+constexpr std::string_view kRepeatableReadDeleteSchemaSuffix = "push_repeatable_read_delete";
 constexpr std::string_view kConcurrentFirstUpdateUrl = "https://example.test/concurrent-first";
 constexpr std::string_view kConcurrentSecondUpdateUrl = "https://example.test/concurrent-second";
 constexpr std::string_view kConcurrentCycleUpdateUrl = "https://example.test/concurrent-cycle";
 constexpr std::string_view kConcurrentExternalUpdateUrl = "https://example.test/concurrent-external";
 constexpr std::string_view kLockConcurrentPushRowOperation = "lock concurrent push config row";
+constexpr std::string_view kSetRepeatableReadIsolationOperation = "set repeatable-read isolation";
+constexpr std::string_view kRepeatableReadIsolationSql = "SET default_transaction_isolation = 'repeatable read'";
+constexpr std::string_view kReadCommittedIsolationRequiredMessage = "requires read-committed transaction isolation";
 constexpr std::string_view kCountWaitingPostgresLocksOperation = "count waiting postgres locks";
 constexpr std::string_view kCountWaitingPostgresLocksMissingRowMessage =
     "count waiting postgres locks: query returned no row";
@@ -1405,6 +1518,7 @@ constexpr std::size_t kCreateFirstPoolSize = 3U;
 constexpr std::size_t kConflictingWriterPoolSize = 3U;
 constexpr std::size_t kExternalConcurrentPoolSize = 3U;
 constexpr std::size_t kDatabaseLockCyclePoolSize = 2U;
+constexpr std::size_t kAdvisoryProgressPoolSize = 4U;
 constexpr std::size_t kPushOnlyRolePoolSize = 1U;
 constexpr std::size_t kOwnerRolePoolSize = 2U;
 constexpr std::size_t kTwoPostgresCommandCount = 2U;
@@ -1966,6 +2080,249 @@ void ExpectConflictingWriterScenario(std::string_view dsn_value) {
   second_config.set_url(std::string(kConcurrentSecondUpdateUrl));
   ExpectConflictingWriterOutcome(
       RunConflictingWriterScenario(push_store, task_store, push_options, first_config, second_config));
+}
+
+struct AdvisoryProgressOutcome final {
+  std::future_status blocked_create_status;
+  SplitRoleCreateOutcome blocked_create;
+};
+
+[[nodiscard]] a2a::core::Result<AdvisoryProgressOutcome> RunAdvisoryProgressScenario(
+    a2a::server::stores::PostgresPushNotificationStore& push_store,
+    const a2a::server::stores::PostgresTaskStore& task_store,
+    const a2a::server::stores::PostgresStoreOptions& options) {
+  std::future<SplitRoleCreateOutcome> blocked_create;
+  auto blocker = push_store.AcquireConnectionForTesting();
+  if (!blocker.ok()) {
+    return blocker.error();
+  }
+  a2a::server::stores::Transaction blocker_transaction(blocker.value().get());
+  const auto begun = blocker_transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  const auto locked =
+      LockPushConfigRow(blocker.value().get(), options.schema, kAtomicCreateTaskId, kAtomicCreateConfigId);
+  if (!locked.ok()) {
+    return locked.error();
+  }
+
+  auto blocked_config =
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId));
+  blocked_config.set_url(std::string(kConcurrentFirstUpdateUrl));
+  std::barrier create_started(2);
+  blocked_create = std::async(std::launch::async, [&] {
+    create_started.arrive_and_wait();
+    return RunTaskAwareCreateWithDiagnostics(push_store, blocked_config, task_store);
+  });
+  create_started.arrive_and_wait();
+  const auto create_waiting = WaitForPostgresLockWaiters(blocker.value().get(), kSinglePostgresCommandCount);
+  if (!create_waiting.ok()) {
+    return create_waiting.error();
+  }
+
+  for (const std::string_view config_id : kConcurrentIds) {
+    const auto same_task = push_store.CreateOrUpdateForTask(
+        a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(config_id)),
+        task_store);
+    if (!same_task.ok()) {
+      return same_task.error();
+    }
+  }
+  const auto different_task = push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId), std::string(kMixedCreateConfigId)),
+      task_store);
+  if (!different_task.ok()) {
+    return different_task.error();
+  }
+
+  const auto blocked_status = blocked_create.wait_for(kConcurrentCreateBlockedTimeout);
+  const auto committed = blocker_transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  auto blocked_outcome = blocked_create.get();
+  return AdvisoryProgressOutcome{.blocked_create_status = blocked_status, .blocked_create = std::move(blocked_outcome)};
+}
+
+void ExpectAdvisoryProgressScenario(std::string_view dsn_value) {
+  const std::string schema = MakePostgresTestSchema(kAdvisoryProgressSchemaSuffix);
+  const std::string push_dsn = BuildEquivalentKeywordDsn(dsn_value);
+  ASSERT_FALSE(push_dsn.empty());
+  const a2a::server::stores::PostgresStoreOptions task_options{
+      .connection_string = std::string(dsn_value), .schema = schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  const a2a::server::stores::PostgresStoreOptions push_options{
+      .connection_string = push_dsn, .schema = schema, .connection_pool_size = kAdvisoryProgressPoolSize};
+  a2a::server::stores::PostgresTaskStore task_store(task_options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(push_options);
+  ASSERT_TRUE(ConfigurePushPoolStatementTimeout(push_store, kAdvisoryProgressPoolSize).ok());
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(task_store, kMixedCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId),
+                                                                                   std::string(kAtomicCreateConfigId)),
+                                         task_store)
+                  .ok());
+
+  const auto outcome = RunAdvisoryProgressScenario(push_store, task_store, push_options);
+  ASSERT_TRUE(outcome.ok());
+  EXPECT_EQ(outcome.value().blocked_create_status, std::future_status::timeout);
+  ASSERT_TRUE(outcome.value().blocked_create.result.ok());
+  ExpectSingleTaskAwarePushUpsertDiagnostics(outcome.value().blocked_create.diagnostics);
+  for (const std::string_view config_id : kConcurrentIds) {
+    ExpectPushConfigPresent(push_store, kAtomicCreateTaskId, config_id);
+  }
+  ExpectPushConfigPresent(push_store, kMixedCreateTaskId, kMixedCreateConfigId);
+}
+
+[[nodiscard]] a2a::core::Result<void> CreateInOtherSchemaWhileTaskDeleteIsHeld(
+    a2a::server::stores::PostgresPushNotificationStore& deleting_push_store,
+    a2a::server::stores::PostgresPushNotificationStore& creating_push_store,
+    a2a::server::stores::PostgresTaskStore& creating_task_store, std::string_view deleting_schema) {
+  auto deletion = deleting_push_store.AcquireConnectionForTesting();
+  if (!deletion.ok()) {
+    return deletion.error();
+  }
+  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
+  auto begun = deletion_transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  auto deleted = a2a::server::stores::Exec(
+      deletion.value().get(),
+      BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(deleting_schema), kTaskIdColumn, kAtomicCreateTaskId),
+      kHoldConcurrentDeleteOperation);
+  if (!deleted.ok()) {
+    return deleted.error();
+  }
+
+  auto created = creating_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      creating_task_store);
+  auto committed = deletion_transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  if (!created.ok()) {
+    return created.error();
+  }
+  return {};
+}
+
+void ExpectAdvisoryLocksScopedToSchema(std::string_view dsn_value) {
+  const std::string schema = MakePostgresTestSchema(kAdvisorySchemaScopeSchemaSuffix);
+  const std::string other_schema = MakePostgresTestSchema(kAdvisorySchemaScopeOtherSchemaSuffix);
+  const std::string push_dsn = BuildEquivalentKeywordDsn(dsn_value);
+  ASSERT_FALSE(push_dsn.empty());
+  const a2a::server::stores::PostgresStoreOptions first_options{
+      .connection_string = push_dsn, .schema = schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  const a2a::server::stores::PostgresStoreOptions second_options{
+      .connection_string = push_dsn, .schema = other_schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  a2a::server::stores::PostgresTaskStore first_task_store(first_options);
+  a2a::server::stores::PostgresPushNotificationStore first_push_store(first_options);
+  a2a::server::stores::PostgresTaskStore second_task_store(second_options);
+  a2a::server::stores::PostgresPushNotificationStore second_push_store(second_options);
+  ASSERT_TRUE(ConfigurePushPoolStatementTimeout(second_push_store, kConcurrencyTaskPoolSize).ok());
+  AddPostgresTask(first_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  AddPostgresTask(second_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  const auto create_while_delete_held =
+      CreateInOtherSchemaWhileTaskDeleteIsHeld(first_push_store, second_push_store, second_task_store, schema);
+  ASSERT_TRUE(create_while_delete_held.ok());
+  EXPECT_FALSE(first_task_store.Get(kAtomicCreateTaskId).ok());
+  EXPECT_TRUE(second_task_store.Get(kAtomicCreateTaskId).ok());
+  ExpectPushConfigPresent(second_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
+}
+
+struct RepeatableReadDeleteConflictOutcome final {
+  bool create_succeeded = false;
+  std::string error_message;
+};
+
+[[nodiscard]] a2a::core::Result<void> ConfigureRepeatableReadPushStore(
+    a2a::server::stores::PostgresPushNotificationStore& push_store) {
+  auto connection = push_store.AcquireConnectionForTesting();
+  if (!connection.ok()) {
+    return connection.error();
+  }
+  auto timeout = a2a::server::stores::Exec(connection.value().get(), std::string(kConcurrentStatementTimeoutSql),
+                                           kSetConcurrentStatementTimeoutOperation);
+  if (!timeout.ok()) {
+    return timeout.error();
+  }
+  return a2a::server::stores::Exec(connection.value().get(), std::string(kRepeatableReadIsolationSql),
+                                   kSetRepeatableReadIsolationOperation);
+}
+
+[[nodiscard]] a2a::core::Result<RepeatableReadDeleteConflictOutcome> RunRepeatableReadDeleteConflictScenario(
+    a2a::server::stores::PostgresPushNotificationStore& owner_push_store,
+    a2a::server::stores::PostgresPushNotificationStore& repeatable_read_push_store,
+    a2a::server::stores::PostgresTaskStore& task_store, std::string_view schema) {
+  auto deletion = owner_push_store.AcquireConnectionForTesting();
+  if (!deletion.ok()) {
+    return deletion.error();
+  }
+  a2a::server::stores::Transaction deletion_transaction(deletion.value().get());
+  auto begun = deletion_transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
+  }
+  auto deleted = a2a::server::stores::Exec(
+      deletion.value().get(),
+      BuildDeleteByTaskIdSql(a2a::server::stores::TaskTable(schema), kTaskIdColumn, kAtomicCreateTaskId),
+      kHoldConcurrentDeleteOperation);
+  if (!deleted.ok()) {
+    return deleted.error();
+  }
+
+  const auto created = repeatable_read_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      task_store);
+  auto committed = deletion_transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
+  }
+  if (created.ok()) {
+    return RepeatableReadDeleteConflictOutcome{.create_succeeded = true, .error_message = {}};
+  }
+  return RepeatableReadDeleteConflictOutcome{.create_succeeded = false,
+                                             .error_message = std::string(created.error().message())};
+}
+
+void ExpectRepeatableReadDeleteConflictOutcome(const RepeatableReadDeleteConflictOutcome& outcome) {
+  EXPECT_FALSE(outcome.create_succeeded);
+  EXPECT_NE(outcome.error_message.find(kReadCommittedIsolationRequiredMessage), std::string_view::npos);
+}
+
+void ExpectRepeatableReadDeleteConflictRejected(std::string_view dsn_value) {
+  const std::string schema = MakePostgresTestSchema(kRepeatableReadDeleteSchemaSuffix);
+  const std::string push_dsn = BuildEquivalentKeywordDsn(dsn_value);
+  ASSERT_FALSE(push_dsn.empty());
+  const a2a::server::stores::PostgresStoreOptions owner_options{
+      .connection_string = push_dsn, .schema = schema, .connection_pool_size = kConcurrencyTaskPoolSize};
+  const a2a::server::stores::PostgresStoreOptions repeatable_read_options{
+      .connection_string = push_dsn,
+      .schema = schema,
+      .auto_create_schema = false,
+      .connection_pool_size = kConcurrencyTaskPoolSize};
+  a2a::server::stores::PostgresTaskStore task_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore owner_push_store(owner_options);
+  a2a::server::stores::PostgresPushNotificationStore repeatable_read_push_store(repeatable_read_options);
+  AddPostgresTask(task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  const auto configured = ConfigureRepeatableReadPushStore(repeatable_read_push_store);
+  ASSERT_TRUE(configured.ok());
+  const auto outcome =
+      RunRepeatableReadDeleteConflictScenario(owner_push_store, repeatable_read_push_store, task_store, schema);
+  ASSERT_TRUE(outcome.ok());
+  ExpectRepeatableReadDeleteConflictOutcome(outcome.value());
+  EXPECT_FALSE(task_store.Get(kAtomicCreateTaskId).ok());
+  ExpectPushConfigMissing(repeatable_read_push_store, kAtomicCreateTaskId, kAtomicCreateConfigId);
 }
 
 void ExpectDatabaseLockCycleScenario(std::string_view dsn_value) {
@@ -2607,6 +2964,32 @@ TEST(StoreConformanceTest, PostgresPushConfigPaginationPreservesCreationOrderAcr
   ExpectPushConfigPaginationOrder(stores.front(), kTaskId);
 }
 
+TEST(StoreConformanceTest, PostgresPushSchemaDropsPushSecondaryIndexes) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const std::string schema = MakePostgresTestSchema(kPushIndexAmplificationSchemaSuffix);
+  a2a::server::stores::PostgresPushNotificationStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
+  auto connection = store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+
+  const std::string legacy_index =
+      a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kPushConfigsTaskIndex);
+  const std::string ordering_index =
+      a2a::server::stores::QualifiedSqlIdentifier(schema, a2a::server::stores::kPushConfigsCreatedSequenceIndex);
+  const std::array values = {legacy_index.c_str(), ordering_index.c_str()};
+  a2a::server::stores::PgResult result(PQexecParams(connection.value().get(), kIndexPresenceSql.data(),
+                                                    static_cast<int>(values.size()), nullptr, values.data(), nullptr,
+                                                    nullptr, 0));
+  ASSERT_TRUE(
+      a2a::server::stores::CheckTuples(connection.value().get(), result.get(), kInspectPushIndexesOperation).ok());
+  ASSERT_EQ(PQntuples(result.get()), kSinglePostgresResultRowCount);
+  EXPECT_NE(PQgetisnull(result.get(), 0, kLegacyIndexPresenceColumn), 0);
+  EXPECT_NE(PQgetisnull(result.get(), 0, kOrderingIndexPresenceColumn), 0);
+}
+
 TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -2647,30 +3030,188 @@ TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
   ExpectPostgresAcquireFailure(append.error());
 }
 
-TEST(StoreConformanceTest, PostgresAppendHistoryReportsLockingReadDiagnostic) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
-  }
-  const std::string schema = MakePostgresTestSchema("history_lock_read_diagnostic");
-  a2a::server::stores::PostgresTaskStore store(
-      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
-  AddPostgresTask(store, "history-diagnostic-task", "history-diagnostic-context", lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+void ExpectHistoryAppendMetadataPreserved(const lf::a2a::v1::Task& before_append, const lf::a2a::v1::Task& appended) {
+  ASSERT_EQ(appended.history_size(), before_append.history_size() + 1);
+  EXPECT_EQ(appended.context_id(), kHistoryDiagnosticContextId);
+  EXPECT_EQ(appended.status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+}
 
-  const auto append = store.AppendTaskHistory(
-      "history-diagnostic-task", a2a::tests::store_conformance::MakeMessage("history-diagnostic-message", "entry"),
-      a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
-
-  ASSERT_TRUE(append.ok());
-  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+void ExpectHistoryAppendWriteDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
+  EXPECT_EQ(
+      diagnostics
+          .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistorySnapshot)],
+      1U);
   EXPECT_EQ(
       diagnostics
           .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistoryLockRead)],
-      1U);
+      0U);
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskGet)],
             0U);
+  EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskUpsert)],
+            1U);
+}
+
+void ExpectHistoryAppendPreservesMetadataAndReportsWriteDiagnostics(a2a::server::stores::PostgresTaskStore& store) {
+  const auto before_append = store.Get(kHistoryDiagnosticTaskId);
+  ASSERT_TRUE(before_append.ok());
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+
+  const auto append =
+      store.AppendTaskHistory(kHistoryDiagnosticTaskId,
+                              a2a::tests::store_conformance::MakeMessage(std::string(kHistoryDiagnosticMessageId),
+                                                                         std::string(kHistoryDiagnosticEntry)),
+                              a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+  ASSERT_TRUE(append.ok());
+  ExpectHistoryAppendMetadataPreserved(before_append.value(), append.value());
+
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  ExpectHistoryAppendWriteDiagnostics(diagnostics);
+}
+
+TEST(StoreConformanceTest, PostgresAppendHistoryPreservesMetadataAndReportsWriteDiagnostics) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const std::string schema = MakePostgresTestSchema(kHistoryDiagnosticSchemaSuffix);
+  a2a::server::stores::PostgresTaskStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
+  AddPostgresTask(store, kHistoryDiagnosticTaskId, kHistoryDiagnosticContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  ExpectHistoryAppendPreservesMetadataAndReportsWriteDiagnostics(store);
+}
+
+void ConfigureConcurrentHistorySnapshotBarrier(a2a::server::stores::PostgresTaskStore& first_store,
+                                               a2a::server::stores::PostgresTaskStore& second_store,
+                                               std::barrier<>& snapshots_ready,
+                                               std::atomic<std::size_t>& snapshot_count) {
+  const auto synchronize_initial_snapshots = [&snapshots_ready, &snapshot_count] {
+    const std::size_t snapshot_index = snapshot_count.fetch_add(1U, std::memory_order_relaxed);
+    if (snapshot_index < static_cast<std::size_t>(kConcurrentHistoryWriterCount)) {
+      snapshots_ready.arrive_and_wait();
+    }
+  };
+  first_store.SetHistorySnapshotHookForTesting(synchronize_initial_snapshots);
+  second_store.SetHistorySnapshotHookForTesting(synchronize_initial_snapshots);
+}
+
+[[nodiscard]] a2a::core::Result<lf::a2a::v1::Task> AppendConcurrentHistoryMessage(
+    a2a::server::stores::PostgresTaskStore* store, std::string_view message_id) {
+  return store->AppendTaskHistory(
+      kConcurrentHistoryTaskId,
+      a2a::tests::store_conformance::MakeMessage(std::string(message_id), std::string(kConcurrentHistoryEntry)),
+      a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+}
+
+[[nodiscard]] std::size_t CountHistoryMessagesById(const lf::a2a::v1::Task& task, std::string_view message_id) {
+  std::size_t count = 0U;
+  for (const auto& message : task.history()) {
+    if (message.message_id() == message_id) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+[[nodiscard]] lf::a2a::v1::Task GetConcurrentHistoryTaskOrFail(a2a::server::stores::PostgresTaskStore& store) {
+  const auto task = store.Get(kConcurrentHistoryTaskId);
+  EXPECT_TRUE(task.ok());
+  return task.ok() ? task.value() : lf::a2a::v1::Task{};
+}
+
+void ExpectConcurrentHistoryAppendResults(std::future<a2a::core::Result<lf::a2a::v1::Task>>& first_append,
+                                          std::future<a2a::core::Result<lf::a2a::v1::Task>>& second_append,
+                                          const std::atomic<std::size_t>& snapshot_count) {
+  EXPECT_TRUE(first_append.get().ok());
+  EXPECT_TRUE(second_append.get().ok());
+  EXPECT_GE(snapshot_count.load(std::memory_order_relaxed), kConcurrentHistoryMinimumSnapshotCountWithRetry);
+}
+
+void ExpectConcurrentHistoryStoredMessages(const lf::a2a::v1::Task& stored, const lf::a2a::v1::Task& before_append) {
+  EXPECT_EQ(stored.history_size(), before_append.history_size() + 2);
+  EXPECT_EQ(CountHistoryMessagesById(stored, kConcurrentHistoryFirstMessageId), kExpectedSingleHistoryMessageCount);
+  EXPECT_EQ(CountHistoryMessagesById(stored, kConcurrentHistorySecondMessageId), kExpectedSingleHistoryMessageCount);
+}
+
+void ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(const char* dsn_value) {
+  const auto options = a2a::server::stores::PostgresStoreOptions{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kConcurrentHistorySchemaSuffix)};
+  a2a::server::stores::PostgresTaskStore first_store(options);
+  a2a::server::stores::PostgresTaskStore second_store(options);
+  AddPostgresTask(first_store, kConcurrentHistoryTaskId, kConcurrentHistoryContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  const auto before_append = GetConcurrentHistoryTaskOrFail(first_store);
+
+  std::barrier snapshots_ready(kConcurrentHistoryWriterCount);
+  std::atomic<std::size_t> snapshot_count = 0U;
+  ConfigureConcurrentHistorySnapshotBarrier(first_store, second_store, snapshots_ready, snapshot_count);
+  auto first_append =
+      std::async(std::launch::async, AppendConcurrentHistoryMessage, &first_store, kConcurrentHistoryFirstMessageId);
+  auto second_append =
+      std::async(std::launch::async, AppendConcurrentHistoryMessage, &second_store, kConcurrentHistorySecondMessageId);
+  ExpectConcurrentHistoryAppendResults(first_append, second_append, snapshot_count);
+
+  const auto stored = GetConcurrentHistoryTaskOrFail(first_store);
+  ExpectConcurrentHistoryStoredMessages(stored, before_append);
+}
+
+TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(dsn_value);
+}
+
+void ConfigureHistoryTaskReplacementAfterSnapshot(a2a::server::stores::PostgresTaskStore& store,
+                                                  a2a::server::stores::PostgresTaskStore& replacement_store,
+                                                  a2a::server::stores::PostgresPushNotificationStore& push_store,
+                                                  const a2a::server::stores::PostgresStoreOptions& options,
+                                                  bool& replaced) {
+  store.SetHistorySnapshotHookForTesting([&replacement_store, &push_store, &options, &replaced] {
+    if (replaced) {
+      return;
+    }
+    replaced = true;
+    ASSERT_TRUE(DeletePostgresTask(push_store, options, kRecreatedHistoryTaskId).ok());
+    AddPostgresTask(replacement_store, kRecreatedHistoryTaskId, kRecreatedHistoryReplacementContextId,
+                    lf::a2a::v1::TASK_STATE_WORKING, kNewTargetTaskTimestampSeconds);
+  });
+}
+
+void ExpectHistoryAppendPreservesRecreatedTaskIdentity(const char* dsn_value) {
+  const auto options = a2a::server::stores::PostgresStoreOptions{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kRecreatedHistorySchemaSuffix)};
+  a2a::server::stores::PostgresTaskStore store(options);
+  a2a::server::stores::PostgresTaskStore replacement_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(store, kRecreatedHistoryTaskId, kRecreatedHistoryOriginalContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  bool replaced = false;
+  ConfigureHistoryTaskReplacementAfterSnapshot(store, replacement_store, push_store, options, replaced);
+  const auto append =
+      store.AppendTaskHistory(kRecreatedHistoryTaskId,
+                              a2a::tests::store_conformance::MakeMessage(std::string(kRecreatedHistoryMessageId),
+                                                                         std::string(kConcurrentHistoryEntry)),
+                              a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+  ASSERT_TRUE(append.ok());
+  ASSERT_TRUE(replaced);
+  EXPECT_EQ(append.value().context_id(), kRecreatedHistoryReplacementContextId);
+
+  const auto stored = store.Get(kRecreatedHistoryTaskId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().context_id(), kRecreatedHistoryReplacementContextId);
+  EXPECT_EQ(CountHistoryMessagesById(stored.value(), kRecreatedHistoryMessageId), kExpectedSingleHistoryMessageCount);
+}
+
+TEST(StoreConformanceTest, PostgresAppendHistoryDoesNotOverwriteRecreatedTask) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectHistoryAppendPreservesRecreatedTaskIdentity(dsn_value);
 }
 
 TEST(StoreConformanceTest, PostgresPushNotificationStorePropagatesAcquireFailures) {
@@ -3100,6 +3641,30 @@ TEST(StoreConformanceTest, ConcurrentLocalPushConfigWritersSerializeWithoutExtra
   ExpectConflictingWriterScenario(dsn_value);
 }
 
+TEST(StoreConformanceTest, PostgresAdvisoryPushLocksAllowSameAndDifferentTaskProgress) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectAdvisoryProgressScenario(dsn_value);
+}
+
+TEST(StoreConformanceTest, PostgresAdvisoryPushLocksAreScopedToSchema) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectAdvisoryLocksScopedToSchema(dsn_value);
+}
+
+TEST(StoreConformanceTest, PostgresRepeatableReadDeleteConflictCannotUseStaleTaskSnapshot) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  ExpectRepeatableReadDeleteConflictRejected(dsn_value);
+}
+
 TEST(StoreConformanceTest, PostgresDetectsLocalCreateDeleteDatabaseLockCycle) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -3381,6 +3946,19 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskLockImplementa
   ExpectManagedPushSchemaMutationRejected(kLockImplementationSchemaSuffix, BuildNoOpTaskLockFunctionSql);
 }
 
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskDeleteLockImplementation) {
+  ExpectManagedPushSchemaMutationRejected(kDeleteLockImplementationSchemaSuffix, BuildNoOpTaskDeleteLockFunctionSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaPreservesTaskDeleteLockIdentifierCase) {
+  ExpectManagedPushSchemaMutationRejected(kDeleteLockIdentifierCaseSchemaSuffix,
+                                          BuildWrongCaseTaskDeleteLockFunctionSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskDeleteLockTrigger) {
+  ExpectManagedPushSchemaMutationRejected(kMissingDeleteLockTriggerSchemaSuffix, BuildDropTaskDeleteLockTriggerSql);
+}
+
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaPreservesQuotedIdentifierCase) {
   ExpectManagedPushSchemaMutationRejected(kCleanupIdentifierCaseSchemaSuffix, BuildWrongCaseCleanupFunctionSql);
 }
@@ -3391,6 +3969,10 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupVersion) {
 
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsPublicLockExecute) {
   ExpectManagedPushSchemaMutationRejected(kLockPublicExecuteSchemaSuffix, BuildGrantPublicLockExecuteSql);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsPublicTaskDeleteLockExecute) {
+  ExpectManagedPushSchemaMutationRejected(kDeleteLockPublicExecuteSchemaSuffix, BuildGrantPublicDeleteLockExecuteSql);
 }
 
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaRejectsPublicCleanupExecute) {

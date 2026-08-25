@@ -136,11 +136,21 @@ final PostgreSQL paths are:
 
 - **Same storage, create/update:** one push-store pool acquisition and one
   `PQexecParams` command. The statement invokes the schema-qualified
-  `SECURITY DEFINER` task-lock helper, takes `FOR KEY SHARE` on the task, and
-  performs `INSERT ... ON CONFLICT DO UPDATE ... RETURNING 1` in the same
-  statement. There is no preliminary `task_get`, explicit multi-command
+  `SECURITY DEFINER` task-lock helper, takes a shared transaction-scoped
+  advisory lock derived from the schema-qualified task table and complete task
+  ID, validates task existence, and performs
+  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING 1` in the same statement. Task
+  deletion takes the matching exclusive advisory lock in a `BEFORE DELETE`
+  trigger. There is no preliminary `task_get`, explicit multi-command
   transaction, revalidation, or compensating cleanup. A missing task returns
-  `TaskNotFound`; a concurrent delete cannot leave a locally owned orphan.
+  `TaskNotFound`; a concurrent delete cannot leave a locally owned orphan. The
+  local task-aware path rejects repeatable-read and serializable transaction
+  isolation before locking because their transaction-scoped snapshots can remain
+  stale after a concurrent delete commits. Under PostgreSQL read-committed
+  semantics, the `VOLATILE` helper rechecks task existence with a fresh snapshot
+  after any advisory-lock wait. Equal task IDs in different schemas use different
+  advisory keys. Hash collisions can still serialize unrelated task IDs; all task
+  and push data access continues to use the original task ID.
 - **External authority, create/update:** the supplied `TaskStore` remains
   authoritative. The service performs its task lookup first and then writes an
   externally owned push row (`local_postgres_task=FALSE`). A different database
@@ -169,29 +179,36 @@ calls use the task-first fallback unless they explicitly share one pool and loca
 storage authority.
 
 When `auto_create_schema=true`, schema initialization creates or upgrades the
-task/push tables, provenance column, helper functions, cleanup trigger, sequences,
-and indexes, and removes the legacy push-to-task foreign key. The migration
-objects are installed transactionally and the `task-aware-push-config-v2`
-markers are written last.
+task/push tables, provenance column, shared push-lock helper, exclusive task-delete
+lock helper and `BEFORE DELETE` trigger, cleanup helper and `AFTER DELETE` trigger,
+sequences, and task indexes, and removes the legacy push-to-task foreign key. During
+the issue #206 write-saturation experiment, initialization also drops both push
+secondary indexes: `idx_a2a_push_configs_task` and
+`idx_a2a_push_configs_created_sequence`. The primary key `(task_id, config_id)`
+remains available for task-prefix filtering; list queries explicitly sort by
+`created_sequence ASC` to preserve deterministic creation order and pagination
+semantics. The migration objects are installed transactionally and the
+`task-aware-push-config-v3` markers are written last.
 
 ## Externally managed PostgreSQL schemas
 
 When `auto_create_schema=false`, the push-notification store always validates
 the push table's provenance column and rejects a legacy push-to-task foreign key.
-The local task-aware objects are an optional capability: if the lock helper,
-cleanup helper, and cleanup trigger are all absent, construction succeeds for a
-push-only store paired with an external authoritative `TaskStore`. Attempting to
-pair that store with a local PostgreSQL task store fails before the push write
-with an actionable `task-aware-push-config-v2` migration error. Capability
-detection happens during store construction; request paths do not query the
-catalogs.
+The local task-aware objects are an optional capability: if the push-lock helper,
+task-delete lock helper and trigger, cleanup helper, and cleanup trigger are all
+absent, construction succeeds for a push-only store paired with an external
+authoritative `TaskStore`. Attempting to pair that store with a local PostgreSQL
+task store fails before the push write with an actionable
+`task-aware-push-config-v3` migration error. Capability detection happens during
+store construction; request paths do not query the catalogs.
 
 If any task-aware helper or trigger is present, construction requires the whole
-migration and rejects partial or stale installations. Validation covers both
-`SECURITY DEFINER` helper implementations and migration markers, their owners'
-required privileges, absence of `PUBLIC EXECUTE`, exact `AFTER DELETE` trigger
-wiring without a `WHEN` clause, and the cleanup owner's ability to bypass any
-row-level security enabled on the push-config table. Function-body checks
+`task-aware-push-config-v3` migration and rejects partial or stale installations.
+Validation covers all `SECURITY DEFINER` helper implementations and migration
+markers, their owners' required privileges, absence of `PUBLIC EXECUTE`, exact
+`BEFORE DELETE` advisory-lock and `AFTER DELETE` cleanup trigger wiring without a
+`WHEN` clause, and the cleanup owner's ability to bypass any row-level security
+enabled on the push-config table. Function-body checks
 preserve the exact case of quoted schema/table identifiers so a similarly named
 object in another case-sensitive schema cannot satisfy validation.
 
@@ -200,9 +217,8 @@ create/update. This example uses the `public` schema and an SDK database role
 named `a2a_sdk`; replace both names for your deployment. Grant the lock helper
 only to SDK roles authorized to create push notification configurations. The
 invoking push-store role needs task-table `SELECT` plus lock-helper `EXECUTE`,
-but it does not need task-table `UPDATE`;
-the helper's owner needs `UPDATE` because the `SECURITY DEFINER` function takes
-`FOR KEY SHARE`. Push-only roles paired with an external authoritative
+but it does not need task-table `UPDATE`; the helper's owner needs schema `USAGE`
+and task-table `SELECT`. Push-only roles paired with an external authoritative
 `TaskStore` do not need task-table access or lock-helper execution. PostgreSQL
 row-level security on the task table is allowed for external-authority/push-only
 use, but the local task-aware create path rejects it explicitly because a
@@ -222,6 +238,9 @@ ALTER TABLE public.a2a_push_notification_configs
 ALTER TABLE public.a2a_push_notification_configs
   DROP CONSTRAINT IF EXISTS a2a_push_configs_task_fk;
 
+DROP INDEX IF EXISTS public.idx_a2a_push_configs_task;
+DROP INDEX IF EXISTS public.idx_a2a_push_configs_created_sequence;
+
 CREATE OR REPLACE FUNCTION public.a2a_lock_task_for_push_config(requested_task_id TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -231,7 +250,18 @@ SET search_path = pg_catalog
 AS $a2a$
 DECLARE
   caller_role NAME;
+  lock_key BIGINT;
 BEGIN
+  IF pg_catalog.current_setting('transaction_isolation') IN ('repeatable read', 'serializable') THEN
+    RAISE EXCEPTION USING ERRCODE = '0A000', MESSAGE =
+      'PostgreSQL task-aware push configuration requires read-committed transaction isolation';
+  END IF;
+  lock_key := pg_catalog.hashtextextended(
+    requested_task_id,
+    pg_catalog.hashtextextended('public.a2a_tasks', 0));
+  IF NOT pg_catalog.pg_try_advisory_xact_lock_shared(lock_key) THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock_shared(lock_key);
+  END IF;
   caller_role := NULLIF(pg_catalog.current_setting('role', true), 'none');
   IF caller_role IS NULL THEN
     caller_role := session_user;
@@ -249,8 +279,7 @@ BEGIN
   END IF;
   PERFORM 1
   FROM public.a2a_tasks
-  WHERE id = requested_task_id
-  FOR KEY SHARE;
+  WHERE id = requested_task_id;
   RETURN FOUND;
 END
 $a2a$;
@@ -258,6 +287,30 @@ $a2a$;
 REVOKE ALL ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) FROM PUBLIC;
 GRANT SELECT ON public.a2a_tasks TO a2a_sdk;
 GRANT EXECUTE ON FUNCTION public.a2a_lock_task_for_push_config(TEXT) TO a2a_sdk;
+
+CREATE OR REPLACE FUNCTION public.a2a_lock_task_for_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $a2a$
+BEGIN
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      OLD.id,
+      pg_catalog.hashtextextended('public.a2a_tasks', 0)));
+  RETURN OLD;
+END
+$a2a$;
+
+REVOKE ALL ON FUNCTION public.a2a_lock_task_for_delete() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS a2a_lock_task_for_delete_trigger ON public.a2a_tasks;
+CREATE TRIGGER a2a_lock_task_for_delete_trigger
+BEFORE DELETE ON public.a2a_tasks
+FOR EACH ROW
+EXECUTE FUNCTION public.a2a_lock_task_for_delete();
 
 CREATE OR REPLACE FUNCTION public.a2a_delete_task_push_configs()
 RETURNS TRIGGER
@@ -280,11 +333,14 @@ AFTER DELETE ON public.a2a_tasks
 FOR EACH ROW
 EXECUTE FUNCTION public.a2a_delete_task_push_configs();
 
+COMMENT ON FUNCTION public.a2a_lock_task_for_delete()
+  IS 'task-aware-push-config-v3';
+
 COMMENT ON FUNCTION public.a2a_delete_task_push_configs()
-  IS 'task-aware-push-config-v2';
+  IS 'task-aware-push-config-v3';
 
 COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
-  IS 'task-aware-push-config-v2';
+  IS 'task-aware-push-config-v3';
 
 COMMIT;
 ```
@@ -292,11 +348,12 @@ COMMIT;
 The migration markers are written last inside the transaction, so a partial
 migration is never accepted. Existing push configurations are marked as
 externally owned by the new column's `FALSE` default. The owner of
-`a2a_lock_task_for_push_config(TEXT)` must have schema `USAGE` plus `SELECT` and
-`UPDATE` on `a2a_tasks`; the `UPDATE` privilege is needed by PostgreSQL for
-`FOR KEY SHARE`. The owner of `a2a_delete_task_push_configs()` must have schema
-`USAGE` plus `SELECT` and `DELETE` on the push-config table. These are SECURITY
-DEFINER owner requirements, not privileges that every push-store role must receive.
+`a2a_lock_task_for_push_config(TEXT)` must have schema `USAGE` plus `SELECT` on
+`a2a_tasks`. The owner of `a2a_lock_task_for_delete()` needs schema `USAGE`; it
+locks only the advisory key derived from `OLD.id`. The owner of
+`a2a_delete_task_push_configs()` must have schema `USAGE` plus `SELECT` and
+`DELETE` on the push-config table. These are SECURITY DEFINER owner requirements,
+not privileges that every push-store role must receive.
 
 ## Sensitive push notification data
 

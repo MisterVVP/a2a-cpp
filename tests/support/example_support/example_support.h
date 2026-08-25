@@ -121,11 +121,13 @@ class ExampleExecutor final : public server::AgentExecutor {
     std::lock_guard task_lock(TaskMutex(task_id));
 
     const bool supports_conditional_writes = task_store_->SupportsConditionalWrites();
+    const bool generated_task_id = request.message().task_id().empty();
     for (std::size_t attempt = 0; attempt < kConditionalWriteRetryLimit; ++attempt) {
       std::uint64_t expected_revision = 0;
       core::Result<lf::a2a::v1::Task> existing =
           core::protocol_errors::TaskNotFound(std::string(kExampleTaskNotFoundMessage));
-      if (supports_conditional_writes) {
+      const bool try_new_task_without_read = supports_conditional_writes && generated_task_id && attempt == 0U;
+      if (supports_conditional_writes && !try_new_task_without_read) {
         auto snapshot = task_store_->GetSnapshot(task_id);
         if (snapshot.ok()) {
           expected_revision = snapshot.value().revision;
@@ -133,15 +135,22 @@ class ExampleExecutor final : public server::AgentExecutor {
         } else {
           existing = snapshot.error();
         }
-      } else {
+      } else if (!supports_conditional_writes) {
         existing = task_store_->Get(task_id);
       }
       lf::a2a::v1::Task task;
       if (existing.ok()) {
+        const auto validated = lifecycle_.ValidateTaskForSendRequest(request, existing.value());
+        if (!validated.ok()) {
+          return validated.error();
+        }
         task = existing.value();
       } else {
         if (!IsTaskNotFoundError(existing.error())) {
           return existing.error();
+        }
+        if (!generated_task_id) {
+          return core::protocol_errors::TaskNotFound();
         }
       }
       task.set_id(task_id);

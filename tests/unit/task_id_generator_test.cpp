@@ -23,6 +23,7 @@ namespace {
 
 constexpr std::string_view kTaskPrefix = "task-";
 constexpr std::string_view kFirstMessageId = "m-1";
+constexpr std::string_view kDifferentSnapshotTaskId = "task-different-snapshot";
 constexpr std::string_view kUuidPatternText = R"(^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$)";
 constexpr std::size_t kTaskPrefixSize = 5;
 constexpr std::size_t kUuidVersionOffset = 14;
@@ -200,7 +201,7 @@ TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdPreservesExplicitTaskId) {
   EXPECT_EQ(result.value(), "task-existing");
 }
 
-TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdRejectsContextMismatchAndTerminalTask) {
+TEST(TaskIdGeneratorTest, LifecycleValidatesAuthoritativeTaskForSendRequest) {
   a2a::server::InMemoryTaskStore store;
   lf::a2a::v1::Task working;
   working.set_id("task-context");
@@ -220,13 +221,25 @@ TEST(TaskIdGeneratorTest, LifecycleResolveTaskIdRejectsContextMismatchAndTermina
   mismatch.mutable_message()->set_task_id("task-context");
   mismatch.mutable_message()->set_context_id("ctx-wrong");
   mismatch.mutable_message()->set_message_id("m-1");
-  EXPECT_FALSE(lifecycle.ResolveTaskIdForSendRequest(mismatch, context).ok());
+  const auto mismatch_id = lifecycle.ResolveTaskIdForSendRequest(mismatch, context);
+  ASSERT_TRUE(mismatch_id.ok());
+  EXPECT_FALSE(lifecycle.ValidateTaskForSendRequest(mismatch, working).ok());
+
+  auto different_snapshot = working;
+  different_snapshot.set_id(std::string(kDifferentSnapshotTaskId));
+  auto matching_context = mismatch;
+  matching_context.mutable_message()->set_context_id(working.context_id());
+  const auto different_snapshot_validation = lifecycle.ValidateTaskForSendRequest(matching_context, different_snapshot);
+  ASSERT_FALSE(different_snapshot_validation.ok());
+  EXPECT_EQ(different_snapshot_validation.error().code(), a2a::core::ErrorCode::kValidation);
 
   lf::a2a::v1::SendMessageRequest follow_up;
   follow_up.mutable_message()->set_task_id("task-terminal");
   follow_up.mutable_message()->set_context_id("ctx-t");
   follow_up.mutable_message()->set_message_id("m-2");
-  EXPECT_FALSE(lifecycle.ResolveTaskIdForSendRequest(follow_up, context).ok());
+  const auto terminal_id = lifecycle.ResolveTaskIdForSendRequest(follow_up, context);
+  ASSERT_TRUE(terminal_id.ok());
+  EXPECT_FALSE(lifecycle.ValidateTaskForSendRequest(follow_up, terminal).ok());
 }
 
 }  // namespace

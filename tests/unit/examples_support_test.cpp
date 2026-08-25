@@ -35,11 +35,20 @@ constexpr std::string_view kCrossExecutorTaskId = "cross-executor-task";
 constexpr std::string_view kCrossExecutorCreateMessageId = "cross-executor-create";
 constexpr std::string_view kCrossExecutorFirstMessageId = "cross-executor-first";
 constexpr std::string_view kCrossExecutorSecondMessageId = "cross-executor-second";
+constexpr std::string_view kCollisionContextId = "collision-context";
+constexpr std::string_view kSingleSnapshotFollowUpMessageId = "single-snapshot-follow-up";
+constexpr std::string_view kMissingFollowUpMessageId = "missing-follow-up";
+constexpr std::string_view kMissingFollowUpTaskId = "missing-task";
+constexpr std::string_view kMismatchedFollowUpMessageId = "mismatched-follow-up";
+constexpr std::string_view kMismatchedFollowUpContextId = "different-context";
 constexpr std::size_t kSingleHistoryEntry = 1U;
 constexpr std::size_t kDuplicateHistorySize = 2U;
 constexpr std::size_t kCrossExecutorHistorySize = 3U;
 constexpr int kSingleUpsertCallCount = 1;
 constexpr int kDuplicateTotalUpsertCount = 3;
+constexpr int kNoStoreCalls = 0;
+constexpr int kCollisionReadCount = 1;
+constexpr int kCollisionWriteCount = 2;
 constexpr std::string_view kCrossExecutorResultNotPopulated = "cross-executor result not populated";
 
 class FixedTaskIdGenerator final : public a2a::server::TaskIdGenerator {
@@ -207,6 +216,11 @@ class CountingTaskStore final : public a2a::server::TaskStore {
   [[nodiscard]] int upsert_calls() const noexcept { return upsert_calls_; }
   [[nodiscard]] int append_calls() const noexcept { return append_calls_; }
   [[nodiscard]] const lf::a2a::v1::Task& last_upsert() const noexcept { return last_upsert_; }
+  void ResetCounts() noexcept {
+    get_calls_ = 0;
+    upsert_calls_ = 0;
+    append_calls_ = 0;
+  }
 
  private:
   a2a::server::InMemoryTaskStore store_;
@@ -478,7 +492,7 @@ TEST(ExampleSupportTest, SendMessagePersistsCompleteTaskWithOneUpsert) {
   const auto result = executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(task_store.get_calls(), kSingleUpsertCallCount);
+  EXPECT_EQ(task_store.get_calls(), kNoStoreCalls);
   EXPECT_EQ(task_store.upsert_calls(), kSingleUpsertCallCount);
   EXPECT_EQ(task_store.append_calls(), 0);
   EXPECT_EQ(task_store.last_upsert().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
@@ -521,6 +535,65 @@ TEST(ExampleSupportTest, ConcurrentExecutorsRetryConflictsWithoutLockingHistoryA
   EXPECT_TRUE(TaskContainsMessage(result.stored_task.value(), kCrossExecutorFirstMessageId));
   EXPECT_TRUE(TaskContainsMessage(result.stored_task.value(), kCrossExecutorSecondMessageId));
   EXPECT_EQ(result.append_calls, 0);
+}
+
+TEST(ExampleSupportTest, GeneratedTaskCollisionFallsBackToSnapshotAndConditionalRetry) {
+  CountingTaskStore task_store;
+  lf::a2a::v1::Task existing;
+  existing.set_id(std::string(kSingleUpsertTaskId));
+  existing.set_context_id(std::string(kCollisionContextId));
+  existing.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+  ASSERT_TRUE(task_store.CreateOrUpdate(existing).ok());
+  task_store.ResetCounts();
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kSingleUpsertTaskId));
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+
+  const auto result = executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(task_store.get_calls(), kCollisionReadCount);
+  EXPECT_EQ(task_store.upsert_calls(), kCollisionWriteCount);
+  EXPECT_TRUE(TaskContainsMessage(result.value().task(), kSingleUpsertMessageId));
+}
+
+TEST(ExampleSupportTest, FollowUpValidationUsesSingleAuthoritativeSnapshot) {
+  CountingTaskStore task_store;
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kSingleUpsertTaskId));
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context).ok());
+  task_store.ResetCounts();
+  auto follow_up = MakeValidSendRequest(std::string(kSingleSnapshotFollowUpMessageId));
+  follow_up.mutable_message()->set_task_id(std::string(kSingleUpsertTaskId));
+
+  const auto result = executor.SendMessage(follow_up, context);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(task_store.get_calls(), kSingleUpsertCallCount);
+  EXPECT_EQ(task_store.upsert_calls(), kSingleUpsertCallCount);
+}
+
+TEST(ExampleSupportTest, FollowUpValidationRejectsMissingAndMismatchedTasks) {
+  CountingTaskStore task_store;
+  a2a::examples::ExampleExecutorOptions options;
+  options.task_store = &task_store;
+  options.task_id_generator = std::make_shared<FixedTaskIdGenerator>(std::string(kSingleUpsertTaskId));
+  a2a::examples::ExampleExecutor executor(std::move(options));
+  a2a::server::RequestContext context;
+  auto missing = MakeValidSendRequest(std::string(kMissingFollowUpMessageId));
+  missing.mutable_message()->set_task_id(std::string(kMissingFollowUpTaskId));
+  EXPECT_FALSE(executor.SendMessage(missing, context).ok());
+
+  ASSERT_TRUE(executor.SendMessage(MakeValidSendRequest(std::string(kSingleUpsertMessageId)), context).ok());
+  auto mismatch = MakeValidSendRequest(std::string(kMismatchedFollowUpMessageId));
+  mismatch.mutable_message()->set_task_id(std::string(kSingleUpsertTaskId));
+  mismatch.mutable_message()->set_context_id(std::string(kMismatchedFollowUpContextId));
+  EXPECT_FALSE(executor.SendMessage(mismatch, context).ok());
 }
 
 TEST(ExampleSupportTest, StreamingPropagatesInjectedStoreReadErrors) {
