@@ -185,7 +185,10 @@ else
 fi
 
 repo_root="$(pwd)"
+repo_root_mixed="$(to_mixed_path "$repo_root")"
+repo_git_url="file:///$repo_root_mixed"
 overlay_triplets="$(to_mixed_path "$repo_root/triplets")"
+installed_dir="$(to_mixed_path "$repo_root/vcpkg_installed")"
 
 ensure_vcpkg
 
@@ -247,11 +250,18 @@ for example in "${examples[@]}"; do
   example_build_dir="$BUILD_DIR/example-$example"
   cmake -S examples/fetch_content_consumer \
     -B "$example_build_dir" \
+    -G "$CMAKE_GENERATOR" \
+    -A x64 \
+    -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+    -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
+    -DVCPKG_HOST_TRIPLET="$HOST_TRIPLET" \
+    -DVCPKG_OVERLAY_TRIPLETS="$overlay_triplets" \
+    -DVCPKG_INSTALLED_DIR="$installed_dir" \
     -DA2A_EXAMPLE_APP="$example" \
-    -DA2A_CPP_GIT_REPOSITORY="file://$ROOT" \
+    -DA2A_CPP_GIT_REPOSITORY="$repo_git_url" \
     -DA2A_CPP_GIT_TAG=HEAD
   cmake --build "$example_build_dir" --config "$CONFIG" --parallel
-  "$example_build_dir/a2a_example"
+  "$example_build_dir/$CONFIG/a2a_example.exe"
 done
 
 log "Done"

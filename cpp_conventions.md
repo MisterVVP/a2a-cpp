@@ -7,6 +7,7 @@ This document defines repository-wide C++ implementation conventions for maintai
 - Favor value semantics and RAII for lifetime/resource ownership.
 - Keep interfaces explicit (`explicit`, `override`, const-correctness, `enum class`).
 - Keep functions focused and side-effect minimal.
+- Treat clang-tidy's `readability-function-cognitive-complexity` threshold of **25** as a hard limit for every function, including test bodies and test helpers; split logic before committing rather than suppressing the check.
 - Validate external inputs at boundaries and return structured errors.
 
 ## Performance-focused guidelines

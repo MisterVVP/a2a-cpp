@@ -186,6 +186,14 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("<summary>Show median aggregates</summary>", summary)
         self.assertIn("<summary>Show median PostgreSQL phases</summary>", summary)
 
+    def test_postgres_diagnostic_phases_distinguish_history_snapshot_from_lock_read(self):
+        runner = load_runner_module()
+
+        self.assertIn("task_history_snapshot", runner.POSTGRES_DIAGNOSTIC_PHASES)
+        self.assertIn("task_history_lock_read", runner.POSTGRES_DIAGNOSTIC_PHASES)
+        self.assertLess(runner.POSTGRES_DIAGNOSTIC_PHASES.index("task_history_snapshot"),
+                        runner.POSTGRES_DIAGNOSTIC_PHASES.index("task_history_lock_read"))
+
     @staticmethod
     def make_result(store, pool, path, transport, concurrency, throughput, p95):
         return {

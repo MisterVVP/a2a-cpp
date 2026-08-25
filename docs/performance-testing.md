@@ -193,8 +193,12 @@ MultiXact SLRU block activity. The local task-aware push path now coordinates
 create/delete with transaction-scoped advisory locks, so its MultiXact deltas
 should remain zero; non-zero activity points to other or legacy row-lock work.
 These server observations complement the per-operation
-`connection_acquire_wait`, `task_upsert`, and `push_config_upsert` phase
-latencies already emitted by the SDK driver.
+`connection_acquire_wait`, `task_upsert`, `task_history_snapshot`, and
+`push_config_upsert` phase latencies already emitted by the SDK driver.
+`task_history_snapshot` is the non-locking snapshot read used by optimistic
+history appends. `task_history_lock_read` remains a distinct legacy/locking
+phase so reports do not misattribute optimistic snapshot latency or retries to
+row-lock acquisition.
 
 ```bash
 A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
@@ -299,7 +303,7 @@ transport-level coverage. In-process rows use
 PostgreSQL result rows expose `postgres_phase_latency_ms`,
 `postgres_phase_call_count`, and `postgres_phase_calls_per_operation`. The phase
 names are stable: `connection_acquire_wait`, `task_get`, `task_upsert`,
-`task_history_lock_read`,
+`task_history_snapshot`, `task_history_lock_read`,
 `push_config_upsert`, `push_config_get`, `push_config_delete`,
 `push_config_list_count`, `push_config_list_select`, `transaction_begin`, and
 `transaction_commit`. A command phase counts one invocation per `PQexecParams`
