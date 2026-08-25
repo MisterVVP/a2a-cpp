@@ -3114,6 +3114,26 @@ void ConfigureConcurrentHistorySnapshotBarrier(a2a::server::stores::PostgresTask
   return count;
 }
 
+[[nodiscard]] lf::a2a::v1::Task GetConcurrentHistoryTaskOrFail(a2a::server::stores::PostgresTaskStore& store) {
+  const auto task = store.Get(kConcurrentHistoryTaskId);
+  EXPECT_TRUE(task.ok());
+  return task.ok() ? task.value() : lf::a2a::v1::Task{};
+}
+
+void ExpectConcurrentHistoryAppendResults(std::future<a2a::core::Result<lf::a2a::v1::Task>>& first_append,
+                                          std::future<a2a::core::Result<lf::a2a::v1::Task>>& second_append,
+                                          const std::atomic<std::size_t>& snapshot_count) {
+  EXPECT_TRUE(first_append.get().ok());
+  EXPECT_TRUE(second_append.get().ok());
+  EXPECT_GE(snapshot_count.load(std::memory_order_relaxed), kConcurrentHistoryMinimumSnapshotCountWithRetry);
+}
+
+void ExpectConcurrentHistoryStoredMessages(const lf::a2a::v1::Task& stored, const lf::a2a::v1::Task& before_append) {
+  EXPECT_EQ(stored.history_size(), before_append.history_size() + 2);
+  EXPECT_EQ(CountHistoryMessagesById(stored, kConcurrentHistoryFirstMessageId), kExpectedSingleHistoryMessageCount);
+  EXPECT_EQ(CountHistoryMessagesById(stored, kConcurrentHistorySecondMessageId), kExpectedSingleHistoryMessageCount);
+}
+
 void ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(const char* dsn_value) {
   const auto options = a2a::server::stores::PostgresStoreOptions{
       .connection_string = dsn_value, .schema = MakePostgresTestSchema(kConcurrentHistorySchemaSuffix)};
@@ -3121,8 +3141,7 @@ void ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(const char* dsn_
   a2a::server::stores::PostgresTaskStore second_store(options);
   AddPostgresTask(first_store, kConcurrentHistoryTaskId, kConcurrentHistoryContextId, lf::a2a::v1::TASK_STATE_WORKING,
                   kOldTargetTaskTimestampSeconds);
-  const auto before_append = first_store.Get(kConcurrentHistoryTaskId);
-  ASSERT_TRUE(before_append.ok());
+  const auto before_append = GetConcurrentHistoryTaskOrFail(first_store);
 
   std::barrier snapshots_ready(kConcurrentHistoryWriterCount);
   std::atomic<std::size_t> snapshot_count = 0U;
@@ -3131,17 +3150,10 @@ void ExpectConcurrentPostgresHistoryAppendsPreserveBothMessages(const char* dsn_
       std::async(std::launch::async, AppendConcurrentHistoryMessage, &first_store, kConcurrentHistoryFirstMessageId);
   auto second_append =
       std::async(std::launch::async, AppendConcurrentHistoryMessage, &second_store, kConcurrentHistorySecondMessageId);
-  ASSERT_TRUE(first_append.get().ok());
-  ASSERT_TRUE(second_append.get().ok());
-  EXPECT_GE(snapshot_count.load(std::memory_order_relaxed), kConcurrentHistoryMinimumSnapshotCountWithRetry);
+  ExpectConcurrentHistoryAppendResults(first_append, second_append, snapshot_count);
 
-  const auto stored = first_store.Get(kConcurrentHistoryTaskId);
-  ASSERT_TRUE(stored.ok());
-  EXPECT_EQ(stored.value().history_size(), before_append.value().history_size() + 2);
-  EXPECT_EQ(CountHistoryMessagesById(stored.value(), kConcurrentHistoryFirstMessageId),
-            kExpectedSingleHistoryMessageCount);
-  EXPECT_EQ(CountHistoryMessagesById(stored.value(), kConcurrentHistorySecondMessageId),
-            kExpectedSingleHistoryMessageCount);
+  const auto stored = GetConcurrentHistoryTaskOrFail(first_store);
+  ExpectConcurrentHistoryStoredMessages(stored, before_append);
 }
 
 TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages) {
