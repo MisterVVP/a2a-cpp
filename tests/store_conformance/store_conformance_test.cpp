@@ -49,6 +49,11 @@ constexpr int kOrderingIndexPresenceColumn = 1;
 constexpr auto kIndexPresenceSql = std::to_array("SELECT pg_catalog.to_regclass($1), pg_catalog.to_regclass($2)");
 constexpr std::string_view kInspectPushIndexesOperation = "inspect push indexes";
 constexpr std::string_view kPushIndexAmplificationSchemaSuffix = "push_index_amplification";
+constexpr std::string_view kHistoryDiagnosticSchemaSuffix = "history_write_diagnostic";
+constexpr std::string_view kHistoryDiagnosticTaskId = "history-diagnostic-task";
+constexpr std::string_view kHistoryDiagnosticContextId = "history-diagnostic-context";
+constexpr std::string_view kHistoryDiagnosticMessageId = "history-diagnostic-message";
+constexpr std::string_view kHistoryDiagnosticEntry = "entry";
 constexpr std::string_view kConcurrentHistorySchemaSuffix = "concurrent_history_append";
 constexpr std::string_view kConcurrentHistoryTaskId = "concurrent-history-task";
 constexpr std::string_view kConcurrentHistoryContextId = "concurrent-history-context";
@@ -3017,29 +3022,13 @@ TEST(StoreConformanceTest, PostgresTaskStorePropagatesAcquireFailures) {
   ExpectPostgresAcquireFailure(append.error());
 }
 
-TEST(StoreConformanceTest, PostgresAppendHistoryPreservesMetadataAndReportsWriteDiagnostics) {
-  const char* dsn_value = GetPostgresDsn();
-  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
-    GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";
-  }
-  const std::string schema = MakePostgresTestSchema("history_write_diagnostic");
-  a2a::server::stores::PostgresTaskStore store(
-      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
-  AddPostgresTask(store, "history-diagnostic-task", "history-diagnostic-context", lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-  const auto before_append = store.Get("history-diagnostic-task");
-  ASSERT_TRUE(before_append.ok());
-  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+void ExpectHistoryAppendMetadataPreserved(const lf::a2a::v1::Task& before_append, const lf::a2a::v1::Task& appended) {
+  ASSERT_EQ(appended.history_size(), before_append.history_size() + 1);
+  EXPECT_EQ(appended.context_id(), kHistoryDiagnosticContextId);
+  EXPECT_EQ(appended.status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+}
 
-  const auto append = store.AppendTaskHistory(
-      "history-diagnostic-task", a2a::tests::store_conformance::MakeMessage("history-diagnostic-message", "entry"),
-      a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
-
-  ASSERT_TRUE(append.ok());
-  ASSERT_EQ(append.value().history_size(), before_append.value().history_size() + 1);
-  EXPECT_EQ(append.value().context_id(), "history-diagnostic-context");
-  EXPECT_EQ(append.value().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
-  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+void ExpectHistoryAppendWriteDiagnostics(const a2a::server::stores::PostgresOperationDiagnostics& diagnostics) {
   EXPECT_EQ(
       diagnostics
           .call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskHistoryLockRead)],
@@ -3048,6 +3037,37 @@ TEST(StoreConformanceTest, PostgresAppendHistoryPreservesMetadataAndReportsWrite
             0U);
   EXPECT_EQ(diagnostics.call_count[static_cast<std::size_t>(a2a::server::stores::PostgresDiagnosticPhase::kTaskUpsert)],
             1U);
+}
+
+void ExpectHistoryAppendPreservesMetadataAndReportsWriteDiagnostics(a2a::server::stores::PostgresTaskStore& store) {
+  const auto before_append = store.Get(kHistoryDiagnosticTaskId);
+  ASSERT_TRUE(before_append.ok());
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+
+  const auto append =
+      store.AppendTaskHistory(kHistoryDiagnosticTaskId,
+                              a2a::tests::store_conformance::MakeMessage(std::string(kHistoryDiagnosticMessageId),
+                                                                         std::string(kHistoryDiagnosticEntry)),
+                              a2a::server::TaskStore::HistoryAppendPolicy::kNoDedup);
+  ASSERT_TRUE(append.ok());
+  ExpectHistoryAppendMetadataPreserved(before_append.value(), append.value());
+
+  const auto diagnostics = a2a::server::stores::TakePostgresOperationDiagnosticsForTesting();
+  ExpectHistoryAppendWriteDiagnostics(diagnostics);
+}
+
+TEST(StoreConformanceTest, PostgresAppendHistoryPreservesMetadataAndReportsWriteDiagnostics) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const std::string schema = MakePostgresTestSchema(kHistoryDiagnosticSchemaSuffix);
+  a2a::server::stores::PostgresTaskStore store(
+      a2a::server::stores::PostgresStoreOptions{.connection_string = dsn_value, .schema = schema});
+  AddPostgresTask(store, kHistoryDiagnosticTaskId, kHistoryDiagnosticContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+
+  ExpectHistoryAppendPreservesMetadataAndReportsWriteDiagnostics(store);
 }
 
 TEST(StoreConformanceTest, ConcurrentPostgresHistoryAppendsPreserveBothMessages) {
