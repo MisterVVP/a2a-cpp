@@ -2276,7 +2276,8 @@ struct RepeatableReadDeleteConflictOutcome final {
   if (created.ok()) {
     return RepeatableReadDeleteConflictOutcome{.create_succeeded = true, .error_message = {}};
   }
-  return RepeatableReadDeleteConflictOutcome{.create_succeeded = false, .error_message = created.error().message()};
+  return RepeatableReadDeleteConflictOutcome{.create_succeeded = false,
+                                             .error_message = std::string(created.error().message())};
 }
 
 void ExpectRepeatableReadDeleteConflictOutcome(const RepeatableReadDeleteConflictOutcome& outcome) {
