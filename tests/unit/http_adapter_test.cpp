@@ -37,6 +37,7 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
     }
     const std::size_t bytes_to_write = partial_write_limit_ == 0 ? size : std::min(size, partial_write_limit_);
     output_.append(buffer, bytes_to_write);
+    ++write_count_;
     return bytes_to_write;
   }
 
@@ -44,12 +45,14 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
   void set_write_zero_bytes(bool enabled) noexcept { write_zero_bytes_ = enabled; }
 
   [[nodiscard]] const std::string& output() const { return output_; }
+  [[nodiscard]] std::size_t write_count() const noexcept { return write_count_; }
 
  private:
   std::string input_;
   std::size_t read_offset_ = 0;
   std::size_t partial_write_limit_ = 0;
   bool write_zero_bytes_ = false;
+  std::size_t write_count_ = 0U;
   std::string output_;
 };
 
@@ -84,6 +87,7 @@ constexpr std::string_view kDifferentContentLength = "4";
 constexpr std::size_t kTinyReadBufferSize = 4U;
 constexpr std::size_t kTinyMaxRequestSize = 8U;
 constexpr std::size_t kPartialWriteLimit = 3;
+constexpr std::size_t kReusableStreamWriteCount = 3U;
 constexpr bool kEnableZeroByteWrites = true;
 constexpr int kHttpOk = 200;
 constexpr int kHttpUnknown = 599;
@@ -125,6 +129,34 @@ std::string BuildExpectedContentLengthLine() {
   line.append(a2a::core::http::kLineTerminator);
   return line;
 }
+
+class HeaderVisibilityWriter final {
+ public:
+  explicit HeaderVisibilityWriter(const BufferTransport& transport) : transport_(transport) {}
+
+  a2a::core::Result<void> operator()(a2a::server::HttpByteTransport& output) const {
+    (void)output;
+    EXPECT_NE(transport_.output().find(BuildExpectedStatusLine()), std::string::npos);
+    EXPECT_NE(transport_.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+    EXPECT_TRUE(transport_.output().ends_with(a2a::core::http::kLineTerminator));
+    return {};
+  }
+
+ private:
+  const BufferTransport& transport_;
+};
+
+class SseChunkWriter final {
+ public:
+  a2a::core::Result<void> operator()(a2a::server::HttpByteTransport& output) const {
+    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
+    if (!written.ok()) {
+      return written.error();
+    }
+    return written.value() == kSseChunk.size() ? a2a::core::Result<void>{}
+                                               : a2a::core::Error::Internal("short SSE test write");
+  }
+};
 
 std::string BuildRequestWithVersion(std::string_view method, std::string_view target, std::string_view version) {
   std::string request;
@@ -485,18 +517,10 @@ TEST(HttpAdapterTest, WriteResponseStreamsBodyWithoutContentLength) {
 
 TEST(HttpAdapterTest, WriteResponseFramesReusableStreamWithChunkedEncoding) {
   BufferTransport transport("");
-  transport.set_partial_write_limit(kPartialWriteLimit);
   a2a::server::HttpServerResponse response;
   response.status_code = kHttpOk;
   response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] = "text/event-stream";
-  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
-    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
-    if (!written.ok()) {
-      return written.error();
-    }
-    return written.value() == kSseChunk.size() ? a2a::core::Result<void>{}
-                                               : a2a::core::Error::Internal("short SSE test write");
-  };
+  response.stream_writer = SseChunkWriter{};
 
   const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
 
@@ -511,6 +535,19 @@ TEST(HttpAdapterTest, WriteResponseFramesReusableStreamWithChunkedEncoding) {
   expected_chunk.append(a2a::core::http::kLineTerminator);
   expected_chunk.append(kFinalChunk);
   EXPECT_TRUE(transport.output().ends_with(expected_chunk));
+  EXPECT_EQ(transport.write_count(), kReusableStreamWriteCount);
+}
+
+TEST(HttpAdapterTest, WritesReusableStreamHeadersBeforeInvokingWriter) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = HeaderVisibilityWriter(transport);
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_TRUE(transport.output().ends_with(kFinalChunk));
 }
 
 TEST(HttpAdapterTest, ExplicitCloseStreamingResponseRemainsCloseDelimited) {

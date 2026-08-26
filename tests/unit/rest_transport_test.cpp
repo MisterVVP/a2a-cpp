@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/http_constants.h"
 #include "a2a/server/http_adapter.h"
@@ -111,6 +112,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
       const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)request;
     (void)context;
+    if (streaming_session != nullptr) {
+      return std::move(streaming_session);
+    }
     return a2a::core::Error::Validation("not implemented");
   }
 
@@ -170,6 +174,53 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   std::size_t observed_page_size = 0;
   std::string observed_page_token;
   std::shared_ptr<std::atomic_bool> heartbeat_cancellation;
+  std::unique_ptr<a2a::server::ServerStreamSession> streaming_session;
+};
+
+class OrderedFiniteSession final : public a2a::server::ServerStreamSession {
+ public:
+  OrderedFiniteSession(std::vector<std::string> task_ids, std::shared_ptr<std::size_t> writes, bool fail_at_end)
+      : task_ids_(std::move(task_ids)), writes_(std::move(writes)), fail_at_end_(fail_at_end) {}
+
+  [[nodiscard]] a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    if (next_index_ > 0U && *writes_ < next_index_) {
+      return a2a::core::Error::Internal("next event requested before previous event was written");
+    }
+    if (next_index_ == task_ids_.size()) {
+      return fail_at_end_ ? a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>>(
+                                a2a::core::Error::Internal("finite producer failed"))
+                          : a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>>(
+                                std::optional<lf::a2a::v1::StreamResponse>{});
+    }
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_task()->set_id(task_ids_[next_index_++]);
+    return std::optional<lf::a2a::v1::StreamResponse>{std::move(event)};
+  }
+
+ private:
+  std::vector<std::string> task_ids_;
+  std::shared_ptr<std::size_t> writes_;
+  bool fail_at_end_;
+  std::size_t next_index_ = 0U;
+};
+
+class CountingHttpTransport final : public a2a::server::HttpByteTransport {
+ public:
+  explicit CountingHttpTransport(std::shared_ptr<std::size_t> writes) : writes_(std::move(writes)) {}
+  a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+    (void)buffer;
+    (void)size;
+    return a2a::core::Error::Internal("read is not used by this test transport");
+  }
+  a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    body.append(buffer, size);
+    ++*writes_;
+    return size;
+  }
+  std::string body;
+
+ private:
+  std::shared_ptr<std::size_t> writes_;
 };
 
 TEST(RestTransportTest, ExposesCentralRouteTable) {
@@ -188,6 +239,56 @@ TEST(RestTransportTest, ExposesCentralRouteTable) {
   EXPECT_EQ(routes[6].path_pattern, "/tasks/{id}:subscribe");
   EXPECT_EQ(routes[7].path_pattern, "/tasks/{task_id}/pushNotificationConfigs");
   EXPECT_EQ(routes[8].path_pattern, "/tasks/{task_id}/pushNotificationConfigs/{id}");
+}
+
+TEST(RestTransportTest, FiniteStreamWritesEachEventBeforeRequestingNext) {
+  auto writes = std::make_shared<std::size_t>(0U);
+  FakeExecutor executor;
+  executor.streaming_session =
+      std::make_unique<OrderedFiniteSession>(std::vector<std::string>{"first-task", "second-task"}, writes, false);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+  a2a::server::RestRequest request;
+  request.method = a2a::core::http::kMethodPost;
+  request.path = a2a::server::RestEndpointPaths::kSendStreamingMessage;
+  request.headers[std::string(kContentTypeHeaderName)] = std::string(a2a::core::http::kContentTypeApplicationJson);
+  request.body = R"({"message":{"role":"ROLE_USER","taskId":"request-task"}})";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  EXPECT_TRUE(response.value().body.empty());
+  ASSERT_TRUE(response.value().stream_writer);
+  CountingHttpTransport output(writes);
+  const auto streamed = response.value().stream_writer(output);
+
+  ASSERT_TRUE(streamed.ok()) << streamed.error().message();
+  const auto first = output.body.find("first-task");
+  const auto second = output.body.find("second-task");
+  ASSERT_NE(first, std::string::npos);
+  ASSERT_NE(second, std::string::npos);
+  EXPECT_LT(first, second);
+}
+
+TEST(RestTransportTest, FiniteStreamPropagatesProducerFailure) {
+  auto writes = std::make_shared<std::size_t>(0U);
+  FakeExecutor executor;
+  executor.streaming_session =
+      std::make_unique<OrderedFiniteSession>(std::vector<std::string>{"only-task"}, writes, true);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+  a2a::server::RestRequest request;
+  request.method = a2a::core::http::kMethodPost;
+  request.path = a2a::server::RestEndpointPaths::kSendStreamingMessage;
+  request.headers[std::string(kContentTypeHeaderName)] = std::string(a2a::core::http::kContentTypeApplicationJson);
+  request.body = R"({"message":{"role":"ROLE_USER","taskId":"request-task"}})";
+
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok()) << response.error().message();
+  CountingHttpTransport output(writes);
+  const auto streamed = response.value().stream_writer(output);
+
+  ASSERT_FALSE(streamed.ok());
+  EXPECT_NE(output.body.find("only-task"), std::string::npos);
 }
 
 void ExpectUnsupportedContentType(std::string_view path, std::string_view body) {

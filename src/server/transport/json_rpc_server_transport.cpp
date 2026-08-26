@@ -838,17 +838,27 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
   return next.error();
 }
 
-core::Result<void> BufferJsonRpcSseEvents(const google::protobuf::Value& id, ServerStreamSession& session,
-                                          std::string& body) {
-  auto next = session.Next();
-  for (; next.ok(); next = session.Next()) {
+core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& id,
+                                                const std::shared_ptr<std::unique_ptr<ServerStreamSession>>& session,
+                                                HttpByteTransport& transport) {
+  if (*session == nullptr) {
+    return core::Error::Internal("JSON-RPC streaming session is missing");
+  }
+  auto next = (*session)->Next();
+  for (; next.ok(); next = (*session)->Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
       return {};
     }
-    const auto append = AppendSseJsonRpcEvent(body, id, event.value());
+    std::string chunk;
+    const auto append = AppendSseJsonRpcEvent(chunk, id, event.value());
     if (!append.ok()) {
       return append.error();
+    }
+    const auto written = WriteSseChunk(transport, chunk);
+    if (!written.ok()) {
+      (*session)->Cancel();
+      return written.error();
     }
   }
   return next.error();
@@ -875,10 +885,10 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
     return response;
   }
 
-  const auto buffered = BufferJsonRpcSseEvents(id, *session, response.body);
-  if (!buffered.ok()) {
-    return buffered.error();
-  }
+  auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
+  response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
+    return StreamFiniteJsonRpcSseEvents(id, session_holder, transport);
+  };
   return response;
 }
 

@@ -325,19 +325,30 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
       std::string(core::http::kContentTypeTextEventStream);
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
 
-  auto next = session->Next();
-  for (; next.ok(); next = session->Next()) {
-    const auto& event = next.value();
-    if (!event.has_value()) {
-      return response;
+  response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
+                               HttpByteTransport& transport) -> core::Result<void> {
+    if (*session == nullptr) {
+      return core::Error::Internal("Streaming response session is missing");
     }
-    const auto append = AppendSseEvent(response, event.value());
-    if (!append.ok()) {
-      return append.error();
+    auto next = (*session)->Next();
+    for (; next.ok(); next = (*session)->Next()) {
+      if (!next.value().has_value()) {
+        return {};
+      }
+      RestResponse chunk;
+      const auto append = AppendSseEvent(chunk, next.value().value());
+      if (!append.ok()) {
+        return append.error();
+      }
+      const auto written = WriteSseChunk(transport, chunk.body);
+      if (!written.ok()) {
+        (*session)->Cancel();
+        return written.error();
+      }
     }
-  }
-
-  return next.error();
+    return next.error();
+  };
+  return response;
 }
 
 core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {

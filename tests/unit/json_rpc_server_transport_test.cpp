@@ -703,7 +703,13 @@ TEST(JsonRpcServerTransportTest, SupportsStreamingMethodWithSseResponse) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
-  EXPECT_NE(response.value().body.find("task-stream"), std::string::npos);
+  EXPECT_TRUE(response.value().body.empty());
+  ASSERT_TRUE(response.value().stream_writer);
+  RecordingHttpTransport output;
+  const auto write = response.value().stream_writer(output);
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(output.body.find("task-stream"), std::string::npos);
+  EXPECT_NE(output.body.find(R"("id":"req-stream")"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTask) {
