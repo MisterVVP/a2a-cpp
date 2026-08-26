@@ -234,6 +234,43 @@ core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, 
   return message;
 }
 
+template <typename T>
+core::Result<T> ParseTypedResultPayload(std::string_view response_body, int response_status_code,
+                                        std::string_view expected_id) {
+  const auto range = core::json::FindTopLevelObjectMemberValue(response_body, core::json_rpc::kResultMemberName);
+  if (!range.has_value()) {
+    const HttpClientResponse response{
+        .status_code = response_status_code, .headers = {}, .body = std::string(response_body)};
+    const auto result = ParseResponseResult(response, expected_id);
+    if (!result.ok()) {
+      return result.error();
+    }
+    return ParseResultMessage<T>(result.value(), response_status_code);
+  }
+
+  const std::string_view prefix = response_body.substr(0, range->begin);
+  const std::string_view suffix = response_body.substr(range->end);
+  std::string validation_body;
+  validation_body.reserve(prefix.size() + kEmptyJsonObject.size() + suffix.size());
+  validation_body.append(prefix);
+  validation_body.append(kEmptyJsonObject);
+  validation_body.append(suffix);
+  const HttpClientResponse validation_response{
+      .status_code = response_status_code, .headers = {}, .body = std::move(validation_body)};
+  const auto validated = ParseResponseResult(validation_response, expected_id);
+  if (!validated.ok()) {
+    return validated.error();
+  }
+
+  T message;
+  const std::string_view result_json = response_body.substr(range->begin, range->end - range->begin);
+  const auto parsed = core::JsonToMessage(result_json, &message);
+  if (!parsed.ok()) {
+    return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response_status_code);
+  }
+  return message;
+}
+
 bool HasSseContentType(const HeaderMap& headers) {
   const auto content_type = core::http::FindHeaderValue(headers, core::http::kContentTypeHeaderName);
   return content_type.has_value() && core::http::IsSseContentType(content_type.value());
@@ -308,13 +345,8 @@ core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, con
 
 core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_view request_id,
                                            const HttpClientResponse& response, StreamObserver& observer) {
-  const HttpClientResponse event_response{
-      .status_code = response.status_code, .headers = response.headers, .body = event.data};
-  const auto result = ParseResponseResult(event_response, request_id);
-  if (!result.ok()) {
-    return result.error();
-  }
-  const auto parsed = ParseResultMessage<lf::a2a::v1::StreamResponse>(result.value(), response.status_code);
+  const auto parsed =
+      ParseTypedResultPayload<lf::a2a::v1::StreamResponse>(event.data, response.status_code, request_id);
   if (!parsed.ok()) {
     return parsed.error();
   }

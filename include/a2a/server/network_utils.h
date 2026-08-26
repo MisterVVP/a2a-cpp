@@ -21,5 +21,6 @@ void CloseSocketCrossPlatform(int fd) noexcept;
 [[nodiscard]] a2a::core::Result<HostPortEndpoint> ParseHostPortEndpoint(std::string_view endpoint,
                                                                         int max_port = 65535);
 [[nodiscard]] bool SetSocketNonBlocking(int fd) noexcept;
+[[nodiscard]] bool SetSocketNoDelay(int fd) noexcept;
 
 }  // namespace a2a::server

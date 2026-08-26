@@ -33,6 +33,20 @@ struct ClientGlobalState final {
   CURLcode code = CURLE_OK;
 };
 
+struct StreamSlot final {
+  ~StreamSlot() {
+    if (multi_handle != nullptr) {
+      curl_multi_cleanup(multi_handle);
+    }
+    if (easy_handle != nullptr) {
+      curl_easy_cleanup(easy_handle);
+    }
+  }
+
+  CURL* easy_handle = nullptr;
+  CURLM* multi_handle = nullptr;
+};
+
 struct ClientState final {
   ~ClientState() {
     if (handle != nullptr) {
@@ -43,6 +57,8 @@ struct ClientState final {
   std::shared_ptr<const ClientGlobalState> global_state;
   CURL* handle = nullptr;
   std::mutex mutex;
+  std::mutex stream_mutex;
+  std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
 };
 }  // namespace detail
 
@@ -68,6 +84,7 @@ constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
 constexpr int kStreamPollTimeoutMs = 100;
+constexpr std::size_t kMaxIdleStreamSlots = 64U;
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   static const auto init = std::make_shared<detail::ClientGlobalState>();
@@ -83,26 +100,6 @@ struct CurlSlistDeleter final {
 };
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
-
-struct CurlEasyDeleter final {
-  void operator()(CURL* handle) const noexcept {
-    if (handle != nullptr) {
-      curl_easy_cleanup(handle);
-    }
-  }
-};
-
-using CurlEasyHandle = std::unique_ptr<CURL, CurlEasyDeleter>;
-
-struct CurlMultiDeleter final {
-  void operator()(CURLM* handle) const noexcept {
-    if (handle != nullptr) {
-      curl_multi_cleanup(handle);
-    }
-  }
-};
-
-using CurlMultiHandle = std::unique_ptr<CURLM, CurlMultiDeleter>;
 
 class CurlMultiAttachment final {
  public:
@@ -423,38 +420,59 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
   return {};
 }
 
-core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, const std::function<bool()>& is_cancelled) {
+core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::ClientState& state) {
+  {
+    std::lock_guard lock(state.stream_mutex);
+    if (!state.idle_stream_slots.empty()) {
+      auto slot = std::move(state.idle_stream_slots.back());
+      state.idle_stream_slots.pop_back();
+      return slot;
+    }
+  }
+  auto slot = std::make_unique<detail::StreamSlot>();
+  slot->easy_handle = curl_easy_init();
+  slot->multi_handle = curl_multi_init();
+  if (slot->easy_handle == nullptr || slot->multi_handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  }
+  return slot;
+}
+
+void ReleaseStreamSlot(detail::ClientState& state, std::unique_ptr<detail::StreamSlot> slot) {
+  std::lock_guard lock(state.stream_mutex);
+  if (state.idle_stream_slots.size() < kMaxIdleStreamSlots) {
+    state.idle_stream_slots.push_back(std::move(slot));
+  }
+}
+
+core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, CURLM* multi_handle,
+                                                const std::function<bool()>& is_cancelled) {
   if (is_cancelled()) {
     return CURLE_ABORTED_BY_CALLBACK;
   }
 
-  CurlMultiHandle multi_handle(curl_multi_init());
-  if (multi_handle == nullptr) {
-    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
-  }
-
-  const CURLMcode add_code = curl_multi_add_handle(multi_handle.get(), easy_handle);
+  const CURLMcode add_code = curl_multi_add_handle(multi_handle, easy_handle);
   if (add_code != CURLM_OK) {
     return core::Error::Internal(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, add_code));
   }
-  [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle.get(), easy_handle);
+  [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle, easy_handle);
 
   int running_handles = 0;
-  CURLMcode multi_code = curl_multi_perform(multi_handle.get(), &running_handles);
+  CURLMcode multi_code = curl_multi_perform(multi_handle, &running_handles);
   while (multi_code == CURLM_OK && running_handles > 0) {
     if (is_cancelled()) {
       return CURLE_ABORTED_BY_CALLBACK;
     }
 
     int ready_descriptors = 0;
-    multi_code = curl_multi_poll(multi_handle.get(), nullptr, 0, kStreamPollTimeoutMs, &ready_descriptors);
+    multi_code = curl_multi_poll(multi_handle, nullptr, 0, kStreamPollTimeoutMs, &ready_descriptors);
     if (multi_code != CURLM_OK) {
       break;
     }
     if (is_cancelled()) {
       return CURLE_ABORTED_BY_CALLBACK;
     }
-    multi_code = curl_multi_perform(multi_handle.get(), &running_handles);
+    multi_code = curl_multi_perform(multi_handle, &running_handles);
   }
 
   if (multi_code != CURLM_OK) {
@@ -462,7 +480,7 @@ core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, const std::fu
   }
 
   int pending_messages = 0;
-  while (CURLMsg* message = curl_multi_info_read(multi_handle.get(), &pending_messages)) {
+  while (CURLMsg* message = curl_multi_info_read(multi_handle, &pending_messages)) {
     if (message->msg == CURLMSG_DONE && message->easy_handle == easy_handle) {
       return message->data.result;
     }
@@ -542,11 +560,13 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (!headers.ok()) {
     return headers.error();
   }
-  CurlEasyHandle stream_handle(curl_easy_init());
-  if (stream_handle == nullptr) {
-    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  auto acquired_slot = AcquireStreamSlot(*state_);
+  if (!acquired_slot.ok()) {
+    return acquired_slot.error();
   }
-  CURL* const handle = stream_handle.get();
+  auto stream_slot = std::move(acquired_slot.value());
+  CURL* const handle = stream_slot->easy_handle;
+  curl_easy_reset(handle);
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
   const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
   if (set_error_buffer != CURLE_OK) {
@@ -570,7 +590,7 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (set_stream_header != CURLE_OK || set_stream_header_data != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
-  const auto performed = PerformStreamingTransfer(handle, is_cancelled);
+  const auto performed = PerformStreamingTransfer(handle, stream_slot->multi_handle, is_cancelled);
   if (!performed.ok()) {
     return performed.error();
   }
@@ -599,6 +619,7 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (response_code == kHttpResponseCodeUnset) {
     return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
   }
+  ReleaseStreamSlot(*state_, std::move(stream_slot));
   return Response{.status_code = static_cast<int>(response_code), .headers = std::move(response_headers), .body = {}};
 }
 

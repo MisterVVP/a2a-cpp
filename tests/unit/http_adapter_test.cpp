@@ -70,6 +70,9 @@ constexpr std::string_view kTestHeaderName = "X-Test";
 constexpr std::string_view kTrueHeaderValue = "true";
 constexpr std::string_view kConnectionHeaderValueWithClose = "keep-alive, close";
 constexpr std::string_view kConnectionCloseHeaderLine = "Connection: close";
+constexpr std::string_view kTransferEncodingChunkedHeaderLine = "Transfer-Encoding: chunked\r\n";
+constexpr std::string_view kFinalChunk = "0\r\n\r\n";
+constexpr std::string_view kSseChunkSizeHex = "a";
 constexpr std::string_view kJsonContentType = "application/json";
 constexpr std::string_view kStatusOkSuffix = " 200 OK";
 constexpr std::string_view kHttp10Version = "HTTP/1.0";
@@ -385,6 +388,14 @@ TEST(HttpAdapterTest, ShouldCloseConnectionHonorsResponseCloseHeader) {
   EXPECT_TRUE(a2a::server::HttpAdapter::ShouldCloseConnection(request, response));
 }
 
+TEST(HttpAdapterTest, ReusableStreamingResponseDoesNotCloseConnection) {
+  a2a::server::HttpServerRequest request;
+  a2a::server::HttpServerResponse response;
+  response.stream_writer = [](a2a::server::HttpByteTransport&) -> a2a::core::Result<void> { return {}; };
+
+  EXPECT_FALSE(a2a::server::HttpAdapter::ShouldCloseConnection(request, response));
+}
+
 TEST(HttpAdapterTest, WriteResponseOverridesKeepAliveWhenConnectionMustClose) {
   BufferTransport transport("");
   a2a::server::HttpServerResponse response;
@@ -470,6 +481,85 @@ TEST(HttpAdapterTest, WriteResponseStreamsBodyWithoutContentLength) {
   EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
   EXPECT_EQ(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
   EXPECT_NE(transport.output().find(std::string(kSseChunk)), std::string::npos);
+}
+
+TEST(HttpAdapterTest, WriteResponseFramesReusableStreamWithChunkedEncoding) {
+  BufferTransport transport("");
+  transport.set_partial_write_limit(kPartialWriteLimit);
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] = "text/event-stream";
+  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
+    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
+    if (!written.ok()) {
+      return written.error();
+    }
+    return written.value() == kSseChunk.size() ? a2a::core::Result<void>{}
+                                               : a2a::core::Error::Internal("short SSE test write");
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(transport.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+  EXPECT_EQ(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
+  EXPECT_EQ(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
+  std::string expected_chunk;
+  expected_chunk.append(kSseChunkSizeHex);
+  expected_chunk.append(a2a::core::http::kLineTerminator);
+  expected_chunk.append(kSseChunk);
+  expected_chunk.append(a2a::core::http::kLineTerminator);
+  expected_chunk.append(kFinalChunk);
+  EXPECT_TRUE(transport.output().ends_with(expected_chunk));
+}
+
+TEST(HttpAdapterTest, ExplicitCloseStreamingResponseRemainsCloseDelimited) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
+    return output.Write(kSseChunk.data(), kSseChunk.size()).ok() ? a2a::core::Result<void>{}
+                                                                 : a2a::core::Error::Internal("SSE write failed");
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, true);
+
+  ASSERT_TRUE(write.ok());
+  EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
+  EXPECT_EQ(transport.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+  EXPECT_TRUE(transport.output().ends_with(kSseChunk));
+}
+
+TEST(HttpAdapterTest, StreamWriterFailureDoesNotWriteSuccessfulFinalChunk) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
+    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
+    if (!written.ok()) {
+      return written.error();
+    }
+    return a2a::core::Error::Internal("stream failed after event");
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_FALSE(write.ok());
+  EXPECT_FALSE(transport.output().ends_with(kFinalChunk));
+}
+
+TEST(HttpAdapterTest, StreamingResponseRejectsCallerTransferEncoding) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers[std::string(a2a::core::http::kTransferEncodingHeaderName)] =
+      std::string(a2a::core::http::kTransferEncodingChunked);
+  response.stream_writer = [](a2a::server::HttpByteTransport&) -> a2a::core::Result<void> { return {}; };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_FALSE(write.ok());
+  EXPECT_EQ(write.error().code(), a2a::core::ErrorCode::kValidation);
 }
 
 TEST(HttpAdapterTest, WriteResponseRejectsZeroByteWrites) {
