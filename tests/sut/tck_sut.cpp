@@ -127,7 +127,7 @@ void SignalHandler(int signal_number) {
 
 class SocketTransport final : public a2a::server::HttpByteTransport {
  public:
-  explicit SocketTransport(int fd) : fd_(fd) {}
+  explicit SocketTransport(int fd) : fd_(fd) { (void)a2a::server::SetSocketNoDelay(fd_); }
 
   a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
     const auto bytes = ::recv(fd_, buffer, size, 0);

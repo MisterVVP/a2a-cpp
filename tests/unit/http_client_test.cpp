@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -206,6 +207,90 @@ class LoopbackHttpServer final : private a2a::core::NonCopyable {
   std::condition_variable cv_;
   std::string request_;
   bool request_observed_ = false;
+  std::thread worker_;
+};
+
+class PersistentSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  PersistentSseLoopbackServer() {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = 1;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, 1), 0);
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+    worker_ = std::thread([this] { ServeTwoStreams(); });
+  }
+
+  ~PersistentSseLoopbackServer() {
+    if (fd_ != kSocketError) {
+      (void)::shutdown(fd_, SHUT_RDWR);
+    }
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    if (fd_ != kSocketError) {
+      ::close(fd_);
+    }
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+  [[nodiscard]] int accepted_connections() const noexcept { return accepted_connections_.load(); }
+
+ private:
+  static bool ReadRequest(int client) {
+    std::string request;
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    while (request.find(a2a::core::http::kHeaderDelimiter) == std::string::npos) {
+      const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
+      if (received <= 0) {
+        return false;
+      }
+      request.append(buffer.data(), static_cast<std::size_t>(received));
+    }
+    return true;
+  }
+
+  static std::string BuildChunkedResponse(std::string_view event) {
+    std::array<char, (sizeof(std::size_t) * 2U) + 1U> size_buffer{};
+    const auto converted = std::to_chars(size_buffer.data(), size_buffer.data() + size_buffer.size(), event.size(), 16);
+    std::string response =
+        "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+    response.append(size_buffer.data(), static_cast<std::size_t>(converted.ptr - size_buffer.data()));
+    response.append(a2a::core::http::kLineTerminator);
+    response.append(event);
+    response.append(a2a::core::http::kLineTerminator);
+    response.append("0\r\n\r\n");
+    return response;
+  }
+
+  void ServeTwoStreams() {
+    const int client = ::accept(fd_, nullptr, nullptr);
+    if (client == kSocketError) {
+      return;
+    }
+    accepted_connections_.fetch_add(1);
+    for (const std::string_view event : {kFirstSseChunk, kSecondSseChunk}) {
+      if (!ReadRequest(client)) {
+        break;
+      }
+      const std::string response = BuildChunkedResponse(event);
+      (void)::send(client, response.data(), response.size(), 0);
+    }
+    ::close(client);
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  std::atomic_int accepted_connections_{0};
   std::thread worker_;
 };
 
@@ -799,6 +884,27 @@ TEST(SharedHttpClientTest, EmptyStreamStillDeliversMetadata) {
   ExpectSuccessfulEmptyStreamResponse(response);
   ExpectEmptyStreamCallbacks(capture);
   ExpectBodylessGetStreamRequest(captured_request);
+}
+
+TEST(SharedHttpClientTest, SequentialFiniteStreamsReuseOneConnection) {
+  PersistentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture first_capture;
+  StreamRequestCapture second_capture;
+  const auto first = ExecuteCapturedStreamRequest(client, request, first_capture);
+  const auto second = ExecuteCapturedStreamRequest(client, request, second_capture);
+
+  ASSERT_TRUE(first.ok()) << first.error().message();
+  ASSERT_TRUE(second.ok()) << second.error().message();
+  EXPECT_NE(first_capture.chunks.find(kFirstSseChunk), std::string::npos);
+  EXPECT_NE(second_capture.chunks.find(kSecondSseChunk), std::string::npos);
+  EXPECT_EQ(server.accepted_connections(), 1);
 }
 
 TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {

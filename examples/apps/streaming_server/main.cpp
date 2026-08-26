@@ -102,7 +102,11 @@ void PrintUsage(std::string_view program_name) {
 
 class SocketTransport final : public a2a::server::HttpByteTransport {
  public:
-  explicit SocketTransport(SocketHandle socket) : socket_(socket) {}
+  explicit SocketTransport(SocketHandle socket) : socket_(socket) {
+#ifndef _WIN32
+    (void)a2a::server::SetSocketNoDelay(static_cast<int>(socket_));
+#endif
+  }
 
   a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
     const auto bytes = ::recv(socket_, buffer, static_cast<int>(size), 0);
