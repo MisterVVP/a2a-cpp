@@ -207,7 +207,9 @@ class OrderedFiniteSession final : public a2a::server::ServerStreamSession {
 class CountingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
   explicit CountingHttpTransport(std::shared_ptr<std::size_t> writes) : writes_(std::move(writes)) {}
-  a2a::core::Result<std::size_t> Read(char*, std::size_t) override {
+  a2a::core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+    (void)buffer;
+    (void)size;
     return a2a::core::Error::Internal("read is not used by this test transport");
   }
   a2a::core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {

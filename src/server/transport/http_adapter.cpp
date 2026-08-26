@@ -219,7 +219,9 @@ core::Result<void> WriteAll(HttpByteTransport& transport, std::string_view paylo
 
 class ChunkedByteTransport final : public HttpByteTransport {
  public:
-  explicit ChunkedByteTransport(HttpByteTransport& transport) : transport_(transport) {}
+  explicit ChunkedByteTransport(HttpByteTransport& transport) : transport_(transport) {
+    scratch_.reserve(kChunkSizeBufferBytes + (core::http::kLineTerminator.size() * 2U));
+  }
 
   core::Result<std::size_t> Read(char* buffer, std::size_t size) override { return transport_.Read(buffer, size); }
 
@@ -233,20 +235,15 @@ class ChunkedByteTransport final : public HttpByteTransport {
       return core::Error::Internal("Failed to encode HTTP chunk size");
     }
     const auto size_length = static_cast<std::size_t>(converted.ptr - chunk_size.data());
-    std::array<char, kChunkSizeBufferBytes + core::http::kLineTerminator.size()> prefix{};
-    std::copy_n(chunk_size.data(), size_length, prefix.data());
-    std::copy(core::http::kLineTerminator.begin(), core::http::kLineTerminator.end(), prefix.data() + size_length);
-    const auto prefix_written = WriteAll(transport_, std::string_view(prefix.data(), size_length + 2U));
-    if (!prefix_written.ok()) {
-      return prefix_written.error();
-    }
-    const auto payload_written = WriteAll(transport_, std::string_view(buffer, size));
-    if (!payload_written.ok()) {
-      return payload_written.error();
-    }
-    const auto terminator_written = WriteAll(transport_, core::http::kLineTerminator);
-    if (!terminator_written.ok()) {
-      return terminator_written.error();
+    scratch_.clear();
+    scratch_.reserve(size_length + size + (core::http::kLineTerminator.size() * 2U));
+    scratch_.append(chunk_size.data(), size_length);
+    scratch_.append(core::http::kLineTerminator);
+    scratch_.append(buffer, size);
+    scratch_.append(core::http::kLineTerminator);
+    const auto chunk_written = WriteAll(transport_, scratch_);
+    if (!chunk_written.ok()) {
+      return chunk_written.error();
     }
     return size;
   }
@@ -255,6 +252,7 @@ class ChunkedByteTransport final : public HttpByteTransport {
 
  private:
   HttpByteTransport& transport_;
+  std::string scratch_;
 };
 
 core::Result<void> ReadRemainingBody(HttpByteTransport& transport, const BodyReadLimits& limits,
