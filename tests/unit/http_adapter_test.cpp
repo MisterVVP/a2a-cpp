@@ -513,6 +513,23 @@ TEST(HttpAdapterTest, WriteResponseFramesReusableStreamWithChunkedEncoding) {
   EXPECT_TRUE(transport.output().ends_with(expected_chunk));
 }
 
+TEST(HttpAdapterTest, WritesReusableStreamHeadersBeforeInvokingWriter) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = [&transport](a2a::server::HttpByteTransport&) -> a2a::core::Result<void> {
+    EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
+    EXPECT_NE(transport.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+    EXPECT_TRUE(transport.output().ends_with(a2a::core::http::kLineTerminator));
+    return {};
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_TRUE(transport.output().ends_with(kFinalChunk));
+}
+
 TEST(HttpAdapterTest, ExplicitCloseStreamingResponseRemainsCloseDelimited) {
   BufferTransport transport("");
   a2a::server::HttpServerResponse response;
