@@ -16,6 +16,10 @@
 
 namespace a2a::client {
 
+namespace internal {
+class StreamWorkerExecutor;
+}
+
 using RequestIdGenerator = std::function<std::string()>;
 
 class JsonRpcTransport final : public ClientTransport {
@@ -81,6 +85,7 @@ class JsonRpcTransport final : public ClientTransport {
   HttpStreamRequester stream_requester_;
   std::chrono::milliseconds default_timeout_;
   RequestIdGenerator id_generator_;
+  std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
 };
 
 }  // namespace a2a::client

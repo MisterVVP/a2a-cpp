@@ -12,6 +12,7 @@
 #include <thread>
 #include <utility>
 
+#include "../stream_worker_executor.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
@@ -411,7 +412,8 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
-      default_timeout_(default_timeout) {}
+      default_timeout_(default_timeout),
+      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {}
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      std::chrono::milliseconds default_timeout)
@@ -703,8 +705,22 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                                                  .response_metadata = {},
                                                                  .metadata_validated = false,
                                                                  .collecting_error_body = false});
-  auto worker = StreamHandle::WorkerThread([session = std::move(session)] { session->Run(); });
-  return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
+  stream_executor_->Submit(
+      [session = std::move(session), state] {
+        {
+          std::lock_guard lock(state->completion_mutex);
+          state->execution_thread_id = std::this_thread::get_id();
+        }
+        session->Run();
+      },
+      [state] {
+        {
+          std::lock_guard lock(state->completion_mutex);
+          state->completed = true;
+        }
+        state->completion_condition.notify_all();
+      });
+  return std::unique_ptr<StreamHandle>(new StreamHandle(state));
 }
 
 }  // namespace a2a::client

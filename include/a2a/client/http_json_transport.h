@@ -16,6 +16,10 @@
 
 namespace a2a::client {
 
+namespace internal {
+class StreamWorkerExecutor;
+}
+
 struct HttpRequest final {
   std::string method;
   std::string url;
@@ -101,6 +105,7 @@ class HttpJsonTransport final : public ClientTransport {
   HttpRequester requester_;
   HttpStreamRequester stream_requester_;
   std::chrono::milliseconds default_timeout_;
+  std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
 };
 
 }  // namespace a2a::client

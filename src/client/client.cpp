@@ -15,9 +15,18 @@ namespace a2a::client {
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
     : state_(std::move(state)), worker_(std::move(worker)) {}
 
+StreamHandle::StreamHandle(std::shared_ptr<State> state) : state_(std::move(state)) {}
+
 StreamHandle::StreamHandle(StreamHandle&&) noexcept = default;
 
-StreamHandle& StreamHandle::operator=(StreamHandle&&) noexcept = default;
+StreamHandle& StreamHandle::operator=(StreamHandle&& other) noexcept {
+  if (this != &other) {
+    Cancel();
+    state_ = std::move(other.state_);
+    worker_ = std::move(other.worker_);
+  }
+  return *this;
+}
 
 StreamHandle::~StreamHandle() { Cancel(); }
 
@@ -29,6 +38,7 @@ void StreamHandle::Cancel() {
   state_->active.store(false);
   std::function<void()> cancel_callback;
   WorkerThread worker;
+  const bool uses_reusable_worker = !worker_.joinable();
   {
     std::lock_guard lock(state_->cancellation_mutex);
     const bool first_cancellation = !state_->cancel_requested.exchange(true);
@@ -47,6 +57,10 @@ void StreamHandle::Cancel() {
   }
   if (worker.joinable()) {
     worker.join();
+  }
+  std::unique_lock completion_lock(state_->completion_mutex);
+  if (uses_reusable_worker && state_->execution_thread_id != std::this_thread::get_id()) {
+    state_->completion_condition.wait(completion_lock, [this] { return state_->completed; });
   }
 }
 
