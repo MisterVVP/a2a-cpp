@@ -29,6 +29,7 @@ void StreamWorkerExecutor::Submit(Task task, Task on_complete) {
     throw std::runtime_error(kShutdownSubmissionMessage);
   }
   if (idle_workers_ != 0) {
+    --idle_workers_;
     pending_tasks_.push_back({.task = std::move(task), .on_complete = std::move(on_complete)});
     work_available_.notify_one();
     return;
@@ -55,7 +56,6 @@ void StreamWorkerExecutor::RunWorker(Work work) {
     }
     lock.lock();
     work_available_.wait(lock, [this] { return shutting_down_ || !pending_tasks_.empty(); });
-    --idle_workers_;
     if (shutting_down_) {
       return;
     }

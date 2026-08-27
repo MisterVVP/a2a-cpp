@@ -6,6 +6,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -106,11 +107,17 @@ class StreamHandle final : private core::NonCopyable {
   using WorkerThread = std::thread;
 #endif
 
+  enum class ExecutionMode : std::uint8_t {
+    kOwnedWorker,
+    kExecutor,
+  };
+
   explicit StreamHandle(std::shared_ptr<State> state, WorkerThread worker);
   explicit StreamHandle(std::shared_ptr<State> state);
 
   std::shared_ptr<State> state_;
   WorkerThread worker_;
+  ExecutionMode execution_mode_ = ExecutionMode::kOwnedWorker;
 };
 
 class ClientTransport {
