@@ -4,7 +4,9 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -80,6 +82,10 @@ class StreamHandle final : private core::NonCopyable {
     std::atomic<bool> active{true};
     std::mutex cancellation_mutex;
     std::function<void()> cancel_callback;
+    std::mutex completion_mutex;
+    std::condition_variable completion_condition;
+    std::thread::id execution_thread_id;
+    bool completed = false;
   };
 
   StreamHandle() = delete;
@@ -101,10 +107,17 @@ class StreamHandle final : private core::NonCopyable {
   using WorkerThread = std::thread;
 #endif
 
+  enum class ExecutionMode : std::uint8_t {
+    kOwnedWorker,
+    kExecutor,
+  };
+
   explicit StreamHandle(std::shared_ptr<State> state, WorkerThread worker);
+  explicit StreamHandle(std::shared_ptr<State> state);
 
   std::shared_ptr<State> state_;
   WorkerThread worker_;
+  ExecutionMode execution_mode_ = ExecutionMode::kOwnedWorker;
 };
 
 class ClientTransport {

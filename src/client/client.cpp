@@ -15,9 +15,20 @@ namespace a2a::client {
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
     : state_(std::move(state)), worker_(std::move(worker)) {}
 
+StreamHandle::StreamHandle(std::shared_ptr<State> state)
+    : state_(std::move(state)), execution_mode_(ExecutionMode::kExecutor) {}
+
 StreamHandle::StreamHandle(StreamHandle&&) noexcept = default;
 
-StreamHandle& StreamHandle::operator=(StreamHandle&&) noexcept = default;
+StreamHandle& StreamHandle::operator=(StreamHandle&& other) noexcept {
+  if (this != &other) {
+    Cancel();
+    state_ = std::move(other.state_);
+    worker_ = std::move(other.worker_);
+    execution_mode_ = other.execution_mode_;
+  }
+  return *this;
+}
 
 StreamHandle::~StreamHandle() { Cancel(); }
 
@@ -47,6 +58,10 @@ void StreamHandle::Cancel() {
   }
   if (worker.joinable()) {
     worker.join();
+  }
+  std::unique_lock completion_lock(state_->completion_mutex);
+  if (execution_mode_ == ExecutionMode::kExecutor && state_->execution_thread_id != std::this_thread::get_id()) {
+    state_->completion_condition.wait(completion_lock, [this] { return state_->completed; });
   }
 }
 

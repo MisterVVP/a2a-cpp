@@ -16,6 +16,7 @@
 #include <thread>
 #include <utility>
 
+#include "../stream_worker_executor.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
@@ -514,7 +515,8 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout),
-      id_generator_(std::move(id_generator)) {
+      id_generator_(std::move(id_generator)),
+      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {
   if (id_generator_ == nullptr) {
     id_generator_ = BuildDefaultRequestId;
   }
@@ -810,10 +812,23 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     }
   }
   auto state = std::make_shared<StreamHandle::State>();
-  StreamHandle::WorkerThread worker(
+  stream_executor_->Submit(
       [stream_requester = stream_requester_, http_request = std::move(http_request), &observer, state,
-       request_id]() mutable { RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id); });
-  return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
+       request_id]() mutable {
+        {
+          std::lock_guard lock(state->completion_mutex);
+          state->execution_thread_id = std::this_thread::get_id();
+        }
+        RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id);
+      },
+      [state] {
+        {
+          std::lock_guard lock(state->completion_mutex);
+          state->completed = true;
+        }
+        state->completion_condition.notify_all();
+      });
+  return std::unique_ptr<StreamHandle>(new StreamHandle(state));
 }
 
 core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SendStreamingMessage(
