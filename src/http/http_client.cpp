@@ -73,6 +73,7 @@ struct ClientState final {
   std::mutex mutex;
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
+  std::mutex stream_reactor_mutex;
   std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
 }  // namespace detail
@@ -205,8 +206,10 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   void Wake() const noexcept {
 #if defined(__linux__)
     constexpr std::uint64_t kWakeValue = 1;
-    const ssize_t ignored = write(wakeup_descriptor_, &kWakeValue, sizeof(kWakeValue));
-    (void)ignored;
+    ssize_t result = 0;
+    do {
+      result = write(wakeup_descriptor_, &kWakeValue, sizeof(kWakeValue));
+    } while (result < 0 && errno == EINTR);
 #else
     (void)curl_multi_wakeup(multi_handle_);
 #endif
@@ -261,7 +264,10 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     }
     transfers_.emplace(transfer->easy_handle, std::move(transfer));
     int running_handles = 0;
-    (void)curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+    const CURLMcode action_code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+    if (action_code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
     ReadCompletions();
   }
 
@@ -309,6 +315,14 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     }
   }
 
+  void FailAll(CURLcode result) {
+    for (auto& [easy_handle, transfer] : transfers_) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle);
+      Complete(transfer, result);
+    }
+    transfers_.clear();
+  }
+
 #if defined(__linux__)
   static void CloseDescriptor(int descriptor) noexcept {
     if (descriptor >= 0) {
@@ -327,6 +341,11 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     do {
       count = epoll_wait(epoll_descriptor_, events.data(), static_cast<int>(events.size()), -1);
     } while (count < 0 && errno == EINTR);
+    if (count < 0) {
+      FailAll(CURLE_RECV_ERROR);
+      shutting_down_ = true;
+      return;
+    }
     for (int index = 0; index < count; ++index) {
       const int descriptor = events[static_cast<std::size_t>(index)].data.fd;
       if (descriptor == wakeup_descriptor_) {
@@ -335,7 +354,10 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
       } else if (descriptor == timer_descriptor_) {
         DrainEventDescriptor(timer_descriptor_);
         int running_handles = 0;
-        (void)curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+        const CURLMcode code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+        if (code != CURLM_OK) {
+          FailAll(CURLE_RECV_ERROR);
+        }
       } else {
         ProcessSocket(descriptor, events[static_cast<std::size_t>(index)].events);
       }
@@ -354,7 +376,10 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     action |= (events & EPOLLOUT) != 0U ? CURL_CSELECT_OUT : 0;
     action |= (events & (EPOLLERR | EPOLLHUP)) != 0U ? CURL_CSELECT_ERR : 0;
     int running_handles = 0;
-    (void)curl_multi_socket_action(multi_handle_, descriptor, action, &running_handles);
+    const CURLMcode code = curl_multi_socket_action(multi_handle_, descriptor, action, &running_handles);
+    if (code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
   }
 
   static int HandleSocket(CURL* easy_handle, curl_socket_t socket, int action, void* user_data, void* socket_data) {
@@ -362,15 +387,19 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     (void)socket_data;
     auto* reactor = static_cast<CurlStreamReactor*>(user_data);
     if (action == CURL_POLL_REMOVE) {
-      (void)epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_DEL, socket, nullptr);
+      if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_DEL, socket, nullptr) != 0 && errno != ENOENT &&
+          errno != EBADF) {
+        reactor->FailAll(CURLE_RECV_ERROR);
+      }
       return 0;
     }
     std::uint32_t events = EPOLLERR | EPOLLHUP;
     events |= action == CURL_POLL_IN || action == CURL_POLL_INOUT ? EPOLLIN : 0U;
     events |= action == CURL_POLL_OUT || action == CURL_POLL_INOUT ? EPOLLOUT : 0U;
     epoll_event event{.events = events, .data = {.fd = socket }};
-    if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_MOD, socket, &event) != 0 && errno == ENOENT) {
-      (void)epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_ADD, socket, &event);
+    if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_MOD, socket, &event) != 0 &&
+        (errno != ENOENT || epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_ADD, socket, &event) != 0)) {
+      reactor->FailAll(CURLE_RECV_ERROR);
     }
     return 0;
   }
@@ -382,20 +411,30 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     if (timeout_ms >= 0) {
       constexpr long kMillisecondsPerSecond = 1000L;
       constexpr long kNanosecondsPerMillisecond = 1000000L;
-      const long nonzero_timeout = std::max(1L, timeout_ms);
-      timer.it_value.tv_sec = nonzero_timeout / kMillisecondsPerSecond;
-      timer.it_value.tv_nsec = (nonzero_timeout % kMillisecondsPerSecond) * kNanosecondsPerMillisecond;
+      timer.it_value.tv_sec = timeout_ms / kMillisecondsPerSecond;
+      timer.it_value.tv_nsec = (timeout_ms % kMillisecondsPerSecond) * kNanosecondsPerMillisecond;
+      if (timeout_ms == 0) {
+        timer.it_value.tv_nsec = 1;
+      }
     }
-    (void)timerfd_settime(reactor->timer_descriptor_, 0, &timer, nullptr);
+    if (timerfd_settime(reactor->timer_descriptor_, 0, &timer, nullptr) != 0) {
+      reactor->FailAll(CURLE_RECV_ERROR);
+    }
     return 0;
   }
 #else
   void WaitForPortableEvents() {
     int ready = 0;
-    (void)curl_multi_poll(multi_handle_, nullptr, 0, -1, &ready);
+    const CURLMcode poll_code = curl_multi_poll(multi_handle_, nullptr, 0, -1, &ready);
+    if (poll_code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+      return;
+    }
     ProcessCommands();
     int running_handles = 0;
-    (void)curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+    if (curl_multi_perform(multi_handle_, &running_handles) != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
   }
 
   static int HandleSocket(CURL*, curl_socket_t, int, void*, void*) { return 0; }
@@ -765,6 +804,14 @@ core::Result<CURLcode> PerformStreamingTransfer(
   return transfer->result;
 }
 
+std::shared_ptr<detail::CurlStreamReactor> GetStreamReactor(detail::ClientState& state) {
+  std::lock_guard lock(state.stream_reactor_mutex);
+  if (state.stream_reactor == nullptr) {
+    state.stream_reactor = detail::CurlStreamReactor::Create();
+  }
+  return state.stream_reactor;
+}
+
 }  // namespace
 
 bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
@@ -775,7 +822,6 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
 Client::Client() : state_(std::make_shared<detail::ClientState>()) {
   state_->global_state = EnsureCurlGlobalInit();
   state_->handle = curl_easy_init();
-  state_->stream_reactor = detail::CurlStreamReactor::Create();
 }
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
@@ -875,7 +921,8 @@ core::Result<Response> Client::StreamRequest(
   if (set_stream_header != CURLE_OK || set_stream_header_data != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
-  const auto performed = PerformStreamingTransfer(state_->stream_reactor, handle, is_cancelled, register_cancellation);
+  const auto performed =
+      PerformStreamingTransfer(GetStreamReactor(*state_), handle, is_cancelled, register_cancellation);
   if (!performed.ok()) {
     return performed.error();
   }
