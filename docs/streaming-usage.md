@@ -27,6 +27,11 @@ Streams issued through one default libcurl-backed HTTP client share a single
 adds or removes easy handles. Start, cancellation, and shutdown operations are
 serialized through a synchronized command queue.
 
+The reactor is initialized lazily by the first streaming request. Constructing
+or using a client exclusively for unary requests does not start a streaming
+reactor thread; concurrent first-stream calls synchronize initialization and
+reuse the same reactor.
+
 On Linux, libcurl socket and timer callbacks maintain an `epoll` readiness set
 and a `timerfd`. An `eventfd` wakes the reactor immediately for queued commands,
 including cancellation and shutdown, with no fixed polling interval. Socket and
