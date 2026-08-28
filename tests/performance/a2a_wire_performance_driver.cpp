@@ -256,6 +256,32 @@ OperationOutcome ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, 
           .completion_latency_ms = observer.CompletionLatencySince(started)};
 }
 
+OperationOutcome ExecuteIdleStreamClientCancellation(a2a::client::A2AClient* client, int index,
+                                                     const a2a::client::CallOptions& call_options) {
+  const std::string task_id = SeedTask(client, BuildId("wire-idle-cancel-seed", index), call_options);
+  if (task_id.empty()) {
+    return {};
+  }
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(task_id);
+  CountingObserver observer;
+  auto stream = client->SubscribeTask(request, observer, call_options);
+  if (!stream.ok() || !observer.WaitForEventCount(1)) {
+    if (stream.ok()) {
+      stream.value()->Cancel();
+    }
+    return {};
+  }
+
+  const auto cancellation_started = std::chrono::steady_clock::now();
+  stream.value()->Cancel();
+  const auto cancellation_duration = std::chrono::steady_clock::now() - cancellation_started;
+  const double cancellation_latency_ms =
+      static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(cancellation_duration).count()) /
+      kNanosecondsPerMillisecond;
+  return {.ok = true, .event_count = observer.event_count(), .measured_latency_ms = cancellation_latency_ms};
+}
+
 bool ExecuteWirePushCreate(a2a::client::A2AClient* client, int index, std::string_view task_id,
                            const a2a::client::CallOptions& call_options) {
   auto config =
@@ -392,6 +418,9 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
   if (scenario == kScenarioSubscribeToTaskFirstEventLatency) {
     return ExecuteWireSubscribeFirstEvent(client, index, call_options);
   }
+  if (scenario == kScenarioIdleStreamClientCancellationLatency) {
+    return ExecuteIdleStreamClientCancellation(client, index, call_options);
+  }
   if (scenario == kScenarioPushConfigCreate) {
     return MakeOutcome(ExecuteWirePushCreate(client, index, fixture.task_id, call_options));
   }
@@ -495,7 +524,9 @@ bool IsPushConfigWireScenario(std::string_view scenario) {
 }
 
 bool IsStreamingWireScenario(std::string_view scenario) {
-  return scenario == kScenarioSendStreamingMessageFiniteStream || scenario == kScenarioSubscribeToTaskFirstEventLatency;
+  return scenario == kScenarioSendStreamingMessageFiniteStream ||
+         scenario == kScenarioSubscribeToTaskFirstEventLatency ||
+         scenario == kScenarioIdleStreamClientCancellationLatency;
 }
 
 bool IsWireScenario(std::string_view scenario, std::string_view transport) {
@@ -577,6 +608,7 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
                                         std::string(kScenarioGetTaskMissingTaskError),
                                         std::string(kScenarioSendStreamingMessageFiniteStream),
                                         std::string(kScenarioSubscribeToTaskFirstEventLatency),
+                                        std::string(kScenarioIdleStreamClientCancellationLatency),
                                         std::string(kScenarioPushConfigCreate),
                                         std::string(kScenarioPushConfigGet),
                                         std::string(kScenarioPushConfigList),

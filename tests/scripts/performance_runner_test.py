@@ -445,7 +445,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         store_pool_count = len(config.postgres_pool_sizes) + len(non_postgres_stores)
         matrix_entries = store_pool_count * len(config.concurrency_levels)
         expected_rows = matrix_entries * (
-            len(runner.SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
+            len(runner.IN_PROCESS_SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
         )
         expected_message = (
             f"estimated_rows={expected_rows} "
@@ -457,6 +457,14 @@ class PerformanceRunnerTest(unittest.TestCase):
             runner.log_workload_estimate(config)
 
         log_progress.assert_called_once_with(expected_message)
+
+    def test_idle_cancellation_is_wire_only(self):
+        runner = load_runner_module()
+        scenario = "IdleStream_ClientCancellationLatency"
+
+        self.assertIn(scenario, runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn(scenario, runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertNotIn(scenario, runner.in_process_scenarios())
 
     def test_normal_workload_estimate_honors_scenario_filter(self):
         runner = load_runner_module()

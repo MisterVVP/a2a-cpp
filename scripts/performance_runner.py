@@ -38,6 +38,7 @@ SCENARIOS = (
     "GetTask_MissingTaskError",
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
+    "IdleStream_ClientCancellationLatency",
     "SubscribeToTask_MultiSubscriber",
     "SubscribeToTask_TerminalCompletionLatency",
     "SubscribeToTask_DisconnectOneSubscriber",
@@ -101,12 +102,14 @@ WIRE_SCENARIOS = (
     "GetTask_MissingTaskError",
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
+    "IdleStream_ClientCancellationLatency",
     "PushConfig_Create",
     "PushConfig_Get",
     "PushConfig_List",
     "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
+IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario != "IdleStream_ClientCancellationLatency")
 SUT_READY_TIMEOUT_SECONDS = 30.0
 SUT_PORT_RANGE_START = 20_000
 SUT_PORT_RANGE_END = 30_000
@@ -568,6 +571,12 @@ def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | No
     if scenarios is None:
         return WIRE_SCENARIOS
     return tuple(scenario for scenario in scenarios if scenario in WIRE_SCENARIOS)
+
+
+def in_process_scenarios(scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    if scenarios is None:
+        return IN_PROCESS_SCENARIOS
+    return tuple(scenario for scenario in scenarios if scenario in IN_PROCESS_SCENARIOS)
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -1197,8 +1206,8 @@ def log_workload_estimate(config: RunnerConfig) -> None:
         for store_backend in config.store_backends
     )
     store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
-    in_process_scenarios = config.scenarios if config.scenarios is not None else SCENARIOS
-    in_process_rows = store_concurrency_rows * len(in_process_scenarios)
+    selected_in_process_scenarios = in_process_scenarios(config.scenarios)
+    in_process_rows = store_concurrency_rows * len(selected_in_process_scenarios)
     wire_rows = sum(len(wire_scenarios_for_transport(transport, config.scenarios)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
@@ -1272,7 +1281,7 @@ def main(argv: list[str]) -> int:
                                     schema or "", repetition, config.scenarios or (),
                                 ) if config.profile == POSTGRES_WRITE_PROFILE else
                                 run_driver(config, in_process_transport, store_backend, concurrency,
-                                           postgres_pool_size, config.scenarios, schema)
+                                           postgres_pool_size, in_process_scenarios(config.scenarios), schema)
                             ),
                             in_process_transport, store_backend, concurrency, config.requests,
                         )
