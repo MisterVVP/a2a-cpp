@@ -74,8 +74,14 @@ constexpr std::string_view kAgentCardBody =
 
 class RecordingStreamObserver final : public a2a::client::StreamObserver {
  public:
-  void OnEvent(const lf::a2a::v1::StreamResponse&) override { events_.fetch_add(1); }
-  void OnError(const a2a::core::Error&) override { errors_.fetch_add(1); }
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    (void)response;
+    events_.fetch_add(1);
+  }
+  void OnError(const a2a::core::Error& error) override {
+    (void)error;
+    errors_.fetch_add(1);
+  }
   void OnCompleted() override { completed_.store(true); }
 
   [[nodiscard]] int errors() const noexcept { return errors_.load(); }
