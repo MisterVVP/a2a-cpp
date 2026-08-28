@@ -389,7 +389,9 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     if (action == CURL_POLL_REMOVE) {
       if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_DEL, socket, nullptr) != 0 && errno != ENOENT &&
           errno != EBADF) {
-        reactor->FailAll(CURLE_RECV_ERROR);
+        // Returning -1 lets libcurl abort after unwinding its socket callback;
+        // mutating the multi handle recursively from here is not permitted.
+        return -1;
       }
       return 0;
     }
@@ -399,7 +401,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     epoll_event event{.events = events, .data = {.fd = socket }};
     if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_MOD, socket, &event) != 0 &&
         (errno != ENOENT || epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_ADD, socket, &event) != 0)) {
-      reactor->FailAll(CURLE_RECV_ERROR);
+      return -1;
     }
     return 0;
   }
@@ -418,7 +420,9 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
       }
     }
     if (timerfd_settime(reactor->timer_descriptor_, 0, &timer, nullptr) != 0) {
-      reactor->FailAll(CURLE_RECV_ERROR);
+      // libcurl observes the callback failure after it regains control. Cleanup
+      // remains in the reactor loop rather than recursively changing CURLM.
+      return -1;
     }
     return 0;
   }
