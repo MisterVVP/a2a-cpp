@@ -38,10 +38,10 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
-            self.assertEqual(36, len(payload["results"]))
+            self.assertEqual(37, len(payload["results"]))
             self.assertEqual({"cpp_sdk_in_process", "wire_tck_sut"}, {result["driver_type"] for result in payload["results"]})
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
-            self.assertEqual(14, len(wire_rows))
+            self.assertEqual(15, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
             self.assertTrue(all("http_coordinate_accepted_connections" not in result for result in wire_rows))
             self.assertTrue(all("http_coordinate_completed_unary_operations" not in result for result in wire_rows))
