@@ -83,7 +83,12 @@ constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
-constexpr int kStreamPollTimeoutMs = 100;
+#if LIBCURL_VERSION_NUM >= 0x074400
+constexpr int kCancellableStreamPollTimeoutMs = 5000;
+constexpr int kLegacyStreamPollTimeoutMs = 100;
+#else
+constexpr int kLegacyStreamPollTimeoutMs = 100;
+#endif
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
@@ -121,6 +126,50 @@ class CurlMultiAttachment final {
   CURLM* multi_handle_;
   CURL* easy_handle_;
 };
+
+#if LIBCURL_VERSION_NUM >= 0x074400
+class CurlMultiWakeup final {
+ public:
+  explicit CurlMultiWakeup(CURLM* multi_handle) : multi_handle_(multi_handle) {}
+
+  void Wake() noexcept {
+    std::lock_guard lock(mutex_);
+    if (multi_handle_ != nullptr) {
+      (void)curl_multi_wakeup(multi_handle_);
+    }
+  }
+
+  void Detach() noexcept {
+    std::lock_guard lock(mutex_);
+    multi_handle_ = nullptr;
+  }
+
+ private:
+  std::mutex mutex_;
+  CURLM* multi_handle_;
+};
+
+class CurlMultiWakeupRegistration final {
+ public:
+  CurlMultiWakeupRegistration(CURLM* multi_handle,
+                              const std::function<void(const std::function<void()>&)>& register_cancellation)
+      : wakeup_(std::make_shared<CurlMultiWakeup>(multi_handle)) {
+    register_cancellation([weak_wakeup = std::weak_ptr<CurlMultiWakeup>(wakeup_)] {
+      if (const auto wakeup = weak_wakeup.lock()) {
+        wakeup->Wake();
+      }
+    });
+  }
+
+  ~CurlMultiWakeupRegistration() { wakeup_->Detach(); }
+
+  CurlMultiWakeupRegistration(const CurlMultiWakeupRegistration&) = delete;
+  CurlMultiWakeupRegistration& operator=(const CurlMultiWakeupRegistration&) = delete;
+
+ private:
+  std::shared_ptr<CurlMultiWakeup> wakeup_;
+};
+#endif
 
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
@@ -445,8 +494,9 @@ void ReleaseStreamSlot(detail::ClientState& state, std::unique_ptr<detail::Strea
   }
 }
 
-core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, CURLM* multi_handle,
-                                                const std::function<bool()>& is_cancelled) {
+core::Result<CURLcode> PerformStreamingTransfer(
+    CURL* easy_handle, CURLM* multi_handle, const std::function<bool()>& is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation) {
   if (is_cancelled()) {
     return CURLE_ABORTED_BY_CALLBACK;
   }
@@ -456,6 +506,16 @@ core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, CURLM* multi_
     return core::Error::Internal(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, add_code));
   }
   [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle, easy_handle);
+#if LIBCURL_VERSION_NUM >= 0x074400
+  std::optional<CurlMultiWakeupRegistration> wakeup_registration;
+  if (register_cancellation) {
+    wakeup_registration.emplace(multi_handle, register_cancellation);
+  }
+  const int poll_timeout = register_cancellation ? kCancellableStreamPollTimeoutMs : kLegacyStreamPollTimeoutMs;
+#else
+  (void)register_cancellation;
+  constexpr int poll_timeout = kLegacyStreamPollTimeoutMs;
+#endif
 
   int running_handles = 0;
   CURLMcode multi_code = curl_multi_perform(multi_handle, &running_handles);
@@ -465,7 +525,7 @@ core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, CURLM* multi_
     }
 
     int ready_descriptors = 0;
-    multi_code = curl_multi_poll(multi_handle, nullptr, 0, kStreamPollTimeoutMs, &ready_descriptors);
+    multi_code = curl_multi_poll(multi_handle, nullptr, 0, poll_timeout, &ready_descriptors);
     if (multi_code != CURLM_OK) {
       break;
     }
@@ -553,6 +613,13 @@ core::Result<Response> Client::StreamRequest(const Request& request,
                                              const std::function<core::Result<void>(const Response&)>& on_metadata,
                                              const std::function<core::Result<void>(std::string_view)>& on_chunk,
                                              const std::function<bool()>& is_cancelled) const {
+  return StreamRequest(request, on_metadata, on_chunk, is_cancelled, {});
+}
+
+core::Result<Response> Client::StreamRequest(
+    const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+    const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation) const {
   if (state_->global_state->code != CURLE_OK) {
     return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, state_->global_state->code, {}));
   }
@@ -590,7 +657,8 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (set_stream_header != CURLE_OK || set_stream_header_data != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
-  const auto performed = PerformStreamingTransfer(handle, stream_slot->multi_handle, is_cancelled);
+  const auto performed =
+      PerformStreamingTransfer(handle, stream_slot->multi_handle, is_cancelled, register_cancellation);
   if (!performed.ok()) {
     return performed.error();
   }
@@ -649,6 +717,14 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   (void)on_chunk;
   (void)is_cancelled;
   return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+}
+
+core::Result<Response> Client::StreamRequest(
+    const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+    const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation) const {
+  (void)register_cancellation;
+  return StreamRequest(request, on_metadata, on_chunk, is_cancelled);
 }
 
 bool IsSupportedHttpVersion(std::string_view http_version) noexcept {

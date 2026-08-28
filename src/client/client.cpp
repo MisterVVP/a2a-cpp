@@ -12,6 +12,20 @@
 #include "a2a/core/protocol_methods.h"
 
 namespace a2a::client {
+void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& callback) {
+  bool cancellation_already_requested = false;
+  {
+    std::lock_guard lock(cancellation_mutex);
+    cancellation_already_requested = cancel_requested.load();
+    if (!cancellation_already_requested) {
+      cancel_callback = callback;
+    }
+  }
+  if (cancellation_already_requested) {
+    callback();
+  }
+}
+
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
     : state_(std::move(state)), worker_(std::move(worker)) {}
 

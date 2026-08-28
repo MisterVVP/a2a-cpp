@@ -72,6 +72,20 @@ constexpr std::string_view kFormContentTypeHeader = "Content-Type: application/x
 constexpr std::string_view kAgentCardBody =
     R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}]})";
 
+class RecordingStreamObserver final : public a2a::client::StreamObserver {
+ public:
+  void OnEvent(const lf::a2a::v1::StreamResponse&) override { events_.fetch_add(1); }
+  void OnError(const a2a::core::Error&) override { errors_.fetch_add(1); }
+  void OnCompleted() override { completed_.store(true); }
+
+  [[nodiscard]] int errors() const noexcept { return errors_.load(); }
+
+ private:
+  std::atomic_int events_{0};
+  std::atomic_int errors_{0};
+  std::atomic_bool completed_{false};
+};
+
 #if !defined(_WIN32) && defined(A2A_HAS_LIBCURL)
 std::string BuildHttpResponse(std::string_view body, std::string_view status = "200 OK") {
   std::string response;
@@ -619,6 +633,42 @@ TEST(DefaultHttpRequesterTest, JsonRpcTransportUsesSharedLibcurlRequester) {
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().id(), kTaskId);
   EXPECT_NE(server.request().find("POST /rpc HTTP/1.1"), std::string::npos);
+}
+
+void ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport transport_kind) {
+  OpenSseLoopbackServer server;
+  a2a::client::ResolvedInterface resolved;
+  resolved.transport = transport_kind;
+  resolved.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  std::unique_ptr<a2a::client::ClientTransport> transport;
+  if (transport_kind == a2a::client::PreferredTransport::kRest) {
+    transport = a2a::client::HttpJsonTransport::CreateDefault(resolved);
+  } else {
+    transport = a2a::client::JsonRpcTransport::CreateDefault(resolved, a2a::client::JsonRpcTransport::kDefaultTimeout,
+                                                             [] { return "req-1"; });
+  }
+  RecordingStreamObserver observer;
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  auto stream = transport->SubscribeTask(request, observer, {});
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  const auto cancellation_started = std::chrono::steady_clock::now();
+  stream.value()->Cancel();
+  const auto cancellation_elapsed = std::chrono::steady_clock::now() - cancellation_started;
+
+  EXPECT_LT(cancellation_elapsed, kCancellationDeadline);
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_FALSE(server.released());
+}
+
+TEST(DefaultHttpRequesterTest, RestIdleStreamCancellationWakesLibcurlPoll) {
+  ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport::kRest);
+}
+
+TEST(DefaultHttpRequesterTest, JsonRpcIdleStreamCancellationWakesLibcurlPoll) {
+  ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport::kJsonRpc);
 }
 
 TEST(DefaultHttpFetcherTest, DiscoveryUsesSharedLibcurlFetcher) {

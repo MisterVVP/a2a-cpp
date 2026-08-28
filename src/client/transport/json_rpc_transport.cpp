@@ -30,6 +30,14 @@
 namespace a2a::client {
 namespace {
 
+StreamCancellationRegistrar MakeStreamCancellationRegistrar(const std::shared_ptr<StreamHandle::State>& state) {
+  return [weak_state = std::weak_ptr<StreamHandle::State>(state)](const std::function<void()>& callback) {
+    if (const auto locked_state = weak_state.lock()) {
+      locked_state->RegisterCancelCallback(callback);
+    }
+  };
+}
+
 constexpr std::string_view kEmptyJsonObject = "{}";
 constexpr std::size_t kJsonRpcRequestEnvelopeOverhead = 45U;
 constexpr std::string_view kStreamingSuccessRequiresSseMessage =
@@ -357,19 +365,30 @@ core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_vi
 
 class JsonRpcSseSession final {
  public:
-  JsonRpcSseSession(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
+  JsonRpcSseSession(HttpStreamRequester stream_requester, const HttpRequest& http_request, StreamObserver& observer,
+                    std::shared_ptr<StreamHandle::State> state, std::string request_id)
+      : stream_requester_(std::move(stream_requester)),
+        http_request_(http_request),
+        observer_(observer),
+        state_(std::move(state)),
+        request_id_(std::move(request_id)) {}
+
+  JsonRpcSseSession(HttpStreamRequesterWithCancellation stream_requester, const HttpRequest& http_request,
                     StreamObserver& observer, std::shared_ptr<StreamHandle::State> state, std::string request_id)
-      : stream_requester_(stream_requester),
+      : cancellable_stream_requester_(std::move(stream_requester)),
         http_request_(http_request),
         observer_(observer),
         state_(std::move(state)),
         request_id_(std::move(request_id)) {}
 
   void Run() {
-    const auto stream_response = stream_requester_(
-        http_request_, [this](const HttpClientResponse& response) { return ValidateMetadata(response); },
-        [this](std::string_view chunk) { return HandleChunk(chunk); },
-        [this]() { return state_->cancel_requested.load(); });
+    const auto metadata_handler = [this](const HttpClientResponse& response) { return ValidateMetadata(response); };
+    const auto chunk_handler = [this](std::string_view chunk) { return HandleChunk(chunk); };
+    const auto cancelled = [this]() { return state_->cancel_requested.load(); };
+    const auto stream_response = cancellable_stream_requester_
+                                     ? cancellable_stream_requester_(http_request_, metadata_handler, chunk_handler,
+                                                                     cancelled, MakeStreamCancellationRegistrar(state_))
+                                     : stream_requester_(http_request_, metadata_handler, chunk_handler, cancelled);
     if (StopIfCancelled()) {
       return;
     }
@@ -482,7 +501,8 @@ class JsonRpcSseSession final {
                        BuildJsonRpcEnvelopeError(kStreamingSuccessRequiresSseMessage, json_response));
   }
 
-  const HttpStreamRequester& stream_requester_;
+  HttpStreamRequester stream_requester_;
+  HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   const HttpRequest& http_request_;
   StreamObserver& observer_;
   std::shared_ptr<StreamHandle::State> state_;
@@ -501,11 +521,18 @@ void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const Http
   session.Run();
 }
 
+void RunJsonRpcSseWorker(const HttpStreamRequesterWithCancellation& stream_requester, const HttpRequest& http_request,
+                         StreamObserver& observer, const std::shared_ptr<StreamHandle::State>& state,
+                         std::string request_id) {
+  JsonRpcSseSession session(stream_requester, http_request, observer, state, std::move(request_id));
+  session.Run();
+}
+
 }  // namespace
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                    std::chrono::milliseconds default_timeout, RequestIdGenerator id_generator)
-    : JsonRpcTransport(std::move(resolved_interface), std::move(requester), {}, default_timeout,
+    : JsonRpcTransport(std::move(resolved_interface), std::move(requester), HttpStreamRequester{}, default_timeout,
                        std::move(id_generator)) {}
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
@@ -522,11 +549,26 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
   }
 }
 
+JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                                   HttpStreamRequesterWithCancellation stream_requester,
+                                   std::chrono::milliseconds default_timeout, RequestIdGenerator id_generator)
+    : resolved_interface_(std::move(resolved_interface)),
+      requester_(std::move(requester)),
+      cancellable_stream_requester_(std::move(stream_requester)),
+      default_timeout_(default_timeout),
+      id_generator_(std::move(id_generator)),
+      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {
+  if (id_generator_ == nullptr) {
+    id_generator_ = BuildDefaultRequestId;
+  }
+}
+
 std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                   std::chrono::milliseconds default_timeout,
                                                                   RequestIdGenerator id_generator) {
   return std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
-                                            MakeDefaultHttpStreamRequester(), default_timeout, std::move(id_generator));
+                                            MakeDefaultCancellableHttpStreamRequester(), default_timeout,
+                                            std::move(id_generator));
 }
 
 core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
@@ -777,7 +819,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
   if (resolved_interface_.url.empty()) {
     return core::Error::Validation("Resolved JSON-RPC interface URL is required");
   }
-  if (stream_requester_ == nullptr) {
+  if (stream_requester_ == nullptr && cancellable_stream_requester_ == nullptr) {
     return core::Error::Internal("HTTP stream requester is not configured");
   }
   const std::string request_id = id_generator_();
@@ -813,13 +855,17 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
   }
   auto state = std::make_shared<StreamHandle::State>();
   stream_executor_->Submit(
-      [stream_requester = stream_requester_, http_request = std::move(http_request), &observer, state,
-       request_id]() mutable {
+      [stream_requester = stream_requester_, cancellable_stream_requester = cancellable_stream_requester_,
+       http_request = std::move(http_request), &observer, state, request_id]() mutable {
         {
           std::lock_guard lock(state->completion_mutex);
           state->execution_thread_id = std::this_thread::get_id();
         }
-        RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id);
+        if (cancellable_stream_requester) {
+          RunJsonRpcSseWorker(cancellable_stream_requester, http_request, observer, state, request_id);
+        } else {
+          RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id);
+        }
       },
       [state] {
         {

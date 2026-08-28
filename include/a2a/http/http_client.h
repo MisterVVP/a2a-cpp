@@ -64,6 +64,10 @@ class Client final {
       const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
       const std::function<core::Result<void>(std::string_view)>& on_chunk,
       const std::function<bool()>& is_cancelled) const;
+  [[nodiscard]] core::Result<Response> StreamRequest(
+      const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+      const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
+      const std::function<void(const std::function<void()>&)>& register_cancellation) const;
 
  private:
   std::shared_ptr<detail::ClientState> state_;

@@ -86,6 +86,8 @@ class StreamHandle final : private core::NonCopyable {
     std::condition_variable completion_condition;
     std::thread::id execution_thread_id;
     bool completed = false;
+
+    void RegisterCancelCallback(const std::function<void()>& callback);
   };
 
   StreamHandle() = delete;

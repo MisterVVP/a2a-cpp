@@ -39,12 +39,17 @@ using HttpRequester = std::function<core::Result<HttpClientResponse>(const HttpR
 using HttpStreamMetadataHandler = std::function<core::Result<void>(const HttpClientResponse& response)>;
 using HttpStreamChunkHandler = std::function<core::Result<void>(std::string_view chunk)>;
 using StreamCancelled = std::function<bool()>;
+using StreamCancellationRegistrar = std::function<void(const std::function<void()>&)>;
 using HttpStreamRequester = std::function<core::Result<HttpClientResponse>(
     const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata, const HttpStreamChunkHandler& on_chunk,
     const StreamCancelled& is_cancelled)>;
+using HttpStreamRequesterWithCancellation = std::function<core::Result<HttpClientResponse>(
+    const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata, const HttpStreamChunkHandler& on_chunk,
+    const StreamCancelled& is_cancelled, const StreamCancellationRegistrar& register_cancellation)>;
 
 [[nodiscard]] HttpRequester MakeDefaultHttpRequester();
 [[nodiscard]] HttpStreamRequester MakeDefaultHttpStreamRequester();
+[[nodiscard]] HttpStreamRequesterWithCancellation MakeDefaultCancellableHttpStreamRequester();
 
 struct HttpOperation final {
   std::string_view method;
@@ -57,6 +62,10 @@ class HttpJsonTransport final : public ClientTransport {
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              HttpStreamRequester stream_requester,
+                             std::chrono::milliseconds default_timeout = kDefaultTimeout);
+
+  explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                             HttpStreamRequesterWithCancellation stream_requester,
                              std::chrono::milliseconds default_timeout = kDefaultTimeout);
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
@@ -104,6 +113,7 @@ class HttpJsonTransport final : public ClientTransport {
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
   HttpStreamRequester stream_requester_;
+  HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;
   std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
 };

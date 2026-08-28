@@ -229,6 +229,14 @@ core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientRe
 
 void MarkInactive(StreamHandle::State& state) { state.active.store(false); }
 
+StreamCancellationRegistrar MakeStreamCancellationRegistrar(const std::shared_ptr<StreamHandle::State>& state) {
+  return [weak_state = std::weak_ptr<StreamHandle::State>(state)](const std::function<void()>& callback) {
+    if (const auto locked_state = weak_state.lock()) {
+      locked_state->RegisterCancelCallback(callback);
+    }
+  };
+}
+
 void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer, const core::Error& error) {
   observer.OnError(error);
   MarkInactive(state);
@@ -236,6 +244,7 @@ void NotifyErrorAndStop(StreamHandle::State& state, StreamObserver& observer, co
 
 struct HttpSseSession final {
   HttpStreamRequester requester;
+  HttpStreamRequesterWithCancellation cancellable_requester;
   HttpRequest request;
   std::shared_ptr<StreamHandle::State> state;
   StreamObserver* observer = nullptr;
@@ -287,10 +296,13 @@ struct HttpSseSession final {
   }
 
   void Run() {
-    const auto response = requester(
-        request, [this](const HttpClientResponse& metadata) { return ValidateMetadata(metadata); },
-        [this](std::string_view chunk) { return HandleChunk(chunk); },
-        [this] { return state->cancel_requested.load(); });
+    const auto metadata_handler = [this](const HttpClientResponse& metadata) { return ValidateMetadata(metadata); };
+    const auto chunk_handler = [this](std::string_view chunk) { return HandleChunk(chunk); };
+    const auto cancelled = [this] { return state->cancel_requested.load(); };
+    const auto response = cancellable_requester
+                              ? cancellable_requester(request, metadata_handler, chunk_handler, cancelled,
+                                                      MakeStreamCancellationRegistrar(state))
+                              : requester(request, metadata_handler, chunk_handler, cancelled);
     if (state->cancel_requested.load()) {
       MarkInactive(*state);
       return;
@@ -407,6 +419,28 @@ HttpStreamRequester MakeDefaultHttpStreamRequester() {
   };
 }
 
+HttpStreamRequesterWithCancellation MakeDefaultCancellableHttpStreamRequester() {
+  return [client = a2a::http::Client{}](
+             const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata,
+             const HttpStreamChunkHandler& on_chunk, const StreamCancelled& is_cancelled,
+             const StreamCancellationRegistrar& register_cancellation) -> core::Result<HttpClientResponse> {
+    if (request.mtls.has_value()) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
+    auto response = client.StreamRequest(
+        ToSharedHttpRequest(request),
+        [&on_metadata](const a2a::http::Response& metadata) {
+          return on_metadata(ToClientHttpResponse(a2a::http::Response{
+              .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
+        },
+        on_chunk, is_cancelled, register_cancellation);
+    if (!response.ok()) {
+      return response.error();
+    }
+    return ToClientHttpResponse(std::move(response.value()));
+  };
+}
+
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
@@ -416,13 +450,22 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
       stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {}
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                                     HttpStreamRequesterWithCancellation stream_requester,
                                      std::chrono::milliseconds default_timeout)
-    : HttpJsonTransport(std::move(resolved_interface), std::move(requester), {}, default_timeout) {}
+    : resolved_interface_(std::move(resolved_interface)),
+      requester_(std::move(requester)),
+      cancellable_stream_requester_(std::move(stream_requester)),
+      default_timeout_(default_timeout),
+      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {}
+
+HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
+                                     std::chrono::milliseconds default_timeout)
+    : HttpJsonTransport(std::move(resolved_interface), std::move(requester), HttpStreamRequester{}, default_timeout) {}
 
 std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                     std::chrono::milliseconds default_timeout) {
   return std::make_unique<HttpJsonTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
-                                             MakeDefaultHttpStreamRequester(), default_timeout);
+                                             MakeDefaultCancellableHttpStreamRequester(), default_timeout);
 }
 
 core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation, std::string body,
@@ -686,7 +729,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
 core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(HttpOperation operation, std::string body,
                                                                               StreamObserver& observer,
                                                                               const CallOptions& options) const {
-  if (stream_requester_ == nullptr) {
+  if (stream_requester_ == nullptr && cancellable_stream_requester_ == nullptr) {
     return core::Error::Internal("HTTP stream requester is not configured");
   }
   auto request = BuildStreamingRequest(resolved_interface_, operation, std::move(body), options, default_timeout_);
@@ -696,6 +739,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
 
   auto state = std::make_shared<StreamHandle::State>();
   auto session = std::make_shared<HttpSseSession>(HttpSseSession{.requester = stream_requester_,
+                                                                 .cancellable_requester = cancellable_stream_requester_,
                                                                  .request = std::move(request.value()),
                                                                  .state = state,
                                                                  .observer = &observer,
