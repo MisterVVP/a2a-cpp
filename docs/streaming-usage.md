@@ -20,6 +20,28 @@ Implement `a2a::client::StreamObserver`:
 
 Observer callbacks run on the transport worker thread that owns the stream request. Keep callbacks fast, avoid blocking indefinitely, and hand work to an application executor if expensive processing is needed.
 
+## Default HTTP network reactor
+
+Streams issued through one default libcurl-backed HTTP client share a single
+`CURLM` multi handle and reactor thread. The reactor is the only thread that
+adds or removes easy handles. Start, cancellation, and shutdown operations are
+serialized through a synchronized command queue.
+
+The reactor is initialized lazily by the first streaming request. Constructing
+or using a client exclusively for unary requests does not start a streaming
+reactor thread; concurrent first-stream calls synchronize initialization and
+reuse the same reactor.
+
+On Linux, libcurl socket and timer callbacks maintain an `epoll` readiness set
+and a `timerfd`. An `eventfd` wakes the reactor immediately for queued commands,
+including cancellation and shutdown, with no fixed polling interval. Socket and
+timer readiness is forwarded to `curl_multi_socket_action()`. Other platforms
+use libcurl's event-driven multi wakeup fallback without a fixed wake interval.
+
+The synchronous `a2a::http::Client::StreamRequest()` API waits for its transfer
+while network I/O progresses on the shared reactor. Injected custom stream
+requesters retain their existing synchronous compatibility path.
+
 ## Handles, cancellation, and timeouts
 
 The returned `StreamHandle` remains active while the request is running. `Cancel()` is idempotent and requests prompt cancellation; destroying the handle also cancels and joins the worker before returning. Cancellation is not reported as normal completion. Configure bounded operation timeouts with `CallOptions::timeout` or the transport default timeout.

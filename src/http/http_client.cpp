@@ -11,9 +11,10 @@
 #if defined(A2A_HAS_LIBCURL)
 #include <curl/curl.h>
 
-#ifndef _WIN32
-#include <fcntl.h>
-#include <poll.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -22,13 +23,17 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #endif
@@ -38,6 +43,8 @@ namespace a2a::http {
 #if defined(A2A_HAS_LIBCURL)
 
 namespace detail {
+class CurlStreamReactor;
+
 struct ClientGlobalState final {
   ClientGlobalState() : code(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
 
@@ -46,16 +53,12 @@ struct ClientGlobalState final {
 
 struct StreamSlot final {
   ~StreamSlot() {
-    if (multi_handle != nullptr) {
-      curl_multi_cleanup(multi_handle);
-    }
     if (easy_handle != nullptr) {
       curl_easy_cleanup(easy_handle);
     }
   }
 
   CURL* easy_handle = nullptr;
-  CURLM* multi_handle = nullptr;
 };
 
 struct ClientState final {
@@ -70,6 +73,8 @@ struct ClientState final {
   std::mutex mutex;
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
+  std::mutex stream_reactor_mutex;
+  std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
 }  // namespace detail
 
@@ -81,8 +86,6 @@ constexpr std::string_view kConfigureRequestFailureMessage = "failed to configur
 constexpr std::string_view kErrorBufferFailureMessage = "failed to configure HTTP client error buffer";
 constexpr std::string_view kRequestFailureMessage = "failed to execute HTTP request";
 constexpr std::string_view kCurlMultiInitFailureMessage = "failed to initialize HTTP stream poller";
-constexpr std::string_view kCurlMultiFailureMessage = "failed to execute polled HTTP stream";
-constexpr std::string_view kCurlMultiCompletionFailureMessage = "HTTP stream ended without a libcurl completion";
 constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP response status";
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
@@ -95,7 +98,7 @@ constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
-constexpr std::size_t kWakeDrainBufferSize = 64U;
+constexpr std::size_t kMaximumReactorEvents = 64U;
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   static const auto init = std::make_shared<detail::ClientGlobalState>();
@@ -112,251 +115,354 @@ struct CurlSlistDeleter final {
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
-class CurlMultiAttachment final {
- public:
-  CurlMultiAttachment(CURLM* multi_handle, CURL* easy_handle)
-      : multi_handle_(multi_handle), easy_handle_(easy_handle) {}
+}  // namespace
 
-  ~CurlMultiAttachment() {
-    if (multi_handle_ != nullptr && easy_handle_ != nullptr) {
-      (void)curl_multi_remove_handle(multi_handle_, easy_handle_);
+namespace detail {
+
+class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamReactor> {
+ public:
+  struct Transfer final {
+    CURL* easy_handle = nullptr;
+    std::mutex mutex;
+    std::condition_variable completed;
+    CURLcode result = CURLE_ABORTED_BY_CALLBACK;
+    bool done = false;
+  };
+
+  static std::shared_ptr<CurlStreamReactor> Create() {
+    auto reactor = std::shared_ptr<CurlStreamReactor>(new CurlStreamReactor());
+    if (!reactor->valid_) {
+      return {};
+    }
+    reactor->thread_ = std::thread([reactor_pointer = reactor.get()] { reactor_pointer->Run(); });
+    return reactor;
+  }
+
+  ~CurlStreamReactor() {
+    Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+#if defined(__linux__)
+    CloseDescriptor(timer_descriptor_);
+    CloseDescriptor(wakeup_descriptor_);
+    CloseDescriptor(epoll_descriptor_);
+#endif
+    if (multi_handle_ != nullptr) {
+      curl_multi_cleanup(multi_handle_);
     }
   }
 
-  CurlMultiAttachment(const CurlMultiAttachment&) = delete;
-  CurlMultiAttachment& operator=(const CurlMultiAttachment&) = delete;
-  CurlMultiAttachment(CurlMultiAttachment&&) = delete;
-  CurlMultiAttachment& operator=(CurlMultiAttachment&&) = delete;
+  CurlStreamReactor(const CurlStreamReactor&) = delete;
+  CurlStreamReactor& operator=(const CurlStreamReactor&) = delete;
+
+  void Add(const std::shared_ptr<Transfer>& transfer) {
+    Enqueue(Command{.type = CommandType::kAdd, .transfer = transfer});
+  }
+
+  void Cancel(const std::shared_ptr<Transfer>& transfer) {
+    Enqueue(Command{.type = CommandType::kCancel, .transfer = transfer});
+  }
 
  private:
-  CURLM* multi_handle_;
-  CURL* easy_handle_;
-};
+  enum class CommandType : std::uint8_t { kAdd, kCancel, kShutdown };
+  struct Command final {
+    CommandType type = CommandType::kShutdown;
+    std::shared_ptr<Transfer> transfer;
+  };
 
-#ifndef _WIN32
-class CurlMultiSocketLoop final {
- public:
-  explicit CurlMultiSocketLoop(CURLM* multi_handle) : multi_handle_(multi_handle) {
+  CurlStreamReactor() : multi_handle_(curl_multi_init()) {
+    if (multi_handle_ == nullptr) {
+      return;
+    }
 #if defined(__linux__)
-    if (::pipe2(wakeup_pipe_.data(), O_NONBLOCK | O_CLOEXEC) != 0) {
-      wakeup_pipe_ = {-1, -1};
-    }
+    epoll_descriptor_ = epoll_create1(EPOLL_CLOEXEC);
+    wakeup_descriptor_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    timer_descriptor_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    valid_ = epoll_descriptor_ >= 0 && wakeup_descriptor_ >= 0 && timer_descriptor_ >= 0 &&
+             AddInternalDescriptor(wakeup_descriptor_) && AddInternalDescriptor(timer_descriptor_);
 #else
-    if (::pipe(wakeup_pipe_.data()) != 0 || !ConfigureWakeDescriptor(wakeup_pipe_[0]) ||
-        !ConfigureWakeDescriptor(wakeup_pipe_[1])) {
-      CloseWakePipe();
+    valid_ = true;
+#endif
+    valid_ = valid_ && curl_multi_setopt(multi_handle_, CURLMOPT_SOCKETFUNCTION, &HandleSocket) == CURLM_OK &&
+             curl_multi_setopt(multi_handle_, CURLMOPT_SOCKETDATA, this) == CURLM_OK &&
+             curl_multi_setopt(multi_handle_, CURLMOPT_TIMERFUNCTION, &HandleTimer) == CURLM_OK &&
+             curl_multi_setopt(multi_handle_, CURLMOPT_TIMERDATA, this) == CURLM_OK;
+  }
+
+  void Enqueue(Command command) {
+    {
+      std::lock_guard lock(command_mutex_);
+      if (shutdown_enqueued_ && command.type != CommandType::kShutdown) {
+        Complete(command.transfer, CURLE_ABORTED_BY_CALLBACK);
+        return;
+      }
+      shutdown_enqueued_ = shutdown_enqueued_ || command.type == CommandType::kShutdown;
+      commands_.push_back(std::move(command));
     }
+    Wake();
+  }
+
+  void Wake() const noexcept {
+#if defined(__linux__)
+    constexpr std::uint64_t kWakeValue = 1;
+    ssize_t result = 0;
+    do {
+      result = write(wakeup_descriptor_, &kWakeValue, sizeof(kWakeValue));
+    } while (result < 0 && errno == EINTR);
+#else
+    (void)curl_multi_wakeup(multi_handle_);
 #endif
   }
 
-  ~CurlMultiSocketLoop() { CloseWakePipe(); }
-
-  CurlMultiSocketLoop(const CurlMultiSocketLoop&) = delete;
-  CurlMultiSocketLoop& operator=(const CurlMultiSocketLoop&) = delete;
-
-  void CloseWakePipe() noexcept {
-    for (const int descriptor : wakeup_pipe_) {
-      if (descriptor >= 0) {
-        (void)::close(descriptor);
+  void Run() {
+    while (!shutting_down_) {
+      ProcessCommands();
+      if (shutting_down_) {
+        break;
       }
+#if defined(__linux__)
+      WaitForLinuxEvents();
+#else
+      WaitForPortableEvents();
+#endif
+      ReadCompletions();
     }
-    wakeup_pipe_ = {-1, -1};
+    for (auto& [easy_handle, transfer] : transfers_) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle);
+      Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
+    }
+    transfers_.clear();
   }
 
-  [[nodiscard]] core::Result<void> Configure() {
-    const CURLMcode socket_code =
-        curl_multi_setopt(multi_handle_, CURLMOPT_SOCKETFUNCTION, &CurlMultiSocketLoop::HandleSocket);
-    const CURLMcode socket_data_code = curl_multi_setopt(multi_handle_, CURLMOPT_SOCKETDATA, this);
-    const CURLMcode timer_code =
-        curl_multi_setopt(multi_handle_, CURLMOPT_TIMERFUNCTION, &CurlMultiSocketLoop::HandleTimer);
-    const CURLMcode timer_data_code = curl_multi_setopt(multi_handle_, CURLMOPT_TIMERDATA, this);
-    if (socket_code != CURLM_OK || socket_data_code != CURLM_OK || timer_code != CURLM_OK ||
-        timer_data_code != CURLM_OK || wakeup_pipe_[0] < 0) {
-      return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  void ProcessCommands() {
+    std::deque<Command> commands;
+    {
+      std::lock_guard lock(command_mutex_);
+      commands.swap(commands_);
     }
-    return {};
-  }
-
-  void Wake() noexcept {
-    constexpr char kWakeByte = 1;
-    if (wakeup_pipe_[1] >= 0) {
-      ssize_t written = 0;
-      do {
-        written = ::write(wakeup_pipe_[1], &kWakeByte, sizeof(kWakeByte));
-      } while (written < 0 && errno == EINTR);
+    for (auto& command : commands) {
+      if (command.type == CommandType::kShutdown) {
+        shutting_down_ = true;
+      } else if (command.type == CommandType::kCancel) {
+        Remove(command.transfer, CURLE_ABORTED_BY_CALLBACK);
+      } else {
+        AddOnReactor(std::move(command.transfer));
+      }
     }
   }
 
-  [[nodiscard]] CURLMcode Run(int* running_handles, const std::function<bool()>& is_cancelled) {
-    CURLMcode code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, running_handles);
-    while (code == CURLM_OK && *running_handles > 0 && !is_cancelled()) {
-      std::vector<pollfd> descriptors;
-      descriptors.reserve(sockets_.size() + 1U);
-      descriptors.push_back({.fd = wakeup_pipe_[0], .events = POLLIN, .revents = 0});
-      for (const auto& [socket, events] : sockets_) {
-        descriptors.push_back({.fd = socket, .events = events, .revents = 0});
+  void AddOnReactor(std::shared_ptr<Transfer> transfer) {
+    if (shutting_down_) {
+      Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
+      return;
+    }
+    const CURLMcode code = curl_multi_add_handle(multi_handle_, transfer->easy_handle);
+    if (code != CURLM_OK) {
+      Complete(transfer, CURLE_FAILED_INIT);
+      return;
+    }
+    transfers_.emplace(transfer->easy_handle, std::move(transfer));
+    int running_handles = 0;
+    const CURLMcode action_code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+    if (action_code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
+    ReadCompletions();
+  }
+
+  void Remove(const std::shared_ptr<Transfer>& transfer, CURLcode result) {
+    if (transfer == nullptr) {
+      return;
+    }
+    const auto found = transfers_.find(transfer->easy_handle);
+    if (found != transfers_.end() && found->second == transfer) {
+      (void)curl_multi_remove_handle(multi_handle_, transfer->easy_handle);
+      transfers_.erase(found);
+    }
+    Complete(transfer, result);
+  }
+
+  static void Complete(const std::shared_ptr<Transfer>& transfer, CURLcode result) {
+    if (transfer == nullptr) {
+      return;
+    }
+    {
+      std::lock_guard lock(transfer->mutex);
+      if (transfer->done) {
+        return;
       }
-      const int ready = ::poll(descriptors.data(), descriptors.size(), TimerWaitMilliseconds());
-      if (ready < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        return CURLM_INTERNAL_ERROR;
-      }
-      if (ready == 0) {
-        timer_deadline_.reset();
-        code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, running_handles);
+      transfer->result = result;
+      transfer->done = true;
+    }
+    transfer->completed.notify_all();
+  }
+
+  void ReadCompletions() {
+    int pending = 0;
+    while (CURLMsg* message = curl_multi_info_read(multi_handle_, &pending)) {
+      if (message->msg != CURLMSG_DONE) {
         continue;
       }
-      if ((descriptors.front().revents & POLLIN) != 0) {
-        DrainWakePipe();
+      const auto found = transfers_.find(message->easy_handle);
+      if (found == transfers_.end()) {
+        continue;
       }
-      code = ProcessReadySockets(descriptors, running_handles);
+      auto transfer = std::move(found->second);
+      transfers_.erase(found);
+      (void)curl_multi_remove_handle(multi_handle_, message->easy_handle);
+      Complete(transfer, message->data.result);
     }
-    return code;
   }
 
- private:
-  static bool ConfigureWakeDescriptor(int descriptor) {
-    const int flags = ::fcntl(descriptor, F_GETFL, 0);
-    const int descriptor_flags = ::fcntl(descriptor, F_GETFD, 0);
-    return flags >= 0 && descriptor_flags >= 0 && ::fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 &&
-           ::fcntl(descriptor, F_SETFD, descriptor_flags | FD_CLOEXEC) == 0;
-  }
-
-  static int SelectAction(short returned_events) {
-    int action = 0;
-    action |= (returned_events & POLLIN) != 0 ? CURL_CSELECT_IN : 0;
-    action |= (returned_events & POLLOUT) != 0 ? CURL_CSELECT_OUT : 0;
-    action |= (returned_events & (POLLERR | POLLHUP | POLLNVAL)) != 0 ? CURL_CSELECT_ERR : 0;
-    return action;
-  }
-
-  CURLMcode ProcessReadySockets(const std::vector<pollfd>& descriptors, int* running_handles) {
-    CURLMcode code = CURLM_OK;
-    for (std::size_t index = 1; code == CURLM_OK && index < descriptors.size(); ++index) {
-      if (descriptors[index].revents != 0) {
-        code = curl_multi_socket_action(multi_handle_, descriptors[index].fd, SelectAction(descriptors[index].revents),
-                                        running_handles);
-      }
+  void FailAll(CURLcode result) {
+    for (auto& [easy_handle, transfer] : transfers_) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle);
+      Complete(transfer, result);
     }
-    return code;
+    transfers_.clear();
   }
 
-  void DrainWakePipe() noexcept {
-    std::array<char, kWakeDrainBufferSize> buffer{};
-    ssize_t received = 0;
+#if defined(__linux__)
+  static void CloseDescriptor(int descriptor) noexcept {
+    if (descriptor >= 0) {
+      (void)close(descriptor);
+    }
+  }
+
+  bool AddInternalDescriptor(int descriptor) const {
+    epoll_event event{.events = EPOLLIN, .data = {.fd = descriptor }};
+    return epoll_ctl(epoll_descriptor_, EPOLL_CTL_ADD, descriptor, &event) == 0;
+  }
+
+  void WaitForLinuxEvents() {
+    std::array<epoll_event, kMaximumReactorEvents> events{};
+    int count = 0;
     do {
-      received = ::read(wakeup_pipe_[0], buffer.data(), buffer.size());
-    } while (received > 0 || (received < 0 && errno == EINTR));
+      count = epoll_wait(epoll_descriptor_, events.data(), static_cast<int>(events.size()), -1);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) {
+      FailAll(CURLE_RECV_ERROR);
+      shutting_down_ = true;
+      return;
+    }
+    for (int index = 0; index < count; ++index) {
+      const int descriptor = events[static_cast<std::size_t>(index)].data.fd;
+      if (descriptor == wakeup_descriptor_) {
+        DrainEventDescriptor(wakeup_descriptor_);
+        ProcessCommands();
+      } else if (descriptor == timer_descriptor_) {
+        DrainEventDescriptor(timer_descriptor_);
+        int running_handles = 0;
+        const CURLMcode code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+        if (code != CURLM_OK) {
+          FailAll(CURLE_RECV_ERROR);
+        }
+      } else {
+        ProcessSocket(descriptor, events[static_cast<std::size_t>(index)].events);
+      }
+    }
+  }
+
+  static void DrainEventDescriptor(int descriptor) noexcept {
+    std::uint64_t value = 0;
+    while (read(descriptor, &value, sizeof(value)) > 0) {
+    }
+  }
+
+  void ProcessSocket(int descriptor, std::uint32_t events) {
+    int action = 0;
+    action |= (events & EPOLLIN) != 0U ? CURL_CSELECT_IN : 0;
+    action |= (events & EPOLLOUT) != 0U ? CURL_CSELECT_OUT : 0;
+    action |= (events & (EPOLLERR | EPOLLHUP)) != 0U ? CURL_CSELECT_ERR : 0;
+    int running_handles = 0;
+    const CURLMcode code = curl_multi_socket_action(multi_handle_, descriptor, action, &running_handles);
+    if (code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
   }
 
   static int HandleSocket(CURL* easy_handle, curl_socket_t socket, int action, void* user_data, void* socket_data) {
     (void)easy_handle;
     (void)socket_data;
-    auto* loop = static_cast<CurlMultiSocketLoop*>(user_data);
+    auto* reactor = static_cast<CurlStreamReactor*>(user_data);
     if (action == CURL_POLL_REMOVE) {
-      loop->sockets_.erase(socket);
+      if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_DEL, socket, nullptr) != 0 && errno != ENOENT &&
+          errno != EBADF) {
+        // Returning -1 lets libcurl abort after unwinding its socket callback;
+        // mutating the multi handle recursively from here is not permitted.
+        return -1;
+      }
       return 0;
     }
-    short events = 0;
-    if (action == CURL_POLL_IN || action == CURL_POLL_INOUT) {
-      events |= POLLIN;
+    std::uint32_t events = EPOLLERR | EPOLLHUP;
+    events |= action == CURL_POLL_IN || action == CURL_POLL_INOUT ? EPOLLIN : 0U;
+    events |= action == CURL_POLL_OUT || action == CURL_POLL_INOUT ? EPOLLOUT : 0U;
+    epoll_event event{.events = events, .data = {.fd = socket }};
+    if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_MOD, socket, &event) != 0 &&
+        (errno != ENOENT || epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_ADD, socket, &event) != 0)) {
+      return -1;
     }
-    if (action == CURL_POLL_OUT || action == CURL_POLL_INOUT) {
-      events |= POLLOUT;
-    }
-    loop->sockets_[socket] = events;
     return 0;
   }
 
   static int HandleTimer(CURLM* multi_handle, long timeout_ms, void* user_data) {
     (void)multi_handle;
-    auto* loop = static_cast<CurlMultiSocketLoop*>(user_data);
-    if (timeout_ms < 0) {
-      loop->timer_deadline_.reset();
-    } else {
-      loop->timer_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+    itimerspec timer{};
+    if (timeout_ms >= 0) {
+      constexpr long kMillisecondsPerSecond = 1000L;
+      constexpr long kNanosecondsPerMillisecond = 1000000L;
+      timer.it_value.tv_sec = timeout_ms / kMillisecondsPerSecond;
+      timer.it_value.tv_nsec = (timeout_ms % kMillisecondsPerSecond) * kNanosecondsPerMillisecond;
+      if (timeout_ms == 0) {
+        timer.it_value.tv_nsec = 1;
+      }
+    }
+    if (timerfd_settime(reactor->timer_descriptor_, 0, &timer, nullptr) != 0) {
+      // libcurl observes the callback failure after it regains control. Cleanup
+      // remains in the reactor loop rather than recursively changing CURLM.
+      return -1;
     }
     return 0;
   }
-
-  [[nodiscard]] int TimerWaitMilliseconds() const {
-    if (!timer_deadline_.has_value()) {
-      return -1;
-    }
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(timer_deadline_.value() -
-                                                                                 std::chrono::steady_clock::now());
-    if (remaining.count() <= 0) {
-      return 0;
-    }
-    return static_cast<int>(std::min<long long>(remaining.count(), std::numeric_limits<int>::max()));
-  }
-
-  CURLM* multi_handle_;
-  std::array<int, 2> wakeup_pipe_{};
-  std::unordered_map<curl_socket_t, short> sockets_;
-  std::optional<std::chrono::steady_clock::time_point> timer_deadline_;
-};
-
-class CurlMultiSocketRegistration final {
- public:
-  explicit CurlMultiSocketRegistration(std::shared_ptr<CurlMultiSocketLoop> loop,
-                                       const std::function<void(const std::function<void()>&)>& register_cancellation)
-      : loop_(std::move(loop)) {
-    register_cancellation([weak_loop = std::weak_ptr<CurlMultiSocketLoop>(loop_)] {
-      if (const auto loop = weak_loop.lock()) {
-        loop->Wake();
-      }
-    });
-  }
-
-  CurlMultiSocketRegistration(const CurlMultiSocketRegistration&) = delete;
-  CurlMultiSocketRegistration& operator=(const CurlMultiSocketRegistration&) = delete;
-
- private:
-  std::shared_ptr<CurlMultiSocketLoop> loop_;
-};
 #else
-class CurlMultiWakeup final {
- public:
-  explicit CurlMultiWakeup(CURLM* multi_handle) : multi_handle_(multi_handle) {}
-
-  void Wake() noexcept {
-    std::lock_guard lock(mutex_);
-    if (multi_handle_ != nullptr) {
-      (void)curl_multi_wakeup(multi_handle_);
+  void WaitForPortableEvents() {
+    int ready = 0;
+    const CURLMcode poll_code = curl_multi_poll(multi_handle_, nullptr, 0, -1, &ready);
+    if (poll_code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+      return;
+    }
+    ProcessCommands();
+    int running_handles = 0;
+    if (curl_multi_perform(multi_handle_, &running_handles) != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
     }
   }
 
-  void Detach() noexcept {
-    std::lock_guard lock(mutex_);
-    multi_handle_ = nullptr;
-  }
-
- private:
-  std::mutex mutex_;
-  CURLM* multi_handle_;
-};
-
-class CurlMultiWakeupRegistration final {
- public:
-  CurlMultiWakeupRegistration(CURLM* multi_handle,
-                              const std::function<void(const std::function<void()>&)>& register_cancellation)
-      : wakeup_(std::make_shared<CurlMultiWakeup>(multi_handle)) {
-    register_cancellation([weak_wakeup = std::weak_ptr<CurlMultiWakeup>(wakeup_)] {
-      if (const auto wakeup = weak_wakeup.lock()) {
-        wakeup->Wake();
-      }
-    });
-  }
-
-  ~CurlMultiWakeupRegistration() { wakeup_->Detach(); }
-
- private:
-  std::shared_ptr<CurlMultiWakeup> wakeup_;
-};
+  static int HandleSocket(CURL*, curl_socket_t, int, void*, void*) { return 0; }
+  static int HandleTimer(CURLM*, long, void*) { return 0; }
 #endif
+
+  CURLM* multi_handle_ = nullptr;
+  std::thread thread_;
+  std::mutex command_mutex_;
+  std::deque<Command> commands_;
+  std::unordered_map<CURL*, std::shared_ptr<Transfer>> transfers_;
+  bool valid_ = false;
+  bool shutdown_enqueued_ = false;
+  bool shutting_down_ = false;
+#if defined(__linux__)
+  int epoll_descriptor_ = -1;
+  int wakeup_descriptor_ = -1;
+  int timer_descriptor_ = -1;
+#endif
+};
+
+}  // namespace detail
+
+namespace {
 
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
@@ -364,12 +470,6 @@ std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::s
   if (!detail.empty()) {
     message << " (" << detail << ')';
   }
-  return message.str();
-}
-
-std::string BuildCurlMultiErrorMessage(std::string_view prefix, CURLMcode code) {
-  std::ostringstream message;
-  message << prefix << ": " << curl_multi_strerror(code);
   return message.str();
 }
 
@@ -667,8 +767,7 @@ core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::Clie
   }
   auto slot = std::make_unique<detail::StreamSlot>();
   slot->easy_handle = curl_easy_init();
-  slot->multi_handle = curl_multi_init();
-  if (slot->easy_handle == nullptr || slot->multi_handle == nullptr) {
+  if (slot->easy_handle == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
   return slot;
@@ -681,84 +780,40 @@ void ReleaseStreamSlot(detail::ClientState& state, std::unique_ptr<detail::Strea
   }
 }
 
-#ifdef _WIN32
-core::Result<void> PerformBlockingStreamingTransfer(CURLM* multi_handle, const std::function<bool()>& is_cancelled) {
-  int running_handles = 0;
-  CURLMcode multi_code = curl_multi_perform(multi_handle, &running_handles);
-  while (multi_code == CURLM_OK && running_handles > 0) {
-    if (is_cancelled()) {
-      return {};
-    }
-    int ready_descriptors = 0;
-    multi_code = curl_multi_poll(multi_handle, nullptr, 0, -1, &ready_descriptors);
-    if (multi_code == CURLM_OK) {
-      multi_code = curl_multi_perform(multi_handle, &running_handles);
-    }
-  }
-  if (multi_code != CURLM_OK) {
-    return core::Error::Network(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, multi_code));
-  }
-  return {};
-}
-#endif
-
 core::Result<CURLcode> PerformStreamingTransfer(
-    CURL* easy_handle, CURLM* multi_handle, const std::function<bool()>& is_cancelled,
+    const std::shared_ptr<detail::CurlStreamReactor>& reactor, CURL* easy_handle,
+    const std::function<bool()>& is_cancelled,
     const std::function<void(const std::function<void()>&)>& register_cancellation) {
+  if (reactor == nullptr) {
+    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  }
   if (is_cancelled()) {
     return CURLE_ABORTED_BY_CALLBACK;
   }
-
-#ifndef _WIN32
-  std::shared_ptr<CurlMultiSocketLoop> socket_loop;
-  socket_loop = std::make_shared<CurlMultiSocketLoop>(multi_handle);
-  const auto configured = socket_loop->Configure();
-  if (!configured.ok()) {
-    return configured.error();
-  }
-#endif
-
-  const CURLMcode add_code = curl_multi_add_handle(multi_handle, easy_handle);
-  if (add_code != CURLM_OK) {
-    return core::Error::Internal(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, add_code));
-  }
-  [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle, easy_handle);
-#ifndef _WIN32
-  {
-    std::optional<CurlMultiSocketRegistration> socket_registration;
-    if (register_cancellation) {
-      socket_registration.emplace(socket_loop, register_cancellation);
-    }
-    int running_handles = 0;
-    const CURLMcode socket_code = socket_loop->Run(&running_handles, is_cancelled);
-    if (is_cancelled()) {
-      return CURLE_ABORTED_BY_CALLBACK;
-    }
-    if (socket_code != CURLM_OK) {
-      return core::Error::Network(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, socket_code));
-    }
-  }
-#else
-  std::optional<CurlMultiWakeupRegistration> wakeup_registration;
+  auto transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  transfer->easy_handle = easy_handle;
+  reactor->Add(transfer);
   if (register_cancellation) {
-    wakeup_registration.emplace(multi_handle, register_cancellation);
+    register_cancellation([weak_reactor = std::weak_ptr<detail::CurlStreamReactor>(reactor),
+                           weak_transfer = std::weak_ptr<detail::CurlStreamReactor::Transfer>(transfer)] {
+      const auto locked_reactor = weak_reactor.lock();
+      const auto locked_transfer = weak_transfer.lock();
+      if (locked_reactor != nullptr && locked_transfer != nullptr) {
+        locked_reactor->Cancel(locked_transfer);
+      }
+    });
   }
-  const auto blocking_transfer = PerformBlockingStreamingTransfer(multi_handle, is_cancelled);
-  if (!blocking_transfer.ok()) {
-    return blocking_transfer.error();
-  }
-  if (is_cancelled()) {
-    return CURLE_ABORTED_BY_CALLBACK;
-  }
-#endif
+  std::unique_lock lock(transfer->mutex);
+  transfer->completed.wait(lock, [&transfer] { return transfer->done; });
+  return transfer->result;
+}
 
-  int pending_messages = 0;
-  while (CURLMsg* message = curl_multi_info_read(multi_handle, &pending_messages)) {
-    if (message->msg == CURLMSG_DONE && message->easy_handle == easy_handle) {
-      return message->data.result;
-    }
+std::shared_ptr<detail::CurlStreamReactor> GetStreamReactor(detail::ClientState& state) {
+  std::lock_guard lock(state.stream_reactor_mutex);
+  if (state.stream_reactor == nullptr) {
+    state.stream_reactor = detail::CurlStreamReactor::Create();
   }
-  return core::Error::Internal(std::string(kCurlMultiCompletionFailureMessage));
+  return state.stream_reactor;
 }
 
 }  // namespace
@@ -871,7 +926,7 @@ core::Result<Response> Client::StreamRequest(
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   const auto performed =
-      PerformStreamingTransfer(handle, stream_slot->multi_handle, is_cancelled, register_cancellation);
+      PerformStreamingTransfer(GetStreamReactor(*state_), handle, is_cancelled, register_cancellation);
   if (!performed.ok()) {
     return performed.error();
   }
