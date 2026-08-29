@@ -303,6 +303,10 @@ struct HttpSseSession final {
                               ? cancellable_requester(request, metadata_handler, chunk_handler, cancelled,
                                                       MakeStreamCancellationRegistrar(state))
                               : requester(request, metadata_handler, chunk_handler, cancelled);
+    Complete(response);
+  }
+
+  void Complete(const core::Result<HttpClientResponse>& response) {
     if (state->cancel_requested.load()) {
       MarkInactive(*state);
       return;
@@ -464,8 +468,10 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
 
 std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                     std::chrono::milliseconds default_timeout) {
-  return std::make_unique<HttpJsonTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
-                                             MakeDefaultCancellableHttpStreamRequester(), default_timeout);
+  auto transport = std::make_unique<HttpJsonTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
+                                                       MakeDefaultCancellableHttpStreamRequester(), default_timeout);
+  transport->default_async_stream_client_ = std::make_shared<a2a::http::Client>();
+  return transport;
 }
 
 core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation, std::string body,
@@ -749,6 +755,46 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                                                  .response_metadata = {},
                                                                  .metadata_validated = false,
                                                                  .collecting_error_body = false});
+  if (default_async_stream_client_ != nullptr) {
+    const auto started = default_async_stream_client_->StartStreamRequest(
+        ToSharedHttpRequest(session->request),
+        [session, state](const a2a::http::Response& metadata) {
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->execution_thread_id = std::this_thread::get_id();
+          }
+          return session->ValidateMetadata(ToClientHttpResponse(a2a::http::Response{
+              .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
+        },
+        [session, state](std::string_view chunk) {
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->execution_thread_id = std::this_thread::get_id();
+          }
+          return session->HandleChunk(chunk);
+        },
+        [state] { return state->cancel_requested.load(); }, MakeStreamCancellationRegistrar(state),
+        [session, state](core::Result<a2a::http::Response> response) {
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->execution_thread_id = std::this_thread::get_id();
+          }
+          if (!response.ok()) {
+            session->Complete(response.error());
+          } else {
+            session->Complete(ToClientHttpResponse(std::move(response.value())));
+          }
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->completed = true;
+          }
+          state->completion_condition.notify_all();
+        });
+    if (!started.ok()) {
+      return started.error();
+    }
+    return std::unique_ptr<StreamHandle>(new StreamHandle(state));
+  }
   stream_executor_->Submit(
       [session = std::move(session), state] {
         {

@@ -18,7 +18,12 @@ Implement `a2a::client::StreamObserver`:
 - `OnError` is called once for transport, HTTP, SSE, JSON/protobuf, or JSON-RPC envelope failures.
 - `OnCompleted` is called once after a clean server close. It is mutually exclusive with `OnError`.
 
-Observer callbacks run on the transport worker thread that owns the stream request. Keep callbacks fast, avoid blocking indefinitely, and hand work to an application executor if expensive processing is needed.
+For the default HTTP+JSON and JSON-RPC transports, observer callbacks are
+serialized per stream on a shared callback-dispatch executor. They never run on
+the shared libcurl reactor thread, and an idle stream does not reserve a dispatch
+worker. A slow callback can occupy one shared worker, so keep callbacks bounded
+and hand expensive processing to an application executor. Custom synchronous
+stream requesters retain their transport-worker compatibility path.
 
 ## Default HTTP network reactor
 

@@ -92,6 +92,7 @@ class JsonRpcTransport final : public ClientTransport {
   std::chrono::milliseconds default_timeout_;
   RequestIdGenerator id_generator_;
   std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
+  std::shared_ptr<http::Client> default_async_stream_client_;
 };
 
 }  // namespace a2a::client
