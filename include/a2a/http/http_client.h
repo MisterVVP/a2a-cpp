@@ -59,6 +59,7 @@ class Client final {
  public:
   using StreamCompletion = std::function<void(core::Result<Response>)>;
   Client();
+  ~Client();
 
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
   [[nodiscard]] core::Result<Response> StreamRequest(
@@ -76,6 +77,7 @@ class Client final {
       std::function<core::Result<void>(std::string_view)> on_chunk, std::function<bool()> is_cancelled,
       const std::function<void(const std::function<void()>&)>& register_cancellation,
       StreamCompletion on_complete) const;
+  void Shutdown() const;
 
  private:
   std::shared_ptr<detail::ClientState> state_;

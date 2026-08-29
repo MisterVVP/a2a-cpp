@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -71,6 +72,7 @@ class JsonRpcTransport final : public ClientTransport {
   [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                           StreamObserver& observer,
                                                                           const CallOptions& options) override;
+  [[nodiscard]] core::Result<void> Shutdown() override;
 
  private:
   [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(std::string request_body,
@@ -93,6 +95,7 @@ class JsonRpcTransport final : public ClientTransport {
   RequestIdGenerator id_generator_;
   std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
   std::shared_ptr<http::Client> default_async_stream_client_;
+  std::atomic<bool> shutting_down_{false};
 };
 
 }  // namespace a2a::client

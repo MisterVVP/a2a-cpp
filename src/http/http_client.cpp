@@ -74,6 +74,9 @@ struct ClientState final {
   std::mutex mutex;
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
+  std::condition_variable streams_finished;
+  std::size_t active_streams = 0;
+  bool shutting_down = false;
   std::mutex stream_reactor_mutex;
   std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
@@ -142,10 +145,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   }
 
   ~CurlStreamReactor() {
-    Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
-    if (thread_.joinable()) {
-      thread_.join();
-    }
+    Shutdown();
 #if defined(__linux__)
     CloseDescriptor(timer_descriptor_);
     CloseDescriptor(wakeup_descriptor_);
@@ -165,6 +165,13 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
 
   void Cancel(const std::shared_ptr<Transfer>& transfer) {
     Enqueue(Command{.type = CommandType::kCancel, .transfer = transfer});
+  }
+
+  void Shutdown() {
+    Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
+    if (thread_.joinable()) {
+      thread_.join();
+    }
   }
 
  private:
@@ -765,6 +772,9 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
 core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::ClientState& state) {
   {
     std::lock_guard lock(state.stream_mutex);
+    if (state.shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+    }
     if (!state.idle_stream_slots.empty()) {
       auto slot = std::move(state.idle_stream_slots.back());
       state.idle_stream_slots.pop_back();
@@ -904,6 +914,18 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   std::shared_ptr<SerialStreamDispatch> dispatch = std::make_shared<SerialStreamDispatch>();
   std::mutex error_mutex;
   std::optional<core::Error> dispatch_error;
+  bool registered = false;
+
+  ~AsyncStreamState() {
+    if (!registered) {
+      return;
+    }
+    {
+      std::lock_guard lock(client_state->stream_mutex);
+      --client_state->active_streams;
+    }
+    client_state->streams_finished.notify_all();
+  }
 
   void RecordError(const core::Error& error) {
     {
@@ -992,6 +1014,26 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
 Client::Client() : state_(std::make_shared<detail::ClientState>()) {
   state_->global_state = EnsureCurlGlobalInit();
   state_->handle = curl_easy_init();
+}
+
+Client::~Client() { Shutdown(); }
+
+void Client::Shutdown() const {
+  std::shared_ptr<detail::CurlStreamReactor> reactor;
+  {
+    std::lock_guard lock(state_->stream_mutex);
+    state_->shutting_down = true;
+  }
+  {
+    std::lock_guard lock(state_->stream_reactor_mutex);
+    reactor = std::move(state_->stream_reactor);
+  }
+  if (reactor != nullptr) {
+    reactor->Shutdown();
+  }
+  reactor.reset();
+  std::unique_lock lock(state_->stream_mutex);
+  state_->streams_finished.wait(lock, [this] { return state_->active_streams == 0U; });
 }
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
@@ -1175,6 +1217,14 @@ core::Result<void> Client::StartStreamRequest(
       locked->Finish(code);
     }
   };
+  {
+    std::lock_guard lock(state_->stream_mutex);
+    if (state_->shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+    }
+    ++state_->active_streams;
+    async_state->registered = true;
+  }
   async_state->reactor->Add(async_state->transfer);
   if (register_cancellation) {
     register_cancellation([weak_state] {

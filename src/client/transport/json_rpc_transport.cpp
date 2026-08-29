@@ -837,6 +837,9 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
                                                                              const google::protobuf::Message& request,
                                                                              StreamObserver& observer,
                                                                              const CallOptions& options) const {
+  if (shutting_down_.load()) {
+    return core::Error::Network("JSON-RPC transport is shutting down").WithTransport("jsonrpc");
+  }
   if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {
     return core::Error::Validation("JsonRpcTransport requires a JSON-RPC interface");
   }
@@ -884,26 +887,17 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     const auto started = default_async_stream_client_->StartStreamRequest(
         ToSharedHttpRequest(http_request),
         [session, state](const a2a::http::Response& metadata) {
-          {
-            std::lock_guard lock(state->completion_mutex);
-            state->execution_thread_id = std::this_thread::get_id();
-          }
+          StreamHandle::State::CallbackExecutionScope callback_scope(*state);
           return session->ValidateMetadata(ToClientHttpResponse(a2a::http::Response{
               .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
         },
         [session, state](std::string_view chunk) {
-          {
-            std::lock_guard lock(state->completion_mutex);
-            state->execution_thread_id = std::this_thread::get_id();
-          }
+          StreamHandle::State::CallbackExecutionScope callback_scope(*state);
           return session->HandleChunk(chunk);
         },
         [state] { return state->cancel_requested.load(); }, MakeStreamCancellationRegistrar(state),
         [session, state](core::Result<a2a::http::Response> response) {
-          {
-            std::lock_guard lock(state->completion_mutex);
-            state->execution_thread_id = std::this_thread::get_id();
-          }
+          StreamHandle::State::CallbackExecutionScope callback_scope(*state);
           if (!response.ok()) {
             session->Complete(response.error());
           } else {
@@ -923,10 +917,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
   stream_executor_->Submit(
       [stream_requester = stream_requester_, cancellable_stream_requester = cancellable_stream_requester_,
        http_request = std::move(http_request), &observer, state, request_id]() mutable {
-        {
-          std::lock_guard lock(state->completion_mutex);
-          state->execution_thread_id = std::this_thread::get_id();
-        }
+        StreamHandle::State::CallbackExecutionScope callback_scope(*state);
         if (cancellable_stream_requester) {
           RunJsonRpcSseWorker(cancellable_stream_requester, http_request, observer, state, request_id);
         } else {
@@ -955,6 +946,15 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(cons
     return core::Error::Validation("GetTaskRequest.id is required");
   }
   return StartSseStream(core::json_rpc::MethodNames::kSubscribeToTask, request, observer, options);
+}
+
+core::Result<void> JsonRpcTransport::Shutdown() {
+  shutting_down_.store(true);
+  if (default_async_stream_client_ != nullptr) {
+    default_async_stream_client_->Shutdown();
+    default_async_stream_client_.reset();
+  }
+  return {};
 }
 
 }  // namespace a2a::client
