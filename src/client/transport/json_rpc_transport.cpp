@@ -26,9 +26,28 @@
 #include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "a2a/http/http_client.h"
 
 namespace a2a::client {
 namespace {
+
+a2a::http::Request ToSharedHttpRequest(const HttpRequest& request) {
+  a2a::http::Request converted{
+      .method = request.method, .url = request.url, .headers = {}, .body = request.body, .timeout = request.timeout};
+  converted.headers.reserve(request.headers.size());
+  for (const auto& [name, value] : request.headers) {
+    converted.headers.push_back({.name = name, .value = value});
+  }
+  return converted;
+}
+
+HttpClientResponse ToClientHttpResponse(a2a::http::Response response) {
+  HttpClientResponse converted{.status_code = response.status_code, .headers = {}, .body = std::move(response.body)};
+  for (auto& header : response.headers) {
+    converted.headers[std::move(header.name)] = std::move(header.value);
+  }
+  return converted;
+}
 
 StreamCancellationRegistrar MakeStreamCancellationRegistrar(const std::shared_ptr<StreamHandle::State>& state) {
   return [weak_state = std::weak_ptr<StreamHandle::State>(state)](const std::function<void()>& callback) {
@@ -389,6 +408,10 @@ class JsonRpcSseSession final {
                                      ? cancellable_stream_requester_(http_request_, metadata_handler, chunk_handler,
                                                                      cancelled, MakeStreamCancellationRegistrar(state_))
                                      : stream_requester_(http_request_, metadata_handler, chunk_handler, cancelled);
+    Complete(stream_response);
+  }
+
+  void Complete(const core::Result<HttpClientResponse>& stream_response) {
     if (StopIfCancelled()) {
       return;
     }
@@ -419,7 +442,6 @@ class JsonRpcSseSession final {
     MarkInactive(*state_);
   }
 
- private:
   core::Result<void> ValidateMetadata(const HttpClientResponse& response) {
     response_metadata_ = response;
     const auto version_check = ValidateResponseVersion(response_metadata_);
@@ -566,9 +588,11 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
 std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                   std::chrono::milliseconds default_timeout,
                                                                   RequestIdGenerator id_generator) {
-  return std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
-                                            MakeDefaultCancellableHttpStreamRequester(), default_timeout,
-                                            std::move(id_generator));
+  auto transport = std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
+                                                      MakeDefaultCancellableHttpStreamRequester(), default_timeout,
+                                                      std::move(id_generator));
+  transport->default_async_stream_client_ = std::make_shared<a2a::http::Client>();
+  return transport;
 }
 
 core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
@@ -854,6 +878,48 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     }
   }
   auto state = std::make_shared<StreamHandle::State>();
+  if (default_async_stream_client_ != nullptr) {
+    auto session = std::make_shared<JsonRpcSseSession>(HttpStreamRequesterWithCancellation{}, http_request, observer,
+                                                       state, request_id);
+    const auto started = default_async_stream_client_->StartStreamRequest(
+        ToSharedHttpRequest(http_request),
+        [session, state](const a2a::http::Response& metadata) {
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->execution_thread_id = std::this_thread::get_id();
+          }
+          return session->ValidateMetadata(ToClientHttpResponse(a2a::http::Response{
+              .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
+        },
+        [session, state](std::string_view chunk) {
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->execution_thread_id = std::this_thread::get_id();
+          }
+          return session->HandleChunk(chunk);
+        },
+        [state] { return state->cancel_requested.load(); }, MakeStreamCancellationRegistrar(state),
+        [session, state](core::Result<a2a::http::Response> response) {
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->execution_thread_id = std::this_thread::get_id();
+          }
+          if (!response.ok()) {
+            session->Complete(response.error());
+          } else {
+            session->Complete(ToClientHttpResponse(std::move(response.value())));
+          }
+          {
+            std::lock_guard lock(state->completion_mutex);
+            state->completed = true;
+          }
+          state->completion_condition.notify_all();
+        });
+    if (!started.ok()) {
+      return started.error();
+    }
+    return std::unique_ptr<StreamHandle>(new StreamHandle(state));
+  }
   stream_executor_->Submit(
       [stream_requester = stream_requester_, cancellable_stream_requester = cancellable_stream_requester_,
        http_request = std::move(http_request), &observer, state, request_id]() mutable {

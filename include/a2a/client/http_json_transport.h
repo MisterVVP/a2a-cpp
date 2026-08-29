@@ -14,6 +14,10 @@
 #include "a2a/client/discovery.h"
 #include "a2a/core/result.h"
 
+namespace a2a::http {
+class Client;
+}
+
 namespace a2a::client {
 
 namespace internal {
@@ -116,6 +120,7 @@ class HttpJsonTransport final : public ClientTransport {
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;
   std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
+  std::shared_ptr<http::Client> default_async_stream_client_;
 };
 
 }  // namespace a2a::client
