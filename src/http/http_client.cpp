@@ -80,7 +80,9 @@ struct ClientState final {
   std::size_t active_streams = 0;
   bool shutting_down = false;
   std::atomic<bool> suppress_stream_callbacks{false};
-  std::mutex stream_reactor_mutex;
+  // Guards the shutdown transition, stream accounting, reusable easy handles,
+  // and reactor ownership. Keeping these under one mutex makes it impossible
+  // to create a reactor after shutdown has claimed the client lifecycle.
   std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
 }  // namespace detail
@@ -108,9 +110,7 @@ constexpr std::size_t kMaxIdleStreamSlots = 64U;
 constexpr std::size_t kMaximumReactorEvents = 64U;
 constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
 constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
-constexpr std::size_t kMaximumActiveStreams = 256U;
 constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
-constexpr std::string_view kActiveStreamLimitExceededMessage = "HTTP active stream limit exceeded";
 constexpr std::chrono::milliseconds kSynchronousCancellationCheckInterval{1};
 
 thread_local detail::ClientState* g_dispatch_client_state = nullptr;
@@ -886,9 +886,10 @@ class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStr
     bool schedule = false;
     {
       std::lock_guard lock(mutex_);
-      if (!terminal &&
-          (tasks_.size() >= kMaximumPendingDispatchTasks ||
-           pending_bytes_ > kMaximumPendingDispatchBytes - std::min(pending_bytes, kMaximumPendingDispatchBytes))) {
+      const std::size_t bounded_pending_bytes =
+          pending_bytes < kMaximumPendingDispatchBytes ? pending_bytes : kMaximumPendingDispatchBytes;
+      if (!terminal && (tasks_.size() >= kMaximumPendingDispatchTasks ||
+                        pending_bytes_ > kMaximumPendingDispatchBytes - bounded_pending_bytes)) {
         return false;
       }
       tasks_.push_back(QueuedTask{.task = std::move(task), .pending_bytes = pending_bytes});
@@ -952,6 +953,7 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   std::optional<core::Error> dispatch_error;
   bool registered = false;
   std::atomic<bool> finalized{false};
+  std::atomic<bool> suppress_callbacks{false};
 
   void Finalize() {
     if (!registered || finalized.exchange(true)) {
@@ -972,13 +974,14 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
       }
       dispatch_error = error;
     }
+    suppress_callbacks.store(true);
     reactor->Cancel(transfer);
   }
 
   void QueueMetadata(Response response) {
     if (!dispatch->Enqueue([self = shared_from_this(), response = std::move(response)] {
           DispatchCallbackScope callback_scope(self->client_state.get());
-          if (self->client_state->suppress_stream_callbacks.load()) {
+          if (self->client_state->suppress_stream_callbacks.load() || self->suppress_callbacks.load()) {
             return;
           }
           const auto handled = self->metadata_handler(response);
@@ -995,7 +998,7 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
     if (!dispatch->Enqueue(
             [self = shared_from_this(), chunk = std::move(chunk)] {
               DispatchCallbackScope callback_scope(self->client_state.get());
-              if (self->client_state->suppress_stream_callbacks.load()) {
+              if (self->client_state->suppress_stream_callbacks.load() || self->suppress_callbacks.load()) {
                 return;
               }
               const auto handled = self->chunk_handler(chunk);
@@ -1052,8 +1055,11 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   }
 };
 
-std::shared_ptr<detail::CurlStreamReactor> GetStreamReactor(detail::ClientState& state) {
-  std::lock_guard lock(state.stream_reactor_mutex);
+core::Result<std::shared_ptr<detail::CurlStreamReactor>> GetStreamReactor(detail::ClientState& state) {
+  std::lock_guard lock(state.stream_mutex);
+  if (state.shutting_down) {
+    return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+  }
   if (state.stream_reactor == nullptr) {
     state.stream_reactor = detail::CurlStreamReactor::Create();
   }
@@ -1080,9 +1086,6 @@ void Client::Shutdown() const {
     std::lock_guard lock(state_->stream_mutex);
     state_->shutting_down = true;
     state_->suppress_stream_callbacks.store(true);
-  }
-  {
-    std::lock_guard lock(state_->stream_reactor_mutex);
     reactor = std::move(state_->stream_reactor);
   }
   if (reactor != nullptr) {
@@ -1235,7 +1238,11 @@ core::Result<void> Client::StartStreamRequest(
   }
   auto async_state = std::make_shared<AsyncStreamState>();
   async_state->client_state = state_;
-  async_state->reactor = GetStreamReactor(*state_);
+  auto reactor = GetStreamReactor(*state_);
+  if (!reactor.ok()) {
+    return reactor.error();
+  }
+  async_state->reactor = std::move(reactor.value());
   if (async_state->reactor == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
@@ -1317,9 +1324,6 @@ core::Result<void> Client::StartStreamRequest(
     std::lock_guard lock(state_->stream_mutex);
     if (state_->shutting_down) {
       return core::Error::Network("HTTP client is shutting down").WithTransport("http");
-    }
-    if (state_->active_streams >= kMaximumActiveStreams) {
-      return core::Error::Network(std::string(kActiveStreamLimitExceededMessage)).WithTransport("http");
     }
     ++state_->active_streams;
     async_state->registered = true;

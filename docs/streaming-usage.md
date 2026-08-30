@@ -27,9 +27,9 @@ stream requesters retain their transport-worker compatibility path.
 
 Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
 pending body data. The reactor never waits for callback capacity: exceeding a
-limit fails and cancels only that stream. The default HTTP client also limits
-active streams to 256, which bounds the shared executor's one-scheduled-task-per-
-stream queue while leaving the supported 64-stream profile well within capacity.
+limit fails and cancels only that stream. There is no fixed SDK limit on the
+number of active streams; network, server, and process resource limits still
+apply.
 
 Callback execution is marked only for the duration of each callback. Calling
 `Cancel()` recursively from that stream's callback requests cancellation and
@@ -57,12 +57,15 @@ timer readiness is forwarded to `curl_multi_socket_action()`. Other platforms
 use libcurl's event-driven multi wakeup fallback without a fixed wake interval.
 
 `A2AClient::Destroy()` explicitly shuts down a default HTTP transport. It rejects
-new streams, wakes and drains the reactor, cancels and detaches active transfers,
-and waits for already-dispatched observer work before returning. Consequently,
-an application observer is not called by a default HTTP stream after `Destroy()`
-returns. This shutdown coordination does not change the lifecycle of injected
-custom synchronous requesters, whose transport workers are still joined through
-their compatibility path.
+new streams, wakes and drains the reactor, and cancels and detaches active
+transfers. From an external thread, destruction waits for already-dispatched
+observer work before returning. When called reentrantly from a stream callback,
+the current callback may finish naturally, but no new callback for that stream
+begins after `Destroy()` returns. A callback for another stream that was already
+executing concurrently is likewise allowed to finish naturally; shutdown does
+not forcibly terminate application code. This coordination does not change the
+lifecycle of injected custom synchronous requesters, whose transport workers are
+still joined through their compatibility path.
 
 The synchronous `a2a::http::Client::StreamRequest()` API waits for its transfer
 while network I/O progresses on the shared reactor. Injected custom stream

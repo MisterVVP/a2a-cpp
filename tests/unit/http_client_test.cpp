@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
@@ -46,6 +47,7 @@ constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
 constexpr std::size_t kScalabilityStreamCount = 64U;
 constexpr std::size_t kMaximumSharedClientThreadGrowth = 8U;
+constexpr std::size_t kShutdownRaceStarterCount = 32U;
 constexpr int kShortStreamTimeoutMs = 100;
 constexpr int kCancellationRequestTimeoutMs = 30000;
 constexpr std::chrono::milliseconds kHangPollInterval{10};
@@ -71,6 +73,8 @@ constexpr std::string_view kFirstSseChunk = "data: first\n\n";
 constexpr std::string_view kSecondSseChunk = "data: second\n\n";
 constexpr std::string_view kMetadataRejectedMessage = "metadata rejected before stream body";
 constexpr std::string_view kGetStreamRequestLine = "GET /stream HTTP/1.1";
+constexpr std::string_view kUnavailableStreamUrl = "http://127.0.0.1:1/stream";
+constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
 constexpr std::string_view kContentLengthHeaderPrefix = "Content-Length:";
 constexpr std::string_view kFormContentTypeHeader = "Content-Type: application/x-www-form-urlencoded";
 constexpr std::string_view kAgentCardBody =
@@ -977,6 +981,66 @@ TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
   ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
   EXPECT_TRUE(shutdown_returned.load());
   EXPECT_TRUE(completed.get().ok());
+}
+
+void InitializeSharedDispatchWorkers() {
+  LoopbackHttpServer server{std::string(kSseHeaders) + std::string(kFirstSseChunk)};
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  std::promise<void> completion;
+  auto completed = completion.get_future();
+  const auto started = client.StartStreamRequest(
+      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+      [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
+      [&completion](a2a::core::Result<a2a::http::Response>) { completion.set_value(); });
+  ASSERT_TRUE(started.ok()) << started.error().message();
+  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
+  client.Shutdown();
+}
+
+TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
+  InitializeSharedDispatchWorkers();
+#if defined(__linux__)
+  const std::size_t baseline_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+#endif
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = kUnavailableStreamUrl;
+  request.timeout = std::chrono::milliseconds(kShortStreamTimeoutMs);
+  std::barrier start_gate(static_cast<std::ptrdiff_t>(kShutdownRaceStarterCount + 1U));
+  std::vector<std::jthread> starters;
+  starters.reserve(kShutdownRaceStarterCount);
+
+  for (std::size_t index = 0; index < kShutdownRaceStarterCount; ++index) {
+    starters.emplace_back([&] {
+      start_gate.arrive_and_wait();
+      (void)client.StartStreamRequest(
+          request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+          [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
+          [](a2a::core::Result<a2a::http::Response>) {});
+    });
+  }
+  start_gate.arrive_and_wait();
+  client.Shutdown();
+  starters.clear();
+  client.Shutdown();
+
+  const auto rejected = client.StartStreamRequest(
+      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+      [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
+      [](a2a::core::Result<a2a::http::Response>) {});
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().message(), kClientShuttingDownMessage);
+#if defined(__linux__)
+  const std::size_t finished_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+  EXPECT_EQ(finished_threads, baseline_threads);
+#endif
 }
 
 void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,
