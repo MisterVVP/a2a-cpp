@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -440,6 +441,28 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
   return {};
 }
 
+bool IsStreamingWireScenario(std::string_view scenario);
+
+std::vector<std::unique_ptr<a2a::client::A2AClient>> MakeMeasuredClients(const WireOptions& options, int client_count) {
+  std::vector<std::unique_ptr<a2a::client::A2AClient>> clients;
+  clients.reserve(static_cast<std::size_t>(client_count));
+  for (int worker_index = 0; worker_index < client_count; ++worker_index) {
+    clients.push_back(MakeClient(options));
+  }
+  return clients;
+}
+
+OperationOutcome ExecuteMeasuredWireOperation(const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
+                                              const std::string& scenario,
+                                              const std::vector<std::string>& follow_up_task_ids,
+                                              const FocusedWireFixture& focused_fixture,
+                                              bool use_shared_http_stream_client, int worker_index, int index) {
+  const std::string_view task_id =
+      follow_up_task_ids.empty() ? std::string_view{} : follow_up_task_ids[static_cast<std::size_t>(index)];
+  const std::size_t client_index = use_shared_http_stream_client ? 0U : static_cast<std::size_t>(worker_index);
+  return ExecuteScenario(clients[client_index].get(), scenario, index, focused_fixture, task_id);
+}
+
 ScenarioResult RunWireScenario(const WireOptions& options, const std::string& scenario) {
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
   int warmup_index = -1;
@@ -464,11 +487,9 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
   }
 
   const int worker_count = std::min(options.concurrency, options.requests);
-  std::vector<std::unique_ptr<a2a::client::A2AClient>> clients;
-  clients.reserve(static_cast<std::size_t>(worker_count));
-  for (int worker_index = 0; worker_index < worker_count; ++worker_index) {
-    clients.push_back(MakeClient(options));
-  }
+  const bool use_shared_http_stream_client = IsStreamingWireScenario(scenario) && options.transport != kGrpcTransport;
+  const int client_count = use_shared_http_stream_client ? 1 : worker_count;
+  auto clients = MakeMeasuredClients(options, client_count);
   const a2a::client::CallOptions fixture_call_options = MakeCallOptions();
   FocusedWireFixture focused_fixture;
   if (!PrepareFocusedWireFixture(clients.front().get(), scenario, options.requests, "wire-measured-fixture",
@@ -508,14 +529,19 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  return RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
-                             [&clients, &scenario, &follow_up_task_ids, &focused_fixture](int worker_index, int index) {
-                               const std::string_view task_id =
-                                   follow_up_task_ids.empty() ? std::string_view{}
-                                                              : follow_up_task_ids[static_cast<std::size_t>(index)];
-                               return ExecuteScenario(clients[static_cast<std::size_t>(worker_index)].get(), scenario,
-                                                      index, focused_fixture, task_id);
-                             });
+  warmup_client.reset();
+  ScenarioResult result =
+      RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
+                          [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_stream_client](
+                              int worker_index, int index) {
+                            return ExecuteMeasuredWireOperation(clients, scenario, follow_up_task_ids, focused_fixture,
+                                                                use_shared_http_stream_client, worker_index, index);
+                          });
+#if defined(__linux__)
+  result.client_process_thread_count = static_cast<int>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+#endif
+  return result;
 }
 
 bool IsPushConfigWireScenario(std::string_view scenario) {
@@ -637,6 +663,9 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   }
   SetNumberField(&object, "configured_duration_seconds", options.duration_seconds);
   SetNumberField(&object, "measured_duration_seconds", result.measured_duration_seconds);
+  if (IsStreamingWireScenario(result.scenario) && options.transport != kGrpcTransport) {
+    SetIntegerField(&object, "client_process_thread_count", result.client_process_thread_count);
+  }
   SetStringField(&object, "driver_type", kWireDriverType);
   SetStringField(&object, "transport_path", TransportPath(options.transport));
   AddLatencyField(&object, result);

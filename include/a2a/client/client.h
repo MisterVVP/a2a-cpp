@@ -78,13 +78,22 @@ class StreamObserver {
 class StreamHandle final : private core::NonCopyable {
  public:
   struct State final {
+    class CallbackExecutionScope final : private core::NonCopyable {
+     public:
+      explicit CallbackExecutionScope(State& state);
+      ~CallbackExecutionScope();
+
+     private:
+      State& state_;
+    };
+
     std::atomic<bool> cancel_requested{false};
     std::atomic<bool> active{true};
     std::mutex cancellation_mutex;
     std::function<void()> cancel_callback;
     std::mutex completion_mutex;
     std::condition_variable completion_condition;
-    std::thread::id execution_thread_id;
+    std::thread::id callback_thread_id;
     bool completed = false;
 
     void RegisterCancelCallback(const std::function<void()>& callback);

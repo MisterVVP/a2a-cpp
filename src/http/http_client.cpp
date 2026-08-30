@@ -20,7 +20,9 @@
 #include <cerrno>
 #endif
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
@@ -74,7 +76,13 @@ struct ClientState final {
   std::mutex mutex;
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
-  std::mutex stream_reactor_mutex;
+  std::condition_variable streams_finished;
+  std::size_t active_streams = 0;
+  bool shutting_down = false;
+  std::atomic<bool> suppress_stream_callbacks{false};
+  // Guards the shutdown transition, stream accounting, reusable easy handles,
+  // and reactor ownership. Keeping these under one mutex makes it impossible
+  // to create a reactor after shutdown has claimed the client lifecycle.
   std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
 }  // namespace detail
@@ -99,7 +107,26 @@ constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
+#if defined(__linux__)
 constexpr std::size_t kMaximumReactorEvents = 64U;
+#endif
+constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
+constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
+constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
+constexpr std::chrono::milliseconds kSynchronousCancellationCheckInterval{1};
+
+thread_local detail::ClientState* g_dispatch_client_state = nullptr;
+
+class DispatchCallbackScope final {
+ public:
+  explicit DispatchCallbackScope(detail::ClientState* state) : previous_(g_dispatch_client_state) {
+    g_dispatch_client_state = state;
+  }
+  ~DispatchCallbackScope() { g_dispatch_client_state = previous_; }
+
+ private:
+  detail::ClientState* previous_;
+};
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   static const auto init = std::make_shared<detail::ClientGlobalState>();
@@ -142,10 +169,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   }
 
   ~CurlStreamReactor() {
-    Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
-    if (thread_.joinable()) {
-      thread_.join();
-    }
+    Shutdown();
 #if defined(__linux__)
     CloseDescriptor(timer_descriptor_);
     CloseDescriptor(wakeup_descriptor_);
@@ -165,6 +189,13 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
 
   void Cancel(const std::shared_ptr<Transfer>& transfer) {
     Enqueue(Command{.type = CommandType::kCancel, .transfer = transfer});
+  }
+
+  void Shutdown() {
+    Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
+    if (thread_.joinable()) {
+      thread_.join();
+    }
   }
 
  private:
@@ -765,6 +796,9 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
 core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::ClientState& state) {
   {
     std::lock_guard lock(state.stream_mutex);
+    if (state.shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+    }
     if (!state.idle_stream_slots.empty()) {
       auto slot = std::move(state.idle_stream_slots.back());
       state.idle_stream_slots.pop_back();
@@ -850,38 +884,53 @@ class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStr
  public:
   using Task = std::function<void()>;
 
-  void Enqueue(Task task) {
+  bool Enqueue(Task task, std::size_t pending_bytes = 0U, bool terminal = false) {
     bool schedule = false;
     {
       std::lock_guard lock(mutex_);
-      tasks_.push_back(std::move(task));
+      const std::size_t bounded_pending_bytes =
+          pending_bytes < kMaximumPendingDispatchBytes ? pending_bytes : kMaximumPendingDispatchBytes;
+      if (!terminal && (tasks_.size() >= kMaximumPendingDispatchTasks ||
+                        pending_bytes_ > kMaximumPendingDispatchBytes - bounded_pending_bytes)) {
+        return false;
+      }
+      tasks_.push_back(QueuedTask{.task = std::move(task), .pending_bytes = pending_bytes});
+      pending_bytes_ += pending_bytes;
       schedule = !scheduled_;
       scheduled_ = true;
     }
     if (schedule) {
       GetStreamDispatchExecutor().Submit([self = shared_from_this()] { self->Drain(); });
     }
+    return true;
   }
 
  private:
   void Drain() {
     while (true) {
-      Task task;
+      QueuedTask queued;
       {
         std::lock_guard lock(mutex_);
         if (tasks_.empty()) {
           scheduled_ = false;
           return;
         }
-        task = std::move(tasks_.front());
+        queued = std::move(tasks_.front());
         tasks_.pop_front();
+        pending_bytes_ -= queued.pending_bytes;
       }
-      task();
+      queued.task();
     }
   }
 
+  struct QueuedTask final {
+    Task task;
+    std::size_t pending_bytes = 0U;
+  };
+
   std::mutex mutex_;
-  std::deque<Task> tasks_;
+  std::deque<QueuedTask> tasks_;
+  std::size_t pending_bytes_ = 0U;
   bool scheduled_ = false;
 };
 
@@ -904,6 +953,20 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   std::shared_ptr<SerialStreamDispatch> dispatch = std::make_shared<SerialStreamDispatch>();
   std::mutex error_mutex;
   std::optional<core::Error> dispatch_error;
+  bool registered = false;
+  std::atomic<bool> finalized{false};
+  std::atomic<bool> suppress_callbacks{false};
+
+  void Finalize() {
+    if (!registered || finalized.exchange(true)) {
+      return;
+    }
+    {
+      std::lock_guard lock(client_state->stream_mutex);
+      --client_state->active_streams;
+    }
+    client_state->streams_finished.notify_all();
+  }
 
   void RecordError(const core::Error& error) {
     {
@@ -913,34 +976,54 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
       }
       dispatch_error = error;
     }
+    suppress_callbacks.store(true);
     reactor->Cancel(transfer);
   }
 
   void QueueMetadata(Response response) {
-    dispatch->Enqueue([self = shared_from_this(), response = std::move(response)] {
-      const auto handled = self->metadata_handler(response);
-      if (!handled.ok()) {
-        self->RecordError(handled.error());
-      }
-    });
+    if (!dispatch->Enqueue([self = shared_from_this(), response = std::move(response)] {
+          DispatchCallbackScope callback_scope(self->client_state.get());
+          if (self->client_state->suppress_stream_callbacks.load() || self->suppress_callbacks.load()) {
+            return;
+          }
+          const auto handled = self->metadata_handler(response);
+          if (!handled.ok()) {
+            self->RecordError(handled.error());
+          }
+        })) {
+      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport("http"));
+    }
   }
 
   void QueueChunk(std::string chunk) {
-    dispatch->Enqueue([self = shared_from_this(), chunk = std::move(chunk)] {
-      const auto handled = self->chunk_handler(chunk);
-      if (!handled.ok()) {
-        self->RecordError(handled.error());
-      }
-    });
+    const std::size_t chunk_size = chunk.size();
+    if (!dispatch->Enqueue(
+            [self = shared_from_this(), chunk = std::move(chunk)] {
+              DispatchCallbackScope callback_scope(self->client_state.get());
+              if (self->client_state->suppress_stream_callbacks.load() || self->suppress_callbacks.load()) {
+                return;
+              }
+              const auto handled = self->chunk_handler(chunk);
+              if (!handled.ok()) {
+                self->RecordError(handled.error());
+              }
+            },
+            chunk_size)) {
+      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport("http"));
+    }
   }
 
   void Finish(CURLcode code) {
-    dispatch->Enqueue([self = shared_from_this(), code] {
-      core::Result<Response> result = self->BuildResult(code);
-      ReleaseStreamSlot(*self->client_state, std::move(self->slot));
-      self->completion(std::move(result));
-      self->transfer->lifetime.reset();
-    });
+    (void)dispatch->Enqueue(
+        [self = shared_from_this(), code] {
+          DispatchCallbackScope callback_scope(self->client_state.get());
+          core::Result<Response> result = self->BuildResult(code);
+          ReleaseStreamSlot(*self->client_state, std::move(self->slot));
+          self->completion(std::move(result));
+          self->transfer->lifetime.reset();
+          self->Finalize();
+        },
+        0U, true);
   }
 
   core::Result<Response> BuildResult(CURLcode code) {
@@ -974,8 +1057,11 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   }
 };
 
-std::shared_ptr<detail::CurlStreamReactor> GetStreamReactor(detail::ClientState& state) {
-  std::lock_guard lock(state.stream_reactor_mutex);
+core::Result<std::shared_ptr<detail::CurlStreamReactor>> GetStreamReactor(detail::ClientState& state) {
+  std::lock_guard lock(state.stream_mutex);
+  if (state.shutting_down) {
+    return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+  }
   if (state.stream_reactor == nullptr) {
     state.stream_reactor = detail::CurlStreamReactor::Create();
   }
@@ -992,6 +1078,27 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
 Client::Client() : state_(std::make_shared<detail::ClientState>()) {
   state_->global_state = EnsureCurlGlobalInit();
   state_->handle = curl_easy_init();
+}
+
+Client::~Client() { Shutdown(); }
+
+void Client::Shutdown() const {
+  std::shared_ptr<detail::CurlStreamReactor> reactor;
+  {
+    std::lock_guard lock(state_->stream_mutex);
+    state_->shutting_down = true;
+    state_->suppress_stream_callbacks.store(true);
+    reactor = std::move(state_->stream_reactor);
+  }
+  if (reactor != nullptr) {
+    reactor->Shutdown();
+  }
+  reactor.reset();
+  if (g_dispatch_client_state == state_.get()) {
+    return;
+  }
+  std::unique_lock lock(state_->stream_mutex);
+  state_->streams_finished.wait(lock, [this] { return state_->active_streams == 0U; });
 }
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
@@ -1058,8 +1165,19 @@ core::Result<Response> Client::StreamRequest(
   std::condition_variable completion_condition;
   core::Result<Response> response = core::Error::Internal("HTTP stream completion is pending");
   bool completed = false;
+  std::mutex cancellation_mutex;
+  std::function<void()> cancel_transfer;
+  const bool needs_cancellation_watcher = !register_cancellation;
+  const auto effective_cancellation_registrar =
+      needs_cancellation_watcher
+          ? std::function<void(const std::function<void()>&)>{[&cancellation_mutex, &cancel_transfer](
+                                                                  const std::function<void()>& callback) {
+              std::lock_guard lock(cancellation_mutex);
+              cancel_transfer = callback;
+            }}
+          : register_cancellation;
   const auto started = StartStreamRequest(
-      request, on_metadata, on_chunk, is_cancelled, register_cancellation,
+      request, on_metadata, on_chunk, is_cancelled, effective_cancellation_registrar,
       [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
         {
           std::lock_guard lock(completion_mutex);
@@ -1071,8 +1189,33 @@ core::Result<Response> Client::StreamRequest(
   if (!started.ok()) {
     return started.error();
   }
+  std::atomic<bool> stop_cancellation_watcher{false};
+  std::thread cancellation_watcher;
+  if (needs_cancellation_watcher) {
+    cancellation_watcher = std::thread([&] {
+      while (!stop_cancellation_watcher.load()) {
+        if (is_cancelled()) {
+          std::function<void()> cancel;
+          {
+            std::lock_guard lock(cancellation_mutex);
+            cancel = cancel_transfer;
+          }
+          if (cancel) {
+            cancel();
+          }
+          return;
+        }
+        std::this_thread::sleep_for(kSynchronousCancellationCheckInterval);
+      }
+    });
+  }
   std::unique_lock lock(completion_mutex);
   completion_condition.wait(lock, [&completed] { return completed; });
+  lock.unlock();
+  stop_cancellation_watcher.store(true);
+  if (cancellation_watcher.joinable()) {
+    cancellation_watcher.join();
+  }
   return response;
 }
 
@@ -1097,7 +1240,11 @@ core::Result<void> Client::StartStreamRequest(
   }
   auto async_state = std::make_shared<AsyncStreamState>();
   async_state->client_state = state_;
-  async_state->reactor = GetStreamReactor(*state_);
+  auto reactor = GetStreamReactor(*state_);
+  if (!reactor.ok()) {
+    return reactor.error();
+  }
+  async_state->reactor = std::move(reactor.value());
   if (async_state->reactor == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
@@ -1175,6 +1322,14 @@ core::Result<void> Client::StartStreamRequest(
       locked->Finish(code);
     }
   };
+  {
+    std::lock_guard lock(state_->stream_mutex);
+    if (state_->shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+    }
+    ++state_->active_streams;
+    async_state->registered = true;
+  }
   async_state->reactor->Add(async_state->transfer);
   if (register_cancellation) {
     register_cancellation([weak_state] {

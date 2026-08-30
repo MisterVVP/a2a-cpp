@@ -154,6 +154,7 @@ struct ScenarioResult final {
   int callback_count = 0;
   int fanout_per_operation = 0;
   int total_fanout_count = 0;
+  int client_process_thread_count = 0;
   double throughput = 0.0;
   std::vector<double> latencies;
   std::vector<double> first_event_latencies;

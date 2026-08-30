@@ -255,6 +255,28 @@ class PerformanceRunnerTest(unittest.TestCase):
                 runner.DEFAULT_POSTGRES_POOL_SIZE, runner.SUT_PORT_RANGE_START
             )
 
+    def test_sut_shutdown_timeout_reports_coordinate_and_log_tail(self):
+        runner = load_runner_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "sut.log"
+            log_path.write_text("stuck joining HTTP connection threads\n", encoding="utf-8")
+            sut = runner.SutProcess.__new__(runner.SutProcess)
+            sut.process = mock.Mock()
+            sut.process.poll.return_value = None
+            sut.process.wait.side_effect = [subprocess.TimeoutExpired("tck_sut", 10.0), 0]
+            sut.log_path = log_path
+            sut.transport = "http_json"
+            sut.store_backend = "inmemory"
+            sut.concurrency = 1
+
+            with self.assertRaisesRegex(
+                ValueError, "failed to terminate gracefully for http_json/inmemory/c1"
+            ) as raised:
+                sut.__exit__(None, None, None)
+
+            self.assertIn("stuck joining HTTP connection threads", str(raised.exception))
+            sut.process.kill.assert_called_once_with()
+
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             completed = subprocess.run([

@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "a2a/client/call_options.h"
@@ -71,6 +73,7 @@ class JsonRpcTransport final : public ClientTransport {
   [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                           StreamObserver& observer,
                                                                           const CallOptions& options) override;
+  [[nodiscard]] core::Result<void> Shutdown() override;
 
  private:
   [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(std::string request_body,
@@ -92,7 +95,9 @@ class JsonRpcTransport final : public ClientTransport {
   std::chrono::milliseconds default_timeout_;
   RequestIdGenerator id_generator_;
   std::shared_ptr<internal::StreamWorkerExecutor> stream_executor_;
+  mutable std::mutex async_client_mutex_;
   std::shared_ptr<http::Client> default_async_stream_client_;
+  std::shared_ptr<std::atomic<bool>> async_shutdown_ = std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace a2a::client
