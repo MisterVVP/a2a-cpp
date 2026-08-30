@@ -57,13 +57,27 @@ struct StreamCallbackContext final {
 
 class Client final {
  public:
+  using StreamCompletion = std::function<void(core::Result<Response>)>;
   Client();
+  ~Client();
 
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
   [[nodiscard]] core::Result<Response> StreamRequest(
       const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
       const std::function<core::Result<void>(std::string_view)>& on_chunk,
       const std::function<bool()>& is_cancelled) const;
+  [[nodiscard]] core::Result<Response> StreamRequest(
+      const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+      const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
+      const std::function<void(const std::function<void()>&)>& register_cancellation) const;
+  // Starts a reactor transfer and returns after registration. Stream callbacks
+  // are serialized on shared dispatch workers, never the reactor thread.
+  [[nodiscard]] core::Result<void> StartStreamRequest(
+      Request request, std::function<core::Result<void>(const Response&)> on_metadata,
+      std::function<core::Result<void>(std::string_view)> on_chunk, std::function<bool()> is_cancelled,
+      const std::function<void(const std::function<void()>&)>& register_cancellation,
+      StreamCompletion on_complete) const;
+  void Shutdown() const;
 
  private:
   std::shared_ptr<detail::ClientState> state_;

@@ -38,10 +38,10 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
-            self.assertEqual(36, len(payload["results"]))
+            self.assertEqual(37, len(payload["results"]))
             self.assertEqual({"cpp_sdk_in_process", "wire_tck_sut"}, {result["driver_type"] for result in payload["results"]})
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
-            self.assertEqual(14, len(wire_rows))
+            self.assertEqual(15, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
             self.assertTrue(all("http_coordinate_accepted_connections" not in result for result in wire_rows))
             self.assertTrue(all("http_coordinate_completed_unary_operations" not in result for result in wire_rows))
@@ -255,6 +255,28 @@ class PerformanceRunnerTest(unittest.TestCase):
                 runner.DEFAULT_POSTGRES_POOL_SIZE, runner.SUT_PORT_RANGE_START
             )
 
+    def test_sut_shutdown_timeout_reports_coordinate_and_log_tail(self):
+        runner = load_runner_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "sut.log"
+            log_path.write_text("stuck joining HTTP connection threads\n", encoding="utf-8")
+            sut = runner.SutProcess.__new__(runner.SutProcess)
+            sut.process = mock.Mock()
+            sut.process.poll.return_value = None
+            sut.process.wait.side_effect = [subprocess.TimeoutExpired("tck_sut", 10.0), 0]
+            sut.log_path = log_path
+            sut.transport = "http_json"
+            sut.store_backend = "inmemory"
+            sut.concurrency = 1
+
+            with self.assertRaisesRegex(
+                ValueError, "failed to terminate gracefully for http_json/inmemory/c1"
+            ) as raised:
+                sut.__exit__(None, None, None)
+
+            self.assertIn("stuck joining HTTP connection threads", str(raised.exception))
+            sut.process.kill.assert_called_once_with()
+
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             completed = subprocess.run([
@@ -445,7 +467,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         store_pool_count = len(config.postgres_pool_sizes) + len(non_postgres_stores)
         matrix_entries = store_pool_count * len(config.concurrency_levels)
         expected_rows = matrix_entries * (
-            len(runner.SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
+            len(runner.IN_PROCESS_SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
         )
         expected_message = (
             f"estimated_rows={expected_rows} "
@@ -457,6 +479,14 @@ class PerformanceRunnerTest(unittest.TestCase):
             runner.log_workload_estimate(config)
 
         log_progress.assert_called_once_with(expected_message)
+
+    def test_idle_cancellation_is_wire_only(self):
+        runner = load_runner_module()
+        scenario = "IdleStream_ClientCancellationLatency"
+
+        self.assertIn(scenario, runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn(scenario, runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertNotIn(scenario, runner.in_process_scenarios())
 
     def test_normal_workload_estimate_honors_scenario_filter(self):
         runner = load_runner_module()

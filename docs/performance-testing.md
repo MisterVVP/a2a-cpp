@@ -132,7 +132,12 @@ The current real wire-level scenario set covers core lifecycle operations, push 
 `CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`,
 `SendMessage_FollowUpAtHistoryDepth/8`,
 `GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
-`PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`, and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
+`PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`,
+`SubscribeToTask_FirstEventLatency`, and `IdleStream_ClientCancellationLatency`.
+The idle-stream cancellation scenario seeds a task, establishes a real subscription,
+waits for its initial event, and then measures only the synchronous local
+`StreamHandle::Cancel()` call. It does not invoke the protocol-level `CancelTask`
+operation or ask the server to publish a terminal event. The wire driver reuses one client/transport per
 worker thread so measured operations do not recreate gRPC channels or HTTP
 transport objects. The libcurl-backed HTTP client also keeps a reusable easy
 handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and

@@ -12,6 +12,30 @@
 #include "a2a/core/protocol_methods.h"
 
 namespace a2a::client {
+StreamHandle::State::CallbackExecutionScope::CallbackExecutionScope(State& state) : state_(state) {
+  std::lock_guard lock(state_.completion_mutex);
+  state_.callback_thread_id = std::this_thread::get_id();
+}
+
+StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
+  std::lock_guard lock(state_.completion_mutex);
+  state_.callback_thread_id = {};
+}
+
+void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& callback) {
+  bool cancellation_already_requested = false;
+  {
+    std::lock_guard lock(cancellation_mutex);
+    cancellation_already_requested = cancel_requested.load();
+    if (!cancellation_already_requested) {
+      cancel_callback = callback;
+    }
+  }
+  if (cancellation_already_requested) {
+    callback();
+  }
+}
+
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
     : state_(std::move(state)), worker_(std::move(worker)) {}
 
@@ -60,7 +84,7 @@ void StreamHandle::Cancel() {
     worker.join();
   }
   std::unique_lock completion_lock(state_->completion_mutex);
-  if (execution_mode_ == ExecutionMode::kExecutor && state_->execution_thread_id != std::this_thread::get_id()) {
+  if (execution_mode_ == ExecutionMode::kExecutor && state_->callback_thread_id != std::this_thread::get_id()) {
     state_->completion_condition.wait(completion_lock, [this] { return state_->completed; });
   }
 }

@@ -11,15 +11,34 @@
 #if defined(A2A_HAS_LIBCURL)
 #include <curl/curl.h>
 
+#if defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <system_error>
+#include <thread>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 #endif
 
 namespace a2a::http {
@@ -27,6 +46,8 @@ namespace a2a::http {
 #if defined(A2A_HAS_LIBCURL)
 
 namespace detail {
+class CurlStreamReactor;
+
 struct ClientGlobalState final {
   ClientGlobalState() : code(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
 
@@ -35,16 +56,12 @@ struct ClientGlobalState final {
 
 struct StreamSlot final {
   ~StreamSlot() {
-    if (multi_handle != nullptr) {
-      curl_multi_cleanup(multi_handle);
-    }
     if (easy_handle != nullptr) {
       curl_easy_cleanup(easy_handle);
     }
   }
 
   CURL* easy_handle = nullptr;
-  CURLM* multi_handle = nullptr;
 };
 
 struct ClientState final {
@@ -59,6 +76,14 @@ struct ClientState final {
   std::mutex mutex;
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
+  std::condition_variable streams_finished;
+  std::size_t active_streams = 0;
+  bool shutting_down = false;
+  std::atomic<bool> suppress_stream_callbacks{false};
+  // Guards the shutdown transition, stream accounting, reusable easy handles,
+  // and reactor ownership. Keeping these under one mutex makes it impossible
+  // to create a reactor after shutdown has claimed the client lifecycle.
+  std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
 }  // namespace detail
 
@@ -70,8 +95,6 @@ constexpr std::string_view kConfigureRequestFailureMessage = "failed to configur
 constexpr std::string_view kErrorBufferFailureMessage = "failed to configure HTTP client error buffer";
 constexpr std::string_view kRequestFailureMessage = "failed to execute HTTP request";
 constexpr std::string_view kCurlMultiInitFailureMessage = "failed to initialize HTTP stream poller";
-constexpr std::string_view kCurlMultiFailureMessage = "failed to execute polled HTTP stream";
-constexpr std::string_view kCurlMultiCompletionFailureMessage = "HTTP stream ended without a libcurl completion";
 constexpr std::string_view kReadStatusFailureMessage = "failed to read HTTP response status";
 constexpr std::string_view kUnsupportedHttpVersionMessage = "HTTP client supports only HTTP/1.1, HTTP/2.0, or HTTP/3.0";
 constexpr std::string_view kMalformedStatusMessage = "HTTP server did not return a response status";
@@ -83,8 +106,27 @@ constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
-constexpr int kStreamPollTimeoutMs = 100;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
+#if defined(__linux__)
+constexpr std::size_t kMaximumReactorEvents = 64U;
+#endif
+constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
+constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
+constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
+constexpr std::chrono::milliseconds kSynchronousCancellationCheckInterval{1};
+
+thread_local detail::ClientState* g_dispatch_client_state = nullptr;
+
+class DispatchCallbackScope final {
+ public:
+  explicit DispatchCallbackScope(detail::ClientState* state) : previous_(g_dispatch_client_state) {
+    g_dispatch_client_state = state;
+  }
+  ~DispatchCallbackScope() { g_dispatch_client_state = previous_; }
+
+ private:
+  detail::ClientState* previous_;
+};
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
   static const auto init = std::make_shared<detail::ClientGlobalState>();
@@ -101,26 +143,363 @@ struct CurlSlistDeleter final {
 
 using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
-class CurlMultiAttachment final {
- public:
-  CurlMultiAttachment(CURLM* multi_handle, CURL* easy_handle)
-      : multi_handle_(multi_handle), easy_handle_(easy_handle) {}
+}  // namespace
 
-  ~CurlMultiAttachment() {
-    if (multi_handle_ != nullptr && easy_handle_ != nullptr) {
-      (void)curl_multi_remove_handle(multi_handle_, easy_handle_);
+namespace detail {
+
+class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamReactor> {
+ public:
+  struct Transfer final {
+    CURL* easy_handle = nullptr;
+    std::mutex mutex;
+    std::condition_variable completed;
+    CURLcode result = CURLE_ABORTED_BY_CALLBACK;
+    bool done = false;
+    std::function<void(CURLcode)> on_complete;
+    std::shared_ptr<void> lifetime;
+  };
+
+  static std::shared_ptr<CurlStreamReactor> Create() {
+    auto reactor = std::shared_ptr<CurlStreamReactor>(new CurlStreamReactor());
+    if (!reactor->valid_) {
+      return {};
+    }
+    reactor->thread_ = std::thread([reactor_pointer = reactor.get()] { reactor_pointer->Run(); });
+    return reactor;
+  }
+
+  ~CurlStreamReactor() {
+    Shutdown();
+#if defined(__linux__)
+    CloseDescriptor(timer_descriptor_);
+    CloseDescriptor(wakeup_descriptor_);
+    CloseDescriptor(epoll_descriptor_);
+#endif
+    if (multi_handle_ != nullptr) {
+      curl_multi_cleanup(multi_handle_);
     }
   }
 
-  CurlMultiAttachment(const CurlMultiAttachment&) = delete;
-  CurlMultiAttachment& operator=(const CurlMultiAttachment&) = delete;
-  CurlMultiAttachment(CurlMultiAttachment&&) = delete;
-  CurlMultiAttachment& operator=(CurlMultiAttachment&&) = delete;
+  CurlStreamReactor(const CurlStreamReactor&) = delete;
+  CurlStreamReactor& operator=(const CurlStreamReactor&) = delete;
+
+  void Add(const std::shared_ptr<Transfer>& transfer) {
+    Enqueue(Command{.type = CommandType::kAdd, .transfer = transfer});
+  }
+
+  void Cancel(const std::shared_ptr<Transfer>& transfer) {
+    Enqueue(Command{.type = CommandType::kCancel, .transfer = transfer});
+  }
+
+  void Shutdown() {
+    Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
 
  private:
-  CURLM* multi_handle_;
-  CURL* easy_handle_;
+  enum class CommandType : std::uint8_t { kAdd, kCancel, kShutdown };
+  struct Command final {
+    CommandType type = CommandType::kShutdown;
+    std::shared_ptr<Transfer> transfer;
+  };
+
+  CurlStreamReactor() : multi_handle_(curl_multi_init()) {
+    if (multi_handle_ == nullptr) {
+      return;
+    }
+#if defined(__linux__)
+    epoll_descriptor_ = epoll_create1(EPOLL_CLOEXEC);
+    wakeup_descriptor_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    timer_descriptor_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    valid_ = epoll_descriptor_ >= 0 && wakeup_descriptor_ >= 0 && timer_descriptor_ >= 0 &&
+             AddInternalDescriptor(wakeup_descriptor_) && AddInternalDescriptor(timer_descriptor_);
+#else
+    valid_ = true;
+#endif
+    valid_ = valid_ && curl_multi_setopt(multi_handle_, CURLMOPT_SOCKETFUNCTION, &HandleSocket) == CURLM_OK &&
+             curl_multi_setopt(multi_handle_, CURLMOPT_SOCKETDATA, this) == CURLM_OK &&
+             curl_multi_setopt(multi_handle_, CURLMOPT_TIMERFUNCTION, &HandleTimer) == CURLM_OK &&
+             curl_multi_setopt(multi_handle_, CURLMOPT_TIMERDATA, this) == CURLM_OK;
+  }
+
+  void Enqueue(Command command) {
+    {
+      std::lock_guard lock(command_mutex_);
+      if (shutdown_enqueued_ && command.type != CommandType::kShutdown) {
+        Complete(command.transfer, CURLE_ABORTED_BY_CALLBACK);
+        return;
+      }
+      shutdown_enqueued_ = shutdown_enqueued_ || command.type == CommandType::kShutdown;
+      commands_.push_back(std::move(command));
+    }
+    Wake();
+  }
+
+  void Wake() const noexcept {
+#if defined(__linux__)
+    constexpr std::uint64_t kWakeValue = 1;
+    ssize_t result = 0;
+    do {
+      result = write(wakeup_descriptor_, &kWakeValue, sizeof(kWakeValue));
+    } while (result < 0 && errno == EINTR);
+#else
+    (void)curl_multi_wakeup(multi_handle_);
+#endif
+  }
+
+  void Run() {
+    while (!shutting_down_) {
+      ProcessCommands();
+      if (shutting_down_) {
+        break;
+      }
+#if defined(__linux__)
+      WaitForLinuxEvents();
+#else
+      WaitForPortableEvents();
+#endif
+      ReadCompletions();
+    }
+    for (auto& [easy_handle, transfer] : transfers_) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle);
+      Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
+    }
+    transfers_.clear();
+  }
+
+  void ProcessCommands() {
+    std::deque<Command> commands;
+    {
+      std::lock_guard lock(command_mutex_);
+      commands.swap(commands_);
+    }
+    for (auto& command : commands) {
+      if (command.type == CommandType::kShutdown) {
+        shutting_down_ = true;
+      } else if (command.type == CommandType::kCancel) {
+        Remove(command.transfer, CURLE_ABORTED_BY_CALLBACK);
+      } else {
+        AddOnReactor(std::move(command.transfer));
+      }
+    }
+  }
+
+  void AddOnReactor(std::shared_ptr<Transfer> transfer) {
+    if (shutting_down_) {
+      Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
+      return;
+    }
+    const CURLMcode code = curl_multi_add_handle(multi_handle_, transfer->easy_handle);
+    if (code != CURLM_OK) {
+      Complete(transfer, CURLE_FAILED_INIT);
+      return;
+    }
+    transfers_.emplace(transfer->easy_handle, std::move(transfer));
+    int running_handles = 0;
+    const CURLMcode action_code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+    if (action_code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
+    ReadCompletions();
+  }
+
+  void Remove(const std::shared_ptr<Transfer>& transfer, CURLcode result) {
+    if (transfer == nullptr) {
+      return;
+    }
+    const auto found = transfers_.find(transfer->easy_handle);
+    if (found != transfers_.end() && found->second == transfer) {
+      (void)curl_multi_remove_handle(multi_handle_, transfer->easy_handle);
+      transfers_.erase(found);
+    }
+    Complete(transfer, result);
+  }
+
+  static void Complete(const std::shared_ptr<Transfer>& transfer, CURLcode result) {
+    if (transfer == nullptr) {
+      return;
+    }
+    {
+      std::lock_guard lock(transfer->mutex);
+      if (transfer->done) {
+        return;
+      }
+      transfer->result = result;
+      transfer->done = true;
+    }
+    transfer->completed.notify_all();
+    if (transfer->on_complete) {
+      transfer->on_complete(result);
+    }
+  }
+
+  void ReadCompletions() {
+    int pending = 0;
+    while (CURLMsg* message = curl_multi_info_read(multi_handle_, &pending)) {
+      if (message->msg != CURLMSG_DONE) {
+        continue;
+      }
+      const auto found = transfers_.find(message->easy_handle);
+      if (found == transfers_.end()) {
+        continue;
+      }
+      auto transfer = std::move(found->second);
+      transfers_.erase(found);
+      (void)curl_multi_remove_handle(multi_handle_, message->easy_handle);
+      Complete(transfer, message->data.result);
+    }
+  }
+
+  void FailAll(CURLcode result) {
+    for (auto& [easy_handle, transfer] : transfers_) {
+      (void)curl_multi_remove_handle(multi_handle_, easy_handle);
+      Complete(transfer, result);
+    }
+    transfers_.clear();
+  }
+
+#if defined(__linux__)
+  static void CloseDescriptor(int descriptor) noexcept {
+    if (descriptor >= 0) {
+      (void)close(descriptor);
+    }
+  }
+
+  bool AddInternalDescriptor(int descriptor) const {
+    epoll_event event{.events = EPOLLIN, .data = {.fd = descriptor }};
+    return epoll_ctl(epoll_descriptor_, EPOLL_CTL_ADD, descriptor, &event) == 0;
+  }
+
+  void WaitForLinuxEvents() {
+    std::array<epoll_event, kMaximumReactorEvents> events{};
+    int count = 0;
+    do {
+      count = epoll_wait(epoll_descriptor_, events.data(), static_cast<int>(events.size()), -1);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) {
+      FailAll(CURLE_RECV_ERROR);
+      shutting_down_ = true;
+      return;
+    }
+    for (int index = 0; index < count; ++index) {
+      const int descriptor = events[static_cast<std::size_t>(index)].data.fd;
+      if (descriptor == wakeup_descriptor_) {
+        DrainEventDescriptor(wakeup_descriptor_);
+        ProcessCommands();
+      } else if (descriptor == timer_descriptor_) {
+        DrainEventDescriptor(timer_descriptor_);
+        int running_handles = 0;
+        const CURLMcode code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
+        if (code != CURLM_OK) {
+          FailAll(CURLE_RECV_ERROR);
+        }
+      } else {
+        ProcessSocket(descriptor, events[static_cast<std::size_t>(index)].events);
+      }
+    }
+  }
+
+  static void DrainEventDescriptor(int descriptor) noexcept {
+    std::uint64_t value = 0;
+    while (read(descriptor, &value, sizeof(value)) > 0) {
+    }
+  }
+
+  void ProcessSocket(int descriptor, std::uint32_t events) {
+    int action = 0;
+    action |= (events & EPOLLIN) != 0U ? CURL_CSELECT_IN : 0;
+    action |= (events & EPOLLOUT) != 0U ? CURL_CSELECT_OUT : 0;
+    action |= (events & (EPOLLERR | EPOLLHUP)) != 0U ? CURL_CSELECT_ERR : 0;
+    int running_handles = 0;
+    const CURLMcode code = curl_multi_socket_action(multi_handle_, descriptor, action, &running_handles);
+    if (code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
+  }
+
+  static int HandleSocket(CURL* easy_handle, curl_socket_t socket, int action, void* user_data, void* socket_data) {
+    (void)easy_handle;
+    (void)socket_data;
+    auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+    if (action == CURL_POLL_REMOVE) {
+      if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_DEL, socket, nullptr) != 0 && errno != ENOENT &&
+          errno != EBADF) {
+        // Returning -1 lets libcurl abort after unwinding its socket callback;
+        // mutating the multi handle recursively from here is not permitted.
+        return -1;
+      }
+      return 0;
+    }
+    std::uint32_t events = EPOLLERR | EPOLLHUP;
+    events |= action == CURL_POLL_IN || action == CURL_POLL_INOUT ? EPOLLIN : 0U;
+    events |= action == CURL_POLL_OUT || action == CURL_POLL_INOUT ? EPOLLOUT : 0U;
+    epoll_event event{.events = events, .data = {.fd = socket }};
+    if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_MOD, socket, &event) != 0 &&
+        (errno != ENOENT || epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_ADD, socket, &event) != 0)) {
+      return -1;
+    }
+    return 0;
+  }
+
+  static int HandleTimer(CURLM* multi_handle, long timeout_ms, void* user_data) {
+    (void)multi_handle;
+    auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+    itimerspec timer{};
+    if (timeout_ms >= 0) {
+      constexpr long kMillisecondsPerSecond = 1000L;
+      constexpr long kNanosecondsPerMillisecond = 1000000L;
+      timer.it_value.tv_sec = timeout_ms / kMillisecondsPerSecond;
+      timer.it_value.tv_nsec = (timeout_ms % kMillisecondsPerSecond) * kNanosecondsPerMillisecond;
+      if (timeout_ms == 0) {
+        timer.it_value.tv_nsec = 1;
+      }
+    }
+    if (timerfd_settime(reactor->timer_descriptor_, 0, &timer, nullptr) != 0) {
+      // libcurl observes the callback failure after it regains control. Cleanup
+      // remains in the reactor loop rather than recursively changing CURLM.
+      return -1;
+    }
+    return 0;
+  }
+#else
+  void WaitForPortableEvents() {
+    int ready = 0;
+    const CURLMcode poll_code = curl_multi_poll(multi_handle_, nullptr, 0, -1, &ready);
+    if (poll_code != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+      return;
+    }
+    ProcessCommands();
+    int running_handles = 0;
+    if (curl_multi_perform(multi_handle_, &running_handles) != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
+  }
+
+  static int HandleSocket(CURL*, curl_socket_t, int, void*, void*) { return 0; }
+  static int HandleTimer(CURLM*, long, void*) { return 0; }
+#endif
+
+  CURLM* multi_handle_ = nullptr;
+  std::thread thread_;
+  std::mutex command_mutex_;
+  std::deque<Command> commands_;
+  std::unordered_map<CURL*, std::shared_ptr<Transfer>> transfers_;
+  bool valid_ = false;
+  bool shutdown_enqueued_ = false;
+  bool shutting_down_ = false;
+#if defined(__linux__)
+  int epoll_descriptor_ = -1;
+  int wakeup_descriptor_ = -1;
+  int timer_descriptor_ = -1;
+#endif
 };
+
+}  // namespace detail
+
+namespace {
 
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
@@ -128,12 +507,6 @@ std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::s
   if (!detail.empty()) {
     message << " (" << detail << ')';
   }
-  return message.str();
-}
-
-std::string BuildCurlMultiErrorMessage(std::string_view prefix, CURLMcode code) {
-  std::ostringstream message;
-  message << prefix << ": " << curl_multi_strerror(code);
   return message.str();
 }
 
@@ -423,6 +796,9 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
 core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::ClientState& state) {
   {
     std::lock_guard lock(state.stream_mutex);
+    if (state.shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+    }
     if (!state.idle_stream_slots.empty()) {
       auto slot = std::move(state.idle_stream_slots.back());
       state.idle_stream_slots.pop_back();
@@ -431,8 +807,7 @@ core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::Clie
   }
   auto slot = std::make_unique<detail::StreamSlot>();
   slot->easy_handle = curl_easy_init();
-  slot->multi_handle = curl_multi_init();
-  if (slot->easy_handle == nullptr || slot->multi_handle == nullptr) {
+  if (slot->easy_handle == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
   return slot;
@@ -445,47 +820,252 @@ void ReleaseStreamSlot(detail::ClientState& state, std::unique_ptr<detail::Strea
   }
 }
 
-core::Result<CURLcode> PerformStreamingTransfer(CURL* easy_handle, CURLM* multi_handle,
-                                                const std::function<bool()>& is_cancelled) {
-  if (is_cancelled()) {
-    return CURLE_ABORTED_BY_CALLBACK;
-  }
+class StreamDispatchExecutor final {
+ public:
+  using Task = std::function<void()>;
 
-  const CURLMcode add_code = curl_multi_add_handle(multi_handle, easy_handle);
-  if (add_code != CURLM_OK) {
-    return core::Error::Internal(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, add_code));
-  }
-  [[maybe_unused]] const CurlMultiAttachment attachment(multi_handle, easy_handle);
-
-  int running_handles = 0;
-  CURLMcode multi_code = curl_multi_perform(multi_handle, &running_handles);
-  while (multi_code == CURLM_OK && running_handles > 0) {
-    if (is_cancelled()) {
-      return CURLE_ABORTED_BY_CALLBACK;
-    }
-
-    int ready_descriptors = 0;
-    multi_code = curl_multi_poll(multi_handle, nullptr, 0, kStreamPollTimeoutMs, &ready_descriptors);
-    if (multi_code != CURLM_OK) {
-      break;
-    }
-    if (is_cancelled()) {
-      return CURLE_ABORTED_BY_CALLBACK;
-    }
-    multi_code = curl_multi_perform(multi_handle, &running_handles);
-  }
-
-  if (multi_code != CURLM_OK) {
-    return core::Error::Network(BuildCurlMultiErrorMessage(kCurlMultiFailureMessage, multi_code));
-  }
-
-  int pending_messages = 0;
-  while (CURLMsg* message = curl_multi_info_read(multi_handle, &pending_messages)) {
-    if (message->msg == CURLMSG_DONE && message->easy_handle == easy_handle) {
-      return message->data.result;
+  StreamDispatchExecutor() {
+    constexpr std::size_t kWorkerCount = 4U;
+    workers_.reserve(kWorkerCount);
+    for (std::size_t index = 0; index < kWorkerCount; ++index) {
+      workers_.emplace_back([this] { Run(); });
     }
   }
-  return core::Error::Internal(std::string(kCurlMultiCompletionFailureMessage));
+
+  ~StreamDispatchExecutor() {
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    available_.notify_all();
+    for (auto& worker : workers_) {
+      worker.join();
+    }
+  }
+
+  void Submit(Task task) {
+    {
+      std::lock_guard lock(mutex_);
+      tasks_.push_back(std::move(task));
+    }
+    available_.notify_one();
+  }
+
+ private:
+  void Run() {
+    while (true) {
+      Task task;
+      {
+        std::unique_lock lock(mutex_);
+        available_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
+        if (stopping_ && tasks_.empty()) {
+          return;
+        }
+        task = std::move(tasks_.front());
+        tasks_.pop_front();
+      }
+      task();
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable available_;
+  std::deque<Task> tasks_;
+  std::vector<std::thread> workers_;
+  bool stopping_ = false;
+};
+
+StreamDispatchExecutor& GetStreamDispatchExecutor() {
+  static StreamDispatchExecutor executor;
+  return executor;
+}
+
+class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStreamDispatch> {
+ public:
+  using Task = std::function<void()>;
+
+  bool Enqueue(Task task, std::size_t pending_bytes = 0U, bool terminal = false) {
+    bool schedule = false;
+    {
+      std::lock_guard lock(mutex_);
+      const std::size_t bounded_pending_bytes =
+          pending_bytes < kMaximumPendingDispatchBytes ? pending_bytes : kMaximumPendingDispatchBytes;
+      if (!terminal && (tasks_.size() >= kMaximumPendingDispatchTasks ||
+                        pending_bytes_ > kMaximumPendingDispatchBytes - bounded_pending_bytes)) {
+        return false;
+      }
+      tasks_.push_back(QueuedTask{.task = std::move(task), .pending_bytes = pending_bytes});
+      pending_bytes_ += pending_bytes;
+      schedule = !scheduled_;
+      scheduled_ = true;
+    }
+    if (schedule) {
+      GetStreamDispatchExecutor().Submit([self = shared_from_this()] { self->Drain(); });
+    }
+    return true;
+  }
+
+ private:
+  void Drain() {
+    while (true) {
+      QueuedTask queued;
+      {
+        std::lock_guard lock(mutex_);
+        if (tasks_.empty()) {
+          scheduled_ = false;
+          return;
+        }
+        queued = std::move(tasks_.front());
+        tasks_.pop_front();
+        pending_bytes_ -= queued.pending_bytes;
+      }
+      queued.task();
+    }
+  }
+
+  struct QueuedTask final {
+    Task task;
+    std::size_t pending_bytes = 0U;
+  };
+
+  std::mutex mutex_;
+  std::deque<QueuedTask> tasks_;
+  std::size_t pending_bytes_ = 0U;
+  bool scheduled_ = false;
+};
+
+struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamState> {
+  std::shared_ptr<detail::ClientState> client_state;
+  std::shared_ptr<detail::CurlStreamReactor> reactor;
+  std::shared_ptr<detail::CurlStreamReactor::Transfer> transfer;
+  std::unique_ptr<detail::StreamSlot> slot;
+  Request request;
+  CurlHeaderList headers;
+  std::array<char, CURL_ERROR_SIZE> error_buffer{};
+  std::vector<Header> response_headers;
+  detail::HeaderCapture header_capture;
+  detail::StreamCallbackContext callback_context;
+  StreamHeaderContext stream_header_context;
+  std::function<core::Result<void>(const Response&)> metadata_handler;
+  std::function<core::Result<void>(std::string_view)> chunk_handler;
+  std::function<bool()> is_cancelled;
+  Client::StreamCompletion completion;
+  std::shared_ptr<SerialStreamDispatch> dispatch = std::make_shared<SerialStreamDispatch>();
+  std::mutex error_mutex;
+  std::optional<core::Error> dispatch_error;
+  bool registered = false;
+  std::atomic<bool> finalized{false};
+  std::atomic<bool> suppress_callbacks{false};
+
+  void Finalize() {
+    if (!registered || finalized.exchange(true)) {
+      return;
+    }
+    {
+      std::lock_guard lock(client_state->stream_mutex);
+      --client_state->active_streams;
+    }
+    client_state->streams_finished.notify_all();
+  }
+
+  void RecordError(const core::Error& error) {
+    {
+      std::lock_guard lock(error_mutex);
+      if (dispatch_error.has_value()) {
+        return;
+      }
+      dispatch_error = error;
+    }
+    suppress_callbacks.store(true);
+    reactor->Cancel(transfer);
+  }
+
+  void QueueMetadata(Response response) {
+    if (!dispatch->Enqueue([self = shared_from_this(), response = std::move(response)] {
+          DispatchCallbackScope callback_scope(self->client_state.get());
+          if (self->client_state->suppress_stream_callbacks.load() || self->suppress_callbacks.load()) {
+            return;
+          }
+          const auto handled = self->metadata_handler(response);
+          if (!handled.ok()) {
+            self->RecordError(handled.error());
+          }
+        })) {
+      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport("http"));
+    }
+  }
+
+  void QueueChunk(std::string chunk) {
+    const std::size_t chunk_size = chunk.size();
+    if (!dispatch->Enqueue(
+            [self = shared_from_this(), chunk = std::move(chunk)] {
+              DispatchCallbackScope callback_scope(self->client_state.get());
+              if (self->client_state->suppress_stream_callbacks.load() || self->suppress_callbacks.load()) {
+                return;
+              }
+              const auto handled = self->chunk_handler(chunk);
+              if (!handled.ok()) {
+                self->RecordError(handled.error());
+              }
+            },
+            chunk_size)) {
+      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport("http"));
+    }
+  }
+
+  void Finish(CURLcode code) {
+    (void)dispatch->Enqueue(
+        [self = shared_from_this(), code] {
+          DispatchCallbackScope callback_scope(self->client_state.get());
+          core::Result<Response> result = self->BuildResult(code);
+          ReleaseStreamSlot(*self->client_state, std::move(self->slot));
+          self->completion(std::move(result));
+          self->transfer->lifetime.reset();
+          self->Finalize();
+        },
+        0U, true);
+  }
+
+  core::Result<Response> BuildResult(CURLcode code) {
+    {
+      std::lock_guard lock(error_mutex);
+      if (dispatch_error.has_value()) {
+        return dispatch_error.value();
+      }
+    }
+    if (code != CURLE_OK) {
+      if (is_cancelled()) {
+        return core::Error::Network("HTTP stream was cancelled").WithTransport("http");
+      }
+      return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
+    }
+    if (!callback_context.metadata_checked) {
+      const auto metadata = ValidateStreamMetadata(&callback_context);
+      if (!metadata.ok()) {
+        return metadata.error();
+      }
+    }
+    long response_code = kHttpResponseCodeUnset;
+    const CURLcode info_code = curl_easy_getinfo(slot->easy_handle, CURLINFO_RESPONSE_CODE, &response_code);
+    if (info_code != CURLE_OK) {
+      return core::Error::RemoteProtocol(BuildCurlErrorMessage(kReadStatusFailureMessage, info_code, {}));
+    }
+    if (response_code == kHttpResponseCodeUnset) {
+      return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
+    }
+    return Response{.status_code = static_cast<int>(response_code), .headers = response_headers, .body = {}};
+  }
+};
+
+core::Result<std::shared_ptr<detail::CurlStreamReactor>> GetStreamReactor(detail::ClientState& state) {
+  std::lock_guard lock(state.stream_mutex);
+  if (state.shutting_down) {
+    return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+  }
+  if (state.stream_reactor == nullptr) {
+    state.stream_reactor = detail::CurlStreamReactor::Create();
+  }
+  return state.stream_reactor;
 }
 
 }  // namespace
@@ -498,6 +1078,27 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
 Client::Client() : state_(std::make_shared<detail::ClientState>()) {
   state_->global_state = EnsureCurlGlobalInit();
   state_->handle = curl_easy_init();
+}
+
+Client::~Client() { Shutdown(); }
+
+void Client::Shutdown() const {
+  std::shared_ptr<detail::CurlStreamReactor> reactor;
+  {
+    std::lock_guard lock(state_->stream_mutex);
+    state_->shutting_down = true;
+    state_->suppress_stream_callbacks.store(true);
+    reactor = std::move(state_->stream_reactor);
+  }
+  if (reactor != nullptr) {
+    reactor->Shutdown();
+  }
+  reactor.reset();
+  if (g_dispatch_client_state == state_.get()) {
+    return;
+  }
+  std::unique_lock lock(state_->stream_mutex);
+  state_->streams_finished.wait(lock, [this] { return state_->active_streams == 0U; });
 }
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
@@ -553,6 +1154,79 @@ core::Result<Response> Client::StreamRequest(const Request& request,
                                              const std::function<core::Result<void>(const Response&)>& on_metadata,
                                              const std::function<core::Result<void>(std::string_view)>& on_chunk,
                                              const std::function<bool()>& is_cancelled) const {
+  return StreamRequest(request, on_metadata, on_chunk, is_cancelled, {});
+}
+
+core::Result<Response> Client::StreamRequest(
+    const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+    const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation) const {
+  std::mutex completion_mutex;
+  std::condition_variable completion_condition;
+  core::Result<Response> response = core::Error::Internal("HTTP stream completion is pending");
+  bool completed = false;
+  std::mutex cancellation_mutex;
+  std::function<void()> cancel_transfer;
+  const bool needs_cancellation_watcher = !register_cancellation;
+  const auto effective_cancellation_registrar =
+      needs_cancellation_watcher
+          ? std::function<void(const std::function<void()>&)>{[&cancellation_mutex, &cancel_transfer](
+                                                                  const std::function<void()>& callback) {
+              std::lock_guard lock(cancellation_mutex);
+              cancel_transfer = callback;
+            }}
+          : register_cancellation;
+  const auto started = StartStreamRequest(
+      request, on_metadata, on_chunk, is_cancelled, effective_cancellation_registrar,
+      [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
+        {
+          std::lock_guard lock(completion_mutex);
+          response = std::move(result);
+          completed = true;
+        }
+        completion_condition.notify_one();
+      });
+  if (!started.ok()) {
+    return started.error();
+  }
+  std::atomic<bool> stop_cancellation_watcher{false};
+  std::thread cancellation_watcher;
+  if (needs_cancellation_watcher) {
+    cancellation_watcher = std::thread([&] {
+      while (!stop_cancellation_watcher.load()) {
+        if (is_cancelled()) {
+          std::function<void()> cancel;
+          {
+            std::lock_guard lock(cancellation_mutex);
+            cancel = cancel_transfer;
+          }
+          if (cancel) {
+            cancel();
+          }
+          return;
+        }
+        std::this_thread::sleep_for(kSynchronousCancellationCheckInterval);
+      }
+    });
+  }
+  std::unique_lock lock(completion_mutex);
+  completion_condition.wait(lock, [&completed] { return completed; });
+  lock.unlock();
+  stop_cancellation_watcher.store(true);
+  if (cancellation_watcher.joinable()) {
+    cancellation_watcher.join();
+  }
+  return response;
+}
+
+core::Result<void> Client::StartStreamRequest(
+    Request request, std::function<core::Result<void>(const Response&)> on_metadata,
+    std::function<core::Result<void>(std::string_view)> on_chunk, std::function<bool()> is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation,
+    StreamCompletion on_complete) const {
+  if (!on_metadata || !on_chunk || !is_cancelled || !on_complete) {
+    return core::Error::Validation("HTTP asynchronous stream callbacks are required").WithTransport("http");
+  }
   if (state_->global_state->code != CURLE_OK) {
     return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, state_->global_state->code, {}));
   }
@@ -564,63 +1238,107 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   if (!acquired_slot.ok()) {
     return acquired_slot.error();
   }
-  auto stream_slot = std::move(acquired_slot.value());
-  CURL* const handle = stream_slot->easy_handle;
+  auto async_state = std::make_shared<AsyncStreamState>();
+  async_state->client_state = state_;
+  auto reactor = GetStreamReactor(*state_);
+  if (!reactor.ok()) {
+    return reactor.error();
+  }
+  async_state->reactor = std::move(reactor.value());
+  if (async_state->reactor == nullptr) {
+    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  }
+  async_state->slot = std::move(acquired_slot.value());
+  async_state->request = std::move(request);
+  async_state->headers = std::move(headers.value());
+  async_state->metadata_handler = std::move(on_metadata);
+  async_state->chunk_handler = std::move(on_chunk);
+  async_state->is_cancelled = std::move(is_cancelled);
+  async_state->completion = std::move(on_complete);
+  async_state->header_capture.response_headers = &async_state->response_headers;
+  std::weak_ptr<AsyncStreamState> weak_state = async_state;
+  const auto queued_metadata = [weak_state](const Response& response) -> core::Result<void> {
+    if (const auto locked = weak_state.lock()) {
+      locked->QueueMetadata(response);
+    }
+    return {};
+  };
+  const auto queued_chunk = [weak_state](std::string_view chunk) -> core::Result<void> {
+    if (const auto locked = weak_state.lock()) {
+      locked->QueueChunk(std::string(chunk));
+    }
+    return {};
+  };
+  async_state->callback_context = {.on_metadata = nullptr,
+                                   .on_chunk = nullptr,
+                                   .is_cancelled = &async_state->is_cancelled,
+                                   .header_capture = &async_state->header_capture,
+                                   .error = std::nullopt,
+                                   .metadata_checked = false};
+  // Callback function objects must be owned by the transfer state because
+  // libcurl stores only their addresses in StreamCallbackContext.
+  async_state->metadata_handler = [handler = std::move(async_state->metadata_handler)](const Response& response) {
+    return handler(response);
+  };
+  async_state->chunk_handler = [handler = std::move(async_state->chunk_handler)](std::string_view chunk) {
+    return handler(chunk);
+  };
+  // Store the bounded capture wrappers separately from user handlers.
+  auto capture_metadata = std::make_shared<std::function<core::Result<void>(const Response&)>>(queued_metadata);
+  auto capture_chunk = std::make_shared<std::function<core::Result<void>(std::string_view)>>(queued_chunk);
+  async_state->callback_context.on_metadata = capture_metadata.get();
+  async_state->callback_context.on_chunk = capture_chunk.get();
+  async_state->stream_header_context = {.header_capture = &async_state->header_capture,
+                                        .stream_context = &async_state->callback_context};
+  CURL* const handle = async_state->slot->easy_handle;
   curl_easy_reset(handle);
-  std::array<char, CURL_ERROR_SIZE> error_buffer{};
-  const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, error_buffer.data());
+  const auto set_error_buffer = curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, async_state->error_buffer.data());
   if (set_error_buffer != CURLE_OK) {
     return core::Error::Internal(BuildCurlErrorMessage(kErrorBufferFailureMessage, set_error_buffer, {}));
   }
-  std::vector<Header> response_headers;
-  detail::HeaderCapture header_capture{.response_headers = &response_headers};
-  detail::StreamCallbackContext stream_context{.on_metadata = &on_metadata,
-                                               .on_chunk = &on_chunk,
-                                               .is_cancelled = &is_cancelled,
-                                               .header_capture = &header_capture,
-                                               .error = std::nullopt,
-                                               .metadata_checked = false};
-  const auto configured = ConfigureCurlStream(handle, request, headers.value(), &stream_context, &header_capture);
+  const auto configured = ConfigureCurlStream(handle, async_state->request, async_state->headers,
+                                              &async_state->callback_context, &async_state->header_capture);
   if (!configured.ok()) {
     return configured.error();
   }
-  StreamHeaderContext stream_header_context{.header_capture = &header_capture, .stream_context = &stream_context};
-  const auto set_stream_header = curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, WriteStreamResponseHeader);
-  const auto set_stream_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, &stream_header_context);
-  if (set_stream_header != CURLE_OK || set_stream_header_data != CURLE_OK) {
+  if (curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, WriteStreamResponseHeader) != CURLE_OK ||
+      curl_easy_setopt(handle, CURLOPT_HEADERDATA, &async_state->stream_header_context) != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
-  const auto performed = PerformStreamingTransfer(handle, stream_slot->multi_handle, is_cancelled);
-  if (!performed.ok()) {
-    return performed.error();
-  }
-  const CURLcode code = performed.value();
-  if (code != CURLE_OK) {
-    if (stream_context.error.has_value()) {
-      return stream_context.error.value();
+  async_state->transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  async_state->transfer->easy_handle = handle;
+  async_state->transfer->lifetime = async_state;
+  // Keep capture wrappers alive alongside the transfer without adding raw
+  // callback addresses to any caller stack.
+  struct CaptureLifetime final {
+    std::shared_ptr<AsyncStreamState> state;
+    std::shared_ptr<std::function<core::Result<void>(const Response&)>> metadata;
+    std::shared_ptr<std::function<core::Result<void>(std::string_view)>> chunk;
+  };
+  async_state->transfer->lifetime = std::make_shared<CaptureLifetime>(CaptureLifetime{
+      .state = async_state, .metadata = std::move(capture_metadata), .chunk = std::move(capture_chunk)});
+  async_state->transfer->on_complete = [weak_state](CURLcode code) {
+    if (const auto locked = weak_state.lock()) {
+      locked->Finish(code);
     }
-    if (is_cancelled()) {
-      return core::Error::Network("HTTP stream was cancelled").WithTransport("http");
+  };
+  {
+    std::lock_guard lock(state_->stream_mutex);
+    if (state_->shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
     }
-    return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
+    ++state_->active_streams;
+    async_state->registered = true;
   }
-  if (!stream_context.metadata_checked) {
-    const auto metadata = ValidateStreamMetadata(&stream_context);
-    if (!metadata.ok()) {
-      return metadata.error();
-    }
-    stream_context.metadata_checked = true;
+  async_state->reactor->Add(async_state->transfer);
+  if (register_cancellation) {
+    register_cancellation([weak_state] {
+      if (const auto locked = weak_state.lock()) {
+        locked->reactor->Cancel(locked->transfer);
+      }
+    });
   }
-  long response_code = kHttpResponseCodeUnset;
-  const CURLcode info_code = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
-  if (info_code != CURLE_OK) {
-    return core::Error::RemoteProtocol(BuildCurlErrorMessage(kReadStatusFailureMessage, info_code, {}));
-  }
-  if (response_code == kHttpResponseCodeUnset) {
-    return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
-  }
-  ReleaseStreamSlot(*state_, std::move(stream_slot));
-  return Response{.status_code = static_cast<int>(response_code), .headers = std::move(response_headers), .body = {}};
+  return {};
 }
 
 #else
@@ -648,6 +1366,46 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   (void)on_metadata;
   (void)on_chunk;
   (void)is_cancelled;
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+}
+
+core::Result<Response> Client::StreamRequest(
+    const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
+    const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation) const {
+  std::mutex completion_mutex;
+  std::condition_variable completion_condition;
+  core::Result<Response> response = core::Error::Internal("HTTP stream completion is pending");
+  bool completed = false;
+  const auto started = StartStreamRequest(
+      request, on_metadata, on_chunk, is_cancelled, register_cancellation,
+      [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
+        {
+          std::lock_guard lock(completion_mutex);
+          response = std::move(result);
+          completed = true;
+        }
+        completion_condition.notify_one();
+      });
+  if (!started.ok()) {
+    return started.error();
+  }
+  std::unique_lock lock(completion_mutex);
+  completion_condition.wait(lock, [&completed] { return completed; });
+  return response;
+}
+
+core::Result<void> Client::StartStreamRequest(
+    Request request, std::function<core::Result<void>(const Response&)> on_metadata,
+    std::function<core::Result<void>(std::string_view)> on_chunk, std::function<bool()> is_cancelled,
+    const std::function<void(const std::function<void()>&)>& register_cancellation,
+    StreamCompletion on_complete) const {
+  (void)request;
+  (void)on_metadata;
+  (void)on_chunk;
+  (void)is_cancelled;
+  (void)register_cancellation;
+  (void)on_complete;
   return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
 }
 

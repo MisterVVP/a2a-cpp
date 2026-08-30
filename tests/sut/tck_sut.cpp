@@ -66,6 +66,18 @@ volatile std::sig_atomic_t kKeepRunning = 1;
 std::atomic<std::uint64_t> kAcceptedUnaryHttpConnections{0};
 std::atomic<std::uint64_t> kCompletedUnaryHttpOperations{0};
 
+void EmitHttpDiagnostics() {
+  const std::uint64_t accepted_connections = kAcceptedUnaryHttpConnections.load(std::memory_order_relaxed);
+  const std::uint64_t completed_operations = kCompletedUnaryHttpOperations.load(std::memory_order_relaxed);
+  const double operations_per_connection = accepted_connections == 0U ? 0.0
+                                                                      : static_cast<double>(completed_operations) /
+                                                                            static_cast<double>(accepted_connections);
+  std::cout << kHttpDiagnosticsPrefix << " accepted_connections=" << accepted_connections
+            << " completed_unary_operations=" << completed_operations
+            << " operations_per_connection=" << operations_per_connection << '\n'
+            << std::flush;
+}
+
 void SignalHandler(int signal_number) {
   (void)signal_number;
   kKeepRunning = 0;
@@ -199,15 +211,15 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       break;
     }
     if (!is_streaming) {
-      completed_unary_on_connection = true;
+      if (!completed_unary_on_connection) {
+        completed_unary_on_connection = true;
+        kAcceptedUnaryHttpConnections.fetch_add(1, std::memory_order_relaxed);
+      }
       kCompletedUnaryHttpOperations.fetch_add(1, std::memory_order_relaxed);
     }
     if (close_connection) {
       break;
     }
-  }
-  if (completed_unary_on_connection) {
-    kAcceptedUnaryHttpConnections.fetch_add(1, std::memory_order_relaxed);
   }
   registry.Remove(fd);
   a2a::server::CloseSocketCrossPlatform(fd);
@@ -229,6 +241,9 @@ int RunTckSut(int argc, char** argv) {
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
+#ifndef _WIN32
+  std::signal(SIGPIPE, SIG_IGN);
+#endif
 #ifdef _WIN32
   std::signal(SIGBREAK, SignalHandler);
 #endif
@@ -375,23 +390,20 @@ int RunTckSut(int argc, char** argv) {
     connection_registry.Add(fd);
     connection_threads.emplace_back(HandleHttpConnection, fd, std::cref(mux), std::ref(connection_registry));
   }
+  a2a::server::CloseSocketCrossPlatform(server_fd);
+  std::cerr << "TCK SUT shutdown: stopping subscriptions\n";
   executor.ShutdownSubscriptions();
+  std::cerr << "TCK SUT shutdown: shutting down active HTTP sockets\n";
   connection_registry.ShutdownActiveSockets();
+  EmitHttpDiagnostics();
+  std::cerr << "TCK SUT shutdown: joining HTTP connection threads\n";
   for (auto& connection_thread : connection_threads) {
     if (connection_thread.joinable()) {
       connection_thread.join();
     }
   }
+  std::cerr << "TCK SUT shutdown: stopping gRPC\n";
   grpc_server->Shutdown();
-  a2a::server::CloseSocketCrossPlatform(server_fd);
-  const std::uint64_t accepted_connections = kAcceptedUnaryHttpConnections.load(std::memory_order_relaxed);
-  const std::uint64_t completed_operations = kCompletedUnaryHttpOperations.load(std::memory_order_relaxed);
-  const double operations_per_connection =
-      accepted_connections == 0 ? 0.0
-                                : static_cast<double>(completed_operations) / static_cast<double>(accepted_connections);
-  std::cout << kHttpDiagnosticsPrefix << " accepted_connections=" << accepted_connections
-            << " completed_unary_operations=" << completed_operations
-            << " operations_per_connection=" << operations_per_connection << '\n';
 #ifdef _WIN32
   WSACleanup();
 #endif
