@@ -107,7 +107,9 @@ constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
+#if defined(__linux__)
 constexpr std::size_t kMaximumReactorEvents = 64U;
+#endif
 constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
 constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
 constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";

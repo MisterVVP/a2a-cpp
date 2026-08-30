@@ -1013,7 +1013,7 @@ TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
   request.url = kUnavailableStreamUrl;
   request.timeout = std::chrono::milliseconds(kShortStreamTimeoutMs);
   std::barrier start_gate(static_cast<std::ptrdiff_t>(kShutdownRaceStarterCount + 1U));
-  std::vector<std::jthread> starters;
+  std::vector<std::thread> starters;
   starters.reserve(kShutdownRaceStarterCount);
 
   for (std::size_t index = 0; index < kShutdownRaceStarterCount; ++index) {
@@ -1027,7 +1027,9 @@ TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
   }
   start_gate.arrive_and_wait();
   client.Shutdown();
-  starters.clear();
+  for (auto& starter : starters) {
+    starter.join();
+  }
   client.Shutdown();
 
   const auto rejected = client.StartStreamRequest(
