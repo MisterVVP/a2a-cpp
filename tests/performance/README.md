@@ -23,6 +23,12 @@ own counters and latency samples, then the driver aggregates those samples after
 workers finish. This avoids adding result-collection mutex contention to the
 measured operation latency.
 
+The wire driver shares one default `A2AClient` across concurrent HTTP+JSON and
+JSON-RPC streaming operations. Running the streaming scenarios at concurrency
+`1`, `16`, and `64` therefore profiles one shared libcurl reactor and the fixed
+callback pool. Those result rows include `client_process_thread_count`, allowing
+thread growth to be compared directly across concurrency levels.
+
 ### Follow-up workloads
 
 Follow-up fixtures are fully created before the measured region. Each measured

@@ -25,6 +25,12 @@ worker. A slow callback can occupy one shared worker, so keep callbacks bounded
 and hand expensive processing to an application executor. Custom synchronous
 stream requesters retain their transport-worker compatibility path.
 
+Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
+pending body data. The reactor never waits for callback capacity: exceeding a
+limit fails and cancels only that stream. The default HTTP client also limits
+active streams to 256, which bounds the shared executor's one-scheduled-task-per-
+stream queue while leaving the supported 64-stream profile well within capacity.
+
 Callback execution is marked only for the duration of each callback. Calling
 `Cancel()` recursively from that stream's callback requests cancellation and
 returns without waiting, avoiding a self-deadlock. Cancellation from a callback

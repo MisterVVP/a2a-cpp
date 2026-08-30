@@ -111,6 +111,8 @@ WIRE_SCENARIOS = (
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
 IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario != "IdleStream_ClientCancellationLatency")
 SUT_READY_TIMEOUT_SECONDS = 30.0
+SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+SUT_FORCE_KILL_TIMEOUT_SECONDS = 10.0
 SUT_PORT_RANGE_START = 20_000
 SUT_PORT_RANGE_END = 30_000
 SUT_PORT_PAIR_STEP = 2
@@ -458,10 +460,14 @@ class SutProcess:
             else:
                 self.process.terminate()
             try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
+                self.process.wait(timeout=SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as timeout_error:
                 self.process.kill()
-                self.process.wait(timeout=10)
+                self.process.wait(timeout=SUT_FORCE_KILL_TIMEOUT_SECONDS)
+                coordinate = f"{self.transport}/{self.store_backend}/c{self.concurrency}"
+                raise ValueError(
+                    f"tck_sut failed to terminate gracefully for {coordinate}; logs:\n{read_tail(self.log_path)}"
+                ) from timeout_error
 
 
 def run_command_json(command: list[str], timeout_seconds: float, error_context: str,

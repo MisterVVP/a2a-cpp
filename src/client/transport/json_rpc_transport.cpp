@@ -536,6 +536,47 @@ class JsonRpcSseSession final {
   bool is_json_response_ = false;
 };
 
+core::Result<void> HandleAsyncJsonRpcMetadata(const std::shared_ptr<JsonRpcSseSession>& session,
+                                              const std::shared_ptr<StreamHandle::State>& state,
+                                              const std::shared_ptr<std::atomic<bool>>& shutdown,
+                                              const a2a::http::Response& metadata) {
+  StreamHandle::State::CallbackExecutionScope callback_scope(*state);
+  if (shutdown->load()) {
+    return core::Error::Network("JSON-RPC transport is shutting down").WithTransport("jsonrpc");
+  }
+  return session->ValidateMetadata(ToClientHttpResponse(
+      a2a::http::Response{.status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
+}
+
+core::Result<void> HandleAsyncJsonRpcChunk(const std::shared_ptr<JsonRpcSseSession>& session,
+                                           const std::shared_ptr<StreamHandle::State>& state,
+                                           const std::shared_ptr<std::atomic<bool>>& shutdown, std::string_view chunk) {
+  StreamHandle::State::CallbackExecutionScope callback_scope(*state);
+  if (shutdown->load()) {
+    return core::Error::Network("JSON-RPC transport is shutting down").WithTransport("jsonrpc");
+  }
+  return session->HandleChunk(chunk);
+}
+
+void CompleteAsyncJsonRpcStream(const std::shared_ptr<JsonRpcSseSession>& session,
+                                const std::shared_ptr<StreamHandle::State>& state,
+                                const std::shared_ptr<std::atomic<bool>>& shutdown,
+                                core::Result<a2a::http::Response> response) {
+  StreamHandle::State::CallbackExecutionScope callback_scope(*state);
+  if (!shutdown->load()) {
+    if (!response.ok()) {
+      session->Complete(response.error());
+    } else {
+      session->Complete(ToClientHttpResponse(std::move(response.value())));
+    }
+  }
+  {
+    std::lock_guard lock(state->completion_mutex);
+    state->completed = true;
+  }
+  state->completion_condition.notify_all();
+}
+
 void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, const HttpRequest& http_request,
                          StreamObserver& observer, const std::shared_ptr<StreamHandle::State>& state,
                          std::string request_id) {
@@ -837,7 +878,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
                                                                              const google::protobuf::Message& request,
                                                                              StreamObserver& observer,
                                                                              const CallOptions& options) const {
-  if (shutting_down_.load()) {
+  if (async_shutdown_->load()) {
     return core::Error::Network("JSON-RPC transport is shutting down").WithTransport("jsonrpc");
   }
   if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {
@@ -881,33 +922,29 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     }
   }
   auto state = std::make_shared<StreamHandle::State>();
-  if (default_async_stream_client_ != nullptr) {
+  std::shared_ptr<a2a::http::Client> async_client;
+  {
+    std::lock_guard lock(async_client_mutex_);
+    if (async_shutdown_->load()) {
+      return core::Error::Network("JSON-RPC transport is shutting down").WithTransport("jsonrpc");
+    }
+    async_client = default_async_stream_client_;
+  }
+  if (async_client != nullptr) {
+    const auto shutdown = async_shutdown_;
     auto session = std::make_shared<JsonRpcSseSession>(HttpStreamRequesterWithCancellation{}, http_request, observer,
                                                        state, request_id);
-    const auto started = default_async_stream_client_->StartStreamRequest(
+    const auto started = async_client->StartStreamRequest(
         ToSharedHttpRequest(http_request),
-        [session, state](const a2a::http::Response& metadata) {
-          StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-          return session->ValidateMetadata(ToClientHttpResponse(a2a::http::Response{
-              .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
+        [session, state, shutdown](const a2a::http::Response& metadata) {
+          return HandleAsyncJsonRpcMetadata(session, state, shutdown, metadata);
         },
-        [session, state](std::string_view chunk) {
-          StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-          return session->HandleChunk(chunk);
+        [session, state, shutdown](std::string_view chunk) {
+          return HandleAsyncJsonRpcChunk(session, state, shutdown, chunk);
         },
         [state] { return state->cancel_requested.load(); }, MakeStreamCancellationRegistrar(state),
-        [session, state](core::Result<a2a::http::Response> response) {
-          StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-          if (!response.ok()) {
-            session->Complete(response.error());
-          } else {
-            session->Complete(ToClientHttpResponse(std::move(response.value())));
-          }
-          {
-            std::lock_guard lock(state->completion_mutex);
-            state->completed = true;
-          }
-          state->completion_condition.notify_all();
+        [session, state, shutdown](core::Result<a2a::http::Response> response) {
+          CompleteAsyncJsonRpcStream(session, state, shutdown, std::move(response));
         });
     if (!started.ok()) {
       return started.error();
@@ -949,10 +986,14 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(cons
 }
 
 core::Result<void> JsonRpcTransport::Shutdown() {
-  shutting_down_.store(true);
-  if (default_async_stream_client_ != nullptr) {
-    default_async_stream_client_->Shutdown();
-    default_async_stream_client_.reset();
+  std::shared_ptr<a2a::http::Client> async_client;
+  {
+    std::lock_guard lock(async_client_mutex_);
+    async_shutdown_->store(true);
+    async_client = default_async_stream_client_;
+  }
+  if (async_client != nullptr) {
+    async_client->Shutdown();
   }
   return {};
 }

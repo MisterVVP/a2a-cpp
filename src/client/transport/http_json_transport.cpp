@@ -733,10 +733,14 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
 }
 
 core::Result<void> HttpJsonTransport::Shutdown() {
-  shutting_down_.store(true);
-  if (default_async_stream_client_ != nullptr) {
-    default_async_stream_client_->Shutdown();
-    default_async_stream_client_.reset();
+  std::shared_ptr<a2a::http::Client> async_client;
+  {
+    std::lock_guard lock(async_client_mutex_);
+    async_shutdown_->store(true);
+    async_client = default_async_stream_client_;
+  }
+  if (async_client != nullptr) {
+    async_client->Shutdown();
   }
   return {};
 }
@@ -744,7 +748,7 @@ core::Result<void> HttpJsonTransport::Shutdown() {
 core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(HttpOperation operation, std::string body,
                                                                               StreamObserver& observer,
                                                                               const CallOptions& options) const {
-  if (shutting_down_.load()) {
+  if (async_shutdown_->load()) {
     return core::Error::Network("HTTP transport is shutting down").WithTransport("http");
   }
   if (stream_requester_ == nullptr && cancellable_stream_requester_ == nullptr) {
@@ -767,25 +771,42 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                                                  .response_metadata = {},
                                                                  .metadata_validated = false,
                                                                  .collecting_error_body = false});
-  if (default_async_stream_client_ != nullptr) {
-    const auto started = default_async_stream_client_->StartStreamRequest(
+  std::shared_ptr<a2a::http::Client> async_client;
+  {
+    std::lock_guard lock(async_client_mutex_);
+    if (async_shutdown_->load()) {
+      return core::Error::Network("HTTP transport is shutting down").WithTransport("http");
+    }
+    async_client = default_async_stream_client_;
+  }
+  if (async_client != nullptr) {
+    const auto shutdown = async_shutdown_;
+    const auto started = async_client->StartStreamRequest(
         ToSharedHttpRequest(session->request),
-        [session, state](const a2a::http::Response& metadata) {
+        [session, state, shutdown](const a2a::http::Response& metadata) {
           StreamHandle::State::CallbackExecutionScope callback_scope(*state);
+          if (shutdown->load()) {
+            return core::Result<void>{core::Error::Network("HTTP transport is shutting down").WithTransport("http")};
+          }
           return session->ValidateMetadata(ToClientHttpResponse(a2a::http::Response{
               .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
         },
-        [session, state](std::string_view chunk) {
+        [session, state, shutdown](std::string_view chunk) {
           StreamHandle::State::CallbackExecutionScope callback_scope(*state);
+          if (shutdown->load()) {
+            return core::Result<void>{core::Error::Network("HTTP transport is shutting down").WithTransport("http")};
+          }
           return session->HandleChunk(chunk);
         },
         [state] { return state->cancel_requested.load(); }, MakeStreamCancellationRegistrar(state),
-        [session, state](core::Result<a2a::http::Response> response) {
+        [session, state, shutdown](core::Result<a2a::http::Response> response) {
           StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-          if (!response.ok()) {
-            session->Complete(response.error());
-          } else {
-            session->Complete(ToClientHttpResponse(std::move(response.value())));
+          if (!shutdown->load()) {
+            if (!response.ok()) {
+              session->Complete(response.error());
+            } else {
+              session->Complete(ToClientHttpResponse(std::move(response.value())));
+            }
           }
           {
             std::lock_guard lock(state->completion_mutex);
