@@ -65,6 +65,9 @@ constexpr std::string_view kHttpDiagnosticsPrefix = "A2A_HTTP_DIAGNOSTICS";
 volatile std::sig_atomic_t kKeepRunning = 1;
 std::atomic<std::uint64_t> kAcceptedUnaryHttpConnections{0};
 std::atomic<std::uint64_t> kCompletedUnaryHttpOperations{0};
+std::atomic<std::uint64_t> kFiniteStreamConnections{0};
+std::atomic<std::uint64_t> kCompletedFiniteStreams{0};
+std::atomic<std::uint64_t> kConnectionsReusedAfterFiniteStream{0};
 
 void EmitHttpDiagnostics() {
   const std::uint64_t accepted_connections = kAcceptedUnaryHttpConnections.load(std::memory_order_relaxed);
@@ -72,9 +75,20 @@ void EmitHttpDiagnostics() {
   const double operations_per_connection = accepted_connections == 0U ? 0.0
                                                                       : static_cast<double>(completed_operations) /
                                                                             static_cast<double>(accepted_connections);
+  const std::uint64_t finite_stream_connections = kFiniteStreamConnections.load(std::memory_order_relaxed);
+  const std::uint64_t completed_finite_streams = kCompletedFiniteStreams.load(std::memory_order_relaxed);
+  const double finite_streams_per_connection =
+      finite_stream_connections == 0U
+          ? 0.0
+          : static_cast<double>(completed_finite_streams) / static_cast<double>(finite_stream_connections);
   std::cout << kHttpDiagnosticsPrefix << " accepted_connections=" << accepted_connections
             << " completed_unary_operations=" << completed_operations
-            << " operations_per_connection=" << operations_per_connection << '\n'
+            << " operations_per_connection=" << operations_per_connection
+            << " finite_stream_connections=" << finite_stream_connections
+            << " completed_finite_streams=" << completed_finite_streams
+            << " finite_streams_per_connection=" << finite_streams_per_connection
+            << " connections_reused_after_finite_stream="
+            << kConnectionsReusedAfterFiniteStream.load(std::memory_order_relaxed) << '\n'
             << std::flush;
 }
 
@@ -194,10 +208,16 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   const a2a::server::HttpAdapter adapter;
   a2a::server::HttpConnectionState connection_state;
   bool completed_unary_on_connection = false;
+  bool completed_finite_stream_on_connection = false;
+  bool awaiting_request_after_finite_stream = false;
   while (true) {
     auto parsed = adapter.ReadRequest(socket_transport, connection_state, "localhost");
     if (!parsed.ok()) {
       break;
+    }
+    if (awaiting_request_after_finite_stream) {
+      kConnectionsReusedAfterFiniteStream.fetch_add(1, std::memory_order_relaxed);
+      awaiting_request_after_finite_stream = false;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
     auto response = mux.RouteRequest(request);
@@ -216,6 +236,14 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
         kAcceptedUnaryHttpConnections.fetch_add(1, std::memory_order_relaxed);
       }
       kCompletedUnaryHttpOperations.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (response.value().stream_kind == a2a::server::HttpStreamKind::kFinite) {
+      if (!completed_finite_stream_on_connection) {
+        completed_finite_stream_on_connection = true;
+        kFiniteStreamConnections.fetch_add(1, std::memory_order_relaxed);
+      }
+      kCompletedFiniteStreams.fetch_add(1, std::memory_order_relaxed);
+      awaiting_request_after_finite_stream = !close_connection;
     }
     if (close_connection) {
       break;

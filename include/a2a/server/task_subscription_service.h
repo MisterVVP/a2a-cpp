@@ -42,7 +42,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
   struct SubscriberState final {
     std::string task_id;
     lf::a2a::v1::Task current_task;
-    std::deque<lf::a2a::v1::StreamResponse> events;
+    std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
     std::atomic_bool closed = false;
     std::atomic_size_t queued_event_count = 0;
     std::optional<std::chrono::milliseconds> wait_timeout;

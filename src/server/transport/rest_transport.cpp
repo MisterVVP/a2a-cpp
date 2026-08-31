@@ -288,14 +288,20 @@ core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& me
   return response;
 }
 
-core::Result<void> AppendSseEvent(RestResponse& response, const lf::a2a::v1::StreamResponse& event) {
+constexpr std::size_t kSseFramingOverhead = 8U;
+constexpr std::string_view kSseDataPrefix = "data: ";
+constexpr std::string_view kSseEventTerminator = "\n\n";
+
+core::Result<void> BuildSseEvent(std::string& body, const lf::a2a::v1::StreamResponse& event) {
   const auto event_json = core::MessageToJson(event);
   if (!event_json.ok()) {
     return event_json.error();
   }
-  response.body += "data: ";
-  response.body += event_json.value();
-  response.body += "\n\n";
+  body.clear();
+  body.reserve(event_json.value().size() + kSseFramingOverhead);
+  body.append(kSseDataPrefix);
+  body.append(event_json.value());
+  body.append(kSseEventTerminator);
   return {};
 }
 
@@ -324,23 +330,24 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
+  response.stream_kind = HttpStreamKind::kFinite;
 
   response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
                                HttpByteTransport& transport) -> core::Result<void> {
     if (*session == nullptr) {
       return core::Error::Internal("Streaming response session is missing");
     }
+    std::string chunk;
     auto next = (*session)->Next();
     for (; next.ok(); next = (*session)->Next()) {
       if (!next.value().has_value()) {
         return {};
       }
-      RestResponse chunk;
-      const auto append = AppendSseEvent(chunk, next.value().value());
+      const auto append = BuildSseEvent(chunk, next.value().value());
       if (!append.ok()) {
         return append.error();
       }
-      const auto written = WriteSseChunk(transport, chunk.body);
+      const auto written = WriteSseChunk(transport, chunk);
       if (!written.ok()) {
         (*session)->Cancel();
         return written.error();
@@ -361,12 +368,14 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
+  response.stream_kind = HttpStreamKind::kLive;
   response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
                                HttpByteTransport& transport) -> core::Result<void> {
     if (*session == nullptr) {
       return core::Error::Internal("Subscription response session is missing");
     }
 
+    std::string chunk;
     auto next = (*session)->NextFor(core::http::kSseHeartbeatInterval);
     for (; next.ok(); next = (*session)->NextFor(core::http::kSseHeartbeatInterval)) {
       const auto& event = next.value();
@@ -381,12 +390,11 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
         }
         continue;
       }
-      RestResponse chunk;
-      const auto append = AppendSseEvent(chunk, event.value());
+      const auto append = BuildSseEvent(chunk, event.value());
       if (!append.ok()) {
         return append.error();
       }
-      const auto written = WriteSseChunk(transport, chunk.body);
+      const auto written = WriteSseChunk(transport, chunk);
       if (!written.ok()) {
         (*session)->Cancel();
         return written.error();

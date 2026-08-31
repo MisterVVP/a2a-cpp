@@ -112,7 +112,7 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
     }
   }
 
-  lf::a2a::v1::StreamResponse event = BuildStatusUpdateEvent(task);
+  const auto event = std::make_shared<const lf::a2a::v1::StreamResponse>(BuildStatusUpdateEvent(task));
   const bool close_after_event = core::IsTerminalTaskState(task.status().state());
   for (const auto& subscriber : subscribers) {
     {
@@ -194,10 +194,10 @@ std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPubli
   if (state->events.empty()) {
     return std::nullopt;
   }
-  lf::a2a::v1::StreamResponse event = std::move(state->events.front());
+  auto event = std::move(state->events.front());
   state->events.pop_front();
   state->queued_event_count.fetch_sub(1);
-  return event;
+  return *event;
 }
 
 StreamResponseCoroutine TaskSubscriptionService::RunSubscription(std::shared_ptr<SubscriberState> state) {
