@@ -17,6 +17,7 @@ std::optional<lf::a2a::v1::StreamResponse> StreamResponseCoroutine::NextFor(std:
 void StreamResponseCoroutine::Start() noexcept {
   if (!started_ && handle_) {
     started_ = true;
+    std::lock_guard resume_lock(handle_.promise().resume_mutex_);
     handle_.resume();
   }
 }
@@ -45,6 +46,7 @@ std::optional<lf::a2a::v1::StreamResponse> StreamResponseCoroutine::WaitForNext(
   auto value = std::move(promise.current_value_);
   promise.current_value_.reset();
   lock.unlock();
+  std::lock_guard resume_lock(promise.resume_mutex_);
   handle_.resume();
   return value;
 }
@@ -57,7 +59,8 @@ class TaskSubscriptionService::SubscriberEventAwaitable final {
     std::lock_guard lock(state_->mutex);
     return state_->closed.load() || !state_->events.empty();
   }
-  [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) const noexcept {
+  [[nodiscard]] bool await_suspend(
+      std::coroutine_handle<StreamResponseCoroutine::promise_type> continuation) const noexcept {
     std::lock_guard lock(state_->mutex);
     if (state_->closed.load() || !state_->events.empty()) {
       return false;
@@ -240,7 +243,7 @@ void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<ServiceStat
 }
 
 void TaskSubscriptionService::SignalSubscriber(const std::shared_ptr<SubscriberState>& state) {
-  std::coroutine_handle<> continuation;
+  std::coroutine_handle<StreamResponseCoroutine::promise_type> continuation;
   {
     std::lock_guard lock(state->mutex);
     continuation = std::exchange(state->continuation, {});
@@ -249,6 +252,7 @@ void TaskSubscriptionService::SignalSubscriber(const std::shared_ptr<SubscriberS
     }
   }
   if (continuation) {
+    std::lock_guard resume_lock(continuation.promise().resume_mutex_);
     continuation.resume();
     {
       std::lock_guard lock(state->mutex);

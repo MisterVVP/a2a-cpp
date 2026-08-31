@@ -51,7 +51,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
     std::atomic_bool closed = false;
     std::atomic_size_t queued_event_count = 0;
-    std::coroutine_handle<> continuation;
+    std::coroutine_handle<StreamResponseCoroutine::promise_type> continuation;
     std::size_t active_resumes = 0;
     std::mutex mutex;
     std::condition_variable ready;

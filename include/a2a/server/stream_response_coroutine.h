@@ -52,6 +52,9 @@ class StreamResponseCoroutine final : private core::NonCopyable {
     std::optional<lf::a2a::v1::StreamResponse> current_value_;
     std::exception_ptr exception_;
     std::mutex mutex_;
+    // Serializes external resume calls. Coroutine execution never acquires
+    // this mutex, so a resumer may hold it until resume() returns.
+    std::mutex resume_mutex_;
     std::condition_variable ready_;
     std::atomic_bool done_ = false;
   };
