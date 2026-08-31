@@ -25,6 +25,38 @@ def load_runner_module():
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def test_reads_server_terminal_phase_diagnostics(self):
+        runner = load_runner_module()
+        fields = []
+        for phase in runner.STREAMING_DIAGNOSTIC_PHASES:
+            fields.extend((f"{phase}_total_ns=2000000", f"{phase}_max_ns=1500000", f"{phase}_count=2"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sut.log"
+            path.write_text(f"{runner.STREAMING_DIAGNOSTICS_PREFIX} {' '.join(fields)}\n", encoding="utf-8")
+            diagnostics = runner.read_streaming_diagnostics(path)
+
+        self.assertEqual(1.0, diagnostics["server_terminal_notify_to_observe_average_ms"])
+        self.assertEqual(1.5, diagnostics["server_terminal_notify_to_observe_max_ms"])
+        self.assertEqual(2, diagnostics["server_terminal_notify_to_observe_count"])
+
+    def test_reads_finite_stream_connection_diagnostics(self):
+        runner = load_runner_module()
+        diagnostics_line = (
+            "A2A_HTTP_DIAGNOSTICS accepted_connections=3 completed_unary_operations=8 "
+            "operations_per_connection=2.66667 finite_stream_connections=2 "
+            "completed_finite_streams=5 finite_streams_per_connection=2.5 "
+            "connections_reused_after_finite_stream=4\n"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diagnostics_path = Path(temp_dir) / "sut.log"
+            diagnostics_path.write_text(diagnostics_line, encoding="utf-8")
+            diagnostics = runner.read_http_diagnostics(diagnostics_path)
+
+        self.assertEqual(2, diagnostics["http_finite_stream_connections"])
+        self.assertEqual(5, diagnostics["http_completed_finite_streams"])
+        self.assertEqual(2.5, diagnostics["http_finite_streams_per_connection"])
+        self.assertEqual(4, diagnostics["http_connections_reused_after_finite_stream"])
+
     def test_writes_reports_for_selected_matrix(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             completed = subprocess.run([

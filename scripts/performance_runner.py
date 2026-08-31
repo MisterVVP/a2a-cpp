@@ -122,7 +122,21 @@ DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
 HTTP_DIAGNOSTICS_PATTERN = re.compile(
     r"A2A_HTTP_DIAGNOSTICS accepted_connections=(\d+) completed_unary_operations=(\d+) "
-    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?)(?=\s|$)"
+    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
+    r"finite_stream_connections=(\d+) completed_finite_streams=(\d+) "
+    r"finite_streams_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
+    r"connections_reused_after_finite_stream=(\d+)(?=\s|$)"
+)
+STREAMING_DIAGNOSTICS_PREFIX = "A2A_STREAMING_DIAGNOSTICS"
+STREAMING_DIAGNOSTIC_PHASES = (
+    "cancel_dispatch_to_publish",
+    "publish_to_notify",
+    "notify_to_observe",
+    "observe_to_serialize",
+    "serialize",
+    "frame",
+    "socket_write",
+    "write_to_finalize",
 )
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
@@ -399,12 +413,38 @@ def read_http_diagnostics(path: Path) -> dict[str, int | float]:
     matches = HTTP_DIAGNOSTICS_PATTERN.findall(path.read_text(encoding="utf-8", errors="replace"))
     if not matches:
         return {}
-    accepted, completed, reuse = matches[-1]
+    accepted, completed, reuse, finite_connections, completed_streams, streams_per_connection, reused_after_stream = (
+        matches[-1]
+    )
     return {
         "http_coordinate_accepted_connections": int(accepted),
         "http_coordinate_completed_unary_operations": int(completed),
         "http_coordinate_operations_per_connection": float(reuse),
+        "http_finite_stream_connections": int(finite_connections),
+        "http_completed_finite_streams": int(completed_streams),
+        "http_finite_streams_per_connection": float(streams_per_connection),
+        "http_connections_reused_after_finite_stream": int(reused_after_stream),
     }
+
+
+def read_streaming_diagnostics(path: Path) -> dict[str, int | float]:
+    if not path.exists():
+        return {}
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    diagnostic_lines = [line for line in lines if line.startswith(STREAMING_DIAGNOSTICS_PREFIX)]
+    if not diagnostic_lines:
+        return {}
+    values = dict(field.split("=", 1) for field in diagnostic_lines[-1].split()[1:])
+    diagnostics: dict[str, int | float] = {}
+    for phase in STREAMING_DIAGNOSTIC_PHASES:
+        count = int(values[f"{phase}_count"])
+        total_nanoseconds = int(values[f"{phase}_total_ns"])
+        diagnostics[f"server_terminal_{phase}_count"] = count
+        diagnostics[f"server_terminal_{phase}_average_ms"] = (
+            total_nanoseconds / count / 1_000_000.0 if count else 0.0
+        )
+        diagnostics[f"server_terminal_{phase}_max_ms"] = int(values[f"{phase}_max_ns"]) / 1_000_000.0
+    return diagnostics
 
 
 def postgres_schema_name(transport: str, concurrency: int, port: int) -> str:
@@ -430,6 +470,7 @@ class SutProcess:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["A2A_TCK_STORE_BACKEND"] = self.store_backend
+        env["A2A_STREAMING_DIAGNOSTICS"] = "1"
         if self.store_backend == "postgres":
             if "A2A_TCK_POSTGRES_DSN" not in env and "A2A_TEST_POSTGRES_DSN" in env:
                 env["A2A_TCK_POSTGRES_DSN"] = env["A2A_TEST_POSTGRES_DSN"]
@@ -558,6 +599,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
+    streaming_diagnostics = read_streaming_diagnostics(sut.log_path)
     if transport in {"http_json", "jsonrpc"} and not diagnostics:
         raise ValueError(
             f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
@@ -569,6 +611,8 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
         if diagnostics:
             result.update(diagnostics)
+        if streaming_diagnostics:
+            result.update(streaming_diagnostics)
     return payload
 
 
@@ -720,7 +764,14 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
         "http_coordinate_accepted_connections",
         "http_coordinate_completed_unary_operations",
         "http_coordinate_operations_per_connection",
+        "http_finite_stream_connections",
+        "http_completed_finite_streams",
+        "http_finite_streams_per_connection",
+        "http_connections_reused_after_finite_stream",
     ))
+    for phase in STREAMING_DIAGNOSTIC_PHASES:
+        fieldnames.extend((f"server_terminal_{phase}_average_ms", f"server_terminal_{phase}_max_ms",
+                           f"server_terminal_{phase}_count"))
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms",
                            f"{phase}_call_count", f"{phase}_calls_per_operation"))

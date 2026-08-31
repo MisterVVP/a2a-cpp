@@ -19,6 +19,7 @@
 
 #include "a2a/core/http_constants.h"
 #include "a2a/core/string_utils.h"
+#include "a2a/server/streaming_diagnostics.h"
 
 namespace a2a::server {
 namespace {
@@ -512,7 +513,9 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
       if (!headers_written.ok()) {
         return headers_written.error();
       }
-      return response.stream_writer(transport);
+      const auto streamed = response.stream_writer(transport);
+      streaming_diagnostics::StreamFinalized();
+      return streamed;
     }
     const auto headers_written = WriteAll(transport, payload);
     if (!headers_written.ok()) {
@@ -523,7 +526,9 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     if (!streamed.ok()) {
       return streamed.error();
     }
-    return chunked_transport.Finish();
+    const auto finished = chunked_transport.Finish();
+    streaming_diagnostics::StreamFinalized();
+    return finished;
   }
   const auto response_written = WriteAll(transport, payload);
   if (!response_written.ok()) {

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -19,7 +20,6 @@
 #include "a2a/core/result.h"
 #include "a2a/core/task_states.h"
 #include "a2a/server/server_stream_session.h"
-#include "a2a/server/stream_response_coroutine.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
@@ -40,12 +40,15 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
   };
 
   struct SubscriberState final {
+    struct QueuedEvent final {
+      lf::a2a::v1::StreamResponse response;
+      std::int64_t notification_time = 0;
+    };
+
     std::string task_id;
-    lf::a2a::v1::Task current_task;
-    std::deque<lf::a2a::v1::StreamResponse> events;
+    std::deque<QueuedEvent> events;
     std::atomic_bool closed = false;
     std::atomic_size_t queued_event_count = 0;
-    std::optional<std::chrono::milliseconds> wait_timeout;
     std::mutex mutex;
     std::condition_variable ready;
   };
@@ -73,14 +76,12 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     std::shared_ptr<ServiceState> service_state_;
     std::shared_ptr<SubscriberState> state_;
     std::atomic_bool cancelled_ = false;
-    StreamResponseCoroutine coroutine_;
   };
 
   static void RemoveSubscriber(const std::shared_ptr<ServiceState>& service_state,
                                const std::shared_ptr<SubscriberState>& state);
   static std::optional<lf::a2a::v1::StreamResponse> WaitForPublishedEvent(
-      const std::shared_ptr<SubscriberState>& state);
-  static StreamResponseCoroutine RunSubscription(std::shared_ptr<SubscriberState> state);
+      const std::shared_ptr<SubscriberState>& state, std::optional<std::chrono::milliseconds> timeout);
   static lf::a2a::v1::StreamResponse BuildCurrentTaskEvent(const lf::a2a::v1::Task& task);
   static lf::a2a::v1::StreamResponse BuildStatusUpdateEvent(const lf::a2a::v1::Task& task);
 

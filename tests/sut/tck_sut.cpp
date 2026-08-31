@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <charconv>
@@ -43,6 +44,7 @@
 #include "a2a/server/network_utils.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/stores/store_factory.h"
+#include "a2a/server/streaming_diagnostics.h"
 #include "a2a/server/transport_mux.h"
 #include "example_support.h"
 #include "sut/tck_sut.h"
@@ -62,9 +64,23 @@ constexpr std::string_view kMissingPostgresDsnMessage =
 constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TCK_STORE_BACKEND: ";
 constexpr std::string_view kInvalidPostgresPoolSizeMessage = "A2A_TCK_POSTGRES_POOL_SIZE must be a positive integer";
 constexpr std::string_view kHttpDiagnosticsPrefix = "A2A_HTTP_DIAGNOSTICS";
+constexpr std::string_view kStreamingDiagnosticsPrefix = "A2A_STREAMING_DIAGNOSTICS";
+constexpr std::string_view kStreamingDiagnosticsEnvironment = "A2A_STREAMING_DIAGNOSTICS";
+constexpr std::array<std::string_view, a2a::server::streaming_diagnostics::kPhaseCount> kStreamingPhaseNames = {
+    "cancel_dispatch_to_publish",
+    "publish_to_notify",
+    "notify_to_observe",
+    "observe_to_serialize",
+    "serialize",
+    "frame",
+    "socket_write",
+    "write_to_finalize"};
 volatile std::sig_atomic_t kKeepRunning = 1;
 std::atomic<std::uint64_t> kAcceptedUnaryHttpConnections{0};
 std::atomic<std::uint64_t> kCompletedUnaryHttpOperations{0};
+std::atomic<std::uint64_t> kFiniteStreamConnections{0};
+std::atomic<std::uint64_t> kCompletedFiniteStreams{0};
+std::atomic<std::uint64_t> kConnectionsReusedAfterFiniteStream{0};
 
 void EmitHttpDiagnostics() {
   const std::uint64_t accepted_connections = kAcceptedUnaryHttpConnections.load(std::memory_order_relaxed);
@@ -72,10 +88,35 @@ void EmitHttpDiagnostics() {
   const double operations_per_connection = accepted_connections == 0U ? 0.0
                                                                       : static_cast<double>(completed_operations) /
                                                                             static_cast<double>(accepted_connections);
+  const std::uint64_t finite_stream_connections = kFiniteStreamConnections.load(std::memory_order_relaxed);
+  const std::uint64_t completed_finite_streams = kCompletedFiniteStreams.load(std::memory_order_relaxed);
+  const double finite_streams_per_connection =
+      finite_stream_connections == 0U
+          ? 0.0
+          : static_cast<double>(completed_finite_streams) / static_cast<double>(finite_stream_connections);
   std::cout << kHttpDiagnosticsPrefix << " accepted_connections=" << accepted_connections
             << " completed_unary_operations=" << completed_operations
-            << " operations_per_connection=" << operations_per_connection << '\n'
+            << " operations_per_connection=" << operations_per_connection
+            << " finite_stream_connections=" << finite_stream_connections
+            << " completed_finite_streams=" << completed_finite_streams
+            << " finite_streams_per_connection=" << finite_streams_per_connection
+            << " connections_reused_after_finite_stream="
+            << kConnectionsReusedAfterFiniteStream.load(std::memory_order_relaxed) << '\n'
             << std::flush;
+}
+
+void EmitStreamingDiagnostics() {
+  if (!a2a::server::streaming_diagnostics::IsEnabled()) {
+    return;
+  }
+  const auto diagnostics = a2a::server::streaming_diagnostics::Take();
+  std::cout << kStreamingDiagnosticsPrefix;
+  for (std::size_t index = 0; index < kStreamingPhaseNames.size(); ++index) {
+    std::cout << ' ' << kStreamingPhaseNames[index] << "_total_ns=" << diagnostics.total_nanoseconds[index] << ' '
+              << kStreamingPhaseNames[index] << "_max_ns=" << diagnostics.maximum_nanoseconds[index] << ' '
+              << kStreamingPhaseNames[index] << "_count=" << diagnostics.sample_count[index];
+  }
+  std::cout << '\n' << std::flush;
 }
 
 void SignalHandler(int signal_number) {
@@ -194,10 +235,16 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
   const a2a::server::HttpAdapter adapter;
   a2a::server::HttpConnectionState connection_state;
   bool completed_unary_on_connection = false;
+  bool completed_finite_stream_on_connection = false;
+  bool awaiting_request_after_finite_stream = false;
   while (true) {
     auto parsed = adapter.ReadRequest(socket_transport, connection_state, "localhost");
     if (!parsed.ok()) {
       break;
+    }
+    if (awaiting_request_after_finite_stream) {
+      kConnectionsReusedAfterFiniteStream.fetch_add(1, std::memory_order_relaxed);
+      awaiting_request_after_finite_stream = false;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
     auto response = mux.RouteRequest(request);
@@ -217,6 +264,14 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       }
       kCompletedUnaryHttpOperations.fetch_add(1, std::memory_order_relaxed);
     }
+    if (response.value().stream_kind == a2a::server::HttpStreamKind::kFinite) {
+      if (!completed_finite_stream_on_connection) {
+        completed_finite_stream_on_connection = true;
+        kFiniteStreamConnections.fetch_add(1, std::memory_order_relaxed);
+      }
+      kCompletedFiniteStreams.fetch_add(1, std::memory_order_relaxed);
+      awaiting_request_after_finite_stream = !close_connection;
+    }
     if (close_connection) {
       break;
     }
@@ -226,6 +281,8 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
 }
 
 int RunTckSut(int argc, char** argv) {
+  a2a::server::streaming_diagnostics::SetEnabled(GetEnvironmentValue(kStreamingDiagnosticsEnvironment.data()) == "1");
+  a2a::server::streaming_diagnostics::Reset();
   const std::string endpoint = (argc > 1) ? argv[1] : std::string(kDefaultHost) + ":" + std::to_string(kDefaultPort);
   auto parsed_endpoint = a2a::server::ParseHostPortEndpoint(endpoint, kMaxHttpPort);
   if (!parsed_endpoint.ok()) {
@@ -395,13 +452,14 @@ int RunTckSut(int argc, char** argv) {
   executor.ShutdownSubscriptions();
   std::cerr << "TCK SUT shutdown: shutting down active HTTP sockets\n";
   connection_registry.ShutdownActiveSockets();
-  EmitHttpDiagnostics();
   std::cerr << "TCK SUT shutdown: joining HTTP connection threads\n";
   for (auto& connection_thread : connection_threads) {
     if (connection_thread.joinable()) {
       connection_thread.join();
     }
   }
+  EmitHttpDiagnostics();
+  EmitStreamingDiagnostics();
   std::cerr << "TCK SUT shutdown: stopping gRPC\n";
   grpc_server->Shutdown();
 #ifdef _WIN32

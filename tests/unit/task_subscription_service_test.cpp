@@ -12,6 +12,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "a2a/server/streaming_diagnostics.h"
+
 namespace {
 
 static_assert(!std::is_copy_constructible_v<a2a::server::TaskSubscriptionService>);
@@ -143,6 +145,25 @@ TEST(TaskSubscriptionServiceTest, QueuedTerminalEventKeepsSubscriptionLiveUntilD
   EXPECT_EQ(terminal.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
   EXPECT_FALSE(subscription.value()->IsLive());
   ExpectClosed(subscription.value().get());
+}
+
+TEST(TaskSubscriptionServiceTest, TerminalPublicationRecordsWakeDrivenDiagnostics) {
+  a2a::server::streaming_diagnostics::SetEnabled(true);
+  a2a::server::streaming_diagnostics::Reset();
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  (void)NextRequired(subscription.value().get());
+
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));
+  const auto terminal = NextRequired(subscription.value().get());
+  ASSERT_TRUE(terminal.has_status_update());
+  const auto diagnostics = a2a::server::streaming_diagnostics::Take();
+  const auto publish_phase = static_cast<std::size_t>(a2a::server::streaming_diagnostics::Phase::kPublishToNotify);
+  const auto wake_phase = static_cast<std::size_t>(a2a::server::streaming_diagnostics::Phase::kNotifyToObserve);
+  EXPECT_EQ(diagnostics.sample_count[publish_phase], 1U);
+  EXPECT_EQ(diagnostics.sample_count[wake_phase], 1U);
+  a2a::server::streaming_diagnostics::SetEnabled(false);
 }
 
 TEST(TaskSubscriptionServiceTest, RejectsStaleSubscriptionAfterTerminalUpdate) {

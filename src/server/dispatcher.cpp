@@ -13,6 +13,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/server/streaming_diagnostics.h"
 #include "a2a/server/tasks/task_history.h"
 
 namespace a2a::server {
@@ -177,6 +178,7 @@ core::Result<DispatchResponse> DispatchCancelTaskToExecutor(AgentExecutor& execu
   if (payload == nullptr) {
     return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForCancelTask);
   }
+  streaming_diagnostics::CancelDispatchBegins();
   const auto response = executor.CancelTask(*payload, context);
   if (!response.ok()) {
     return response.error();

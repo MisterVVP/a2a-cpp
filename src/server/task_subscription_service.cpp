@@ -6,44 +6,23 @@
 #include <optional>
 #include <utility>
 
+#include "a2a/server/streaming_diagnostics.h"
+
 namespace a2a::server {
 
 TaskSubscriptionService::SubscriptionSession::SubscriptionSession(std::shared_ptr<ServiceState> service_state,
                                                                   std::shared_ptr<SubscriberState> state)
-    : service_state_(std::move(service_state)),
-      state_(std::move(state)),
-      coroutine_(TaskSubscriptionService::RunSubscription(state_)) {}
+    : service_state_(std::move(service_state)), state_(std::move(state)) {}
 
 TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() { Cancel(); }
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
-  try {
-    {
-      std::lock_guard lock(state_->mutex);
-      state_->wait_timeout.reset();
-    }
-    auto event = coroutine_.Next();
-    while (!event.has_value() && !coroutine_.IsDone()) {
-      event = coroutine_.Next();
-    }
-    return event;
-  } catch (const std::exception& ex) {
-    return core::Error::Internal(ex.what());
-  }
+  return TaskSubscriptionService::WaitForPublishedEvent(state_, std::nullopt);
 }
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
     std::chrono::milliseconds timeout) {
-  try {
-    {
-      std::lock_guard lock(state_->mutex);
-      state_->wait_timeout = timeout;
-    }
-    auto event = coroutine_.Next();
-    return event;
-  } catch (const std::exception& ex) {
-    return core::Error::Internal(ex.what());
-  }
+  return TaskSubscriptionService::WaitForPublishedEvent(state_, timeout);
 }
 
 bool TaskSubscriptionService::SubscriptionSession::IsLive() const noexcept {
@@ -68,16 +47,18 @@ core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subs
     return core::Error::Internal("task subscription service is shut down");
   }
 
-  subscriber_state->current_task = task;
+  lf::a2a::v1::Task current_task = task;
   const auto latest = service_state->latest_task_states_by_id.find(subscriber_state->task_id);
   if (latest != service_state->latest_task_states_by_id.end()) {
-    subscriber_state->current_task.set_context_id(latest->second.context_id);
-    *subscriber_state->current_task.mutable_status() = latest->second.status;
+    current_task.set_context_id(latest->second.context_id);
+    *current_task.mutable_status() = latest->second.status;
   }
-  if (core::IsTerminalTaskState(subscriber_state->current_task.status().state())) {
+  if (core::IsTerminalTaskState(current_task.status().state())) {
     return core::protocol_errors::UnsupportedOperation("task is already terminal");
   }
   service_state->subscribers_by_task_id[subscriber_state->task_id].push_back(subscriber_state);
+  subscriber_state->events.push_back({.response = BuildCurrentTaskEvent(current_task)});
+  subscriber_state->queued_event_count.store(1U);
 
   return std::unique_ptr<ServerStreamSession>(
       std::make_unique<SubscriptionSession>(service_state, std::move(subscriber_state)));
@@ -114,11 +95,19 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
 
   lf::a2a::v1::StreamResponse event = BuildStatusUpdateEvent(task);
   const bool close_after_event = core::IsTerminalTaskState(task.status().state());
-  for (const auto& subscriber : subscribers) {
+  const std::int64_t publication_started = close_after_event ? streaming_diagnostics::TerminalPublicationBegins() : 0;
+  for (std::size_t index = 0; index < subscribers.size(); ++index) {
+    const auto& subscriber = subscribers[index];
     {
       std::lock_guard lock(subscriber->mutex);
       if (!subscriber->closed.load()) {
-        subscriber->events.push_back(event);
+        if (index + 1U == subscribers.size()) {
+          subscriber->events.push_back({.response = std::move(event)});
+        } else {
+          subscriber->events.push_back({.response = event});
+        }
+        subscriber->events.back().notification_time =
+            close_after_event ? streaming_diagnostics::SubscriberNotified(publication_started) : 0;
         subscriber->queued_event_count.fetch_add(1);
         subscriber->closed.store(close_after_event);
       }
@@ -180,12 +169,11 @@ void TaskSubscriptionService::RemoveSubscriber(const std::shared_ptr<ServiceStat
 }
 
 std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPublishedEvent(
-    const std::shared_ptr<SubscriberState>& state) {
+    const std::shared_ptr<SubscriberState>& state, std::optional<std::chrono::milliseconds> timeout) {
   std::unique_lock lock(state->mutex);
   const auto is_ready = [&state] { return state->closed.load() || !state->events.empty(); };
-  const auto wait_timeout = state->wait_timeout.value_or(std::chrono::milliseconds::zero());
-  if (state->wait_timeout.has_value()) {
-    if (!state->ready.wait_for(lock, wait_timeout, is_ready)) {
+  if (timeout.has_value()) {
+    if (!state->ready.wait_for(lock, *timeout, is_ready)) {
       return std::nullopt;
     }
   } else {
@@ -194,28 +182,11 @@ std::optional<lf::a2a::v1::StreamResponse> TaskSubscriptionService::WaitForPubli
   if (state->events.empty()) {
     return std::nullopt;
   }
-  lf::a2a::v1::StreamResponse event = std::move(state->events.front());
+  SubscriberState::QueuedEvent event = std::move(state->events.front());
   state->events.pop_front();
   state->queued_event_count.fetch_sub(1);
-  return event;
-}
-
-StreamResponseCoroutine TaskSubscriptionService::RunSubscription(std::shared_ptr<SubscriberState> state) {
-  co_yield BuildCurrentTaskEvent(state->current_task);
-
-  for (auto event = WaitForPublishedEvent(state); !state->closed.load() || event.has_value();
-       event = WaitForPublishedEvent(state)) {
-    if (!event.has_value()) {
-      co_await std::suspend_always{};
-      continue;
-    }
-    const bool is_terminal =
-        event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
-    co_yield std::move(event.value());
-    if (is_terminal) {
-      co_return;
-    }
-  }
+  streaming_diagnostics::TerminalEventObserved(event.notification_time);
+  return std::move(event.response);
 }
 
 lf::a2a::v1::StreamResponse TaskSubscriptionService::BuildCurrentTaskEvent(const lf::a2a::v1::Task& task) {

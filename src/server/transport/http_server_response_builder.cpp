@@ -19,6 +19,7 @@ HttpServerResponseBuilder HttpServerResponseBuilder::FromRestResponse(const Rest
   builder.response_.headers = response.headers;
   builder.response_.body = response.body;
   builder.response_.stream_writer = response.stream_writer;
+  builder.response_.stream_kind = response.stream_kind;
   return builder;
 }
 
