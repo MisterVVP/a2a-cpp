@@ -78,6 +78,9 @@ core::Result<lf::a2a::v1::Task> TaskLifecycleService::TransitionTaskStatus(std::
     return current.error();
   }
   if (core::IsTerminalTaskState(current.value().status().state())) {
+    if (next_state == lf::a2a::v1::TASK_STATE_CANCELED) {
+      return core::protocol_errors::TaskNotCancelable();
+    }
     return core::protocol_errors::UnsupportedOperation("task is already terminal");
   }
   current.value().mutable_status()->set_state(next_state);
