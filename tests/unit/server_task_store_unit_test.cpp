@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/core/protocol_codes.h"
 #include "a2a/server/request_context.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "a2a/server/tasks/list_tasks.h"
@@ -441,6 +442,7 @@ TEST(ServerTaskUtilitiesTest, LifecycleServiceEnforcesTerminalStateGuard) {
   ASSERT_TRUE(lifecycle.TransitionTaskStatus("terminal-task", lf::a2a::v1::TASK_STATE_COMPLETED).ok());
   const auto rejected = lifecycle.TransitionTaskStatus("terminal-task", lf::a2a::v1::TASK_STATE_CANCELED);
   ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().protocol_code(), a2a::core::protocol_codes::kTaskNotCancelable);
 }
 
 TEST(ServerTaskUtilitiesTest, AppliesHistoryAndArtifactProjectionHelpers) {
