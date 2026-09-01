@@ -105,7 +105,7 @@ std::size_t DrainStatusUpdateCount(a2a::server::ServerStreamSession* session) {
     if (!next.ok() || !next.value().has_value()) {
       return count;
     }
-    count += next.value()->has_status_update() ? 1U : 0U;
+    count += next.value()->has_status_update() ? 1U : 0U;  // NOLINT: next.value().has_value() check above
   }
 }
 
