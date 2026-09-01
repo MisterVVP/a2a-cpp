@@ -825,9 +825,16 @@ class StreamDispatchExecutor final {
   using Task = std::function<void()>;
 
   StreamDispatchExecutor() {
-    constexpr std::size_t kWorkerCount = 4U;
-    workers_.reserve(kWorkerCount);
-    for (std::size_t index = 0; index < kWorkerCount; ++index) {
+    constexpr std::size_t kMinimumWorkerCount = 4U;
+    constexpr std::size_t kMaximumWorkerCount = 32U;
+    constexpr std::size_t kWorkersPerHardwareThread = 2U;
+    const std::size_t hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+    // Observer work may block, so allow two workers per hardware thread while
+    // keeping the process-wide pool independent of the active stream count.
+    const std::size_t worker_count =
+        std::clamp(hardware_threads * kWorkersPerHardwareThread, kMinimumWorkerCount, kMaximumWorkerCount);
+    workers_.reserve(worker_count);
+    for (std::size_t index = 0; index < worker_count; ++index) {
       workers_.emplace_back([this] { Run(); });
     }
   }

@@ -21,9 +21,13 @@ Implement `a2a::client::StreamObserver`:
 For the default HTTP+JSON and JSON-RPC transports, observer callbacks are
 serialized per stream on a shared callback-dispatch executor. They never run on
 the shared libcurl reactor thread, and an idle stream does not reserve a dispatch
-worker. A slow callback can occupy one shared worker, so keep callbacks bounded
-and hand expensive processing to an application executor. Custom synchronous
-stream requesters retain their transport-worker compatibility path.
+worker. The process-wide executor uses two workers per reported hardware thread,
+clamped to a minimum of four and a maximum of 32; its thread count therefore
+remains bounded as clients and active streams increase. The extra capacity is
+intentional because observer work may block rather than being strictly
+CPU-bound. A slow callback can occupy one shared worker, so keep callbacks
+bounded and hand expensive processing to an application executor. Custom
+synchronous stream requesters retain their transport-worker compatibility path.
 
 Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
 pending body data. The reactor never waits for callback capacity: exceeding a
