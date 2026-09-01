@@ -38,6 +38,12 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/non_copyable.h"
 
+#if defined(A2A_HAS_LIBCURL)
+namespace a2a::http::testing {
+std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept;
+}
+#endif
+
 namespace {
 
 constexpr int kSocketError = -1;
@@ -46,7 +52,7 @@ constexpr int kHttpBadGateway = 502;
 constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
 constexpr std::size_t kScalabilityStreamCount = 64U;
-constexpr std::size_t kMaximumStreamDispatchWorkers = 32U;
+constexpr std::size_t kMaximumStreamDispatchWorkers = 4U;
 constexpr std::size_t kMaximumClientReactorThreads = 1U;
 constexpr std::size_t kMaximumSharedClientThreadGrowth = kMaximumStreamDispatchWorkers + kMaximumClientReactorThreads;
 constexpr std::size_t kShutdownRaceStarterCount = 32U;
@@ -985,7 +991,7 @@ TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
   EXPECT_TRUE(completed.get().ok());
 }
 
-TEST(SharedHttpClientTest, ConcurrentStartsRemainRejectedAfterShutdown) {
+void ExerciseConcurrentStartsAndShutdown() {
   a2a::http::Client client;
   a2a::http::Request request;
   request.method = std::string(a2a::core::http::kMethodGet);
@@ -1019,6 +1025,18 @@ TEST(SharedHttpClientTest, ConcurrentStartsRemainRejectedAfterShutdown) {
       [](const a2a::core::Result<a2a::http::Response>&) {});
   ASSERT_FALSE(rejected.ok());
   EXPECT_EQ(rejected.error().message(), kClientShuttingDownMessage);
+}
+
+TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
+  const auto before = a2a::http::testing::CurlStreamReactorLifecycleCounts();
+
+  ExerciseConcurrentStartsAndShutdown();
+
+  const auto after = a2a::http::testing::CurlStreamReactorLifecycleCounts();
+  const std::size_t created = after.first - before.first;
+  const std::size_t destroyed = after.second - before.second;
+  EXPECT_LE(created, kMaximumClientReactorThreads);
+  EXPECT_EQ(destroyed, created);
 }
 
 void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,
