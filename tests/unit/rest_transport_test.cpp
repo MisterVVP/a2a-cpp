@@ -258,6 +258,7 @@ TEST(RestTransportTest, FiniteStreamWritesEachEventBeforeRequestingNext) {
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_TRUE(response.value().body.empty());
   ASSERT_TRUE(response.value().stream_writer);
+  EXPECT_EQ(response.value().stream_kind, a2a::server::HttpStreamKind::kFinite);
   CountingHttpTransport output(writes);
   const auto streamed = response.value().stream_writer(output);
 
@@ -557,6 +558,7 @@ TEST(RestTransportTest, CancelsSubscriptionWhenHeartbeatDetectsDisconnect) {
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   ASSERT_TRUE(response.value().stream_writer);
+  EXPECT_EQ(response.value().stream_kind, a2a::server::HttpStreamKind::kLive);
 
   RecordingHttpTransport output;
   output.fail_heartbeat = true;

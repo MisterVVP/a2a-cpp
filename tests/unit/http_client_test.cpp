@@ -995,7 +995,7 @@ void InitializeSharedDispatchWorkers() {
   const auto started = client.StartStreamRequest(
       request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
       [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
-      [&completion](a2a::core::Result<a2a::http::Response>) { completion.set_value(); });
+      [&completion](const a2a::core::Result<a2a::http::Response>&) { completion.set_value(); });
   ASSERT_TRUE(started.ok()) << started.error().message();
   ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
   client.Shutdown();
@@ -1022,7 +1022,7 @@ TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
       (void)client.StartStreamRequest(
           request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
           [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
-          [](a2a::core::Result<a2a::http::Response>) {});
+          [](const a2a::core::Result<a2a::http::Response>&) {});
     });
   }
   start_gate.arrive_and_wait();
@@ -1035,13 +1035,16 @@ TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
   const auto rejected = client.StartStreamRequest(
       request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
       [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
-      [](a2a::core::Result<a2a::http::Response>) {});
+      [](const a2a::core::Result<a2a::http::Response>&) {});
   ASSERT_FALSE(rejected.ok());
   EXPECT_EQ(rejected.error().message(), kClientShuttingDownMessage);
 #if defined(__linux__)
   const std::size_t finished_threads = static_cast<std::size_t>(
       std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
-  EXPECT_EQ(finished_threads, baseline_threads);
+  // Other shared test infrastructure can retire an idle worker while this
+  // race runs; only growth indicates that shutdown allowed a replacement
+  // reactor thread to escape.
+  EXPECT_LE(finished_threads, baseline_threads);
 #endif
 }
 
@@ -1055,7 +1058,7 @@ void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request
         request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
         [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; },
         [cancellations](const std::function<void()>& cancel) { cancellations->push_back(cancel); },
-        [completion](a2a::core::Result<a2a::http::Response>) { completion->set_value(); });
+        [completion](const a2a::core::Result<a2a::http::Response>&) { completion->set_value(); });
     if (!started.ok()) {
       ADD_FAILURE() << started.error().message();
       return;

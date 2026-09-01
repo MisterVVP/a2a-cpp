@@ -29,6 +29,15 @@ JSON-RPC streaming operations. Running the streaming scenarios at concurrency
 callback pool. Those result rows include `client_process_thread_count`, allowing
 thread growth to be compared directly across concurrency levels.
 
+HTTP wire rows also report finite-stream connection lifecycle diagnostics. The
+`http_finite_stream_connections` and `http_completed_finite_streams` fields
+count connections carrying finite streams and successfully completed finite
+streams. `http_finite_streams_per_connection` reports their ratio, while
+`http_connections_reused_after_finite_stream` counts successful parsing of a
+subsequent request on a connection after its terminal chunk. The counters are
+collected for the complete SUT run and are therefore shared by all scenario rows
+from that run.
+
 ### Follow-up workloads
 
 Follow-up fixtures are fully created before the measured region. Each measured

@@ -19,6 +19,8 @@ namespace a2a::server {
 
 class HttpByteTransport;
 
+enum class HttpStreamKind { kNone, kFinite, kLive };
+
 struct RestEndpointPaths final {
   static constexpr std::string_view kSendMessage = "/message:send";
   static constexpr std::string_view kSendStreamingMessage = "/message:stream";
@@ -44,6 +46,7 @@ struct RestResponse final {
   std::unordered_map<std::string, std::string> headers;
   std::string body;
   std::function<core::Result<void>(HttpByteTransport&)> stream_writer;
+  HttpStreamKind stream_kind = HttpStreamKind::kNone;
 };
 
 struct RestRoute final {

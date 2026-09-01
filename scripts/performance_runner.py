@@ -122,7 +122,10 @@ DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
 HTTP_DIAGNOSTICS_PATTERN = re.compile(
     r"A2A_HTTP_DIAGNOSTICS accepted_connections=(\d+) completed_unary_operations=(\d+) "
-    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?)(?=\s|$)"
+    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
+    r"finite_stream_connections=(\d+) completed_finite_streams=(\d+) "
+    r"finite_streams_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
+    r"connections_reused_after_finite_stream=(\d+)(?=\s|$)"
 )
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
@@ -399,11 +402,17 @@ def read_http_diagnostics(path: Path) -> dict[str, int | float]:
     matches = HTTP_DIAGNOSTICS_PATTERN.findall(path.read_text(encoding="utf-8", errors="replace"))
     if not matches:
         return {}
-    accepted, completed, reuse = matches[-1]
+    accepted, completed, reuse, finite_connections, completed_streams, streams_per_connection, reused_after_stream = (
+        matches[-1]
+    )
     return {
         "http_coordinate_accepted_connections": int(accepted),
         "http_coordinate_completed_unary_operations": int(completed),
         "http_coordinate_operations_per_connection": float(reuse),
+        "http_finite_stream_connections": int(finite_connections),
+        "http_completed_finite_streams": int(completed_streams),
+        "http_finite_streams_per_connection": float(streams_per_connection),
+        "http_connections_reused_after_finite_stream": int(reused_after_stream),
     }
 
 
@@ -720,6 +729,10 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
         "http_coordinate_accepted_connections",
         "http_coordinate_completed_unary_operations",
         "http_coordinate_operations_per_connection",
+        "http_finite_stream_connections",
+        "http_completed_finite_streams",
+        "http_finite_streams_per_connection",
+        "http_connections_reused_after_finite_stream",
     ))
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms",
