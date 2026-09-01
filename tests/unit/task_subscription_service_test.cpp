@@ -3,7 +3,10 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <barrier>
 #include <chrono>
+#include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -23,11 +26,17 @@ constexpr std::string_view kTaskId = "subscription-task";
 constexpr std::string_view kContextId = "subscription-context";
 constexpr std::string_view kTransientArtifactId = "transient-artifact";
 constexpr std::string_view kTransientHistoryMessageId = "transient-history-message";
+constexpr std::string_view kFirstRaceContextId = "first-race-context";
+constexpr std::string_view kSecondRaceContextId = "second-race-context";
 constexpr std::chrono::milliseconds kSubscriptionWaitTimeout{1};
+constexpr std::chrono::milliseconds kImmediateTimeout{0};
 constexpr std::size_t kConcurrentCancelThreadCount = 8;
 constexpr std::size_t kConcurrentPublisherCount = 8;
 constexpr std::size_t kUpdatesPerPublisher = 16;
 constexpr std::size_t kOrderingSubscriberCount = 8;
+constexpr std::ptrdiff_t kConcurrentParticipantCount = 3;
+constexpr std::size_t kMaximumRacingUpdateCount = 1;
+constexpr std::size_t kExpectedConcurrentSignalEventCount = 3;
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -70,6 +79,33 @@ std::vector<std::string> DrainStatusContextIds(a2a::server::ServerStreamSession*
     if (event.has_status_update()) {
       context_ids.push_back(event.status_update().context_id());
     }
+  }
+}
+
+void RunConcurrently(const std::function<void()>& first, const std::function<void()>& second) {
+  std::barrier start_gate(kConcurrentParticipantCount);
+  std::thread first_thread([&] {
+    start_gate.arrive_and_wait();
+    first();
+  });
+  std::thread second_thread([&] {
+    start_gate.arrive_and_wait();
+    second();
+  });
+  start_gate.arrive_and_wait();
+  first_thread.join();
+  second_thread.join();
+}
+
+std::size_t DrainStatusUpdateCount(a2a::server::ServerStreamSession* session) {
+  std::size_t count = 0;
+  while (true) {
+    const auto next = session->Next();
+    EXPECT_TRUE(next.ok());
+    if (!next.ok() || !next.value().has_value()) {
+      return count;
+    }
+    count += next.value()->has_status_update() ? 1U : 0U;
   }
 }
 
@@ -289,6 +325,91 @@ TEST(TaskSubscriptionServiceTest, SubscriptionCanOutliveService) {
   EXPECT_FALSE(session->IsLive());
   ExpectClosed(session.get());
   session.reset();
+}
+
+TEST(TaskSubscriptionServiceTest, PublicationRacingTimeoutDeliversEventExactlyOnce) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto* session = subscription.value().get();
+  (void)NextRequired(session);
+  std::atomic_size_t delivered = 0;
+
+  RunConcurrently(
+      [&] {
+        const auto next = session->NextFor(kImmediateTimeout);
+        ASSERT_TRUE(next.ok());
+        delivered.fetch_add(next.value().has_value() ? 1U : 0U);
+      },
+      [&] { service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED)); });
+
+  const auto remaining = session->NextFor(kSubscriptionWaitTimeout);
+  ASSERT_TRUE(remaining.ok());
+  delivered.fetch_add(remaining.value().has_value() ? 1U : 0U);
+  EXPECT_EQ(delivered.load(), 1U);
+}
+
+TEST(TaskSubscriptionServiceTest, PublicationRacingCancellationClosesWithoutDuplicateDelivery) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto* session = subscription.value().get();
+  (void)NextRequired(session);
+
+  RunConcurrently([&] { service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED)); },
+                  [&] { session->Cancel(); });
+
+  EXPECT_LE(DrainStatusUpdateCount(session), kMaximumRacingUpdateCount);
+  EXPECT_FALSE(session->IsLive());
+}
+
+TEST(TaskSubscriptionServiceTest, ShutdownRacingPublicationClosesWithoutDuplicateDelivery) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto* session = subscription.value().get();
+  (void)NextRequired(session);
+
+  RunConcurrently([&] { service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED)); },
+                  [&] { service.Shutdown(); });
+
+  EXPECT_LE(DrainStatusUpdateCount(session), kMaximumRacingUpdateCount);
+  EXPECT_FALSE(session->IsLive());
+}
+
+TEST(TaskSubscriptionServiceTest, DestroyingSuspendedSubscriptionPreventsLaterResume) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  (void)NextRequired(subscription.value().get());
+
+  subscription.value().reset();
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED));
+
+  auto replacement = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(replacement.ok());
+  const auto current = NextRequired(replacement.value().get());
+  EXPECT_TRUE(current.has_task());
+}
+
+TEST(TaskSubscriptionServiceTest, ConcurrentSignalsResumeOnceAndPreserveBothEvents) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto* session = subscription.value().get();
+  (void)NextRequired(session);
+  auto first = MakeTask(lf::a2a::v1::TASK_STATE_WORKING);
+  auto second = MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED);
+  first.set_context_id(std::string(kFirstRaceContextId));
+  second.set_context_id(std::string(kSecondRaceContextId));
+
+  RunConcurrently([&] { service.PublishTaskUpdated(first); }, [&] { service.PublishTaskUpdated(second); });
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_COMPLETED));
+
+  const auto contexts = DrainStatusContextIds(session);
+  ASSERT_EQ(contexts.size(), kExpectedConcurrentSignalEventCount);
+  EXPECT_NE(contexts[0], contexts[1]);
+  EXPECT_EQ(contexts.back(), kContextId);
 }
 
 }  // namespace
