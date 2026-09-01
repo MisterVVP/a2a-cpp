@@ -3,20 +3,46 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/result.h"
+#include "a2a/core/subscription_diagnostics.h"
 #include "a2a/core/version.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace {
+
+constexpr std::chrono::nanoseconds kFirstDiagnosticDuration{11};
+constexpr std::chrono::nanoseconds kSecondDiagnosticDuration{29};
 
 TEST(CoreVersionTest, EmitsAndValidatesA2AVersion10) {
   EXPECT_EQ(a2a::core::Version::kHeaderName, "A2A-Version");
   EXPECT_EQ(a2a::core::Version::HeaderValue(), "1.0");
   EXPECT_TRUE(a2a::core::Version::IsSupported("1.0"));
   EXPECT_FALSE(a2a::core::Version::IsSupported("2.0"));
+}
+
+TEST(SubscriptionDiagnosticsTest, AggregatesAndResetsWithoutSharedLocks) {
+  using a2a::core::subscription_diagnostics::Phase;
+  (void)a2a::core::subscription_diagnostics::TakeSnapshot();
+
+  a2a::core::subscription_diagnostics::Record(Phase::kTerminalPublication, kFirstDiagnosticDuration);
+  a2a::core::subscription_diagnostics::Record(Phase::kTerminalPublication, kSecondDiagnosticDuration);
+
+  const auto snapshot = a2a::core::subscription_diagnostics::TakeSnapshot();
+  const auto& publication = snapshot[static_cast<std::size_t>(Phase::kTerminalPublication)];
+  EXPECT_EQ(publication.count, 2U);
+  EXPECT_EQ(publication.elapsed_nanoseconds,
+            static_cast<std::uint64_t>((kFirstDiagnosticDuration + kSecondDiagnosticDuration).count()));
+  EXPECT_EQ(publication.maximum_nanoseconds, static_cast<std::uint64_t>(kSecondDiagnosticDuration.count()));
+
+  const auto reset = a2a::core::subscription_diagnostics::TakeSnapshot();
+  EXPECT_EQ(reset[static_cast<std::size_t>(Phase::kTerminalPublication)].count, 0U);
 }
 
 TEST(CoreExtensionsTest, FormatSortsAndDeduplicatesExtensionsDeterministically) {

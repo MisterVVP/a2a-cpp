@@ -27,6 +27,7 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/subscription_diagnostics.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 #include "a2a/server/agent_card/agent_card_serializer.h"
@@ -783,10 +784,18 @@ core::Result<std::string> BuildSseJsonRpcPrefix(const google::protobuf::Value& i
 
 core::Result<void> BuildSseJsonRpcEvent(std::string& body, std::string_view prefix,
                                         const lf::a2a::v1::StreamResponse& event) {
-  const auto event_json = core::MessageToJson(event);
+  const bool terminal = event.has_status_update() && core::IsTerminalTaskState(event.status_update().status().state());
+  core::Result<std::string> event_json = core::Error::Internal("JSON-RPC SSE serialization did not run");
+  {
+    const core::subscription_diagnostics::ScopedTimer serialization_timer(
+        core::subscription_diagnostics::Phase::kProtoToJson, terminal);
+    event_json = core::MessageToJson(event);
+  }
   if (!event_json.ok()) {
     return event_json.error();
   }
+  const core::subscription_diagnostics::ScopedTimer framing_timer(
+      core::subscription_diagnostics::Phase::kFrameConstruction, terminal);
   body.clear();
   body.reserve(prefix.size() + event_json.value().size() + kJsonRpcSseSuffixSize);
   body.append(prefix);
@@ -828,6 +837,8 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
     const auto& event = next.value();
     if (!event.has_value()) {
       if (!(*session)->IsLive()) {
+        const core::subscription_diagnostics::ScopedTimer finalization_timer(
+            core::subscription_diagnostics::Phase::kStreamFinalization);
         return {};
       }
       const auto heartbeat = WriteSseChunk(transport, core::http::kSseHeartbeat);
@@ -841,6 +852,10 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
     if (!append.ok()) {
       return append.error();
     }
+    const bool terminal =
+        event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
+    const core::subscription_diagnostics::ScopedTimer delivery_timer(
+        core::subscription_diagnostics::Phase::kHttpDelivery, terminal);
     const auto written = WriteSseChunk(transport, chunk);
     if (!written.ok()) {
       (*session)->Cancel();

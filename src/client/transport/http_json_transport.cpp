@@ -20,6 +20,8 @@
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/subscription_diagnostics.h"
+#include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
 
@@ -199,6 +201,10 @@ core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& obser
     return error;
   }
 
+  const bool terminal =
+      response.has_status_update() && core::IsTerminalTaskState(response.status_update().status().state());
+  const core::subscription_diagnostics::ScopedTimer observation_timer(
+      core::subscription_diagnostics::Phase::kClientTerminalObservation, terminal);
   observer.OnEvent(response);
   return {};
 }
@@ -343,6 +349,8 @@ struct HttpSseSession final {
       NotifyErrorAndStop(*state, *observer, finish.error());
       return;
     }
+    const core::subscription_diagnostics::ScopedTimer finalization_timer(
+        core::subscription_diagnostics::Phase::kStreamFinalization);
     observer->OnCompleted();
     MarkInactive(*state);
   }

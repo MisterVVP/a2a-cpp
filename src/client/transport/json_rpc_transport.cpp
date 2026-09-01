@@ -25,6 +25,8 @@
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/subscription_diagnostics.h"
+#include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
 
@@ -378,7 +380,12 @@ core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_vi
   if (!parsed.ok()) {
     return parsed.error();
   }
-  observer.OnEvent(parsed.value());
+  const auto& response_event = parsed.value();
+  const bool terminal =
+      response_event.has_status_update() && core::IsTerminalTaskState(response_event.status_update().status().state());
+  const core::subscription_diagnostics::ScopedTimer observation_timer(
+      core::subscription_diagnostics::Phase::kClientTerminalObservation, terminal);
+  observer.OnEvent(response_event);
   return {};
 }
 
@@ -438,6 +445,8 @@ class JsonRpcSseSession final {
       NotifyErrorAndStop(*state_, observer_, finish.error());
       return;
     }
+    const core::subscription_diagnostics::ScopedTimer finalization_timer(
+        core::subscription_diagnostics::Phase::kStreamFinalization);
     observer_.OnCompleted();
     MarkInactive(*state_);
   }

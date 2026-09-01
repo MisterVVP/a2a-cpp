@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <charconv>
@@ -36,6 +37,7 @@
 
 #include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/subscription_diagnostics.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/http_adapter.h"
@@ -62,6 +64,12 @@ constexpr std::string_view kMissingPostgresDsnMessage =
 constexpr std::string_view kUnsupportedStoreBackendMessage = "Unsupported A2A_TCK_STORE_BACKEND: ";
 constexpr std::string_view kInvalidPostgresPoolSizeMessage = "A2A_TCK_POSTGRES_POOL_SIZE must be a positive integer";
 constexpr std::string_view kHttpDiagnosticsPrefix = "A2A_HTTP_DIAGNOSTICS";
+constexpr std::string_view kSubscriptionDiagnosticsPrefix = "A2A_SUBSCRIPTION_DIAGNOSTICS";
+constexpr std::array<std::string_view, a2a::core::subscription_diagnostics::kPhaseCount>
+    kSubscriptionDiagnosticPhaseNames = {
+        "cancel_dispatch",    "terminal_store_update", "terminal_publication", "subscriber_resume",
+        "proto_to_json",      "frame_construction",    "http_delivery",        "client_terminal_observation",
+        "stream_finalization"};
 volatile std::sig_atomic_t kKeepRunning = 1;
 std::atomic<std::uint64_t> kAcceptedUnaryHttpConnections{0};
 std::atomic<std::uint64_t> kCompletedUnaryHttpOperations{0};
@@ -90,6 +98,21 @@ void EmitHttpDiagnostics() {
             << " connections_reused_after_finite_stream="
             << kConnectionsReusedAfterFiniteStream.load(std::memory_order_relaxed) << '\n'
             << std::flush;
+}
+
+void EmitSubscriptionDiagnostics() {
+  if (!a2a::core::subscription_diagnostics::IsEnabled()) {
+    return;
+  }
+  const auto snapshot = a2a::core::subscription_diagnostics::TakeSnapshot();
+  std::cout << kSubscriptionDiagnosticsPrefix;
+  for (std::size_t index = 0; index < snapshot.size(); ++index) {
+    const auto& aggregate = snapshot[index];
+    std::cout << ' ' << kSubscriptionDiagnosticPhaseNames[index] << "_count=" << aggregate.count << ' '
+              << kSubscriptionDiagnosticPhaseNames[index] << "_total_ns=" << aggregate.elapsed_nanoseconds << ' '
+              << kSubscriptionDiagnosticPhaseNames[index] << "_max_ns=" << aggregate.maximum_nanoseconds;
+  }
+  std::cout << '\n' << std::flush;
 }
 
 void SignalHandler(int signal_number) {
@@ -430,6 +453,7 @@ int RunTckSut(int argc, char** argv) {
       connection_thread.join();
     }
   }
+  EmitSubscriptionDiagnostics();
   std::cerr << "TCK SUT shutdown: stopping gRPC\n";
   grpc_server->Shutdown();
 #ifdef _WIN32

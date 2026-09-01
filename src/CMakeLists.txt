@@ -26,6 +26,7 @@ add_library(a2a_core STATIC
   core/protojson.cpp
   core/response_builders.cpp
   core/string_utils.cpp
+  core/subscription_diagnostics.cpp
   core/version.cpp
 )
 add_library(a2a::core ALIAS a2a_core)
