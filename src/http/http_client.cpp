@@ -89,6 +89,9 @@ struct ClientState final {
 
 namespace {
 
+std::atomic_size_t g_curl_stream_reactors_created{0U};
+std::atomic_size_t g_curl_stream_reactors_destroyed{0U};
+
 constexpr std::string_view kCurlInitFailureMessage = "failed to initialize HTTP client";
 constexpr std::string_view kCurlHeaderFailureMessage = "failed to build HTTP request headers";
 constexpr std::string_view kConfigureRequestFailureMessage = "failed to configure HTTP request";
@@ -161,6 +164,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
 
   static std::shared_ptr<CurlStreamReactor> Create() {
     auto reactor = std::shared_ptr<CurlStreamReactor>(new CurlStreamReactor());
+    g_curl_stream_reactors_created.fetch_add(1U, std::memory_order_relaxed);
     if (!reactor->valid_) {
       return {};
     }
@@ -178,6 +182,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     if (multi_handle_ != nullptr) {
       curl_multi_cleanup(multi_handle_);
     }
+    g_curl_stream_reactors_destroyed.fetch_add(1U, std::memory_order_relaxed);
   }
 
   CurlStreamReactor(const CurlStreamReactor&) = delete;
@@ -1325,6 +1330,8 @@ core::Result<void> Client::StartStreamRequest(
   {
     std::lock_guard lock(state_->stream_mutex);
     if (state_->shutting_down) {
+      async_state->transfer->lifetime.reset();
+      async_state->transfer->on_complete = {};
       return core::Error::Network("HTTP client is shutting down").WithTransport("http");
     }
     ++state_->active_streams;
@@ -1340,6 +1347,15 @@ core::Result<void> Client::StartStreamRequest(
   }
   return {};
 }
+
+namespace testing {
+
+std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept {
+  return {g_curl_stream_reactors_created.load(std::memory_order_relaxed),
+          g_curl_stream_reactors_destroyed.load(std::memory_order_relaxed)};
+}
+
+}  // namespace testing
 
 #else
 

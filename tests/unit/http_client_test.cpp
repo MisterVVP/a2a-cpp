@@ -38,6 +38,12 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/non_copyable.h"
 
+#if defined(A2A_HAS_LIBCURL)
+namespace a2a::http::testing {
+std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept;
+}
+#endif
+
 namespace {
 
 constexpr int kSocketError = -1;
@@ -46,7 +52,9 @@ constexpr int kHttpBadGateway = 502;
 constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
 constexpr std::size_t kScalabilityStreamCount = 64U;
-constexpr std::size_t kMaximumSharedClientThreadGrowth = 8U;
+constexpr std::size_t kMaximumStreamDispatchWorkers = 4U;
+constexpr std::size_t kMaximumClientReactorThreads = 1U;
+constexpr std::size_t kMaximumSharedClientThreadGrowth = kMaximumStreamDispatchWorkers + kMaximumClientReactorThreads;
 constexpr std::size_t kShutdownRaceStarterCount = 32U;
 constexpr int kShortStreamTimeoutMs = 100;
 constexpr int kCancellationRequestTimeoutMs = 30000;
@@ -983,30 +991,7 @@ TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
   EXPECT_TRUE(completed.get().ok());
 }
 
-void InitializeSharedDispatchWorkers() {
-  LoopbackHttpServer server{std::string(kSseHeaders) + std::string(kFirstSseChunk)};
-  a2a::http::Client client;
-  a2a::http::Request request;
-  request.method = std::string(a2a::core::http::kMethodGet);
-  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
-  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
-  std::promise<void> completion;
-  auto completed = completion.get_future();
-  const auto started = client.StartStreamRequest(
-      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
-      [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
-      [&completion](const a2a::core::Result<a2a::http::Response>&) { completion.set_value(); });
-  ASSERT_TRUE(started.ok()) << started.error().message();
-  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
-  client.Shutdown();
-}
-
-TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
-  InitializeSharedDispatchWorkers();
-#if defined(__linux__)
-  const std::size_t baseline_threads = static_cast<std::size_t>(
-      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
-#endif
+void ExerciseConcurrentStartsAndShutdown() {
   a2a::http::Client client;
   a2a::http::Request request;
   request.method = std::string(a2a::core::http::kMethodGet);
@@ -1032,20 +1017,26 @@ TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
   }
   client.Shutdown();
 
+  // Rejection is the deterministic lifecycle guarantee: process thread counts
+  // also include the lazily initialized shared dispatch pool and test runtime.
   const auto rejected = client.StartStreamRequest(
       request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
       [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
       [](const a2a::core::Result<a2a::http::Response>&) {});
   ASSERT_FALSE(rejected.ok());
   EXPECT_EQ(rejected.error().message(), kClientShuttingDownMessage);
-#if defined(__linux__)
-  const std::size_t finished_threads = static_cast<std::size_t>(
-      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
-  // Other shared test infrastructure can retire an idle worker while this
-  // race runs; only growth indicates that shutdown allowed a replacement
-  // reactor thread to escape.
-  EXPECT_LE(finished_threads, baseline_threads);
-#endif
+}
+
+TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
+  const auto before = a2a::http::testing::CurlStreamReactorLifecycleCounts();
+
+  ExerciseConcurrentStartsAndShutdown();
+
+  const auto after = a2a::http::testing::CurlStreamReactorLifecycleCounts();
+  const std::size_t created = after.first - before.first;
+  const std::size_t destroyed = after.second - before.second;
+  EXPECT_LE(created, kMaximumClientReactorThreads);
+  EXPECT_EQ(destroyed, created);
 }
 
 void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,
