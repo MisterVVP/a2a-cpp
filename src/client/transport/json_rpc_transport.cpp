@@ -25,6 +25,10 @@
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "a2a/core/task_states.h"
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
 
@@ -378,7 +382,18 @@ core::Result<void> DispatchJsonRpcSseEvent(const SseEvent& event, std::string_vi
   if (!parsed.ok()) {
     return parsed.error();
   }
-  observer.OnEvent(parsed.value());
+  const auto& response_event = parsed.value();
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const bool terminal =
+      response_event.has_status_update() && core::IsTerminalTaskState(response_event.status_update().status().state());
+  {
+    const core::subscription_diagnostics::ScopedTimer observation_timer(
+        core::subscription_diagnostics::Phase::kClientTerminalObserverCallback, terminal);
+    observer.OnEvent(response_event);
+  }
+#else
+  observer.OnEvent(response_event);
+#endif
   return {};
 }
 
@@ -438,7 +453,15 @@ class JsonRpcSseSession final {
       NotifyErrorAndStop(*state_, observer_, finish.error());
       return;
     }
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    {
+      const core::subscription_diagnostics::ScopedTimer completion_timer(
+          core::subscription_diagnostics::Phase::kClientCompletionCallback);
+      observer_.OnCompleted();
+    }
+#else
     observer_.OnCompleted();
+#endif
     MarkInactive(*state_);
   }
 

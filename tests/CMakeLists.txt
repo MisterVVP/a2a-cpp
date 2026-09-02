@@ -50,6 +50,14 @@ target_link_libraries(core_helpers_test
 
 gtest_discover_tests(core_helpers_test)
 
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  add_executable(subscription_diagnostics_test unit/subscription_diagnostics_test.cpp)
+  target_include_directories(subscription_diagnostics_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(subscription_diagnostics_test PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+  target_link_libraries(subscription_diagnostics_test PRIVATE a2a::core GTest::gtest_main)
+  gtest_discover_tests(subscription_diagnostics_test)
+endif()
+
 add_executable(json_value_test
   unit/json_value_test.cpp
 )
@@ -851,6 +859,11 @@ add_executable(tck_sut sut/tck_sut.cpp)
 target_include_directories(tck_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/tests/support/example_support)
 target_link_libraries(tck_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
 
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_include_directories(tck_sut PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(tck_sut PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+endif()
+
 if(A2A_ENABLE_POSTGRES_STORE)
   target_link_libraries(tck_sut
     PRIVATE
@@ -928,6 +941,13 @@ gtest_discover_tests(a2a_performance_driver_test)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+  if(NOT A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    add_test(
+      NAME subscription_diagnostics_normal_build_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test.py
+              $<TARGET_FILE:a2a_core> $<TARGET_FILE:a2a_client> $<TARGET_FILE:a2a_server>
+    )
+  endif()
   add_test(
     NAME http_persistence_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:tck_sut>
@@ -977,6 +997,11 @@ target_link_libraries(a2a_wire_performance_driver
     a2a::core
     a2a::proto_generated
 )
+
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_include_directories(a2a_wire_performance_driver PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(a2a_wire_performance_driver PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
   target_link_libraries(a2a_performance_driver

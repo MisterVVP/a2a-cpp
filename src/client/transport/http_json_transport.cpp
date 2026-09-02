@@ -20,6 +20,10 @@
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "a2a/core/task_states.h"
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
 
@@ -199,7 +203,17 @@ core::Result<void> DispatchSseEvent(const SseEvent& event, StreamObserver& obser
     return error;
   }
 
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const bool terminal =
+      response.has_status_update() && core::IsTerminalTaskState(response.status_update().status().state());
+  {
+    const core::subscription_diagnostics::ScopedTimer observation_timer(
+        core::subscription_diagnostics::Phase::kClientTerminalObserverCallback, terminal);
+    observer.OnEvent(response);
+  }
+#else
   observer.OnEvent(response);
+#endif
   return {};
 }
 
@@ -343,7 +357,15 @@ struct HttpSseSession final {
       NotifyErrorAndStop(*state, *observer, finish.error());
       return;
     }
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    {
+      const core::subscription_diagnostics::ScopedTimer completion_timer(
+          core::subscription_diagnostics::Phase::kClientCompletionCallback);
+      observer->OnCompleted();
+    }
+#else
     observer->OnCompleted();
+#endif
     MarkInactive(*state);
   }
 };

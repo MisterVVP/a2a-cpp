@@ -56,6 +56,8 @@ DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_PUSH_CONFIG_FANOUT = 8
 DEFAULT_BUILD_DIR = "build/performance"
+SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX = "-subscription-diagnostics"
+SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX = "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS:BOOL="
 DRIVER_NAME = "a2a_performance_driver"
 WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
 SUT_NAME = "tck_sut"
@@ -126,6 +128,18 @@ HTTP_DIAGNOSTICS_PATTERN = re.compile(
     r"finite_stream_connections=(\d+) completed_finite_streams=(\d+) "
     r"finite_streams_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
     r"connections_reused_after_finite_stream=(\d+)(?=\s|$)"
+)
+SUBSCRIPTION_DIAGNOSTICS_PREFIX = "A2A_SUBSCRIPTION_SERVER_DIAGNOSTICS"
+SUBSCRIPTION_DIAGNOSTIC_PHASES = (
+    "server_cancel_task_total",
+    "terminal_store_update",
+    "terminal_publication_total",
+    "subscriber_resume_callback",
+    "proto_to_json",
+    "frame_construction",
+    "http_delivery",
+    "client_terminal_observer_callback",
+    "client_completion_callback",
 )
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
@@ -324,6 +338,26 @@ def executable_path_from_build(build_dir: Path, name: str) -> Path:
     return candidates[0]
 
 
+def subscription_diagnostics_requested() -> bool:
+    return os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1"
+
+
+def performance_build_dir(diagnostics_requested: bool) -> Path:
+    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    if diagnostics_requested:
+        return build_dir.with_name(f"{build_dir.name}{SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX}")
+    return build_dir
+
+
+def build_matches_subscription_diagnostics_mode(build_dir: Path, diagnostics_requested: bool) -> bool:
+    cache_path = build_dir / "CMakeCache.txt"
+    if not cache_path.exists():
+        return False
+    expected_value = "ON" if diagnostics_requested else "OFF"
+    expected_entry = f"{SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}{expected_value}"
+    return expected_entry in cache_path.read_text(encoding="utf-8")
+
+
 def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str) -> Path:
     explicit = os.environ.get(env_name)
     if explicit:
@@ -331,11 +365,16 @@ def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, des
         if not executable.exists():
             raise ValueError(f"{env_name} does not exist: {executable}")
         return executable
-    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    diagnostics_requested = subscription_diagnostics_requested()
+    build_dir = performance_build_dir(diagnostics_requested)
     executable = executable_path_from_build(build_dir, target_name)
-    if executable.exists():
+    if executable.exists() and build_matches_subscription_diagnostics_mode(build_dir, diagnostics_requested):
         return executable
-    configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
+    configure = [
+        "cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release",
+        "-DA2A_ENABLE_TESTING=ON",
+        f"-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS={'ON' if diagnostics_requested else 'OFF'}",
+    ]
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)
@@ -413,6 +452,24 @@ def read_http_diagnostics(path: Path) -> dict[str, int | float]:
         "http_completed_finite_streams": int(completed_streams),
         "http_finite_streams_per_connection": float(streams_per_connection),
         "http_connections_reused_after_finite_stream": int(reused_after_stream),
+    }
+
+
+def read_subscription_diagnostics(path: Path) -> dict[str, dict[str, int]]:
+    if not path.exists():
+        return {}
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+             if line.startswith(SUBSCRIPTION_DIAGNOSTICS_PREFIX)]
+    if not lines:
+        return {}
+    fields = dict(field.split("=", 1) for field in lines[-1].split()[1:])
+    return {
+        phase: {
+            "count": int(fields[f"{phase}_count"]),
+            "total_ns": int(fields[f"{phase}_total_ns"]),
+            "max_ns": int(fields[f"{phase}_max_ns"]),
+        }
+        for phase in SUBSCRIPTION_DIAGNOSTIC_PHASES
     }
 
 
@@ -567,6 +624,9 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
+    server_subscription_diagnostics = read_subscription_diagnostics(sut.log_path)
+    if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and not server_subscription_diagnostics:
+        raise ValueError("subscription diagnostics were requested but the SUT did not report server diagnostics")
     if transport in {"http_json", "jsonrpc"} and not diagnostics:
         raise ValueError(
             f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
@@ -576,8 +636,12 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
+        if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and "client_subscription_diagnostics" not in result:
+            raise ValueError("subscription diagnostics were requested but the wire driver did not report client diagnostics")
         if diagnostics:
             result.update(diagnostics)
+        if server_subscription_diagnostics:
+            result["server_subscription_diagnostics"] = server_subscription_diagnostics
     return payload
 
 
