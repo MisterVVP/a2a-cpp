@@ -83,6 +83,7 @@ constexpr std::string_view kMetadataRejectedMessage = "metadata rejected before 
 constexpr std::string_view kGetStreamRequestLine = "GET /stream HTTP/1.1";
 constexpr std::string_view kUnavailableStreamUrl = "http://127.0.0.1:1/stream";
 constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
+constexpr std::string_view kConcurrentUnaryPath = "/unary";
 constexpr std::string_view kContentLengthHeaderPrefix = "Content-Length:";
 constexpr std::string_view kFormContentTypeHeader = "Content-Type: application/x-www-form-urlencoded";
 constexpr std::string_view kAgentCardBody =
@@ -1184,6 +1185,32 @@ TEST(SharedHttpClientTest, SequentialFiniteStreamsReuseOneConnection) {
   EXPECT_NE(first_capture.chunks.find(kFirstSseChunk), std::string::npos);
   EXPECT_NE(second_capture.chunks.find(kSecondSseChunk), std::string::npos);
   EXPECT_EQ(server.accepted_connections(), 1);
+}
+
+TEST(SharedHttpClientTest, ConcurrentSendRequestsDoNotSerializeBehindSharedEasyHandle) {
+  ConcurrentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kConcurrentUnaryPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  auto first = std::async(std::launch::async, [&] { return client.SendRequest(request); });
+  const bool first_started = server.WaitForFirstStream(std::chrono::milliseconds(kStreamTimeoutMs));
+
+  auto second = std::async(std::launch::async, [&] { return client.SendRequest(request); });
+  const bool second_started = server.WaitForSecondStream(kCancellationDeadline);
+  server.ReleaseFirstStream();
+
+  EXPECT_TRUE(first_started);
+  EXPECT_TRUE(second_started);
+  ASSERT_EQ(first.wait_for(kCancellationDeadline), std::future_status::ready);
+  ASSERT_EQ(second.wait_for(kCancellationDeadline), std::future_status::ready);
+  const auto first_response = first.get();
+  const auto second_response = second.get();
+  EXPECT_TRUE(first_response.ok());
+  EXPECT_TRUE(second_response.ok());
 }
 
 TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {

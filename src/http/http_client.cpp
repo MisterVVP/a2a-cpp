@@ -54,6 +54,16 @@ struct ClientGlobalState final {
   CURLcode code = CURLE_OK;
 };
 
+struct RequestSlot final {
+  ~RequestSlot() {
+    if (easy_handle != nullptr) {
+      curl_easy_cleanup(easy_handle);
+    }
+  }
+
+  CURL* easy_handle = nullptr;
+};
+
 struct StreamSlot final {
   ~StreamSlot() {
     if (easy_handle != nullptr) {
@@ -65,22 +75,18 @@ struct StreamSlot final {
 };
 
 struct ClientState final {
-  ~ClientState() {
-    if (handle != nullptr) {
-      curl_easy_cleanup(handle);
-    }
-  }
-
   std::shared_ptr<const ClientGlobalState> global_state;
-  CURL* handle = nullptr;
-  std::mutex mutex;
+  // Blocking unary requests borrow independent easy handles. This mutex
+  // protects only the idle pool and is never held across network I/O.
+  std::mutex request_mutex;
+  std::vector<std::unique_ptr<RequestSlot>> idle_request_slots;
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
   std::condition_variable streams_finished;
   std::size_t active_streams = 0;
   bool shutting_down = false;
   std::atomic<bool> suppress_stream_callbacks{false};
-  // Guards the shutdown transition, stream accounting, reusable easy handles,
+  // Guards the shutdown transition, stream accounting, reusable stream easy handles,
   // and reactor ownership. Keeping these under one mutex makes it impossible
   // to create a reactor after shutdown has claimed the client lifecycle.
   std::shared_ptr<CurlStreamReactor> stream_reactor;
@@ -109,6 +115,7 @@ constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
+constexpr std::size_t kMaxIdleRequestSlots = 64U;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
 #if defined(__linux__)
 constexpr std::size_t kMaximumReactorEvents = 64U;
@@ -798,6 +805,30 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
   return {};
 }
 
+core::Result<std::unique_ptr<detail::RequestSlot>> AcquireRequestSlot(detail::ClientState& state) {
+  {
+    std::lock_guard lock(state.request_mutex);
+    if (!state.idle_request_slots.empty()) {
+      auto slot = std::move(state.idle_request_slots.back());
+      state.idle_request_slots.pop_back();
+      return slot;
+    }
+  }
+  auto slot = std::make_unique<detail::RequestSlot>();
+  slot->easy_handle = curl_easy_init();
+  if (slot->easy_handle == nullptr) {
+    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  }
+  return slot;
+}
+
+void ReleaseRequestSlot(detail::ClientState& state, std::unique_ptr<detail::RequestSlot> slot) {
+  std::lock_guard lock(state.request_mutex);
+  if (state.idle_request_slots.size() < kMaxIdleRequestSlots) {
+    state.idle_request_slots.push_back(std::move(slot));
+  }
+}
+
 core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::ClientState& state) {
   {
     std::lock_guard lock(state.stream_mutex);
@@ -1082,7 +1113,11 @@ bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
 
 Client::Client() : state_(std::make_shared<detail::ClientState>()) {
   state_->global_state = EnsureCurlGlobalInit();
-  state_->handle = curl_easy_init();
+  auto slot = std::make_unique<detail::RequestSlot>();
+  slot->easy_handle = curl_easy_init();
+  if (slot->easy_handle != nullptr) {
+    state_->idle_request_slots.push_back(std::move(slot));
+  }
 }
 
 Client::~Client() { Shutdown(); }
@@ -1116,11 +1151,12 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
     return headers.error();
   }
 
-  std::lock_guard<std::mutex> lock(state_->mutex);
-  if (state_->handle == nullptr) {
-    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  auto acquired_slot = AcquireRequestSlot(*state_);
+  if (!acquired_slot.ok()) {
+    return acquired_slot.error();
   }
-  CURL* const handle = state_->handle;
+  auto slot = std::move(acquired_slot.value());
+  CURL* const handle = slot->easy_handle;
   curl_easy_reset(handle);
 
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
@@ -1150,9 +1186,11 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
   if (response_code == kHttpResponseCodeUnset) {
     return core::Error::RemoteProtocol(std::string(kMalformedStatusMessage));
   }
-  return Response{.status_code = static_cast<int>(response_code),
-                  .headers = std::move(response_headers),
-                  .body = std::move(response_body)};
+  Response response{.status_code = static_cast<int>(response_code),
+                    .headers = std::move(response_headers),
+                    .body = std::move(response_body)};
+  ReleaseRequestSlot(*state_, std::move(slot));
+  return response;
 }
 
 core::Result<Response> Client::StreamRequest(const Request& request,
