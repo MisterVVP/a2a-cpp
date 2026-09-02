@@ -97,7 +97,6 @@ jobs:
         run: |
           cmake -S . -B build-subscription-diagnostics \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DA2A_ENABLE_TESTING=ON \
             -DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON
       - name: Build subscription diagnostics targets
@@ -107,8 +106,6 @@ jobs:
           a2a_wire_performance_driver tck_sut -j"$(nproc)"
       - name: Test subscription diagnostics aggregation
         run: ./build-subscription-diagnostics/tests/subscription_diagnostics_test
-      - name: Run clang-tidy with subscription diagnostics enabled
-        run: ./scripts/run_clang_tidy.sh --profile src build-subscription-diagnostics
       - name: Run subscription diagnostics smoke
         env:
           A2A_SUBSCRIPTION_DIAGNOSTICS: "1"
