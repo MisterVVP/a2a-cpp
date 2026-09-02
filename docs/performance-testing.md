@@ -19,19 +19,20 @@ The runner writes:
 
 ### Subscription terminal phase diagnostics
 
-Subscription attribution is compiled out of normal SDK builds. Build an
-optimized profiling configuration and enable runtime collection with both the
-private CMake option and environment switch:
+Subscription attribution is compiled out of normal SDK builds. Enable runtime
+collection with the environment switch; the runner automatically configures a
+separate optimized diagnostics build with the private CMake option enabled:
 
 ```bash
-cmake -S . -B build/performance-diagnostics \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DA2A_ENABLE_TESTING=ON \
-  -DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON
-A2A_PERF_BUILD_DIR=build/performance-diagnostics \
 A2A_SUBSCRIPTION_DIAGNOSTICS=1 \
   ./scripts/run_performance_tests.sh
 ```
+
+The normal build remains in `build/performance`; diagnostics use the isolated
+`build/performance-subscription-diagnostics` tree. `A2A_PERF_BUILD_DIR` changes
+the normal build-tree base, and the runner appends the diagnostics suffix for
+profiling runs so a diagnostics-enabled binary cannot be reused as a normal
+benchmark binary.
 
 Wire results keep `server_subscription_diagnostics` and
 `client_subscription_diagnostics` separate because the SUT and SDK client run

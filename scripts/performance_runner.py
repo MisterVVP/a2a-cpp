@@ -56,6 +56,8 @@ DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_PUSH_CONFIG_FANOUT = 8
 DEFAULT_BUILD_DIR = "build/performance"
+SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX = "-subscription-diagnostics"
+SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX = "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS:BOOL="
 DRIVER_NAME = "a2a_performance_driver"
 WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
 SUT_NAME = "tck_sut"
@@ -336,6 +338,26 @@ def executable_path_from_build(build_dir: Path, name: str) -> Path:
     return candidates[0]
 
 
+def subscription_diagnostics_requested() -> bool:
+    return os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1"
+
+
+def performance_build_dir(diagnostics_requested: bool) -> Path:
+    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    if diagnostics_requested:
+        return build_dir.with_name(f"{build_dir.name}{SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX}")
+    return build_dir
+
+
+def build_matches_subscription_diagnostics_mode(build_dir: Path, diagnostics_requested: bool) -> bool:
+    cache_path = build_dir / "CMakeCache.txt"
+    if not cache_path.exists():
+        return False
+    expected_value = "ON" if diagnostics_requested else "OFF"
+    expected_entry = f"{SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}{expected_value}"
+    return expected_entry in cache_path.read_text(encoding="utf-8")
+
+
 def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str) -> Path:
     explicit = os.environ.get(env_name)
     if explicit:
@@ -343,18 +365,16 @@ def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, des
         if not executable.exists():
             raise ValueError(f"{env_name} does not exist: {executable}")
         return executable
-    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    diagnostics_requested = subscription_diagnostics_requested()
+    build_dir = performance_build_dir(diagnostics_requested)
     executable = executable_path_from_build(build_dir, target_name)
-    diagnostics_requested = os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1"
-    if executable.exists() and not diagnostics_requested:
+    if executable.exists() and build_matches_subscription_diagnostics_mode(build_dir, diagnostics_requested):
         return executable
-    cache_path = build_dir / "CMakeCache.txt"
-    if executable.exists() and diagnostics_requested and cache_path.exists():
-        if "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS:BOOL=ON" in cache_path.read_text(encoding="utf-8"):
-            return executable
-    configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
-    if diagnostics_requested:
-        configure.append("-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON")
+    configure = [
+        "cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release",
+        "-DA2A_ENABLE_TESTING=ON",
+        f"-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS={'ON' if diagnostics_requested else 'OFF'}",
+    ]
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)

@@ -26,6 +26,60 @@ def load_runner_module():
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def test_diagnostics_and_normal_runs_use_separate_matching_builds(self):
+        runner = load_runner_module()
+        config = SimpleNamespace(store_backends=("inmemory",))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            normal_build = Path(temp_dir) / "performance"
+            diagnostics_build = normal_build.with_name(
+                f"{normal_build.name}{runner.SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX}"
+            )
+            normal_executable = normal_build / "tests" / runner.WIRE_DRIVER_NAME
+            diagnostics_executable = diagnostics_build / "tests" / runner.WIRE_DRIVER_NAME
+            normal_executable.parent.mkdir(parents=True)
+            diagnostics_executable.parent.mkdir(parents=True)
+            normal_executable.touch()
+            diagnostics_executable.touch()
+            (normal_build / "CMakeCache.txt").write_text(
+                f"{runner.SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}OFF\n", encoding="utf-8"
+            )
+            (diagnostics_build / "CMakeCache.txt").write_text(
+                f"{runner.SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}ON\n", encoding="utf-8"
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"A2A_PERF_BUILD_DIR": str(normal_build), "A2A_SUBSCRIPTION_DIAGNOSTICS": "1"},
+                clear=True,
+            ):
+                selected_diagnostics = runner.ensure_wire_driver(config)
+            with mock.patch.dict(os.environ, {"A2A_PERF_BUILD_DIR": str(normal_build)}, clear=True):
+                selected_normal = runner.ensure_wire_driver(config)
+
+        self.assertEqual(diagnostics_executable, selected_diagnostics)
+        self.assertEqual(normal_executable, selected_normal)
+        self.assertNotEqual(selected_diagnostics, selected_normal)
+
+    def test_normal_run_reconfigures_stale_diagnostics_build(self):
+        runner = load_runner_module()
+        config = SimpleNamespace(store_backends=("inmemory",))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_dir = Path(temp_dir) / "performance"
+            executable = build_dir / "tests" / runner.WIRE_DRIVER_NAME
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            (build_dir / "CMakeCache.txt").write_text(
+                f"{runner.SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}ON\n", encoding="utf-8"
+            )
+            with mock.patch.dict(os.environ, {"A2A_PERF_BUILD_DIR": str(build_dir)}, clear=True), \
+                 mock.patch.object(runner.subprocess, "run") as subprocess_run:
+                selected = runner.ensure_wire_driver(config)
+
+        self.assertEqual(executable, selected)
+        self.assertEqual(2, subprocess_run.call_count)
+        configure_command = subprocess_run.call_args_list[0].args[0]
+        self.assertIn("-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=OFF", configure_command)
+
     def test_reads_stable_server_subscription_diagnostics(self):
         runner = load_runner_module()
         fields = []

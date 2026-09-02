@@ -93,6 +93,68 @@ jobs:
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.clang_tidy_profile == 'strict')
         run: ./scripts/run_clang_tidy.sh --profile strict build
 
+      - name: Configure subscription diagnostics Release build
+        run: |
+          cmake -S . -B build-subscription-diagnostics \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DA2A_ENABLE_TESTING=ON \
+            -DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON
+      - name: Build subscription diagnostics targets
+        run: >-
+          cmake --build build-subscription-diagnostics
+          --target subscription_diagnostics_test a2a_performance_driver
+          a2a_wire_performance_driver tck_sut -j"$(nproc)"
+      - name: Test subscription diagnostics aggregation
+        run: ./build-subscription-diagnostics/tests/subscription_diagnostics_test
+      - name: Run clang-tidy with subscription diagnostics enabled
+        run: ./scripts/run_clang_tidy.sh --profile src build-subscription-diagnostics
+      - name: Run subscription diagnostics smoke
+        env:
+          A2A_SUBSCRIPTION_DIAGNOSTICS: "1"
+          A2A_PERF_DRIVER: ${{ github.workspace }}/build-subscription-diagnostics/tests/a2a_performance_driver
+          A2A_PERF_WIRE_DRIVER: ${{ github.workspace }}/build-subscription-diagnostics/tests/a2a_wire_performance_driver
+          A2A_TCK_SUT: ${{ github.workspace }}/build-subscription-diagnostics/tests/tck_sut
+        run: >-
+          ./scripts/run_performance_tests.sh
+          --transports http_json
+          --store-backends inmemory
+          --requests 2
+          --concurrency 1
+          --warmup-seconds 0
+          --duration-seconds 0
+          --scenarios SubscribeToTask_FirstEventLatency
+          --report-dir perf-artifacts/subscription-diagnostics-smoke
+      - name: Validate subscription diagnostics smoke output
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          results_path = Path("perf-artifacts/subscription-diagnostics-smoke/results.json")
+          payload = json.loads(results_path.read_text(encoding="utf-8"))
+          rows = [
+              row for row in payload["results"]
+              if row.get("driver_type") == "wire_tck_sut"
+              and row.get("transport_path") == "wire_http_json"
+              and row.get("scenario") == "SubscribeToTask_FirstEventLatency"
+          ]
+          if len(rows) != 1:
+              raise SystemExit(f"expected one diagnostics smoke wire row, found {len(rows)}")
+          row = rows[0]
+          for field in ("server_subscription_diagnostics", "client_subscription_diagnostics"):
+              diagnostics = row.get(field)
+              if not isinstance(diagnostics, dict) or not diagnostics:
+                  raise SystemExit(f"missing or invalid {field}")
+              counts = [
+                  int(aggregate.get("count", 0))
+                  for aggregate in diagnostics.values()
+                  if isinstance(aggregate, dict)
+              ]
+              if not counts or max(counts) <= 0:
+                  raise SystemExit(f"{field} did not record any phase samples")
+          PY
+
       - name: Upload clang-tidy check profile artifact
         if: always() && github.event_name == 'workflow_dispatch' && inputs.profiling
         uses: actions/upload-artifact@v6

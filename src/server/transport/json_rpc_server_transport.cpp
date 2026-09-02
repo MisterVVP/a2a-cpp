@@ -788,15 +788,14 @@ core::Result<void> BuildSseJsonRpcEvent(std::string& body, std::string_view pref
                                         const lf::a2a::v1::StreamResponse& event) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   const bool terminal = event.has_status_update() && core::IsTerminalTaskState(event.status_update().status().state());
-#endif
-  core::Result<std::string> event_json = core::Error::Internal("JSON-RPC SSE serialization did not run");
-  {
-#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const auto event_json = [&event, terminal] {
     const core::subscription_diagnostics::ScopedTimer serialization_timer(
         core::subscription_diagnostics::Phase::kProtoToJson, terminal);
+    return core::MessageToJson(event);
+  }();
+#else
+  const auto event_json = core::MessageToJson(event);
 #endif
-    event_json = core::MessageToJson(event);
-  }
   if (!event_json.ok()) {
     return event_json.error();
   }
