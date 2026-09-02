@@ -23,11 +23,15 @@ own counters and latency samples, then the driver aggregates those samples after
 workers finish. This avoids adding result-collection mutex contention to the
 measured operation latency.
 
-The wire driver shares one default `A2AClient` across concurrent HTTP+JSON and
-JSON-RPC streaming operations. Running the streaming scenarios at concurrency
-`1`, `16`, and `64` therefore profiles one shared libcurl reactor and the fixed
-callback pool. Those result rows include `client_process_thread_count`, allowing
-thread growth to be compared directly across concurrency levels.
+The historical wire streaming scenario names use one `A2AClient` per benchmark
+worker, preserving the topology used by earlier reports. HTTP+JSON and JSON-RPC
+also expose `SendStreamingMessage_FiniteStream_SharedClient` and
+`SubscribeToTask_FirstEventLatency_SharedClient`. Those variants route every
+measured worker through one `A2AClient`, profiling one shared libcurl reactor and
+the fixed callback pool without changing the historical comparison rows. gRPC
+does not run the shared-client variants. HTTP streaming rows include
+`client_process_thread_count`, allowing thread growth to be compared across
+concurrency levels without conflating the two client topologies.
 
 HTTP wire rows also report finite-stream connection lifecycle diagnostics. The
 `http_finite_stream_connections` and `http_completed_finite_streams` fields

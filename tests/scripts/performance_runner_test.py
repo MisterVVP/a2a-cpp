@@ -318,13 +318,28 @@ class PerformanceRunnerTest(unittest.TestCase):
                            "p99": p95, "max": p95},
         }
 
-    def test_wire_scenarios_include_streaming_for_http_transports(self):
+    def test_wire_scenarios_preserve_historical_and_add_http_shared_client_variants(self):
         runner = load_runner_module()
-        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("grpc"))
-        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
-        self.assertIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
+        grpc_scenarios = runner.wire_scenarios_for_transport("grpc")
+        jsonrpc_scenarios = runner.wire_scenarios_for_transport("jsonrpc")
+        http_json_scenarios = runner.wire_scenarios_for_transport("http_json")
+
+        for scenario in ("SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"):
+            self.assertIn(scenario, grpc_scenarios)
+            self.assertIn(scenario, jsonrpc_scenarios)
+            self.assertIn(scenario, http_json_scenarios)
+        for scenario in runner.SHARED_CLIENT_WIRE_SCENARIOS:
+            self.assertNotIn(scenario, grpc_scenarios)
+            self.assertIn(scenario, jsonrpc_scenarios)
+            self.assertIn(scenario, http_json_scenarios)
+            self.assertNotIn(scenario, runner.in_process_scenarios())
+
+        selected = runner.wire_scenarios_for_transport(
+            "grpc", (runner.SHARED_CLIENT_WIRE_SCENARIOS[0], "SendStreamingMessage_FiniteStream")
+        )
+        self.assertEqual(("SendStreamingMessage_FiniteStream",), selected)
+        self.assertIn("PushConfig_Create", jsonrpc_scenarios)
+        self.assertIn("PushConfig_Delete", http_json_scenarios)
 
     def test_run_wire_driver_skips_selection_without_wire_scenarios(self):
         runner = load_runner_module()

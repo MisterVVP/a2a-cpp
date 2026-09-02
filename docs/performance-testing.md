@@ -157,14 +157,23 @@ The current real wire-level scenario set covers core lifecycle operations, push 
 `GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
 `PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`,
 `SubscribeToTask_FirstEventLatency`, and `IdleStream_ClientCancellationLatency`.
+The historical `SendStreamingMessage_FiniteStream` and
+`SubscribeToTask_FirstEventLatency` rows preserve the original one-client-per-worker
+topology so before/after comparisons remain equivalent to older reports. HTTP+JSON
+and JSON-RPC additionally run `SendStreamingMessage_FiniteStream_SharedClient` and
+`SubscribeToTask_FirstEventLatency_SharedClient`, where every measured worker uses
+one shared `A2AClient`. These shared-client rows are separate scalability
+coordinates and must not be substituted for the historical rows when evaluating
+regressions or issue acceptance. gRPC does not run the shared-client variants.
 The idle-stream cancellation scenario seeds a task, establishes a real subscription,
 waits for its initial event, and then measures only the synchronous local
 `StreamHandle::Cancel()` call. It does not invoke the protocol-level `CancelTask`
-operation or ask the server to publish a terminal event. The wire driver reuses one client/transport per
-worker thread so measured operations do not recreate gRPC channels or HTTP
-transport objects. The libcurl-backed HTTP client also keeps a reusable easy
-handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
-JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
+operation or ask the server to publish a terminal event. For HTTP transports it
+retains the shared-client stress topology because it has no historical baseline.
+The wire driver otherwise reuses one client/transport per worker thread so
+measured operations do not recreate gRPC channels or HTTP transport objects. The
+libcurl-backed HTTP client also keeps reusable easy handles per SDK HTTP client,
+avoiding repeated easy-handle setup on REST and JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
 seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
 the listed task set bounded in CI. Multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and callback fan-out remain SDK in-process rows in this implementation; they are not duplicated as transport rows and must not be interpreted as full `wire_tck_sut` coverage.
 

@@ -27,6 +27,10 @@ from typing import Callable, Iterable
 
 TRANSPORTS = ("grpc", "jsonrpc", "http_json")
 STORE_BACKENDS = ("inmemory", "postgres")
+SHARED_CLIENT_WIRE_SCENARIOS = (
+    "SendStreamingMessage_FiniteStream_SharedClient",
+    "SubscribeToTask_FirstEventLatency_SharedClient",
+)
 SCENARIOS = (
     "SendMessage_CreateTask",
     "GetTask_ExistingTask",
@@ -39,6 +43,7 @@ SCENARIOS = (
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
     "IdleStream_ClientCancellationLatency",
+    *SHARED_CLIENT_WIRE_SCENARIOS,
     "SubscribeToTask_MultiSubscriber",
     "SubscribeToTask_TerminalCompletionLatency",
     "SubscribeToTask_DisconnectOneSubscriber",
@@ -105,13 +110,15 @@ WIRE_SCENARIOS = (
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
     "IdleStream_ClientCancellationLatency",
+    *SHARED_CLIENT_WIRE_SCENARIOS,
     "PushConfig_Create",
     "PushConfig_Get",
     "PushConfig_List",
     "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
-IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario != "IdleStream_ClientCancellationLatency")
+WIRE_ONLY_SCENARIOS = ("IdleStream_ClientCancellationLatency", *SHARED_CLIENT_WIRE_SCENARIOS)
+IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario not in WIRE_ONLY_SCENARIOS)
 SUT_READY_TIMEOUT_SECONDS = 30.0
 SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 SUT_FORCE_KILL_TIMEOUT_SECONDS = 10.0
@@ -646,10 +653,12 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
 
 
 def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
-    del transport
-    if scenarios is None:
-        return WIRE_SCENARIOS
-    return tuple(scenario for scenario in scenarios if scenario in WIRE_SCENARIOS)
+    selected = WIRE_SCENARIOS if scenarios is None else tuple(
+        scenario for scenario in scenarios if scenario in WIRE_SCENARIOS
+    )
+    if transport == "grpc":
+        return tuple(scenario for scenario in selected if scenario not in SHARED_CLIENT_WIRE_SCENARIOS)
+    return selected
 
 
 def in_process_scenarios(scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:

@@ -41,6 +41,10 @@ constexpr std::string_view kA2aVersionHeader = "A2A-Version";
 constexpr std::string_view kA2aVersion = "1.0";
 constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
 constexpr int kFocusedListConfigCount = 3;
+constexpr std::string_view kScenarioSendStreamingMessageFiniteStreamSharedClient =
+    "SendStreamingMessage_FiniteStream_SharedClient";
+constexpr std::string_view kScenarioSubscribeToTaskFirstEventLatencySharedClient =
+    "SubscribeToTask_FirstEventLatency_SharedClient";
 
 struct FocusedWireFixture final {
   std::string task_id;
@@ -416,10 +420,12 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
     request.set_id(BuildId("wire-missing", index));
     return MakeOutcome(!client->GetTask(request, call_options).ok());
   }
-  if (scenario == kScenarioSendStreamingMessageFiniteStream) {
+  if (scenario == kScenarioSendStreamingMessageFiniteStream ||
+      scenario == kScenarioSendStreamingMessageFiniteStreamSharedClient) {
     return ExecuteWireStreaming(client, index, call_options);
   }
-  if (scenario == kScenarioSubscribeToTaskFirstEventLatency) {
+  if (scenario == kScenarioSubscribeToTaskFirstEventLatency ||
+      scenario == kScenarioSubscribeToTaskFirstEventLatencySharedClient) {
     return ExecuteWireSubscribeFirstEvent(client, index, call_options);
   }
   if (scenario == kScenarioIdleStreamClientCancellationLatency) {
@@ -444,7 +450,20 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
   return {};
 }
 
-bool IsStreamingWireScenario(std::string_view scenario);
+bool IsSharedClientWireScenario(std::string_view scenario) {
+  return scenario == kScenarioSendStreamingMessageFiniteStreamSharedClient ||
+         scenario == kScenarioSubscribeToTaskFirstEventLatencySharedClient;
+}
+
+bool UsesSharedHttpClient(std::string_view scenario) {
+  return scenario == kScenarioIdleStreamClientCancellationLatency || IsSharedClientWireScenario(scenario);
+}
+
+bool IsStreamingWireScenario(std::string_view scenario) {
+  return scenario == kScenarioSendStreamingMessageFiniteStream ||
+         scenario == kScenarioSubscribeToTaskFirstEventLatency ||
+         scenario == kScenarioIdleStreamClientCancellationLatency || IsSharedClientWireScenario(scenario);
+}
 
 std::vector<std::unique_ptr<a2a::client::A2AClient>> MakeMeasuredClients(const WireOptions& options, int client_count) {
   std::vector<std::unique_ptr<a2a::client::A2AClient>> clients;
@@ -490,8 +509,8 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
   }
 
   const int worker_count = std::min(options.concurrency, options.requests);
-  const bool use_shared_http_stream_client = IsStreamingWireScenario(scenario) && options.transport != kGrpcTransport;
-  const int client_count = use_shared_http_stream_client ? 1 : worker_count;
+  const bool use_shared_http_client = UsesSharedHttpClient(scenario) && options.transport != kGrpcTransport;
+  const int client_count = use_shared_http_client ? 1 : worker_count;
   auto clients = MakeMeasuredClients(options, client_count);
   const a2a::client::CallOptions fixture_call_options = MakeCallOptions();
   FocusedWireFixture focused_fixture;
@@ -532,13 +551,15 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  warmup_client.reset();
+  if (use_shared_http_client) {
+    warmup_client.reset();
+  }
   ScenarioResult result =
       RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
-                          [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_stream_client](
+                          [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_client](
                               int worker_index, int index) {
                             return ExecuteMeasuredWireOperation(clients, scenario, follow_up_task_ids, focused_fixture,
-                                                                use_shared_http_stream_client, worker_index, index);
+                                                                use_shared_http_client, worker_index, index);
                           });
 #if defined(__linux__)
   result.client_process_thread_count = static_cast<int>(
@@ -552,14 +573,10 @@ bool IsPushConfigWireScenario(std::string_view scenario) {
          scenario == kScenarioPushConfigList || scenario == kScenarioPushConfigDelete;
 }
 
-bool IsStreamingWireScenario(std::string_view scenario) {
-  return scenario == kScenarioSendStreamingMessageFiniteStream ||
-         scenario == kScenarioSubscribeToTaskFirstEventLatency ||
-         scenario == kScenarioIdleStreamClientCancellationLatency;
-}
-
 bool IsWireScenario(std::string_view scenario, std::string_view transport) {
-  (void)transport;
+  if (IsSharedClientWireScenario(scenario)) {
+    return transport != kGrpcTransport;
+  }
   const bool supported_core = scenario == kScenarioSendMessageCreateTask || scenario == kScenarioGetTaskExistingTask ||
                               scenario == kScenarioCancelTaskWorkingTask ||
                               scenario == kScenarioListTasksNoPagination ||
@@ -576,12 +593,6 @@ bool ParseScenarios(std::string_view value, WireOptions* options) {
   if (options->scenarios.empty()) {
     std::cerr << "scenario selection must not be empty\n";
     return false;
-  }
-  for (const std::string& scenario : options->scenarios) {
-    if (!IsWireScenario(scenario, options->transport)) {
-      std::cerr << "unsupported wire scenario: " << scenario << '\n';
-      return false;
-    }
   }
   return true;
 }
@@ -620,6 +631,12 @@ bool ParseArgs(int argc, char** argv, WireOptions* options) {
       return false;
     }
   }
+  for (const std::string& scenario : options->scenarios) {
+    if (!IsWireScenario(scenario, options->transport)) {
+      std::cerr << "unsupported wire scenario: " << scenario << '\n';
+      return false;
+    }
+  }
   return options->requests > 0 && options->concurrency > 0 && options->port > 0;
 }
 
@@ -642,6 +659,10 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
                                         std::string(kScenarioPushConfigGet),
                                         std::string(kScenarioPushConfigList),
                                         std::string(kScenarioPushConfigDelete)};
+  if (options.transport != kGrpcTransport) {
+    scenarios.push_back(std::string(kScenarioSendStreamingMessageFiniteStreamSharedClient));
+    scenarios.push_back(std::string(kScenarioSubscribeToTaskFirstEventLatencySharedClient));
+  }
   return scenarios;
 }
 
