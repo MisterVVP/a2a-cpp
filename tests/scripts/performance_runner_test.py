@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "run_performance_tests.sh"
@@ -25,6 +26,45 @@ def load_runner_module():
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def test_reads_stable_server_subscription_diagnostics(self):
+        runner = load_runner_module()
+        fields = []
+        for index, phase in enumerate(runner.SUBSCRIPTION_DIAGNOSTIC_PHASES, start=1):
+            fields.extend((f"{phase}_count={index}", f"{phase}_total_ns={index * 10}",
+                           f"{phase}_max_ns={index * 2}"))
+        diagnostics_line = f"{runner.SUBSCRIPTION_DIAGNOSTICS_PREFIX} {' '.join(fields)}\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diagnostics_path = Path(temp_dir) / "sut.log"
+            diagnostics_path.write_text(diagnostics_line, encoding="utf-8")
+            diagnostics = runner.read_subscription_diagnostics(diagnostics_path)
+
+        self.assertEqual(set(runner.SUBSCRIPTION_DIAGNOSTIC_PHASES), set(diagnostics))
+        self.assertEqual(1, diagnostics["server_cancel_task_total"]["count"])
+        self.assertEqual(18, diagnostics["client_completion_callback"]["max_ns"])
+
+    def test_wire_results_keep_server_and_client_diagnostics_separate(self):
+        runner = load_runner_module()
+        client_diagnostics = {"client_completion_callback": {"count": 1, "total_ns": 10, "max_ns": 10}}
+        server_diagnostics = {"server_cancel_task_total": {"count": 1, "total_ns": 20, "max_ns": 20}}
+        payload = [{"driver_type": "wire_tck_sut", "transport_path": "wire_http_json",
+                    "client_subscription_diagnostics": client_diagnostics}]
+        sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
+        sut_context = mock.MagicMock()
+        sut_context.__enter__.return_value = sut
+        config = SimpleNamespace(scenarios=("SubscribeToTask_FirstEventLatency",), requests=1,
+                                 warmup_seconds=0, duration_seconds=0, wire_driver_timeout_seconds=1,
+                                 report_dir=Path("."))
+        with mock.patch.dict(os.environ, {"A2A_SUBSCRIPTION_DIAGNOSTICS": "1"}), \
+             mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
+             mock.patch.object(runner, "SutProcess", return_value=sut_context), \
+             mock.patch.object(runner, "run_command_json", return_value=payload), \
+             mock.patch.object(runner, "read_http_diagnostics", return_value={"http_completed_finite_streams": 1}), \
+             mock.patch.object(runner, "read_subscription_diagnostics", return_value=server_diagnostics):
+            results = runner.run_wire_driver(config, "http_json", "inmemory", 1, 1, 1234)
+
+        self.assertEqual(server_diagnostics, results[0]["server_subscription_diagnostics"])
+        self.assertEqual(client_diagnostics, results[0]["client_subscription_diagnostics"])
+
     def test_reads_finite_stream_connection_diagnostics(self):
         runner = load_runner_module()
         diagnostics_line = (

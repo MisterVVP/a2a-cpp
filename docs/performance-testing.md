@@ -17,6 +17,28 @@ The runner writes:
 - `perf-artifacts/results.csv`
 - `perf-artifacts/summary.md`
 
+### Subscription terminal phase diagnostics
+
+Subscription attribution is compiled out of normal SDK builds. Build an
+optimized profiling configuration and enable runtime collection with both the
+private CMake option and environment switch:
+
+```bash
+cmake -S . -B build/performance-diagnostics \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DA2A_ENABLE_TESTING=ON \
+  -DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON
+A2A_PERF_BUILD_DIR=build/performance-diagnostics \
+A2A_SUBSCRIPTION_DIAGNOSTICS=1 \
+  ./scripts/run_performance_tests.sh
+```
+
+Wire results keep `server_subscription_diagnostics` and
+`client_subscription_diagnostics` separate because the SUT and SDK client run
+in different processes. Each phase contains `count`, `total_ns`, and `max_ns`.
+`server_cancel_task_total` and `terminal_publication_total` are total timers and
+must not be added to their nested phase measurements.
+
 ### Reading the reports
 
 The Markdown summary keeps fundamentally different workloads separate. Its

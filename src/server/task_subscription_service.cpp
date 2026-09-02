@@ -6,7 +6,9 @@
 #include <optional>
 #include <utility>
 
-#include "a2a/core/subscription_diagnostics.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "core/subscription_diagnostics.h"
+#endif
 
 namespace a2a::server {
 
@@ -149,8 +151,11 @@ core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subs
 }
 
 void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) {
-  const core::subscription_diagnostics::ScopedTimer timer(core::subscription_diagnostics::Phase::kTerminalPublication,
-                                                          core::IsTerminalTaskState(task.status().state()));
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const core::subscription_diagnostics::ScopedTimer timer(
+      core::subscription_diagnostics::Phase::kTerminalPublicationTotal,
+      core::IsTerminalTaskState(task.status().state()));
+#endif
   const auto service_state = state_;
   std::lock_guard publication_lock(service_state->publication_mutex);
   std::vector<std::shared_ptr<SubscriberState>> subscribers;
@@ -256,7 +261,10 @@ void TaskSubscriptionService::SignalSubscriber(const std::shared_ptr<SubscriberS
     }
   }
   if (continuation) {
-    const core::subscription_diagnostics::ScopedTimer timer(core::subscription_diagnostics::Phase::kSubscriberResume);
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    const core::subscription_diagnostics::ScopedTimer timer(
+        core::subscription_diagnostics::Phase::kSubscriberResumeCallback);
+#endif
     std::lock_guard resume_lock(continuation.promise().resume_mutex_);
     continuation.resume();
     {

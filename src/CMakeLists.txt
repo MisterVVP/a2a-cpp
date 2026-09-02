@@ -26,7 +26,6 @@ add_library(a2a_core STATIC
   core/protojson.cpp
   core/response_builders.cpp
   core/string_utils.cpp
-  core/subscription_diagnostics.cpp
   core/version.cpp
 )
 add_library(a2a::core ALIAS a2a_core)
@@ -141,6 +140,14 @@ target_link_libraries(a2a_server
     a2a::core
     a2a::http
 )
+
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_sources(a2a_core PRIVATE core/subscription_diagnostics.cpp)
+  foreach(diagnostics_target IN ITEMS a2a_core a2a_client a2a_server)
+    target_include_directories(${diagnostics_target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_definitions(${diagnostics_target} PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+  endforeach()
+endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
   find_package(PostgreSQL REQUIRED)

@@ -127,6 +127,18 @@ HTTP_DIAGNOSTICS_PATTERN = re.compile(
     r"finite_streams_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
     r"connections_reused_after_finite_stream=(\d+)(?=\s|$)"
 )
+SUBSCRIPTION_DIAGNOSTICS_PREFIX = "A2A_SUBSCRIPTION_SERVER_DIAGNOSTICS"
+SUBSCRIPTION_DIAGNOSTIC_PHASES = (
+    "server_cancel_task_total",
+    "terminal_store_update",
+    "terminal_publication_total",
+    "subscriber_resume_callback",
+    "proto_to_json",
+    "frame_construction",
+    "http_delivery",
+    "client_terminal_observer_callback",
+    "client_completion_callback",
+)
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
     "task_get",
@@ -333,9 +345,16 @@ def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, des
         return executable
     build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
     executable = executable_path_from_build(build_dir, target_name)
-    if executable.exists():
+    diagnostics_requested = os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1"
+    if executable.exists() and not diagnostics_requested:
         return executable
+    cache_path = build_dir / "CMakeCache.txt"
+    if executable.exists() and diagnostics_requested and cache_path.exists():
+        if "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS:BOOL=ON" in cache_path.read_text(encoding="utf-8"):
+            return executable
     configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
+    if diagnostics_requested:
+        configure.append("-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON")
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)
@@ -413,6 +432,24 @@ def read_http_diagnostics(path: Path) -> dict[str, int | float]:
         "http_completed_finite_streams": int(completed_streams),
         "http_finite_streams_per_connection": float(streams_per_connection),
         "http_connections_reused_after_finite_stream": int(reused_after_stream),
+    }
+
+
+def read_subscription_diagnostics(path: Path) -> dict[str, dict[str, int]]:
+    if not path.exists():
+        return {}
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+             if line.startswith(SUBSCRIPTION_DIAGNOSTICS_PREFIX)]
+    if not lines:
+        return {}
+    fields = dict(field.split("=", 1) for field in lines[-1].split()[1:])
+    return {
+        phase: {
+            "count": int(fields[f"{phase}_count"]),
+            "total_ns": int(fields[f"{phase}_total_ns"]),
+            "max_ns": int(fields[f"{phase}_max_ns"]),
+        }
+        for phase in SUBSCRIPTION_DIAGNOSTIC_PHASES
     }
 
 
@@ -567,6 +604,9 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
+    server_subscription_diagnostics = read_subscription_diagnostics(sut.log_path)
+    if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and not server_subscription_diagnostics:
+        raise ValueError("subscription diagnostics were requested but the SUT did not report server diagnostics")
     if transport in {"http_json", "jsonrpc"} and not diagnostics:
         raise ValueError(
             f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
@@ -576,8 +616,12 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
+        if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and "client_subscription_diagnostics" not in result:
+            raise ValueError("subscription diagnostics were requested but the wire driver did not report client diagnostics")
         if diagnostics:
             result.update(diagnostics)
+        if server_subscription_diagnostics:
+            result["server_subscription_diagnostics"] = server_subscription_diagnostics
     return payload
 
 

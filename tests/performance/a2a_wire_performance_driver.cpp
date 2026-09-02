@@ -23,6 +23,9 @@
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/protojson.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a_performance_driver.h"
 
 namespace {
@@ -652,7 +655,12 @@ std::string TransportPath(std::string_view transport) {
   return "wire_http_json";
 }
 
-google::protobuf::Struct BuildResultObject(const WireOptions& options, const ScenarioResult& result) {
+google::protobuf::Struct BuildResultObject(const WireOptions& options, const ScenarioResult& result
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+                                           ,
+                                           const a2a::core::subscription_diagnostics::Snapshot& client_diagnostics
+#endif
+) {
   google::protobuf::Struct object;
   PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
                              result);
@@ -669,14 +677,37 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   SetStringField(&object, "driver_type", kWireDriverType);
   SetStringField(&object, "transport_path", TransportPath(options.transport));
   AddLatencyField(&object, result);
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  google::protobuf::Struct diagnostics;
+  for (std::size_t index = 0; index < client_diagnostics.size(); ++index) {
+    google::protobuf::Struct aggregate;
+    SetNumberField(&aggregate, "count", static_cast<double>(client_diagnostics[index].count));
+    SetNumberField(&aggregate, "total_ns", static_cast<double>(client_diagnostics[index].elapsed_nanoseconds));
+    SetNumberField(&aggregate, "max_ns", static_cast<double>(client_diagnostics[index].maximum_nanoseconds));
+    (*diagnostics.mutable_fields())[std::string(a2a::core::subscription_diagnostics::kPhaseNames[index])]
+        .mutable_struct_value()
+        ->Swap(&aggregate);
+  }
+  (*object.mutable_fields())["client_subscription_diagnostics"].mutable_struct_value()->Swap(&diagnostics);
+#endif
   return object;
 }
 
-void WriteResultJson(const WireOptions& options, const ScenarioResult& result, bool first) {
+void WriteResultJson(const WireOptions& options, const ScenarioResult& result, bool first
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+                     ,
+                     const a2a::core::subscription_diagnostics::Snapshot& client_diagnostics
+#endif
+) {
   if (!first) {
     std::cout << ",\n";
   }
-  const auto json = a2a::core::MessageToJson(BuildResultObject(options, result));
+  const auto json = a2a::core::MessageToJson(BuildResultObject(options, result
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+                                                               ,
+                                                               client_diagnostics
+#endif
+                                                               ));
   std::cout << "  " << (json.ok() ? json.value() : "{}");
 }
 
@@ -696,7 +727,16 @@ int main(int argc, char** argv) {
   std::cout << "[\n";
   bool first = true;
   for (const std::string& scenario : SelectedScenarios(options)) {
-    WriteResultJson(options, RunWireScenario(options, scenario), first);
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    (void)a2a::core::subscription_diagnostics::TakeSnapshot();
+#endif
+    const auto result = RunWireScenario(options, scenario);
+    WriteResultJson(options, result, first
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+                    ,
+                    a2a::core::subscription_diagnostics::TakeSnapshot()
+#endif
+    );
     first = false;
   }
   std::cout << "\n]\n";

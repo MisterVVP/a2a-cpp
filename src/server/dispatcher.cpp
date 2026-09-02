@@ -13,7 +13,9 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
-#include "a2a/core/subscription_diagnostics.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a/server/tasks/task_history.h"
 
 namespace a2a::server {
@@ -174,7 +176,10 @@ core::Result<DispatchResponse> DispatchListTasksToExecutor(AgentExecutor& execut
 
 core::Result<DispatchResponse> DispatchCancelTaskToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                             RequestContext& context) {
-  const core::subscription_diagnostics::ScopedTimer timer(core::subscription_diagnostics::Phase::kCancelDispatch);
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const core::subscription_diagnostics::ScopedTimer timer(
+      core::subscription_diagnostics::Phase::kServerCancelTaskTotal);
+#endif
   const auto* payload = std::get_if<lf::a2a::v1::CancelTaskRequest>(&request.payload);
   if (payload == nullptr) {
     return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForCancelTask);

@@ -8,7 +8,9 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_errors.h"
-#include "a2a/core/subscription_diagnostics.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a/core/task_states.h"
 
 namespace a2a::server {
@@ -71,8 +73,10 @@ core::Result<void> TaskLifecycleService::ValidateTaskForSendRequest(const lf::a2
 
 core::Result<lf::a2a::v1::Task> TaskLifecycleService::TransitionTaskStatus(std::string_view task_id,
                                                                            lf::a2a::v1::TaskState next_state) const {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   const core::subscription_diagnostics::ScopedTimer timer(core::subscription_diagnostics::Phase::kTerminalStoreUpdate,
                                                           core::IsTerminalTaskState(next_state));
+#endif
   if (store_ == nullptr) {
     return core::Error::Internal("TaskLifecycleService store is not configured");
   }
