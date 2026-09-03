@@ -86,6 +86,7 @@ constexpr std::string_view kGetStreamRequestLine = "GET /stream HTTP/1.1";
 constexpr std::string_view kUnavailableStreamUrl = "http://127.0.0.1:1/stream";
 constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
 constexpr std::string_view kConcurrentUnaryPath = "/unary";
+constexpr std::string_view kStreamPath = "/stream";
 constexpr std::string_view kContentLengthHeaderPrefix = "Content-Length:";
 constexpr std::string_view kFormContentTypeHeader = "Content-Type: application/x-www-form-urlencoded";
 constexpr std::string_view kAgentCardBody =
@@ -1245,6 +1246,26 @@ TEST(SharedHttpClientTest, SequentialFiniteStreamsReuseOneConnection) {
   ASSERT_TRUE(second.ok()) << second.error().message();
   EXPECT_NE(first_capture.chunks.find(kFirstSseChunk), std::string::npos);
   EXPECT_NE(second_capture.chunks.find(kSecondSseChunk), std::string::npos);
+  EXPECT_EQ(server.accepted_connections(), 1);
+}
+
+TEST(SharedHttpClientTest, UnaryAndStreamRequestsReuseOneCurlMultiConnection) {
+  PersistentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  const auto unary = client.SendRequest(request);
+  StreamRequestCapture stream_capture;
+  const auto stream = ExecuteCapturedStreamRequest(client, request, stream_capture);
+
+  ASSERT_TRUE(unary.ok()) << unary.error().message();
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  EXPECT_NE(unary.value().body.find(kFirstSseChunk), std::string::npos);
+  EXPECT_NE(stream_capture.chunks.find(kSecondSseChunk), std::string::npos);
   EXPECT_EQ(server.accepted_connections(), 1);
 }
 

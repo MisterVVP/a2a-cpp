@@ -64,6 +64,7 @@ struct RequestSlot final {
   }
 
   CURL* easy_handle = nullptr;
+  std::shared_ptr<CurlStreamReactor> reactor;
 };
 
 struct StreamSlot final {
@@ -79,6 +80,10 @@ struct StreamSlot final {
 
 struct ClientState final {
   std::shared_ptr<const ClientGlobalState> global_state;
+  // The first unary and streaming handles share one reactor shard so common
+  // request -> stream sequences can reuse the same CURLM connection cache.
+  std::mutex reactor_mutex;
+  std::weak_ptr<CurlStreamReactor> primary_reactor;
   // Blocking unary requests borrow independent easy handles. This mutex
   // protects only the idle pool and is never held across network I/O.
   std::mutex request_mutex;
@@ -86,6 +91,7 @@ struct ClientState final {
   // Guards shutdown, stream accounting, and reusable stream easy handles.
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
+  bool primary_stream_reactor_assigned = false;
   std::condition_variable streams_finished;
   std::size_t active_streams = 0;
   bool shutting_down = false;
@@ -588,6 +594,16 @@ ClientGlobalState::ClientGlobalState()
 
 namespace {
 
+std::shared_ptr<detail::CurlStreamReactor> GetOrCreatePrimaryReactor(detail::ClientState& state) {
+  std::lock_guard lock(state.reactor_mutex);
+  auto reactor = state.primary_reactor.lock();
+  if (reactor == nullptr) {
+    reactor = state.global_state->stream_reactor_pool->Acquire();
+    state.primary_reactor = reactor;
+  }
+  return reactor;
+}
+
 std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail) {
   std::ostringstream message;
   message << prefix << ": " << curl_easy_strerror(code);
@@ -881,18 +897,29 @@ core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request, con
 }
 
 core::Result<std::unique_ptr<detail::RequestSlot>> AcquireRequestSlot(detail::ClientState& state) {
+  std::unique_ptr<detail::RequestSlot> slot;
+  bool use_primary_reactor = false;
   {
     std::lock_guard lock(state.request_mutex);
     if (!state.idle_request_slots.empty()) {
-      auto slot = std::move(state.idle_request_slots.back());
+      slot = std::move(state.idle_request_slots.back());
       state.idle_request_slots.pop_back();
-      return slot;
+      use_primary_reactor = slot->reactor == nullptr;
     }
   }
-  auto slot = std::make_unique<detail::RequestSlot>();
-  slot->easy_handle = curl_easy_init();
-  if (slot->easy_handle == nullptr) {
-    return core::Error::Internal(std::string(kCurlInitFailureMessage));
+  if (slot == nullptr) {
+    slot = std::make_unique<detail::RequestSlot>();
+    slot->easy_handle = curl_easy_init();
+    if (slot->easy_handle == nullptr) {
+      return core::Error::Internal(std::string(kCurlInitFailureMessage));
+    }
+  }
+  if (slot->reactor == nullptr) {
+    slot->reactor =
+        use_primary_reactor ? GetOrCreatePrimaryReactor(state) : state.global_state->stream_reactor_pool->Acquire();
+    if (slot->reactor == nullptr) {
+      return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+    }
   }
   return slot;
 }
@@ -921,13 +948,17 @@ core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::Clie
   if (slot->easy_handle == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
+  bool use_primary_reactor = false;
   {
     std::lock_guard lock(state.stream_mutex);
     if (state.shutting_down) {
       return core::Error::Network("HTTP client is shutting down").WithTransport("http");
     }
-    slot->reactor = state.global_state->stream_reactor_pool->Acquire();
+    use_primary_reactor = !state.primary_stream_reactor_assigned;
+    state.primary_stream_reactor_assigned = true;
   }
+  slot->reactor =
+      use_primary_reactor ? GetOrCreatePrimaryReactor(state) : state.global_state->stream_reactor_pool->Acquire();
   if (slot->reactor == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
@@ -939,6 +970,16 @@ void ReleaseStreamSlot(detail::ClientState& state, std::unique_ptr<detail::Strea
   if (!state.shutting_down && state.idle_stream_slots.size() < kMaxIdleStreamSlots) {
     state.idle_stream_slots.push_back(std::move(slot));
   }
+}
+
+CURLcode PerformCurlTransfer(CURL* handle, const std::shared_ptr<detail::CurlStreamReactor>& reactor) {
+  auto transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  transfer->easy_handle = handle;
+  reactor->Add(transfer);
+
+  std::unique_lock lock(transfer->mutex);
+  transfer->completed.wait(lock, [&transfer] { return transfer->done; });
+  return transfer->result;
 }
 
 class StreamDispatchExecutor final {
@@ -1248,7 +1289,7 @@ core::Result<Response> Client::SendRequest(const Request& request) const {
     return configured.error();
   }
 
-  const CURLcode code = curl_easy_perform(handle);
+  const CURLcode code = PerformCurlTransfer(handle, slot->reactor);
   if (code != CURLE_OK) {
     return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
   }
