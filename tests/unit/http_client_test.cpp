@@ -41,7 +41,8 @@
 #if defined(A2A_HAS_LIBCURL)
 namespace a2a::http::testing {
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept;
-}
+std::size_t CurlStreamReactorPoolSize();
+}  // namespace a2a::http::testing
 #endif
 
 namespace {
@@ -53,8 +54,9 @@ constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
 constexpr std::size_t kScalabilityStreamCount = 64U;
 constexpr std::size_t kMaximumStreamDispatchWorkers = 4U;
-constexpr std::size_t kMaximumClientReactorThreads = 1U;
-constexpr std::size_t kMaximumSharedClientThreadGrowth = kMaximumStreamDispatchWorkers + kMaximumClientReactorThreads;
+constexpr std::size_t kMaximumStreamReactorPoolSize = 4U;
+constexpr std::size_t kMaximumSharedClientThreadGrowth = kMaximumStreamDispatchWorkers + kMaximumStreamReactorPoolSize;
+constexpr std::size_t kSameReactorClientIndex = kMaximumStreamReactorPoolSize;
 constexpr std::size_t kShutdownRaceStarterCount = 32U;
 constexpr int kShortStreamTimeoutMs = 100;
 constexpr int kCancellationRequestTimeoutMs = 30000;
@@ -1028,16 +1030,15 @@ void ExerciseConcurrentStartsAndShutdown() {
   EXPECT_EQ(rejected.error().message(), kClientShuttingDownMessage);
 }
 
-TEST(SharedHttpClientTest, ConcurrentStartsCannotReplaceReactorAfterShutdown) {
+TEST(SharedHttpClientTest, ConcurrentStartsUseBoundedProcessReactorPoolAfterShutdown) {
   const auto before = a2a::http::testing::CurlStreamReactorLifecycleCounts();
 
   ExerciseConcurrentStartsAndShutdown();
 
   const auto after = a2a::http::testing::CurlStreamReactorLifecycleCounts();
   const std::size_t created = after.first - before.first;
-  const std::size_t destroyed = after.second - before.second;
-  EXPECT_LE(created, kMaximumClientReactorThreads);
-  EXPECT_EQ(destroyed, created);
+  EXPECT_LE(created, kMaximumStreamReactorPoolSize);
+  EXPECT_LE(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
 }
 
 void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,
@@ -1068,6 +1069,27 @@ void CancelAndWaitForScalabilityStreams(const std::vector<std::function<void()>>
   }
 }
 
+void StartScalabilityStreamsAcrossClients(const a2a::http::Request& request,
+                                          std::vector<std::unique_ptr<a2a::http::Client>>* clients,
+                                          std::vector<std::function<void()>>* cancellations,
+                                          std::vector<std::future<void>>* completions) {
+  clients->reserve(kScalabilityStreamCount);
+  for (std::size_t index = 0; index < kScalabilityStreamCount; ++index) {
+    clients->push_back(std::make_unique<a2a::http::Client>());
+    auto completion = std::make_shared<std::promise<void>>();
+    completions->push_back(completion->get_future());
+    const auto started = clients->back()->StartStreamRequest(
+        request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+        [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; },
+        [cancellations](const std::function<void()>& cancel) { cancellations->push_back(cancel); },
+        [completion](const a2a::core::Result<a2a::http::Response>&) { completion->set_value(); });
+    if (!started.ok()) {
+      ADD_FAILURE() << started.error().message();
+      return;
+    }
+  }
+}
+
 TEST(SharedHttpClientTest, OneClientKeepsSixtyFourStreamsOnBoundedSharedThreads) {
   ManyOpenSseLoopbackServer server;
 #if defined(__linux__)
@@ -1093,7 +1115,46 @@ TEST(SharedHttpClientTest, OneClientKeepsSixtyFourStreamsOnBoundedSharedThreads)
       std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
   EXPECT_LE(established_threads, baseline_threads + kMaximumSharedClientThreadGrowth);
 #endif
+  EXPECT_EQ(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
   ASSERT_EQ(cancellations.size(), kScalabilityStreamCount);
+  CancelAndWaitForScalabilityStreams(cancellations, &completions);
+}
+
+TEST(SharedHttpClientTest, SixtyFourClientsShareBoundedProcessReactorPool) {
+  ManyOpenSseLoopbackServer server;
+#if defined(__linux__)
+  const std::size_t baseline_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+#endif
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kCancellationRequestTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+  std::vector<std::unique_ptr<a2a::http::Client>> clients;
+  std::vector<std::function<void()>> cancellations;
+  std::vector<std::future<void>> completions;
+  cancellations.reserve(kScalabilityStreamCount);
+  completions.reserve(kScalabilityStreamCount);
+
+  StartScalabilityStreamsAcrossClients(request, &clients, &cancellations, &completions);
+
+  ASSERT_TRUE(server.WaitForAllStreams(std::chrono::milliseconds(kStreamTimeoutMs)));
+  ASSERT_EQ(clients.size(), kScalabilityStreamCount);
+  ASSERT_EQ(cancellations.size(), kScalabilityStreamCount);
+  ASSERT_EQ(completions.size(), kScalabilityStreamCount);
+  EXPECT_EQ(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
+#if defined(__linux__)
+  const std::size_t established_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+  EXPECT_LE(established_threads, baseline_threads + kMaximumSharedClientThreadGrowth);
+#endif
+
+  clients.front()->Shutdown();
+
+  ASSERT_EQ(completions.front().wait_for(kCancellationDeadline), std::future_status::ready);
+  EXPECT_EQ(completions[kSameReactorClientIndex].wait_for(std::chrono::milliseconds::zero()),
+            std::future_status::timeout);
   CancelAndWaitForScalabilityStreams(cancellations, &completions);
 }
 

@@ -27,11 +27,14 @@ The historical wire streaming scenario names use one `A2AClient` per benchmark
 worker, preserving the topology used by earlier reports. HTTP+JSON and JSON-RPC
 also expose `SendStreamingMessage_FiniteStream_SharedClient` and
 `SubscribeToTask_FirstEventLatency_SharedClient`. Those variants route every
-measured worker through one `A2AClient`, profiling one shared libcurl reactor and
-the fixed callback pool without changing the historical comparison rows. gRPC
-does not run the shared-client variants. HTTP streaming rows include
-`client_process_thread_count`, allowing thread growth to be compared across
-concurrency levels without conflating the two client topologies.
+measured worker through one `A2AClient` without changing the historical
+comparison rows. HTTP streaming easy handles are sharded across a process-wide
+pool of at most four libcurl reactors, while callbacks use the fixed shared
+dispatch pool. Reusable stream slots retain their reactor assignment so
+sequential finite streams keep connection-cache locality. gRPC does not run the
+shared-client variants. HTTP streaming rows include `client_process_thread_count`,
+allowing thread growth to be compared across concurrency levels without
+conflating the two client topologies.
 
 HTTP wire rows also report finite-stream connection lifecycle diagnostics. The
 `http_finite_stream_connections` and `http_completed_finite_streams` fields

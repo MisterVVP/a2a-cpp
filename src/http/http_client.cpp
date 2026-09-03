@@ -47,11 +47,13 @@ namespace a2a::http {
 
 namespace detail {
 class CurlStreamReactor;
+class CurlStreamReactorPool;
 
 struct ClientGlobalState final {
-  ClientGlobalState() : code(curl_global_init(CURL_GLOBAL_DEFAULT)) {}
+  ClientGlobalState();
 
   CURLcode code = CURLE_OK;
+  std::shared_ptr<CurlStreamReactorPool> stream_reactor_pool;
 };
 
 struct RequestSlot final {
@@ -72,6 +74,7 @@ struct StreamSlot final {
   }
 
   CURL* easy_handle = nullptr;
+  std::shared_ptr<CurlStreamReactor> reactor;
 };
 
 struct ClientState final {
@@ -80,16 +83,13 @@ struct ClientState final {
   // protects only the idle pool and is never held across network I/O.
   std::mutex request_mutex;
   std::vector<std::unique_ptr<RequestSlot>> idle_request_slots;
+  // Guards shutdown, stream accounting, and reusable stream easy handles.
   std::mutex stream_mutex;
   std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
   std::condition_variable streams_finished;
   std::size_t active_streams = 0;
   bool shutting_down = false;
   std::atomic<bool> suppress_stream_callbacks{false};
-  // Guards the shutdown transition, stream accounting, reusable stream easy handles,
-  // and reactor ownership. Keeping these under one mutex makes it impossible
-  // to create a reactor after shutdown has claimed the client lifecycle.
-  std::shared_ptr<CurlStreamReactor> stream_reactor;
 };
 }  // namespace detail
 
@@ -117,6 +117,7 @@ constexpr long kHttpInformationalStatusMin = 100;
 constexpr long kHttpInformationalStatusMax = 199;
 constexpr std::size_t kMaxIdleRequestSlots = 64U;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
+constexpr std::size_t kStreamReactorPoolSize = 4U;
 #if defined(__linux__)
 constexpr std::size_t kMaximumReactorEvents = 64U;
 #endif
@@ -161,6 +162,8 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
  public:
   struct Transfer final {
     CURL* easy_handle = nullptr;
+    // Non-owning identity; `lifetime` keeps the owning client state alive.
+    const void* owner = nullptr;
     std::mutex mutex;
     std::condition_variable completed;
     CURLcode result = CURLE_ABORTED_BY_CALLBACK;
@@ -203,6 +206,10 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
     Enqueue(Command{.type = CommandType::kCancel, .transfer = transfer});
   }
 
+  void CancelOwner(const void* owner) {
+    Enqueue(Command{.type = CommandType::kCancelOwner, .transfer = {}, .owner = owner});
+  }
+
   void Shutdown() {
     Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
     if (thread_.joinable()) {
@@ -211,10 +218,11 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   }
 
  private:
-  enum class CommandType : std::uint8_t { kAdd, kCancel, kShutdown };
+  enum class CommandType : std::uint8_t { kAdd, kCancel, kCancelOwner, kShutdown };
   struct Command final {
     CommandType type = CommandType::kShutdown;
     std::shared_ptr<Transfer> transfer;
+    const void* owner = nullptr;
   };
 
   CurlStreamReactor() : multi_handle_(curl_multi_init()) {
@@ -288,12 +296,19 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
       commands.swap(commands_);
     }
     for (auto& command : commands) {
-      if (command.type == CommandType::kShutdown) {
-        shutting_down_ = true;
-      } else if (command.type == CommandType::kCancel) {
-        Remove(command.transfer, CURLE_ABORTED_BY_CALLBACK);
-      } else {
-        AddOnReactor(std::move(command.transfer));
+      switch (command.type) {
+        case CommandType::kAdd:
+          AddOnReactor(std::move(command.transfer));
+          break;
+        case CommandType::kCancel:
+          Remove(command.transfer, CURLE_ABORTED_BY_CALLBACK);
+          break;
+        case CommandType::kCancelOwner:
+          RemoveOwner(command.owner, CURLE_ABORTED_BY_CALLBACK);
+          break;
+        case CommandType::kShutdown:
+          shutting_down_ = true;
+          break;
       }
     }
   }
@@ -327,6 +342,20 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
       transfers_.erase(found);
     }
     Complete(transfer, result);
+  }
+
+  void RemoveOwner(const void* owner, CURLcode result) {
+    auto current = transfers_.begin();
+    while (current != transfers_.end()) {
+      if (current->second->owner != owner) {
+        ++current;
+        continue;
+      }
+      auto transfer = std::move(current->second);
+      (void)curl_multi_remove_handle(multi_handle_, current->first);
+      current = transfers_.erase(current);
+      Complete(transfer, result);
+    }
   }
 
   static void Complete(const std::shared_ptr<Transfer>& transfer, CURLcode result) {
@@ -508,6 +537,52 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   int timer_descriptor_ = -1;
 #endif
 };
+
+class CurlStreamReactorPool final {
+ public:
+  std::shared_ptr<CurlStreamReactor> Acquire() {
+    const std::size_t index = next_reactor_.fetch_add(1U, std::memory_order_relaxed) % kStreamReactorPoolSize;
+    std::lock_guard lock(reactor_mutexes_[index]);
+    auto reactor = reactors_[index].lock();
+    if (reactor == nullptr) {
+      reactor = CurlStreamReactor::Create();
+      reactors_[index] = reactor;
+    }
+    return reactor;
+  }
+
+  void CancelOwner(const void* owner) {
+    for (std::size_t index = 0; index < kStreamReactorPoolSize; ++index) {
+      std::shared_ptr<CurlStreamReactor> reactor;
+      {
+        std::lock_guard lock(reactor_mutexes_[index]);
+        reactor = reactors_[index].lock();
+      }
+      if (reactor != nullptr) {
+        reactor->CancelOwner(owner);
+      }
+    }
+  }
+
+  [[nodiscard]] std::size_t size() const {
+    std::size_t count = 0U;
+    for (std::size_t index = 0; index < kStreamReactorPoolSize; ++index) {
+      std::lock_guard lock(reactor_mutexes_[index]);
+      if (!reactors_[index].expired()) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+ private:
+  std::array<std::weak_ptr<CurlStreamReactor>, kStreamReactorPoolSize> reactors_{};
+  mutable std::array<std::mutex, kStreamReactorPoolSize> reactor_mutexes_{};
+  std::atomic_size_t next_reactor_{0U};
+};
+
+ClientGlobalState::ClientGlobalState()
+    : code(curl_global_init(CURL_GLOBAL_DEFAULT)), stream_reactor_pool(std::make_shared<CurlStreamReactorPool>()) {}
 
 }  // namespace detail
 
@@ -846,12 +921,22 @@ core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::Clie
   if (slot->easy_handle == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
+  {
+    std::lock_guard lock(state.stream_mutex);
+    if (state.shutting_down) {
+      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+    }
+    slot->reactor = state.global_state->stream_reactor_pool->Acquire();
+  }
+  if (slot->reactor == nullptr) {
+    return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
+  }
   return slot;
 }
 
 void ReleaseStreamSlot(detail::ClientState& state, std::unique_ptr<detail::StreamSlot> slot) {
   std::lock_guard lock(state.stream_mutex);
-  if (state.idle_stream_slots.size() < kMaxIdleStreamSlots) {
+  if (!state.shutting_down && state.idle_stream_slots.size() < kMaxIdleStreamSlots) {
     state.idle_stream_slots.push_back(std::move(slot));
   }
 }
@@ -1093,17 +1178,6 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   }
 };
 
-core::Result<std::shared_ptr<detail::CurlStreamReactor>> GetStreamReactor(detail::ClientState& state) {
-  std::lock_guard lock(state.stream_mutex);
-  if (state.shutting_down) {
-    return core::Error::Network("HTTP client is shutting down").WithTransport("http");
-  }
-  if (state.stream_reactor == nullptr) {
-    state.stream_reactor = detail::CurlStreamReactor::Create();
-  }
-  return state.stream_reactor;
-}
-
 }  // namespace
 
 bool IsSupportedHttpVersion(std::string_view http_version) noexcept {
@@ -1123,17 +1197,18 @@ Client::Client() : state_(std::make_shared<detail::ClientState>()) {
 Client::~Client() { Shutdown(); }
 
 void Client::Shutdown() const {
-  std::shared_ptr<detail::CurlStreamReactor> reactor;
+  std::vector<std::unique_ptr<detail::StreamSlot>> released_stream_slots;
+  bool has_active_streams = false;
   {
     std::lock_guard lock(state_->stream_mutex);
     state_->shutting_down = true;
     state_->suppress_stream_callbacks.store(true);
-    reactor = std::move(state_->stream_reactor);
+    has_active_streams = state_->active_streams != 0U;
+    released_stream_slots.swap(state_->idle_stream_slots);
   }
-  if (reactor != nullptr) {
-    reactor->Shutdown();
+  if (has_active_streams) {
+    state_->global_state->stream_reactor_pool->CancelOwner(state_.get());
   }
-  reactor.reset();
   if (g_dispatch_client_state == state_.get()) {
     return;
   }
@@ -1283,15 +1358,11 @@ core::Result<void> Client::StartStreamRequest(
   }
   auto async_state = std::make_shared<AsyncStreamState>();
   async_state->client_state = state_;
-  auto reactor = GetStreamReactor(*state_);
-  if (!reactor.ok()) {
-    return reactor.error();
-  }
-  async_state->reactor = std::move(reactor.value());
+  async_state->slot = std::move(acquired_slot.value());
+  async_state->reactor = async_state->slot->reactor;
   if (async_state->reactor == nullptr) {
     return core::Error::Internal(std::string(kCurlMultiInitFailureMessage));
   }
-  async_state->slot = std::move(acquired_slot.value());
   async_state->request = std::move(request);
   async_state->headers = std::move(headers.value());
   async_state->metadata_handler = std::move(on_metadata);
@@ -1350,6 +1421,7 @@ core::Result<void> Client::StartStreamRequest(
   }
   async_state->transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
   async_state->transfer->easy_handle = handle;
+  async_state->transfer->owner = state_.get();
   async_state->transfer->lifetime = async_state;
   // Keep capture wrappers alive alongside the transfer without adding raw
   // callback addresses to any caller stack.
@@ -1374,8 +1446,9 @@ core::Result<void> Client::StartStreamRequest(
     }
     ++state_->active_streams;
     async_state->registered = true;
+    // Publish the add command before shutdown can enqueue owner cancellation.
+    async_state->reactor->Add(async_state->transfer);
   }
-  async_state->reactor->Add(async_state->transfer);
   if (register_cancellation) {
     register_cancellation([weak_state] {
       if (const auto locked = weak_state.lock()) {
@@ -1392,6 +1465,8 @@ std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept 
   return {g_curl_stream_reactors_created.load(std::memory_order_relaxed),
           g_curl_stream_reactors_destroyed.load(std::memory_order_relaxed)};
 }
+
+std::size_t CurlStreamReactorPoolSize() { return EnsureCurlGlobalInit()->stream_reactor_pool->size(); }
 
 }  // namespace testing
 

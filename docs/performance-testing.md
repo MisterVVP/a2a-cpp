@@ -172,8 +172,11 @@ operation or ask the server to publish a terminal event. For HTTP transports it
 retains the shared-client stress topology because it has no historical baseline.
 The wire driver otherwise reuses one client/transport per worker thread so
 measured operations do not recreate gRPC channels or HTTP transport objects. The
-libcurl-backed HTTP client also keeps reusable easy handles per SDK HTTP client,
-avoiding repeated easy-handle setup on REST and JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
+libcurl-backed HTTP streaming path shards reusable stream easy handles across a
+process-wide pool of at most four CURLM reactors. Reused stream slots keep their
+reactor assignment for connection-cache locality, so increasing the number of SDK
+clients does not create an unbounded number of reactor threads. Unary HTTP
+requests remain on their separate reusable easy-handle pool. List scenarios run before mutating lifecycle scenarios and
 seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
 the listed task set bounded in CI. Multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and callback fan-out remain SDK in-process rows in this implementation; they are not duplicated as transport rows and must not be interpreted as full `wire_tck_sut` coverage.
 
