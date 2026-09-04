@@ -42,6 +42,10 @@
 #endif
 
 namespace a2a::http {
+namespace {
+constexpr char kHttpTransportName[] = "http";
+constexpr std::string_view kStreamCompletionPendingMessage = "HTTP stream completion is pending";
+}  // namespace
 
 #if defined(A2A_HAS_LIBCURL)
 
@@ -118,6 +122,9 @@ constexpr std::string_view kHttpStatusLinePrefix = "HTTP/";
 constexpr std::string_view kMissingStreamMetadataCallbackMessage = "HTTP stream metadata callback is required";
 constexpr std::string_view kMissingStreamChunkCallbackMessage = "HTTP stream chunk callback is required";
 constexpr std::string_view kMissingStreamCancellationCallbackMessage = "HTTP stream cancellation callback is required";
+constexpr std::string_view kStreamCancelledMessage = "HTTP stream was cancelled";
+constexpr std::string_view kAsyncStreamCallbacksRequiredMessage = "HTTP asynchronous stream callbacks are required";
+constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
 constexpr char kHeaderSeparator = ':';
 constexpr long kHttpResponseCodeUnset = 0;
 constexpr long kHttpInformationalStatusMin = 100;
@@ -936,7 +943,7 @@ core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::Clie
   {
     std::lock_guard lock(state.stream_mutex);
     if (state.shutting_down) {
-      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+      return core::Error::Network(std::string(kClientShuttingDownMessage)).WithTransport(kHttpTransportName);
     }
     if (!state.idle_stream_slots.empty()) {
       auto slot = std::move(state.idle_stream_slots.back());
@@ -953,7 +960,7 @@ core::Result<std::unique_ptr<detail::StreamSlot>> AcquireStreamSlot(detail::Clie
   {
     std::lock_guard lock(state.stream_mutex);
     if (state.shutting_down) {
-      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+      return core::Error::Network(std::string(kClientShuttingDownMessage)).WithTransport(kHttpTransportName);
     }
     use_primary_reactor = !state.primary_stream_reactor_assigned;
     state.primary_stream_reactor_assigned = true;
@@ -1154,7 +1161,7 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
             self->RecordError(handled.error());
           }
         })) {
-      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport("http"));
+      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport(kHttpTransportName));
     }
   }
 
@@ -1172,7 +1179,7 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
               }
             },
             chunk_size)) {
-      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport("http"));
+      RecordError(core::Error::Network(std::string(kDispatchBacklogExceededMessage)).WithTransport(kHttpTransportName));
     }
   }
 
@@ -1198,7 +1205,7 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
     }
     if (code != CURLE_OK) {
       if (is_cancelled()) {
-        return core::Error::Network("HTTP stream was cancelled").WithTransport("http");
+        return core::Error::Network(std::string(kStreamCancelledMessage)).WithTransport(kHttpTransportName);
       }
       return core::Error::Network(BuildCurlErrorMessage(kRequestFailureMessage, code, error_buffer.data()));
     }
@@ -1365,7 +1372,7 @@ core::Result<Response> Client::StreamRequest(
     const std::function<void(const std::function<void()>&)>& register_cancellation) const {
   std::mutex completion_mutex;
   std::condition_variable completion_condition;
-  core::Result<Response> response = core::Error::Internal("HTTP stream completion is pending");
+  core::Result<Response> response = core::Error::Internal(std::string(kStreamCompletionPendingMessage));
   bool completed = false;
   std::mutex cancellation_mutex;
   std::function<void()> cancel_transfer;
@@ -1427,7 +1434,7 @@ core::Result<void> Client::StartStreamRequest(
     const std::function<void(const std::function<void()>&)>& register_cancellation,
     StreamCompletion on_complete) const {
   if (!on_metadata || !on_chunk || !is_cancelled || !on_complete) {
-    return core::Error::Validation("HTTP asynchronous stream callbacks are required").WithTransport("http");
+    return core::Error::Validation(std::string(kAsyncStreamCallbacksRequiredMessage)).WithTransport(kHttpTransportName);
   }
   if (state_->global_state->code != CURLE_OK) {
     return core::Error::Internal(BuildCurlErrorMessage(kCurlInitFailureMessage, state_->global_state->code, {}));
@@ -1526,7 +1533,7 @@ core::Result<void> Client::StartStreamRequest(
     if (state_->shutting_down) {
       async_state->transfer->lifetime.reset();
       async_state->transfer->on_complete = {};
-      return core::Error::Network("HTTP client is shutting down").WithTransport("http");
+      return core::Error::Network(std::string(kClientShuttingDownMessage)).WithTransport(kHttpTransportName);
     }
     ++state_->active_streams;
     async_state->registered = true;
@@ -1576,7 +1583,7 @@ void Client::Shutdown() const {}
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
   (void)request;
-  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport(kHttpTransportName);
 }
 
 core::Result<Response> Client::StreamRequest(const Request& request,
@@ -1587,7 +1594,7 @@ core::Result<Response> Client::StreamRequest(const Request& request,
   (void)on_metadata;
   (void)on_chunk;
   (void)is_cancelled;
-  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport(kHttpTransportName);
 }
 
 core::Result<Response> Client::StreamRequest(
@@ -1596,7 +1603,7 @@ core::Result<Response> Client::StreamRequest(
     const std::function<void(const std::function<void()>&)>& register_cancellation) const {
   std::mutex completion_mutex;
   std::condition_variable completion_condition;
-  core::Result<Response> response = core::Error::Internal("HTTP stream completion is pending");
+  core::Result<Response> response = core::Error::Internal(std::string(kStreamCompletionPendingMessage));
   bool completed = false;
   const auto started = StartStreamRequest(
       request, on_metadata, on_chunk, is_cancelled, register_cancellation,
@@ -1627,7 +1634,7 @@ core::Result<void> Client::StartStreamRequest(
   (void)is_cancelled;
   (void)register_cancellation;
   (void)on_complete;
-  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport("http");
+  return core::Error::Internal(std::string(kLibcurlDisabledMessage)).WithTransport(kHttpTransportName);
 }
 
 bool IsSupportedHttpVersion(std::string_view http_version) noexcept {

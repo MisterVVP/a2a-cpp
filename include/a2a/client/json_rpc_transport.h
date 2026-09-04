@@ -33,11 +33,6 @@ class JsonRpcTransport final : public ClientTransport {
                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
                             RequestIdGenerator id_generator = {});
 
-  explicit JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
-                            HttpStreamRequesterWithCancellation stream_requester,
-                            std::chrono::milliseconds default_timeout = kDefaultTimeout,
-                            RequestIdGenerator id_generator = {});
-
   [[nodiscard]] static std::unique_ptr<JsonRpcTransport> CreateDefault(
       ResolvedInterface resolved_interface, std::chrono::milliseconds default_timeout = kDefaultTimeout,
       RequestIdGenerator id_generator = {});

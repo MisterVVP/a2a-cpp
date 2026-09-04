@@ -72,6 +72,14 @@ constexpr std::string_view kRestTaskBody = R"({"id":"task-1"})";
 constexpr std::string_view kJsonRpcTaskBody = R"({"jsonrpc":"2.0","id":"req-1","result":{"id":"task-1"}})";
 constexpr std::string_view kJsonRpcErrorBody =
     R"({"jsonrpc":"2.0","id":"req-1","error":{"code":-32603,"message":"failed"}})";
+constexpr std::string_view kJsonRpcRequestId = "req-1";
+constexpr std::string_view kLoopbackRestPath = "/a2a";
+constexpr std::string_view kLoopbackJsonRpcPath = "/rpc";
+constexpr std::string_view kPersistentJsonResponsePrefix =
+    "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nContent-Length: ";
+constexpr int kEnabledSocketOption = 1;
+constexpr int kSingleConnectionBacklog = 1;
+constexpr int kExpectedSingleConnection = 1;
 constexpr std::string_view kSseHeaders =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kJsonStreamHeaders =
@@ -331,6 +339,143 @@ class PersistentSseLoopbackServer final : private a2a::core::NonCopyable {
   int fd_ = kSocketError;
   int port_ = 0;
   std::atomic_int accepted_connections_{0};
+  std::thread worker_;
+};
+
+class PersistentUnaryThenSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  explicit PersistentUnaryThenSseLoopbackServer(std::string unary_body)
+      : unary_response_(BuildUnaryResponse(unary_body)) {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = kEnabledSocketOption;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, kSingleConnectionBacklog), 0);
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+    worker_ = std::thread([this] { ServeUnaryThenStream(); });
+  }
+
+  ~PersistentUnaryThenSseLoopbackServer() {
+    ReleaseStreamResponse();
+    const int client = client_fd_.load();
+    if (client != kSocketError) {
+      (void)::shutdown(client, SHUT_RDWR);
+    }
+    if (fd_ != kSocketError) {
+      (void)::shutdown(fd_, SHUT_RDWR);
+    }
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    if (fd_ != kSocketError) {
+      ::close(fd_);
+    }
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+  [[nodiscard]] int accepted_connections() const noexcept { return accepted_connections_.load(); }
+
+  [[nodiscard]] bool WaitForStreamRequest(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, timeout, [this] { return stream_request_observed_; });
+  }
+
+  void ReleaseStreamResponse() {
+    {
+      std::lock_guard lock(mutex_);
+      release_stream_response_ = true;
+    }
+    condition_.notify_all();
+  }
+
+ private:
+  static std::string BuildUnaryResponse(std::string_view body) {
+    std::string response(kPersistentJsonResponsePrefix);
+    response.append(std::to_string(body.size()));
+    response.append(a2a::core::http::kHeaderDelimiter);
+    response.append(body);
+    return response;
+  }
+
+  static bool ReadCompleteRequest(int client) {
+    std::string request;
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    while (request.find(a2a::core::http::kHeaderDelimiter) == std::string::npos) {
+      const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
+      if (received <= 0) {
+        return false;
+      }
+      request.append(buffer.data(), static_cast<std::size_t>(received));
+    }
+    const auto headers_end = request.find(a2a::core::http::kHeaderDelimiter);
+    const auto length_header = request.find(kContentLengthHeaderPrefix);
+    if (length_header == std::string::npos) {
+      return true;
+    }
+    const auto value_start = length_header + kContentLengthHeaderPrefix.size();
+    const auto value_end = request.find(a2a::core::http::kLineTerminator, value_start);
+    const auto content_length =
+        static_cast<std::size_t>(std::stoul(request.substr(value_start, value_end - value_start)));
+    const auto body_start = headers_end + a2a::core::http::kHeaderDelimiter.size();
+    while (request.size() - body_start < content_length) {
+      const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
+      if (received <= 0) {
+        return false;
+      }
+      request.append(buffer.data(), static_cast<std::size_t>(received));
+    }
+    return true;
+  }
+
+  void ServeUnaryThenStream() {
+    const int client = ::accept(fd_, nullptr, nullptr);
+    if (client == kSocketError) {
+      return;
+    }
+    accepted_connections_.fetch_add(1);
+    client_fd_.store(client);
+    if (!ReadCompleteRequest(client)) {
+      client_fd_.store(kSocketError);
+      ::close(client);
+      return;
+    }
+    (void)::send(client, unary_response_.data(), unary_response_.size(), 0);
+    if (!ReadCompleteRequest(client)) {
+      client_fd_.store(kSocketError);
+      ::close(client);
+      return;
+    }
+    {
+      std::lock_guard lock(mutex_);
+      stream_request_observed_ = true;
+    }
+    condition_.notify_all();
+    {
+      std::unique_lock lock(mutex_);
+      condition_.wait(lock, [this] { return release_stream_response_; });
+    }
+    (void)::send(client, kEmptySseResponse.data(), kEmptySseResponse.size(), 0);
+    client_fd_.store(kSocketError);
+    ::close(client);
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  std::string unary_response_;
+  std::atomic_int accepted_connections_{0};
+  std::atomic_int client_fd_{kSocketError};
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  bool stream_request_observed_ = false;
+  bool release_stream_response_ = false;
   std::thread worker_;
 };
 
@@ -1267,6 +1412,84 @@ TEST(SharedHttpClientTest, UnaryAndStreamRequestsReuseOneCurlMultiConnection) {
   EXPECT_NE(unary.value().body.find(kFirstSseChunk), std::string::npos);
   EXPECT_NE(stream_capture.chunks.find(kSecondSseChunk), std::string::npos);
   EXPECT_EQ(server.accepted_connections(), 1);
+}
+
+bool WaitForStreamInactive(const a2a::client::StreamHandle& handle) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kStreamTimeoutMs);
+  while (handle.IsActive() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(kHangPollInterval);
+  }
+  return !handle.IsActive();
+}
+
+a2a::client::ResolvedInterface MakeLoopbackInterface(a2a::client::PreferredTransport transport, int port,
+                                                     std::string_view path) {
+  a2a::client::ResolvedInterface resolved;
+  resolved.transport = transport;
+  resolved.url = BuildLoopbackUrl(port, a2a::core::http::kHttpScheme, path);
+  return resolved;
+}
+
+TEST(DefaultHttpTransportTest, LegacyEmptyStreamRequesterConstructionRemainsUnambiguous) {
+  a2a::client::ResolvedInterface rest;
+  rest.transport = a2a::client::PreferredTransport::kRest;
+  a2a::client::ResolvedInterface json_rpc;
+  json_rpc.transport = a2a::client::PreferredTransport::kJsonRpc;
+  a2a::client::HttpRequester requester;
+
+  a2a::client::HttpJsonTransport http_transport(rest, requester, {}, a2a::client::HttpJsonTransport::kDefaultTimeout);
+  a2a::client::JsonRpcTransport json_rpc_transport(json_rpc, requester, {},
+                                                   a2a::client::JsonRpcTransport::kDefaultTimeout,
+                                                   [] { return std::string(kJsonRpcRequestId); });
+
+  (void)http_transport;
+  (void)json_rpc_transport;
+}
+
+TEST(DefaultHttpTransportTest, HttpJsonUnaryAndStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server(std::string(kRestTaskBody));
+  auto transport = a2a::client::HttpJsonTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kRest, server.port(), kLoopbackRestPath),
+      std::chrono::milliseconds(kStreamTimeoutMs));
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = client.GetTask(request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
+}
+
+TEST(DefaultHttpTransportTest, JsonRpcUnaryAndDelayedStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server(std::string(kJsonRpcTaskBody));
+  auto transport = a2a::client::JsonRpcTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kJsonRpc, server.port(), kLoopbackJsonRpcPath),
+      std::chrono::milliseconds(kStreamTimeoutMs), [] { return std::string(kJsonRpcRequestId); });
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = client.GetTask(request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
 }
 
 TEST(SharedHttpClientTest, DestroyingCopiedClientKeepsSurvivingClientUsable) {

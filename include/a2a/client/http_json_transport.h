@@ -52,7 +52,6 @@ using HttpStreamRequesterWithCancellation = std::function<core::Result<HttpClien
 
 [[nodiscard]] HttpRequester MakeDefaultHttpRequester();
 [[nodiscard]] HttpStreamRequester MakeDefaultHttpStreamRequester();
-[[nodiscard]] HttpStreamRequesterWithCancellation MakeDefaultCancellableHttpStreamRequester();
 
 struct HttpOperation final {
   std::string_view method;
@@ -65,10 +64,6 @@ class HttpJsonTransport final : public ClientTransport {
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              HttpStreamRequester stream_requester,
-                             std::chrono::milliseconds default_timeout = kDefaultTimeout);
-
-  explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
-                             HttpStreamRequesterWithCancellation stream_requester,
                              std::chrono::milliseconds default_timeout = kDefaultTimeout);
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,

@@ -34,6 +34,11 @@ constexpr int kHttpOkMax = 299;
 constexpr int kHttpNoContent = 204;
 constexpr std::string_view kDefaultMtlsUnsupportedMessage =
     "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
+constexpr char kHttpTransportName[] = "http";
+constexpr char kHttpTransportShuttingDownMessage[] = "HTTP transport is shutting down";
+constexpr char kHttpStreamRequesterNotConfiguredMessage[] = "HTTP stream requester is not configured";
+constexpr char kHttpStreamContentTypeMessage[] = "HTTP stream response must use text/event-stream";
+constexpr char kHttpStreamMetadataOrderMessage[] = "HTTP stream metadata must be validated before body chunks";
 
 a2a::http::Request ToSharedHttpRequest(const HttpRequest& request) {
   a2a::http::Request shared_request;
@@ -57,6 +62,19 @@ HttpClientResponse ToClientHttpResponse(a2a::http::Response response) {
     client_response.headers.insert_or_assign(std::move(header.name), std::move(header.value));
   }
   return client_response;
+}
+
+HttpRequester MakeHttpRequesterForClient(std::shared_ptr<a2a::http::Client> client) {
+  return [client = std::move(client)](const HttpRequest& request) -> core::Result<HttpClientResponse> {
+    if (request.mtls.has_value()) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
+    auto response = client->SendRequest(ToSharedHttpRequest(request));
+    if (!response.ok()) {
+      return response.error();
+    }
+    return ToClientHttpResponse(std::move(response.value()));
+  };
 }
 
 struct EndpointMap final {
@@ -280,8 +298,8 @@ struct HttpSseSession final {
       return {};
     }
     if (!HasSseContentType(response_metadata.headers)) {
-      return core::Error::RemoteProtocol("HTTP stream response must use text/event-stream")
-          .WithTransport("http")
+      return core::Error::RemoteProtocol(kHttpStreamContentTypeMessage)
+          .WithTransport(kHttpTransportName)
           .WithHttpStatus(response_metadata.status_code);
     }
     metadata_validated = true;
@@ -293,8 +311,7 @@ struct HttpSseSession final {
       return {};
     }
     if (!metadata_validated) {
-      return core::Error::RemoteProtocol("HTTP stream metadata must be validated before body chunks")
-          .WithTransport("http");
+      return core::Error::RemoteProtocol(kHttpStreamMetadataOrderMessage).WithTransport(kHttpTransportName);
     }
     if (collecting_error_body) {
       response_metadata.body.append(chunk);
@@ -390,7 +407,7 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
     request.headers[std::string(core::http::kContentTypeHeaderName)] =
         std::string(core::http::kContentTypeApplicationJson);
   }
-  request.headers["Accept"] = "text/event-stream";
+  request.headers[std::string(core::http::kAcceptHeaderName)] = std::string(core::http::kContentTypeTextEventStream);
   request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
@@ -444,28 +461,6 @@ HttpStreamRequester MakeDefaultHttpStreamRequester() {
   };
 }
 
-HttpStreamRequesterWithCancellation MakeDefaultCancellableHttpStreamRequester() {
-  return [client = a2a::http::Client{}](
-             const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata,
-             const HttpStreamChunkHandler& on_chunk, const StreamCancelled& is_cancelled,
-             const StreamCancellationRegistrar& register_cancellation) -> core::Result<HttpClientResponse> {
-    if (request.mtls.has_value()) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    auto response = client.StreamRequest(
-        ToSharedHttpRequest(request),
-        [&on_metadata](const a2a::http::Response& metadata) {
-          return on_metadata(ToClientHttpResponse(a2a::http::Response{
-              .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
-        },
-        on_chunk, is_cancelled, register_cancellation);
-    if (!response.ok()) {
-      return response.error();
-    }
-    return ToClientHttpResponse(std::move(response.value()));
-  };
-}
-
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout)
     : resolved_interface_(std::move(resolved_interface)),
@@ -474,22 +469,16 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
       default_timeout_(default_timeout) {}
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
-                                     HttpStreamRequesterWithCancellation stream_requester,
-                                     std::chrono::milliseconds default_timeout)
-    : resolved_interface_(std::move(resolved_interface)),
-      requester_(std::move(requester)),
-      cancellable_stream_requester_(std::move(stream_requester)),
-      default_timeout_(default_timeout) {}
-
-HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      std::chrono::milliseconds default_timeout)
     : HttpJsonTransport(std::move(resolved_interface), std::move(requester), HttpStreamRequester{}, default_timeout) {}
 
 std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                     std::chrono::milliseconds default_timeout) {
-  auto transport = std::make_unique<HttpJsonTransport>(std::move(resolved_interface), MakeDefaultHttpRequester(),
-                                                       MakeDefaultCancellableHttpStreamRequester(), default_timeout);
-  transport->default_async_stream_client_ = std::make_shared<a2a::http::Client>();
+  auto default_http_client = std::make_shared<a2a::http::Client>();
+  auto transport = std::make_unique<HttpJsonTransport>(std::move(resolved_interface),
+                                                       MakeHttpRequesterForClient(default_http_client),
+                                                       HttpStreamRequester{}, default_timeout);
+  transport->default_async_stream_client_ = std::move(default_http_client);
   return transport;
 }
 
@@ -513,8 +502,9 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
 
   request.headers = options.headers;
   request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
-  request.headers["Content-Type"] = "application/json";
-  request.headers["Accept"] = "application/json";
+  request.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
+  request.headers[std::string(core::http::kAcceptHeaderName)] = std::string(core::http::kContentTypeApplicationJson);
   request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
@@ -768,10 +758,11 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                                                               StreamObserver& observer,
                                                                               const CallOptions& options) const {
   if (async_shutdown_->load()) {
-    return core::Error::Network("HTTP transport is shutting down").WithTransport("http");
+    return core::Error::Network(kHttpTransportShuttingDownMessage).WithTransport(kHttpTransportName);
   }
-  if (stream_requester_ == nullptr && cancellable_stream_requester_ == nullptr) {
-    return core::Error::Internal("HTTP stream requester is not configured");
+  if (stream_requester_ == nullptr && cancellable_stream_requester_ == nullptr &&
+      default_async_stream_client_ == nullptr) {
+    return core::Error::Internal(kHttpStreamRequesterNotConfiguredMessage);
   }
   auto request = BuildStreamingRequest(resolved_interface_, operation, std::move(body), options, default_timeout_);
   if (!request.ok()) {
@@ -794,7 +785,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
   {
     std::lock_guard lock(async_client_mutex_);
     if (async_shutdown_->load()) {
-      return core::Error::Network("HTTP transport is shutting down").WithTransport("http");
+      return core::Error::Network(kHttpTransportShuttingDownMessage).WithTransport(kHttpTransportName);
     }
     async_client = default_async_stream_client_;
   }
@@ -805,7 +796,8 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
         [session, state, shutdown](const a2a::http::Response& metadata) {
           StreamHandle::State::CallbackExecutionScope callback_scope(*state);
           if (shutdown->load()) {
-            return core::Result<void>{core::Error::Network("HTTP transport is shutting down").WithTransport("http")};
+            return core::Result<void>{
+                core::Error::Network(kHttpTransportShuttingDownMessage).WithTransport(kHttpTransportName)};
           }
           return session->ValidateMetadata(ToClientHttpResponse(a2a::http::Response{
               .status_code = metadata.status_code, .headers = metadata.headers, .body = metadata.body}));
@@ -813,7 +805,8 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
         [session, state, shutdown](std::string_view chunk) {
           StreamHandle::State::CallbackExecutionScope callback_scope(*state);
           if (shutdown->load()) {
-            return core::Result<void>{core::Error::Network("HTTP transport is shutting down").WithTransport("http")};
+            return core::Result<void>{
+                core::Error::Network(kHttpTransportShuttingDownMessage).WithTransport(kHttpTransportName)};
           }
           return session->HandleChunk(chunk);
         },
