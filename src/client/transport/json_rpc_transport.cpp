@@ -974,24 +974,16 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     }
     return std::unique_ptr<StreamHandle>(new StreamHandle(state));
   }
-  stream_executor_->Submit(
-      [stream_requester = stream_requester_, cancellable_stream_requester = cancellable_stream_requester_,
-       http_request = std::move(http_request), &observer, state, request_id]() mutable {
-        StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-        if (cancellable_stream_requester) {
-          RunJsonRpcSseWorker(cancellable_stream_requester, http_request, observer, state, request_id);
-        } else {
-          RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id);
-        }
-      },
-      [state] {
-        {
-          std::lock_guard lock(state->completion_mutex);
-          state->completed = true;
-        }
-        state->completion_condition.notify_all();
-      });
-  return std::unique_ptr<StreamHandle>(new StreamHandle(state));
+  StreamHandle::WorkerThread worker([stream_requester = stream_requester_,
+                                     cancellable_stream_requester = cancellable_stream_requester_,
+                                     http_request = std::move(http_request), &observer, state, request_id]() mutable {
+    if (cancellable_stream_requester) {
+      RunJsonRpcSseWorker(cancellable_stream_requester, http_request, observer, state, request_id);
+    } else {
+      RunJsonRpcSseWorker(stream_requester, http_request, observer, state, request_id);
+    }
+  });
+  return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
 
 core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SendStreamingMessage(

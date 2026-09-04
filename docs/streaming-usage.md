@@ -23,7 +23,7 @@ serialized per stream on a shared callback-dispatch executor. They never run on
 the shared libcurl reactor thread, and an idle stream does not reserve a dispatch
 worker. A slow callback can occupy one shared worker, so keep callbacks bounded
 and hand expensive processing to an application executor. Custom synchronous
-stream requesters retain their transport-worker compatibility path.
+stream requesters retain a per-stream `StreamHandle`-owned worker compatibility path.
 
 Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
 pending body data. The reactor never waits for callback capacity: exceeding a
@@ -63,9 +63,10 @@ observer work before returning. When called reentrantly from a stream callback,
 the current callback may finish naturally, but no new callback for that stream
 begins after `Destroy()` returns. A callback for another stream that was already
 executing concurrently is likewise allowed to finish naturally; shutdown does
-not forcibly terminate application code. This coordination does not change the
-lifecycle of injected custom synchronous requesters, whose transport workers are
-still joined through their compatibility path.
+not forcibly terminate application code. Injected custom synchronous requesters
+are not owned by transport shutdown; their compatibility workers stay attached
+to the returned `StreamHandle` and are cancelled and joined when that handle is
+cancelled or destroyed.
 
 The synchronous `a2a::http::Client::StreamRequest()` API waits for its transfer
 while network I/O progresses on the shared reactor. Injected custom stream

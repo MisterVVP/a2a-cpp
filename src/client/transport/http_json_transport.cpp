@@ -841,19 +841,8 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
     }
     return std::unique_ptr<StreamHandle>(new StreamHandle(state));
   }
-  stream_executor_->Submit(
-      [session = std::move(session), state] {
-        StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-        session->Run();
-      },
-      [state] {
-        {
-          std::lock_guard lock(state->completion_mutex);
-          state->completed = true;
-        }
-        state->completion_condition.notify_all();
-      });
-  return std::unique_ptr<StreamHandle>(new StreamHandle(state));
+  auto worker = StreamHandle::WorkerThread([session = std::move(session)] { session->Run(); });
+  return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
 
 }  // namespace a2a::client
