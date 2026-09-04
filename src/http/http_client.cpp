@@ -80,6 +80,7 @@ struct StreamSlot final {
 
 struct ClientState final {
   std::shared_ptr<const ClientGlobalState> global_state;
+  std::atomic_size_t client_owners{1U};
   // The first unary and streaming handles share one reactor shard so common
   // request -> stream sequences can reuse the same CURLM connection cache.
   std::mutex reactor_mutex;
@@ -1235,9 +1236,51 @@ Client::Client() : state_(std::make_shared<detail::ClientState>()) {
   }
 }
 
-Client::~Client() { Shutdown(); }
+Client::Client(const Client& other) : state_(other.state_) {
+  if (state_ != nullptr) {
+    state_->client_owners.fetch_add(1U, std::memory_order_relaxed);
+  }
+}
+
+Client& Client::operator=(const Client& other) {
+  if (this == &other) {
+    return *this;
+  }
+  ReleaseOwner();
+  state_ = other.state_;
+  if (state_ != nullptr) {
+    state_->client_owners.fetch_add(1U, std::memory_order_relaxed);
+  }
+  return *this;
+}
+
+Client::Client(Client&& other) noexcept : state_(std::move(other.state_)) {}
+
+Client& Client::operator=(Client&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  ReleaseOwner();
+  state_ = std::move(other.state_);
+  return *this;
+}
+
+Client::~Client() { ReleaseOwner(); }
+
+void Client::ReleaseOwner() {
+  if (state_ == nullptr) {
+    return;
+  }
+  if (state_->client_owners.fetch_sub(1U, std::memory_order_acq_rel) == 1U) {
+    Shutdown();
+  }
+  state_.reset();
+}
 
 void Client::Shutdown() const {
+  if (state_ == nullptr) {
+    return;
+  }
   std::vector<std::unique_ptr<detail::StreamSlot>> released_stream_slots;
   bool has_active_streams = false;
   {
@@ -1522,6 +1565,14 @@ constexpr std::string_view kLibcurlDisabledMessage =
 }  // namespace
 
 Client::Client() = default;
+Client::Client(const Client& other) = default;
+Client& Client::operator=(const Client& other) = default;
+Client::Client(Client&& other) noexcept = default;
+Client& Client::operator=(Client&& other) noexcept = default;
+Client::~Client() = default;
+
+void Client::ReleaseOwner() {}
+void Client::Shutdown() const {}
 
 core::Result<Response> Client::SendRequest(const Request& request) const {
   (void)request;

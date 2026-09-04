@@ -59,6 +59,10 @@ class Client final {
  public:
   using StreamCompletion = std::function<void(core::Result<Response>)>;
   Client();
+  Client(const Client& other);
+  Client& operator=(const Client& other);
+  Client(Client&& other) noexcept;
+  Client& operator=(Client&& other) noexcept;
   ~Client();
 
   [[nodiscard]] core::Result<Response> SendRequest(const Request& request) const;
@@ -80,6 +84,7 @@ class Client final {
   void Shutdown() const;
 
  private:
+  void ReleaseOwner();
   std::shared_ptr<detail::ClientState> state_;
 };
 

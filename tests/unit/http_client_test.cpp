@@ -1269,6 +1269,48 @@ TEST(SharedHttpClientTest, UnaryAndStreamRequestsReuseOneCurlMultiConnection) {
   EXPECT_EQ(server.accepted_connections(), 1);
 }
 
+TEST(SharedHttpClientTest, DestroyingCopiedClientKeepsSurvivingClientUsable) {
+  PersistentSseLoopbackServer server;
+  a2a::http::Client client;
+  {
+    const a2a::http::Client copy = client;
+    (void)copy;
+  }
+
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture capture;
+  const auto stream = ExecuteCapturedStreamRequest(client, request, capture);
+
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  EXPECT_NE(capture.chunks.find(kFirstSseChunk), std::string::npos);
+}
+
+TEST(SharedHttpClientTest, MovingClientTransfersShutdownOwnership) {
+  PersistentSseLoopbackServer server;
+  std::unique_ptr<a2a::http::Client> client;
+  {
+    a2a::http::Client source;
+    client = std::make_unique<a2a::http::Client>(std::move(source));
+  }
+
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture capture;
+  const auto stream = ExecuteCapturedStreamRequest(*client, request, capture);
+
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  EXPECT_NE(capture.chunks.find(kFirstSseChunk), std::string::npos);
+}
+
 TEST(SharedHttpClientTest, ConcurrentSendRequestsDoNotSerializeBehindSharedEasyHandle) {
   ConcurrentSseLoopbackServer server;
   a2a::http::Client client;
