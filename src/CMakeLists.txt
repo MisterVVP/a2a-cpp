@@ -77,7 +77,6 @@ add_library(a2a_client STATIC
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
-  client/stream_worker_executor.cpp
   client/transport/grpc_transport.cpp
   client/transport/http_json_transport.cpp
   client/transport/json_rpc_transport.cpp

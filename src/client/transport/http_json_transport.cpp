@@ -12,7 +12,6 @@
 #include <thread>
 #include <utility>
 
-#include "../stream_worker_executor.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
@@ -472,8 +471,7 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
-      default_timeout_(default_timeout),
-      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {}
+      default_timeout_(default_timeout) {}
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      HttpStreamRequesterWithCancellation stream_requester,
@@ -481,8 +479,7 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       cancellable_stream_requester_(std::move(stream_requester)),
-      default_timeout_(default_timeout),
-      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {}
+      default_timeout_(default_timeout) {}
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      std::chrono::milliseconds default_timeout)

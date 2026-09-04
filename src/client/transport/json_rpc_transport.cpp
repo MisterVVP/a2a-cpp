@@ -16,7 +16,6 @@
 #include <thread>
 #include <utility>
 
-#include "../stream_worker_executor.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
@@ -628,8 +627,7 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout),
-      id_generator_(std::move(id_generator)),
-      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {
+      id_generator_(std::move(id_generator)) {
   if (id_generator_ == nullptr) {
     id_generator_ = BuildDefaultRequestId;
   }
@@ -642,8 +640,7 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
       requester_(std::move(requester)),
       cancellable_stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout),
-      id_generator_(std::move(id_generator)),
-      stream_executor_(std::make_shared<internal::StreamWorkerExecutor>()) {
+      id_generator_(std::move(id_generator)) {
   if (id_generator_ == nullptr) {
     id_generator_ = BuildDefaultRequestId;
   }

@@ -35,6 +35,13 @@ type Evaluation struct {
 	Failures  int
 }
 
+func thresholdValueNS(measurement results.Measurement) int64 {
+	if measurement.MedianNS != nil {
+		return *measurement.MedianNS
+	}
+	return measurement.ActualNS
+}
+
 func Evaluate(measurements map[string]results.Measurement, thresholdSet thresholds.Set, tolerance float64, failOnUntracked bool) Evaluation {
 	evaluation := Evaluation{}
 	for _, name := range thresholds.Names(thresholdSet) {
@@ -46,12 +53,13 @@ func Evaluate(measurements map[string]results.Measurement, thresholdSet threshol
 			continue
 		}
 		allowed := float64(threshold.MaxTimeNS) * tolerance
+		thresholdValue := thresholdValueNS(measurement)
 		status := "PASS"
-		if float64(measurement.ActualNS) > allowed {
+		if float64(thresholdValue) > allowed {
 			status = "FAIL"
 			evaluation.Failures++
 		}
-		evaluation.Rows = append(evaluation.Rows, Row{Benchmark: name, ActualNS: measurement.ActualNS, MedianNS: measurement.MedianNS, ThresholdNS: threshold.MaxTimeNS, Ratio: float64(measurement.ActualNS) / float64(threshold.MaxTimeNS), Status: status})
+		evaluation.Rows = append(evaluation.Rows, Row{Benchmark: name, ActualNS: measurement.ActualNS, MedianNS: measurement.MedianNS, ThresholdNS: threshold.MaxTimeNS, Ratio: float64(thresholdValue) / float64(threshold.MaxTimeNS), Status: status})
 	}
 	for _, name := range results.Names(measurements) {
 		if _, ok := thresholdSet[name]; ok {
@@ -69,6 +77,7 @@ func Markdown(evaluation Evaluation, timeField string) string {
 	var builder strings.Builder
 	builder.WriteString("# Benchmark threshold check\n\n")
 	builder.WriteString(fmt.Sprintf("Measured field: `%s`. Thresholds are in nanoseconds.\n\n", timeField))
+	builder.WriteString("Threshold status and ratio use the median when benchmark repetitions provide one; otherwise they use the measured value.\n\n")
 	component := ""
 	for _, row := range evaluation.Rows {
 		rowComponent := benchmarkComponent(row.Benchmark)

@@ -1013,10 +1013,3 @@ if(A2A_ENABLE_POSTGRES_STORE)
       A2A_ENABLE_POSTGRES_STORE=1
   )
 endif()
-
-add_executable(stream_worker_executor_test
-  unit/stream_worker_executor_test.cpp
-)
-target_include_directories(stream_worker_executor_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(stream_worker_executor_test PRIVATE a2a::client GTest::gtest_main)
-gtest_discover_tests(stream_worker_executor_test)
