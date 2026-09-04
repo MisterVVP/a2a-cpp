@@ -1447,7 +1447,7 @@ TEST(DefaultHttpTransportTest, LegacyEmptyStreamRequesterConstructionRemainsUnam
 }
 
 TEST(DefaultHttpTransportTest, HttpJsonUnaryAndStreamReuseOneConnection) {
-  PersistentUnaryThenSseLoopbackServer server(std::string(kRestTaskBody));
+  PersistentUnaryThenSseLoopbackServer server{std::string(kRestTaskBody)};
   auto transport = a2a::client::HttpJsonTransport::CreateDefault(
       MakeLoopbackInterface(a2a::client::PreferredTransport::kRest, server.port(), kLoopbackRestPath),
       std::chrono::milliseconds(kStreamTimeoutMs));
@@ -1470,7 +1470,7 @@ TEST(DefaultHttpTransportTest, HttpJsonUnaryAndStreamReuseOneConnection) {
 }
 
 TEST(DefaultHttpTransportTest, JsonRpcUnaryAndDelayedStreamReuseOneConnection) {
-  PersistentUnaryThenSseLoopbackServer server(std::string(kJsonRpcTaskBody));
+  PersistentUnaryThenSseLoopbackServer server{std::string(kJsonRpcTaskBody)};
   auto transport = a2a::client::JsonRpcTransport::CreateDefault(
       MakeLoopbackInterface(a2a::client::PreferredTransport::kJsonRpc, server.port(), kLoopbackJsonRpcPath),
       std::chrono::milliseconds(kStreamTimeoutMs), [] { return std::string(kJsonRpcRequestId); });
