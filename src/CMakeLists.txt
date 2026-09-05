@@ -46,6 +46,7 @@ target_link_libraries(a2a_core
 )
 
 add_library(a2a_http STATIC
+  http/curl_stream_reactor.cpp
   http/http_client.cpp
 )
 add_library(a2a::http ALIAS a2a_http)
@@ -78,8 +79,12 @@ add_library(a2a_client STATIC
   client/client.cpp
   client/discovery.cpp
   client/transport/grpc_transport.cpp
+  client/transport/http_json_streaming.cpp
   client/transport/http_json_transport.cpp
+  client/transport/http_json_transport_internal.cpp
+  client/transport/json_rpc_streaming.cpp
   client/transport/json_rpc_transport.cpp
+  client/transport/json_rpc_transport_internal.cpp
   client/transport/sse_parser.cpp
 )
 add_library(a2a::client ALIAS a2a_client)
