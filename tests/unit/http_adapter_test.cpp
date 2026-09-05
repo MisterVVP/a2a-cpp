@@ -37,6 +37,7 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
     }
     const std::size_t bytes_to_write = partial_write_limit_ == 0 ? size : std::min(size, partial_write_limit_);
     output_.append(buffer, bytes_to_write);
+    ++write_count_;
     return bytes_to_write;
   }
 
@@ -44,12 +45,14 @@ class BufferTransport final : public a2a::server::HttpByteTransport {
   void set_write_zero_bytes(bool enabled) noexcept { write_zero_bytes_ = enabled; }
 
   [[nodiscard]] const std::string& output() const { return output_; }
+  [[nodiscard]] std::size_t write_count() const noexcept { return write_count_; }
 
  private:
   std::string input_;
   std::size_t read_offset_ = 0;
   std::size_t partial_write_limit_ = 0;
   bool write_zero_bytes_ = false;
+  std::size_t write_count_ = 0U;
   std::string output_;
 };
 
@@ -70,6 +73,9 @@ constexpr std::string_view kTestHeaderName = "X-Test";
 constexpr std::string_view kTrueHeaderValue = "true";
 constexpr std::string_view kConnectionHeaderValueWithClose = "keep-alive, close";
 constexpr std::string_view kConnectionCloseHeaderLine = "Connection: close";
+constexpr std::string_view kTransferEncodingChunkedHeaderLine = "Transfer-Encoding: chunked\r\n";
+constexpr std::string_view kFinalChunk = "0\r\n\r\n";
+constexpr std::string_view kSseChunkSizeHex = "a";
 constexpr std::string_view kJsonContentType = "application/json";
 constexpr std::string_view kStatusOkSuffix = " 200 OK";
 constexpr std::string_view kHttp10Version = "HTTP/1.0";
@@ -81,6 +87,7 @@ constexpr std::string_view kDifferentContentLength = "4";
 constexpr std::size_t kTinyReadBufferSize = 4U;
 constexpr std::size_t kTinyMaxRequestSize = 8U;
 constexpr std::size_t kPartialWriteLimit = 3;
+constexpr std::size_t kReusableStreamWriteCount = 3U;
 constexpr bool kEnableZeroByteWrites = true;
 constexpr int kHttpOk = 200;
 constexpr int kHttpUnknown = 599;
@@ -122,6 +129,34 @@ std::string BuildExpectedContentLengthLine() {
   line.append(a2a::core::http::kLineTerminator);
   return line;
 }
+
+class HeaderVisibilityWriter final {
+ public:
+  explicit HeaderVisibilityWriter(const BufferTransport& transport) : transport_(transport) {}
+
+  a2a::core::Result<void> operator()(a2a::server::HttpByteTransport& output) const {
+    (void)output;
+    EXPECT_NE(transport_.output().find(BuildExpectedStatusLine()), std::string::npos);
+    EXPECT_NE(transport_.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+    EXPECT_TRUE(transport_.output().ends_with(a2a::core::http::kLineTerminator));
+    return {};
+  }
+
+ private:
+  const BufferTransport& transport_;
+};
+
+class SseChunkWriter final {
+ public:
+  a2a::core::Result<void> operator()(a2a::server::HttpByteTransport& output) const {
+    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
+    if (!written.ok()) {
+      return written.error();
+    }
+    return written.value() == kSseChunk.size() ? a2a::core::Result<void>{}
+                                               : a2a::core::Error::Internal("short SSE test write");
+  }
+};
 
 std::string BuildRequestWithVersion(std::string_view method, std::string_view target, std::string_view version) {
   std::string request;
@@ -385,6 +420,14 @@ TEST(HttpAdapterTest, ShouldCloseConnectionHonorsResponseCloseHeader) {
   EXPECT_TRUE(a2a::server::HttpAdapter::ShouldCloseConnection(request, response));
 }
 
+TEST(HttpAdapterTest, ReusableStreamingResponseDoesNotCloseConnection) {
+  a2a::server::HttpServerRequest request;
+  a2a::server::HttpServerResponse response;
+  response.stream_writer = [](a2a::server::HttpByteTransport&) -> a2a::core::Result<void> { return {}; };
+
+  EXPECT_FALSE(a2a::server::HttpAdapter::ShouldCloseConnection(request, response));
+}
+
 TEST(HttpAdapterTest, WriteResponseOverridesKeepAliveWhenConnectionMustClose) {
   BufferTransport transport("");
   a2a::server::HttpServerResponse response;
@@ -470,6 +513,90 @@ TEST(HttpAdapterTest, WriteResponseStreamsBodyWithoutContentLength) {
   EXPECT_NE(transport.output().find(BuildExpectedStatusLine()), std::string::npos);
   EXPECT_EQ(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
   EXPECT_NE(transport.output().find(std::string(kSseChunk)), std::string::npos);
+}
+
+TEST(HttpAdapterTest, WriteResponseFramesReusableStreamWithChunkedEncoding) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers[std::string(a2a::core::http::kContentTypeHeaderName)] = "text/event-stream";
+  response.stream_writer = SseChunkWriter{};
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(transport.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+  EXPECT_EQ(transport.output().find(BuildExpectedContentLengthLine()), std::string::npos);
+  EXPECT_EQ(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
+  std::string expected_chunk;
+  expected_chunk.append(kSseChunkSizeHex);
+  expected_chunk.append(a2a::core::http::kLineTerminator);
+  expected_chunk.append(kSseChunk);
+  expected_chunk.append(a2a::core::http::kLineTerminator);
+  expected_chunk.append(kFinalChunk);
+  EXPECT_TRUE(transport.output().ends_with(expected_chunk));
+  EXPECT_EQ(transport.write_count(), kReusableStreamWriteCount);
+}
+
+TEST(HttpAdapterTest, WritesReusableStreamHeadersBeforeInvokingWriter) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = HeaderVisibilityWriter(transport);
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_TRUE(transport.output().ends_with(kFinalChunk));
+}
+
+TEST(HttpAdapterTest, ExplicitCloseStreamingResponseRemainsCloseDelimited) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
+    return output.Write(kSseChunk.data(), kSseChunk.size()).ok() ? a2a::core::Result<void>{}
+                                                                 : a2a::core::Error::Internal("SSE write failed");
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, true);
+
+  ASSERT_TRUE(write.ok());
+  EXPECT_NE(transport.output().find(kConnectionCloseHeaderLine), std::string::npos);
+  EXPECT_EQ(transport.output().find(kTransferEncodingChunkedHeaderLine), std::string::npos);
+  EXPECT_TRUE(transport.output().ends_with(kSseChunk));
+}
+
+TEST(HttpAdapterTest, StreamWriterFailureDoesNotWriteSuccessfulFinalChunk) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.stream_writer = [](a2a::server::HttpByteTransport& output) -> a2a::core::Result<void> {
+    const auto written = output.Write(kSseChunk.data(), kSseChunk.size());
+    if (!written.ok()) {
+      return written.error();
+    }
+    return a2a::core::Error::Internal("stream failed after event");
+  };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_FALSE(write.ok());
+  EXPECT_FALSE(transport.output().ends_with(kFinalChunk));
+}
+
+TEST(HttpAdapterTest, StreamingResponseRejectsCallerTransferEncoding) {
+  BufferTransport transport("");
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.headers[std::string(a2a::core::http::kTransferEncodingHeaderName)] =
+      std::string(a2a::core::http::kTransferEncodingChunked);
+  response.stream_writer = [](a2a::server::HttpByteTransport&) -> a2a::core::Result<void> { return {}; };
+
+  const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response, false);
+
+  ASSERT_FALSE(write.ok());
+  EXPECT_EQ(write.error().code(), a2a::core::ErrorCode::kValidation);
 }
 
 TEST(HttpAdapterTest, WriteResponseRejectsZeroByteWrites) {

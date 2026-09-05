@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
@@ -164,6 +165,43 @@ TEST(StreamHandleLifecycleTest, IsActiveWhileWorkIsActiveAndCancelIsIdempotent) 
   EXPECT_FALSE(handle.value()->IsActive());
   EXPECT_EQ(observer.completions(), 0);
   EXPECT_EQ(observer.errors(), 0);
+}
+
+TEST(StreamHandleLifecycleTest, DestroyReturnsPromptlyWithInjectedSynchronousRequester) {
+  BlockingStreamFixture fixture;
+  auto client = MakeClient(fixture.MakeRequester());
+  CountingObserver observer;
+  auto handle = client->SendStreamingMessage(MakeRequest(), observer);
+  ASSERT_TRUE(handle.ok()) << handle.error().message();
+  ASSERT_TRUE(fixture.WaitUntilStarted());
+
+  std::mutex destroy_mutex;
+  std::condition_variable destroy_condition;
+  bool destroy_done = false;
+  bool destroy_ok = false;
+  std::thread destroy_thread([&] {
+    const auto destroyed = client->Destroy();
+    {
+      std::lock_guard lock(destroy_mutex);
+      destroy_done = true;
+      destroy_ok = destroyed.ok();
+    }
+    destroy_condition.notify_one();
+  });
+
+  bool destroyed_promptly = false;
+  {
+    std::unique_lock lock(destroy_mutex);
+    destroyed_promptly =
+        destroy_condition.wait_for(lock, kPromptCancelTimeout, [&destroy_done] { return destroy_done; });
+  }
+
+  handle.value()->Cancel();
+  destroy_thread.join();
+
+  EXPECT_TRUE(destroyed_promptly);
+  EXPECT_TRUE(destroy_ok);
+  EXPECT_FALSE(handle.value()->IsActive());
 }
 
 TEST(StreamHandleLifecycleTest, DestroyingActiveHandleCancelsAndJoinsSafely) {

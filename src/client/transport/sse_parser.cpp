@@ -11,11 +11,11 @@
 namespace a2a::client {
 namespace {
 
-std::string TrimSingleLeadingSpace(std::string_view value) {
+std::string_view TrimSingleLeadingSpace(std::string_view value) {
   if (!value.empty() && value.front() == ' ') {
     value.remove_prefix(1);
   }
-  return std::string(value);
+  return value;
 }
 
 }  // namespace
@@ -23,11 +23,12 @@ std::string TrimSingleLeadingSpace(std::string_view value) {
 core::Result<void> SseParser::Feed(std::string_view chunk, const EventCallback& on_event) {
   line_buffer_.append(chunk);
 
-  std::size_t line_end = line_buffer_.find('\n');
+  std::size_t line_start = 0;
+  std::size_t line_end = line_buffer_.find('\n', line_start);
   while (line_end != std::string::npos) {
-    std::string line = line_buffer_.substr(0, line_end);
+    std::string_view line(line_buffer_.data() + line_start, line_end - line_start);
     if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
+      line.remove_suffix(1);
     }
 
     const auto consume = ConsumeLine(line, on_event);
@@ -35,8 +36,11 @@ core::Result<void> SseParser::Feed(std::string_view chunk, const EventCallback& 
       return consume.error();
     }
 
-    line_buffer_.erase(0, line_end + 1U);
-    line_end = line_buffer_.find('\n');
+    line_start = line_end + 1U;
+    line_end = line_buffer_.find('\n', line_start);
+  }
+  if (line_start != 0U) {
+    line_buffer_.erase(0, line_start);
   }
 
   return {};
@@ -71,7 +75,7 @@ core::Result<void> SseParser::ConsumeLine(std::string_view line, const EventCall
   }
 
   const std::string_view field = line.substr(0, separator);
-  const std::string value = TrimSingleLeadingSpace(line.substr(separator + 1U));
+  const std::string_view value = TrimSingleLeadingSpace(line.substr(separator + 1U));
 
   if (field == "event") {
     current_event_ = value;
@@ -100,9 +104,7 @@ core::Result<void> SseParser::DispatchEvent(const EventCallback& on_event) {
     current_data_.pop_back();
   }
 
-  SseEvent event{.event = current_event_, .data = current_data_};
-  current_event_.clear();
-  current_data_.clear();
+  SseEvent event{.event = std::exchange(current_event_, {}), .data = std::exchange(current_data_, {})};
 
   return on_event(event);
 }

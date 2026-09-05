@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <coroutine>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -40,12 +41,18 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
   };
 
   struct SubscriberState final {
+    // The subscriber mutex protects both queued events and the suspended
+    // continuation. A signaler removes the continuation and accounts for an
+    // active resume while holding the mutex, then always resumes without any
+    // service, publication, or subscriber lock held. Session destruction
+    // waits for that accounting to reach zero before destroying the frame.
     std::string task_id;
     lf::a2a::v1::Task current_task;
-    std::deque<lf::a2a::v1::StreamResponse> events;
+    std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
     std::atomic_bool closed = false;
     std::atomic_size_t queued_event_count = 0;
-    std::optional<std::chrono::milliseconds> wait_timeout;
+    std::coroutine_handle<StreamResponseCoroutine::promise_type> continuation;
+    std::size_t active_resumes = 0;
     std::mutex mutex;
     std::condition_variable ready;
   };
@@ -78,8 +85,9 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
 
   static void RemoveSubscriber(const std::shared_ptr<ServiceState>& service_state,
                                const std::shared_ptr<SubscriberState>& state);
-  static std::optional<lf::a2a::v1::StreamResponse> WaitForPublishedEvent(
-      const std::shared_ptr<SubscriberState>& state);
+  class SubscriberEventAwaitable;
+  static void SignalSubscriber(const std::shared_ptr<SubscriberState>& state);
+  static void WaitForResumes(const std::shared_ptr<SubscriberState>& state);
   static StreamResponseCoroutine RunSubscription(std::shared_ptr<SubscriberState> state);
   static lf::a2a::v1::StreamResponse BuildCurrentTaskEvent(const lf::a2a::v1::Task& task);
   static lf::a2a::v1::StreamResponse BuildStatusUpdateEvent(const lf::a2a::v1::Task& task);

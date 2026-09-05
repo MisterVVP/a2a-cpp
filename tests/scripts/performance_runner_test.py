@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "run_performance_tests.sh"
@@ -25,6 +26,117 @@ def load_runner_module():
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def test_diagnostics_and_normal_runs_use_separate_matching_builds(self):
+        runner = load_runner_module()
+        config = SimpleNamespace(store_backends=("inmemory",))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            normal_build = Path(temp_dir) / "performance"
+            diagnostics_build = normal_build.with_name(
+                f"{normal_build.name}{runner.SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX}"
+            )
+            normal_executable = normal_build / "tests" / runner.WIRE_DRIVER_NAME
+            diagnostics_executable = diagnostics_build / "tests" / runner.WIRE_DRIVER_NAME
+            normal_executable.parent.mkdir(parents=True)
+            diagnostics_executable.parent.mkdir(parents=True)
+            normal_executable.touch()
+            diagnostics_executable.touch()
+            (normal_build / "CMakeCache.txt").write_text(
+                f"{runner.SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}OFF\n", encoding="utf-8"
+            )
+            (diagnostics_build / "CMakeCache.txt").write_text(
+                f"{runner.SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}ON\n", encoding="utf-8"
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"A2A_PERF_BUILD_DIR": str(normal_build), "A2A_SUBSCRIPTION_DIAGNOSTICS": "1"},
+                clear=True,
+            ):
+                selected_diagnostics = runner.ensure_wire_driver(config)
+            with mock.patch.dict(os.environ, {"A2A_PERF_BUILD_DIR": str(normal_build)}, clear=True):
+                selected_normal = runner.ensure_wire_driver(config)
+
+        self.assertEqual(diagnostics_executable, selected_diagnostics)
+        self.assertEqual(normal_executable, selected_normal)
+        self.assertNotEqual(selected_diagnostics, selected_normal)
+
+    def test_normal_run_reconfigures_stale_diagnostics_build(self):
+        runner = load_runner_module()
+        config = SimpleNamespace(store_backends=("inmemory",))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_dir = Path(temp_dir) / "performance"
+            executable = build_dir / "tests" / runner.WIRE_DRIVER_NAME
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            (build_dir / "CMakeCache.txt").write_text(
+                f"{runner.SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}ON\n", encoding="utf-8"
+            )
+            with mock.patch.dict(os.environ, {"A2A_PERF_BUILD_DIR": str(build_dir)}, clear=True), \
+                 mock.patch.object(runner.subprocess, "run") as subprocess_run:
+                selected = runner.ensure_wire_driver(config)
+
+        self.assertEqual(executable, selected)
+        self.assertEqual(2, subprocess_run.call_count)
+        configure_command = subprocess_run.call_args_list[0].args[0]
+        self.assertIn("-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=OFF", configure_command)
+
+    def test_reads_stable_server_subscription_diagnostics(self):
+        runner = load_runner_module()
+        fields = []
+        for index, phase in enumerate(runner.SUBSCRIPTION_DIAGNOSTIC_PHASES, start=1):
+            fields.extend((f"{phase}_count={index}", f"{phase}_total_ns={index * 10}",
+                           f"{phase}_max_ns={index * 2}"))
+        diagnostics_line = f"{runner.SUBSCRIPTION_DIAGNOSTICS_PREFIX} {' '.join(fields)}\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diagnostics_path = Path(temp_dir) / "sut.log"
+            diagnostics_path.write_text(diagnostics_line, encoding="utf-8")
+            diagnostics = runner.read_subscription_diagnostics(diagnostics_path)
+
+        self.assertEqual(set(runner.SUBSCRIPTION_DIAGNOSTIC_PHASES), set(diagnostics))
+        self.assertEqual(1, diagnostics["server_cancel_task_total"]["count"])
+        self.assertEqual(18, diagnostics["client_completion_callback"]["max_ns"])
+
+    def test_wire_results_keep_server_and_client_diagnostics_separate(self):
+        runner = load_runner_module()
+        client_diagnostics = {"client_completion_callback": {"count": 1, "total_ns": 10, "max_ns": 10}}
+        server_diagnostics = {"server_cancel_task_total": {"count": 1, "total_ns": 20, "max_ns": 20}}
+        payload = [{"driver_type": "wire_tck_sut", "transport_path": "wire_http_json",
+                    "client_subscription_diagnostics": client_diagnostics}]
+        sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
+        sut_context = mock.MagicMock()
+        sut_context.__enter__.return_value = sut
+        config = SimpleNamespace(scenarios=("SubscribeToTask_FirstEventLatency",), requests=1,
+                                 warmup_seconds=0, duration_seconds=0, wire_driver_timeout_seconds=1,
+                                 report_dir=Path("."))
+        with mock.patch.dict(os.environ, {"A2A_SUBSCRIPTION_DIAGNOSTICS": "1"}), \
+             mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
+             mock.patch.object(runner, "SutProcess", return_value=sut_context), \
+             mock.patch.object(runner, "run_command_json", return_value=payload), \
+             mock.patch.object(runner, "read_http_diagnostics", return_value={"http_completed_finite_streams": 1}), \
+             mock.patch.object(runner, "read_subscription_diagnostics", return_value=server_diagnostics):
+            results = runner.run_wire_driver(config, "http_json", "inmemory", 1, 1, 1234)
+
+        self.assertEqual(server_diagnostics, results[0]["server_subscription_diagnostics"])
+        self.assertEqual(client_diagnostics, results[0]["client_subscription_diagnostics"])
+
+    def test_reads_finite_stream_connection_diagnostics(self):
+        runner = load_runner_module()
+        diagnostics_line = (
+            "A2A_HTTP_DIAGNOSTICS accepted_connections=3 completed_unary_operations=8 "
+            "operations_per_connection=2.66667 finite_stream_connections=2 "
+            "completed_finite_streams=5 finite_streams_per_connection=2.5 "
+            "connections_reused_after_finite_stream=4\n"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            diagnostics_path = Path(temp_dir) / "sut.log"
+            diagnostics_path.write_text(diagnostics_line, encoding="utf-8")
+            diagnostics = runner.read_http_diagnostics(diagnostics_path)
+
+        self.assertEqual(2, diagnostics["http_finite_stream_connections"])
+        self.assertEqual(5, diagnostics["http_completed_finite_streams"])
+        self.assertEqual(2.5, diagnostics["http_finite_streams_per_connection"])
+        self.assertEqual(4, diagnostics["http_connections_reused_after_finite_stream"])
+
     def test_writes_reports_for_selected_matrix(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             completed = subprocess.run([
@@ -38,10 +150,10 @@ class PerformanceRunnerTest(unittest.TestCase):
             ], cwd=ROOT, text=True, capture_output=True, check=True)
             report_dir = Path(temp_dir)
             payload = json.loads((report_dir / "results.json").read_text(encoding="utf-8"))
-            self.assertEqual(36, len(payload["results"]))
+            self.assertEqual(37, len(payload["results"]))
             self.assertEqual({"cpp_sdk_in_process", "wire_tck_sut"}, {result["driver_type"] for result in payload["results"]})
             wire_rows = [result for result in payload["results"] if result["driver_type"] == "wire_tck_sut"]
-            self.assertEqual(14, len(wire_rows))
+            self.assertEqual(15, len(wire_rows))
             self.assertEqual({"wire_grpc"}, {result["transport_path"] for result in wire_rows})
             self.assertTrue(all("http_coordinate_accepted_connections" not in result for result in wire_rows))
             self.assertTrue(all("http_coordinate_completed_unary_operations" not in result for result in wire_rows))
@@ -206,13 +318,28 @@ class PerformanceRunnerTest(unittest.TestCase):
                            "p99": p95, "max": p95},
         }
 
-    def test_wire_scenarios_include_streaming_for_http_transports(self):
+    def test_wire_scenarios_preserve_historical_and_add_http_shared_client_variants(self):
         runner = load_runner_module()
-        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("grpc"))
-        self.assertIn("SendStreamingMessage_FiniteStream", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertIn("SubscribeToTask_FirstEventLatency", runner.wire_scenarios_for_transport("http_json"))
-        self.assertIn("PushConfig_Create", runner.wire_scenarios_for_transport("jsonrpc"))
-        self.assertIn("PushConfig_Delete", runner.wire_scenarios_for_transport("http_json"))
+        grpc_scenarios = runner.wire_scenarios_for_transport("grpc")
+        jsonrpc_scenarios = runner.wire_scenarios_for_transport("jsonrpc")
+        http_json_scenarios = runner.wire_scenarios_for_transport("http_json")
+
+        for scenario in ("SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency"):
+            self.assertIn(scenario, grpc_scenarios)
+            self.assertIn(scenario, jsonrpc_scenarios)
+            self.assertIn(scenario, http_json_scenarios)
+        for scenario in runner.SHARED_CLIENT_WIRE_SCENARIOS:
+            self.assertNotIn(scenario, grpc_scenarios)
+            self.assertIn(scenario, jsonrpc_scenarios)
+            self.assertIn(scenario, http_json_scenarios)
+            self.assertNotIn(scenario, runner.in_process_scenarios())
+
+        selected = runner.wire_scenarios_for_transport(
+            "grpc", (runner.SHARED_CLIENT_WIRE_SCENARIOS[0], "SendStreamingMessage_FiniteStream")
+        )
+        self.assertEqual(("SendStreamingMessage_FiniteStream",), selected)
+        self.assertIn("PushConfig_Create", jsonrpc_scenarios)
+        self.assertIn("PushConfig_Delete", http_json_scenarios)
 
     def test_run_wire_driver_skips_selection_without_wire_scenarios(self):
         runner = load_runner_module()
@@ -254,6 +381,28 @@ class PerformanceRunnerTest(unittest.TestCase):
                 config, "http_json", "inmemory", 1,
                 runner.DEFAULT_POSTGRES_POOL_SIZE, runner.SUT_PORT_RANGE_START
             )
+
+    def test_sut_shutdown_timeout_reports_coordinate_and_log_tail(self):
+        runner = load_runner_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "sut.log"
+            log_path.write_text("stuck joining HTTP connection threads\n", encoding="utf-8")
+            sut = runner.SutProcess.__new__(runner.SutProcess)
+            sut.process = mock.Mock()
+            sut.process.poll.return_value = None
+            sut.process.wait.side_effect = [subprocess.TimeoutExpired("tck_sut", 10.0), 0]
+            sut.log_path = log_path
+            sut.transport = "http_json"
+            sut.store_backend = "inmemory"
+            sut.concurrency = 1
+
+            with self.assertRaisesRegex(
+                ValueError, "failed to terminate gracefully for http_json/inmemory/c1"
+            ) as raised:
+                sut.__exit__(None, None, None)
+
+            self.assertIn("stuck joining HTTP connection threads", str(raised.exception))
+            sut.process.kill.assert_called_once_with()
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -445,7 +594,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         store_pool_count = len(config.postgres_pool_sizes) + len(non_postgres_stores)
         matrix_entries = store_pool_count * len(config.concurrency_levels)
         expected_rows = matrix_entries * (
-            len(runner.SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
+            len(runner.IN_PROCESS_SCENARIOS) + len(runner.wire_scenarios_for_transport("grpc"))
         )
         expected_message = (
             f"estimated_rows={expected_rows} "
@@ -457,6 +606,14 @@ class PerformanceRunnerTest(unittest.TestCase):
             runner.log_workload_estimate(config)
 
         log_progress.assert_called_once_with(expected_message)
+
+    def test_idle_cancellation_is_wire_only(self):
+        runner = load_runner_module()
+        scenario = "IdleStream_ClientCancellationLatency"
+
+        self.assertIn(scenario, runner.wire_scenarios_for_transport("http_json"))
+        self.assertIn(scenario, runner.wire_scenarios_for_transport("jsonrpc"))
+        self.assertNotIn(scenario, runner.in_process_scenarios())
 
     def test_normal_workload_estimate_honors_scenario_filter(self):
         runner = load_runner_module()

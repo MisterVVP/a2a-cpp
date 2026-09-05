@@ -4,6 +4,7 @@
 #include "a2a/server/http_adapter.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cstdint>
@@ -23,6 +24,8 @@ namespace a2a::server {
 namespace {
 constexpr std::size_t kResponsePayloadReserveSlackBytes = 32;
 constexpr std::size_t kResponsePayloadReserveSlackLineCount = 3;
+constexpr std::size_t kChunkSizeBufferBytes = (sizeof(std::size_t) * 2U) + 1U;
+constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 
 struct RequestLine final {
   std::string method;
@@ -214,6 +217,44 @@ core::Result<void> WriteAll(HttpByteTransport& transport, std::string_view paylo
   return {};
 }
 
+class ChunkedByteTransport final : public HttpByteTransport {
+ public:
+  explicit ChunkedByteTransport(HttpByteTransport& transport) : transport_(transport) {
+    scratch_.reserve(kChunkSizeBufferBytes + (core::http::kLineTerminator.size() * 2U));
+  }
+
+  core::Result<std::size_t> Read(char* buffer, std::size_t size) override { return transport_.Read(buffer, size); }
+
+  core::Result<std::size_t> Write(const char* buffer, std::size_t size) override {
+    if (size == 0U) {
+      return 0U;
+    }
+    std::array<char, kChunkSizeBufferBytes> chunk_size{};
+    const auto converted = std::to_chars(chunk_size.data(), chunk_size.data() + chunk_size.size(), size, 16);
+    if (converted.ec != std::errc{}) {
+      return core::Error::Internal("Failed to encode HTTP chunk size");
+    }
+    const auto size_length = static_cast<std::size_t>(converted.ptr - chunk_size.data());
+    scratch_.clear();
+    scratch_.reserve(size_length + size + (core::http::kLineTerminator.size() * 2U));
+    scratch_.append(chunk_size.data(), size_length);
+    scratch_.append(core::http::kLineTerminator);
+    scratch_.append(buffer, size);
+    scratch_.append(core::http::kLineTerminator);
+    const auto chunk_written = WriteAll(transport_, scratch_);
+    if (!chunk_written.ok()) {
+      return chunk_written.error();
+    }
+    return size;
+  }
+
+  core::Result<void> Finish() { return WriteAll(transport_, kFinalChunk); }
+
+ private:
+  HttpByteTransport& transport_;
+  std::string scratch_;
+};
+
 core::Result<void> ReadRemainingBody(HttpByteTransport& transport, const BodyReadLimits& limits,
                                      std::vector<char>& buffer, std::string& raw) {
   while (raw.size() - limits.body_start < limits.expected_body_size) {
@@ -275,6 +316,9 @@ core::Result<bool> AppendResponseHeaders(const HttpServerResponse& response, boo
                                          std::string* payload) {
   bool has_content_length = false;
   for (const auto& [name, value] : response.headers) {
+    if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kTransferEncodingHeader)) {
+      return core::Error::Validation("Response Transfer-Encoding is owned by the HTTP adapter");
+    }
     if (core::strings::EqualsAsciiCaseInsensitive(name, core::http::kContentLengthHeader)) {
       const auto validated = ValidateResponseContentLength(response, value, is_streaming);
       if (!validated.ok()) {
@@ -367,7 +411,7 @@ bool HttpAdapter::IsConnectionReusable(const HttpServerRequest& request) {
 }
 
 bool HttpAdapter::ShouldCloseConnection(const HttpServerRequest& request, const HttpServerResponse& response) {
-  return !IsConnectionReusable(request) || static_cast<bool>(response.stream_writer) ||
+  return !IsConnectionReusable(request) ||
          HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
 }
 
@@ -433,7 +477,7 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   const bool is_streaming = static_cast<bool>(response.stream_writer);
   const bool response_requests_close =
       HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
-  const bool must_close_connection = close_connection || is_streaming || response_requests_close;
+  const bool must_close_connection = close_connection || response_requests_close;
   const auto headers =
       AppendResponseHeaders(response, is_streaming, must_close_connection, response_requests_close, &payload);
   if (!headers.ok()) {
@@ -443,6 +487,12 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     payload += core::http::kContentLengthHeaderName;
     payload += core::http::kHeaderNameValueSeparator;
     payload += std::to_string(response.body.size());
+    payload += core::http::kLineTerminator;
+  }
+  if (is_streaming && !must_close_connection) {
+    payload += core::http::kTransferEncodingHeaderName;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += core::http::kTransferEncodingChunked;
     payload += core::http::kLineTerminator;
   }
   if (must_close_connection && !response_requests_close) {
@@ -456,12 +506,28 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     payload += response.body;
   }
 
-  const auto headers_written = WriteAll(transport, payload);
-  if (!headers_written.ok()) {
-    return headers_written.error();
-  }
   if (is_streaming) {
-    return response.stream_writer(transport);
+    if (must_close_connection) {
+      const auto headers_written = WriteAll(transport, payload);
+      if (!headers_written.ok()) {
+        return headers_written.error();
+      }
+      return response.stream_writer(transport);
+    }
+    const auto headers_written = WriteAll(transport, payload);
+    if (!headers_written.ok()) {
+      return headers_written.error();
+    }
+    ChunkedByteTransport chunked_transport(transport);
+    const auto streamed = response.stream_writer(chunked_transport);
+    if (!streamed.ok()) {
+      return streamed.error();
+    }
+    return chunked_transport.Finish();
+  }
+  const auto response_written = WriteAll(transport, payload);
+  if (!response_written.ok()) {
+    return response_written.error();
   }
   return {};
 }

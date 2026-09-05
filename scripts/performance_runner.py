@@ -27,6 +27,10 @@ from typing import Callable, Iterable
 
 TRANSPORTS = ("grpc", "jsonrpc", "http_json")
 STORE_BACKENDS = ("inmemory", "postgres")
+SHARED_CLIENT_WIRE_SCENARIOS = (
+    "SendStreamingMessage_FiniteStream_SharedClient",
+    "SubscribeToTask_FirstEventLatency_SharedClient",
+)
 SCENARIOS = (
     "SendMessage_CreateTask",
     "GetTask_ExistingTask",
@@ -38,6 +42,8 @@ SCENARIOS = (
     "GetTask_MissingTaskError",
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
+    "IdleStream_ClientCancellationLatency",
+    *SHARED_CLIENT_WIRE_SCENARIOS,
     "SubscribeToTask_MultiSubscriber",
     "SubscribeToTask_TerminalCompletionLatency",
     "SubscribeToTask_DisconnectOneSubscriber",
@@ -55,6 +61,8 @@ DEFAULT_REQUESTS = 2_000
 DEFAULT_CONCURRENCY = (1, 4)
 DEFAULT_PUSH_CONFIG_FANOUT = 8
 DEFAULT_BUILD_DIR = "build/performance"
+SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX = "-subscription-diagnostics"
+SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX = "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS:BOOL="
 DRIVER_NAME = "a2a_performance_driver"
 WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
 SUT_NAME = "tck_sut"
@@ -101,13 +109,19 @@ WIRE_SCENARIOS = (
     "GetTask_MissingTaskError",
     "SendStreamingMessage_FiniteStream",
     "SubscribeToTask_FirstEventLatency",
+    "IdleStream_ClientCancellationLatency",
+    *SHARED_CLIENT_WIRE_SCENARIOS,
     "PushConfig_Create",
     "PushConfig_Get",
     "PushConfig_List",
     "PushConfig_Delete",
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
+WIRE_ONLY_SCENARIOS = ("IdleStream_ClientCancellationLatency", *SHARED_CLIENT_WIRE_SCENARIOS)
+IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario not in WIRE_ONLY_SCENARIOS)
 SUT_READY_TIMEOUT_SECONDS = 30.0
+SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+SUT_FORCE_KILL_TIMEOUT_SECONDS = 10.0
 SUT_PORT_RANGE_START = 20_000
 SUT_PORT_RANGE_END = 30_000
 SUT_PORT_PAIR_STEP = 2
@@ -117,7 +131,22 @@ DEFAULT_WIRE_DRIVER_TIMEOUT_SECONDS = 600.0
 MAX_ERROR_ROWS_TO_PRINT = 20
 HTTP_DIAGNOSTICS_PATTERN = re.compile(
     r"A2A_HTTP_DIAGNOSTICS accepted_connections=(\d+) completed_unary_operations=(\d+) "
-    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?)(?=\s|$)"
+    r"operations_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
+    r"finite_stream_connections=(\d+) completed_finite_streams=(\d+) "
+    r"finite_streams_per_connection=([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?) "
+    r"connections_reused_after_finite_stream=(\d+)(?=\s|$)"
+)
+SUBSCRIPTION_DIAGNOSTICS_PREFIX = "A2A_SUBSCRIPTION_SERVER_DIAGNOSTICS"
+SUBSCRIPTION_DIAGNOSTIC_PHASES = (
+    "server_cancel_task_total",
+    "terminal_store_update",
+    "terminal_publication_total",
+    "subscriber_resume_callback",
+    "proto_to_json",
+    "frame_construction",
+    "http_delivery",
+    "client_terminal_observer_callback",
+    "client_completion_callback",
 )
 POSTGRES_DIAGNOSTIC_PHASES = (
     "connection_acquire_wait",
@@ -316,6 +345,26 @@ def executable_path_from_build(build_dir: Path, name: str) -> Path:
     return candidates[0]
 
 
+def subscription_diagnostics_requested() -> bool:
+    return os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1"
+
+
+def performance_build_dir(diagnostics_requested: bool) -> Path:
+    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    if diagnostics_requested:
+        return build_dir.with_name(f"{build_dir.name}{SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX}")
+    return build_dir
+
+
+def build_matches_subscription_diagnostics_mode(build_dir: Path, diagnostics_requested: bool) -> bool:
+    cache_path = build_dir / "CMakeCache.txt"
+    if not cache_path.exists():
+        return False
+    expected_value = "ON" if diagnostics_requested else "OFF"
+    expected_entry = f"{SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX}{expected_value}"
+    return expected_entry in cache_path.read_text(encoding="utf-8")
+
+
 def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str) -> Path:
     explicit = os.environ.get(env_name)
     if explicit:
@@ -323,11 +372,16 @@ def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, des
         if not executable.exists():
             raise ValueError(f"{env_name} does not exist: {executable}")
         return executable
-    build_dir = Path(os.environ.get("A2A_PERF_BUILD_DIR", DEFAULT_BUILD_DIR))
+    diagnostics_requested = subscription_diagnostics_requested()
+    build_dir = performance_build_dir(diagnostics_requested)
     executable = executable_path_from_build(build_dir, target_name)
-    if executable.exists():
+    if executable.exists() and build_matches_subscription_diagnostics_mode(build_dir, diagnostics_requested):
         return executable
-    configure = ["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release", "-DA2A_ENABLE_TESTING=ON"]
+    configure = [
+        "cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release",
+        "-DA2A_ENABLE_TESTING=ON",
+        f"-DA2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS={'ON' if diagnostics_requested else 'OFF'}",
+    ]
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
     subprocess.run(configure, check=True)
@@ -394,11 +448,35 @@ def read_http_diagnostics(path: Path) -> dict[str, int | float]:
     matches = HTTP_DIAGNOSTICS_PATTERN.findall(path.read_text(encoding="utf-8", errors="replace"))
     if not matches:
         return {}
-    accepted, completed, reuse = matches[-1]
+    accepted, completed, reuse, finite_connections, completed_streams, streams_per_connection, reused_after_stream = (
+        matches[-1]
+    )
     return {
         "http_coordinate_accepted_connections": int(accepted),
         "http_coordinate_completed_unary_operations": int(completed),
         "http_coordinate_operations_per_connection": float(reuse),
+        "http_finite_stream_connections": int(finite_connections),
+        "http_completed_finite_streams": int(completed_streams),
+        "http_finite_streams_per_connection": float(streams_per_connection),
+        "http_connections_reused_after_finite_stream": int(reused_after_stream),
+    }
+
+
+def read_subscription_diagnostics(path: Path) -> dict[str, dict[str, int]]:
+    if not path.exists():
+        return {}
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+             if line.startswith(SUBSCRIPTION_DIAGNOSTICS_PREFIX)]
+    if not lines:
+        return {}
+    fields = dict(field.split("=", 1) for field in lines[-1].split()[1:])
+    return {
+        phase: {
+            "count": int(fields[f"{phase}_count"]),
+            "total_ns": int(fields[f"{phase}_total_ns"]),
+            "max_ns": int(fields[f"{phase}_max_ns"]),
+        }
+        for phase in SUBSCRIPTION_DIAGNOSTIC_PHASES
     }
 
 
@@ -455,10 +533,14 @@ class SutProcess:
             else:
                 self.process.terminate()
             try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
+                self.process.wait(timeout=SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as timeout_error:
                 self.process.kill()
-                self.process.wait(timeout=10)
+                self.process.wait(timeout=SUT_FORCE_KILL_TIMEOUT_SECONDS)
+                coordinate = f"{self.transport}/{self.store_backend}/c{self.concurrency}"
+                raise ValueError(
+                    f"tck_sut failed to terminate gracefully for {coordinate}; logs:\n{read_tail(self.log_path)}"
+                ) from timeout_error
 
 
 def run_command_json(command: list[str], timeout_seconds: float, error_context: str,
@@ -549,6 +631,9 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
         )
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
+    server_subscription_diagnostics = read_subscription_diagnostics(sut.log_path)
+    if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and not server_subscription_diagnostics:
+        raise ValueError("subscription diagnostics were requested but the SUT did not report server diagnostics")
     if transport in {"http_json", "jsonrpc"} and not diagnostics:
         raise ValueError(
             f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
@@ -558,16 +643,28 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
+        if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and "client_subscription_diagnostics" not in result:
+            raise ValueError("subscription diagnostics were requested but the wire driver did not report client diagnostics")
         if diagnostics:
             result.update(diagnostics)
+        if server_subscription_diagnostics:
+            result["server_subscription_diagnostics"] = server_subscription_diagnostics
     return payload
 
 
 def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
-    del transport
+    selected = WIRE_SCENARIOS if scenarios is None else tuple(
+        scenario for scenario in scenarios if scenario in WIRE_SCENARIOS
+    )
+    if transport == "grpc":
+        return tuple(scenario for scenario in selected if scenario not in SHARED_CLIENT_WIRE_SCENARIOS)
+    return selected
+
+
+def in_process_scenarios(scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
     if scenarios is None:
-        return WIRE_SCENARIOS
-    return tuple(scenario for scenario in scenarios if scenario in WIRE_SCENARIOS)
+        return IN_PROCESS_SCENARIOS
+    return tuple(scenario for scenario in scenarios if scenario in IN_PROCESS_SCENARIOS)
 
 
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -705,6 +802,10 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
         "http_coordinate_accepted_connections",
         "http_coordinate_completed_unary_operations",
         "http_coordinate_operations_per_connection",
+        "http_finite_stream_connections",
+        "http_completed_finite_streams",
+        "http_finite_streams_per_connection",
+        "http_connections_reused_after_finite_stream",
     ))
     for phase in POSTGRES_DIAGNOSTIC_PHASES:
         fieldnames.extend((f"{phase}_p95_ms", f"{phase}_p99_ms", f"{phase}_max_ms",
@@ -1197,8 +1298,8 @@ def log_workload_estimate(config: RunnerConfig) -> None:
         for store_backend in config.store_backends
     )
     store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
-    in_process_scenarios = config.scenarios if config.scenarios is not None else SCENARIOS
-    in_process_rows = store_concurrency_rows * len(in_process_scenarios)
+    selected_in_process_scenarios = in_process_scenarios(config.scenarios)
+    in_process_rows = store_concurrency_rows * len(selected_in_process_scenarios)
     wire_rows = sum(len(wire_scenarios_for_transport(transport, config.scenarios)) for transport in config.transports) * store_concurrency_rows
     estimated_rows = in_process_rows + wire_rows
     estimated_operations = estimated_rows * config.requests
@@ -1272,7 +1373,7 @@ def main(argv: list[str]) -> int:
                                     schema or "", repetition, config.scenarios or (),
                                 ) if config.profile == POSTGRES_WRITE_PROFILE else
                                 run_driver(config, in_process_transport, store_backend, concurrency,
-                                           postgres_pool_size, config.scenarios, schema)
+                                           postgres_pool_size, in_process_scenarios(config.scenarios), schema)
                             ),
                             in_process_transport, store_backend, concurrency, config.requests,
                         )

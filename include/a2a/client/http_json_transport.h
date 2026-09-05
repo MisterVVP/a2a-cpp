@@ -3,8 +3,11 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +16,10 @@
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/core/result.h"
+
+namespace a2a::http {
+class Client;
+}
 
 namespace a2a::client {
 
@@ -35,9 +42,13 @@ using HttpRequester = std::function<core::Result<HttpClientResponse>(const HttpR
 using HttpStreamMetadataHandler = std::function<core::Result<void>(const HttpClientResponse& response)>;
 using HttpStreamChunkHandler = std::function<core::Result<void>(std::string_view chunk)>;
 using StreamCancelled = std::function<bool()>;
+using StreamCancellationRegistrar = std::function<void(const std::function<void()>&)>;
 using HttpStreamRequester = std::function<core::Result<HttpClientResponse>(
     const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata, const HttpStreamChunkHandler& on_chunk,
     const StreamCancelled& is_cancelled)>;
+using HttpStreamRequesterWithCancellation = std::function<core::Result<HttpClientResponse>(
+    const HttpRequest& request, const HttpStreamMetadataHandler& on_metadata, const HttpStreamChunkHandler& on_chunk,
+    const StreamCancelled& is_cancelled, const StreamCancellationRegistrar& register_cancellation)>;
 
 [[nodiscard]] HttpRequester MakeDefaultHttpRequester();
 [[nodiscard]] HttpStreamRequester MakeDefaultHttpStreamRequester();
@@ -88,6 +99,7 @@ class HttpJsonTransport final : public ClientTransport {
   [[nodiscard]] core::Result<std::unique_ptr<StreamHandle>> SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                           StreamObserver& observer,
                                                                           const CallOptions& options) override;
+  [[nodiscard]] core::Result<void> Shutdown() override;
 
  private:
   [[nodiscard]] core::Result<HttpClientResponse> SendRequest(HttpOperation operation, std::string body,
@@ -100,7 +112,11 @@ class HttpJsonTransport final : public ClientTransport {
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
   HttpStreamRequester stream_requester_;
+  HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;
+  mutable std::mutex async_client_mutex_;
+  std::shared_ptr<http::Client> default_async_stream_client_;
+  std::shared_ptr<std::atomic<bool>> async_shutdown_ = std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace a2a::client

@@ -5,6 +5,7 @@ This document defines repository-wide C++ implementation conventions for maintai
 ## Core conventions
 - Prefer C++20 standard library facilities over third-party wrappers when equivalent.
 - Favor value semantics and RAII for lifetime/resource ownership.
+- When a class explicitly manages copy, move, or destruction, follow the [Rule of Three/Five/Zero](https://en.cppreference.com/cpp/language/rule_of_three) and define or delete the relevant special member functions deliberately.
 - Keep interfaces explicit (`explicit`, `override`, const-correctness, `enum class`).
 - Keep functions focused and side-effect minimal.
 - Treat clang-tidy's `readability-function-cognitive-complexity` threshold of **25** as a hard limit for every function, including test bodies and test helpers; split logic before committing rather than suppressing the check.

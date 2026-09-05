@@ -15,9 +15,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <barrier>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <memory>
@@ -26,6 +29,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
@@ -34,6 +38,13 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/non_copyable.h"
 
+#if defined(A2A_HAS_LIBCURL)
+namespace a2a::http::testing {
+std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept;
+std::size_t CurlStreamReactorPoolSize();
+}  // namespace a2a::http::testing
+#endif
+
 namespace {
 
 constexpr int kSocketError = -1;
@@ -41,6 +52,12 @@ constexpr int kHttpOk = 200;
 constexpr int kHttpBadGateway = 502;
 constexpr int kLoopbackTimeoutMs = 1000;
 constexpr int kStreamTimeoutMs = 5000;
+constexpr std::size_t kScalabilityStreamCount = 64U;
+constexpr std::size_t kMaximumStreamDispatchWorkers = 4U;
+constexpr std::size_t kMaximumStreamReactorPoolSize = 4U;
+constexpr std::size_t kMaximumSharedClientThreadGrowth = kMaximumStreamDispatchWorkers + kMaximumStreamReactorPoolSize;
+constexpr std::size_t kSameReactorClientIndex = kMaximumStreamReactorPoolSize;
+constexpr std::size_t kShutdownRaceStarterCount = 32U;
 constexpr int kShortStreamTimeoutMs = 100;
 constexpr int kCancellationRequestTimeoutMs = 30000;
 constexpr std::chrono::milliseconds kHangPollInterval{10};
@@ -55,6 +72,14 @@ constexpr std::string_view kRestTaskBody = R"({"id":"task-1"})";
 constexpr std::string_view kJsonRpcTaskBody = R"({"jsonrpc":"2.0","id":"req-1","result":{"id":"task-1"}})";
 constexpr std::string_view kJsonRpcErrorBody =
     R"({"jsonrpc":"2.0","id":"req-1","error":{"code":-32603,"message":"failed"}})";
+constexpr std::string_view kJsonRpcRequestId = "req-1";
+constexpr std::string_view kLoopbackRestPath = "/a2a";
+constexpr std::string_view kLoopbackJsonRpcPath = "/rpc";
+constexpr std::string_view kPersistentJsonResponsePrefix =
+    "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nContent-Length: ";
+constexpr int kEnabledSocketOption = 1;
+constexpr int kSingleConnectionBacklog = 1;
+constexpr int kExpectedSingleConnection = 1;
 constexpr std::string_view kSseHeaders =
     "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kJsonStreamHeaders =
@@ -66,10 +91,34 @@ constexpr std::string_view kFirstSseChunk = "data: first\n\n";
 constexpr std::string_view kSecondSseChunk = "data: second\n\n";
 constexpr std::string_view kMetadataRejectedMessage = "metadata rejected before stream body";
 constexpr std::string_view kGetStreamRequestLine = "GET /stream HTTP/1.1";
+constexpr std::string_view kUnavailableStreamUrl = "http://127.0.0.1:1/stream";
+constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
+constexpr std::string_view kConcurrentUnaryPath = "/unary";
+constexpr std::string_view kStreamPath = "/stream";
 constexpr std::string_view kContentLengthHeaderPrefix = "Content-Length:";
 constexpr std::string_view kFormContentTypeHeader = "Content-Type: application/x-www-form-urlencoded";
 constexpr std::string_view kAgentCardBody =
     R"({"supportedInterfaces":[{"protocolBinding":"HTTP+JSON","protocolVersion":"1.0","url":"https://agent.example.com/a2a"}]})";
+
+class RecordingStreamObserver final : public a2a::client::StreamObserver {
+ public:
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    (void)response;
+    events_.fetch_add(1);
+  }
+  void OnError(const a2a::core::Error& error) override {
+    (void)error;
+    errors_.fetch_add(1);
+  }
+  void OnCompleted() override { completed_.store(true); }
+
+  [[nodiscard]] int errors() const noexcept { return errors_.load(); }
+
+ private:
+  std::atomic_int events_{0};
+  std::atomic_int errors_{0};
+  std::atomic_bool completed_{false};
+};
 
 #if !defined(_WIN32) && defined(A2A_HAS_LIBCURL)
 std::string BuildHttpResponse(std::string_view body, std::string_view status = "200 OK") {
@@ -206,6 +255,227 @@ class LoopbackHttpServer final : private a2a::core::NonCopyable {
   std::condition_variable cv_;
   std::string request_;
   bool request_observed_ = false;
+  std::thread worker_;
+};
+
+class PersistentSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  PersistentSseLoopbackServer() {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = 1;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, 1), 0);
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+    worker_ = std::thread([this] { ServeTwoStreams(); });
+  }
+
+  ~PersistentSseLoopbackServer() {
+    if (fd_ != kSocketError) {
+      (void)::shutdown(fd_, SHUT_RDWR);
+    }
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    if (fd_ != kSocketError) {
+      ::close(fd_);
+    }
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+  [[nodiscard]] int accepted_connections() const noexcept { return accepted_connections_.load(); }
+
+ private:
+  static bool ReadRequest(int client) {
+    std::string request;
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    while (request.find(a2a::core::http::kHeaderDelimiter) == std::string::npos) {
+      const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
+      if (received <= 0) {
+        return false;
+      }
+      request.append(buffer.data(), static_cast<std::size_t>(received));
+    }
+    return true;
+  }
+
+  static std::string BuildChunkedResponse(std::string_view event) {
+    std::array<char, (sizeof(std::size_t) * 2U) + 1U> size_buffer{};
+    const auto converted = std::to_chars(size_buffer.data(), size_buffer.data() + size_buffer.size(), event.size(), 16);
+    std::string response =
+        "HTTP/1.1 200 OK\r\nA2A-Version: 1.0\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+    response.append(size_buffer.data(), static_cast<std::size_t>(converted.ptr - size_buffer.data()));
+    response.append(a2a::core::http::kLineTerminator);
+    response.append(event);
+    response.append(a2a::core::http::kLineTerminator);
+    response.append("0\r\n\r\n");
+    return response;
+  }
+
+  void ServeTwoStreams() {
+    const int client = ::accept(fd_, nullptr, nullptr);
+    if (client == kSocketError) {
+      return;
+    }
+    accepted_connections_.fetch_add(1);
+    for (const std::string_view event : {kFirstSseChunk, kSecondSseChunk}) {
+      if (!ReadRequest(client)) {
+        break;
+      }
+      const std::string response = BuildChunkedResponse(event);
+      (void)::send(client, response.data(), response.size(), 0);
+    }
+    ::close(client);
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  std::atomic_int accepted_connections_{0};
+  std::thread worker_;
+};
+
+class PersistentUnaryThenSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  explicit PersistentUnaryThenSseLoopbackServer(std::string unary_body)
+      : unary_response_(BuildUnaryResponse(unary_body)) {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = kEnabledSocketOption;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, kSingleConnectionBacklog), 0);
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+    worker_ = std::thread([this] { ServeUnaryThenStream(); });
+  }
+
+  ~PersistentUnaryThenSseLoopbackServer() {
+    ReleaseStreamResponse();
+    const int client = client_fd_.load();
+    if (client != kSocketError) {
+      (void)::shutdown(client, SHUT_RDWR);
+    }
+    if (fd_ != kSocketError) {
+      (void)::shutdown(fd_, SHUT_RDWR);
+    }
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    if (fd_ != kSocketError) {
+      ::close(fd_);
+    }
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+  [[nodiscard]] int accepted_connections() const noexcept { return accepted_connections_.load(); }
+
+  [[nodiscard]] bool WaitForStreamRequest(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, timeout, [this] { return stream_request_observed_; });
+  }
+
+  void ReleaseStreamResponse() {
+    {
+      std::lock_guard lock(mutex_);
+      release_stream_response_ = true;
+    }
+    condition_.notify_all();
+  }
+
+ private:
+  static std::string BuildUnaryResponse(std::string_view body) {
+    std::string response(kPersistentJsonResponsePrefix);
+    response.append(std::to_string(body.size()));
+    response.append(a2a::core::http::kHeaderDelimiter);
+    response.append(body);
+    return response;
+  }
+
+  static bool ReadCompleteRequest(int client) {
+    std::string request;
+    std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+    while (request.find(a2a::core::http::kHeaderDelimiter) == std::string::npos) {
+      const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
+      if (received <= 0) {
+        return false;
+      }
+      request.append(buffer.data(), static_cast<std::size_t>(received));
+    }
+    const auto headers_end = request.find(a2a::core::http::kHeaderDelimiter);
+    const auto length_header = request.find(kContentLengthHeaderPrefix);
+    if (length_header == std::string::npos) {
+      return true;
+    }
+    const auto value_start = length_header + kContentLengthHeaderPrefix.size();
+    const auto value_end = request.find(a2a::core::http::kLineTerminator, value_start);
+    const auto content_length =
+        static_cast<std::size_t>(std::stoul(request.substr(value_start, value_end - value_start)));
+    const auto body_start = headers_end + a2a::core::http::kHeaderDelimiter.size();
+    while (request.size() - body_start < content_length) {
+      const auto received = ::recv(client, buffer.data(), buffer.size(), 0);
+      if (received <= 0) {
+        return false;
+      }
+      request.append(buffer.data(), static_cast<std::size_t>(received));
+    }
+    return true;
+  }
+
+  void ServeUnaryThenStream() {
+    const int client = ::accept(fd_, nullptr, nullptr);
+    if (client == kSocketError) {
+      return;
+    }
+    accepted_connections_.fetch_add(1);
+    client_fd_.store(client);
+    if (!ReadCompleteRequest(client)) {
+      client_fd_.store(kSocketError);
+      ::close(client);
+      return;
+    }
+    (void)::send(client, unary_response_.data(), unary_response_.size(), 0);
+    if (!ReadCompleteRequest(client)) {
+      client_fd_.store(kSocketError);
+      ::close(client);
+      return;
+    }
+    {
+      std::lock_guard lock(mutex_);
+      stream_request_observed_ = true;
+    }
+    condition_.notify_all();
+    {
+      std::unique_lock lock(mutex_);
+      condition_.wait(lock, [this] { return release_stream_response_; });
+    }
+    (void)::send(client, kEmptySseResponse.data(), kEmptySseResponse.size(), 0);
+    client_fd_.store(kSocketError);
+    ::close(client);
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  std::string unary_response_;
+  std::atomic_int accepted_connections_{0};
+  std::atomic_int client_fd_{kSocketError};
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  bool stream_request_observed_ = false;
+  bool release_stream_response_ = false;
   std::thread worker_;
 };
 
@@ -406,6 +676,80 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
   std::thread worker_;
 };
 
+class ManyOpenSseLoopbackServer final : private a2a::core::NonCopyable {
+ public:
+  ManyOpenSseLoopbackServer() {
+    fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    EXPECT_NE(fd_, kSocketError);
+    int reuse = 1;
+    EXPECT_EQ(::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, static_cast<socklen_t>(sizeof(reuse))), 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    EXPECT_EQ(::bind(fd_, reinterpret_cast<sockaddr*>(&address), static_cast<socklen_t>(sizeof(address))), 0);
+    EXPECT_EQ(::listen(fd_, static_cast<int>(kScalabilityStreamCount)), 0);
+    sockaddr_in bound_address{};
+    auto bound_size = static_cast<socklen_t>(sizeof(bound_address));
+    EXPECT_EQ(::getsockname(fd_, reinterpret_cast<sockaddr*>(&bound_address), &bound_size), 0);
+    port_ = static_cast<int>(ntohs(bound_address.sin_port));
+    worker_ = std::thread([this] { AcceptStreams(); });
+  }
+
+  ~ManyOpenSseLoopbackServer() {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    cv_.notify_all();
+    (void)::shutdown(fd_, SHUT_RDWR);
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    ::close(fd_);
+  }
+
+  [[nodiscard]] int port() const noexcept { return port_; }
+
+  [[nodiscard]] bool WaitForAllStreams(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return cv_.wait_for(lock, timeout, [this] { return clients_.size() == kScalabilityStreamCount; });
+  }
+
+ private:
+  void AcceptStreams() {
+    while (clients_.size() < kScalabilityStreamCount) {
+      const int client = ::accept(fd_, nullptr, nullptr);
+      if (client == kSocketError) {
+        break;
+      }
+      std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
+      (void)::recv(client, buffer.data(), buffer.size(), 0);
+      (void)::send(client, kSseHeaders.data(), kSseHeaders.size(), 0);
+      {
+        std::lock_guard lock(mutex_);
+        clients_.push_back(client);
+      }
+      cv_.notify_all();
+    }
+    {
+      std::unique_lock lock(mutex_);
+      cv_.wait(lock, [this] { return released_; });
+    }
+    for (const int client : clients_) {
+      ::close(client);
+    }
+  }
+
+  int fd_ = kSocketError;
+  int port_ = 0;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::vector<int> clients_;
+  bool released_ = false;
+  std::thread worker_;
+};
+
 class HangingLoopbackServer final : private a2a::core::NonCopyable {
  public:
   HangingLoopbackServer() {
@@ -534,6 +878,42 @@ TEST(DefaultHttpRequesterTest, JsonRpcTransportUsesSharedLibcurlRequester) {
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().id(), kTaskId);
   EXPECT_NE(server.request().find("POST /rpc HTTP/1.1"), std::string::npos);
+}
+
+void ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport transport_kind) {
+  OpenSseLoopbackServer server;
+  a2a::client::ResolvedInterface resolved;
+  resolved.transport = transport_kind;
+  resolved.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  std::unique_ptr<a2a::client::ClientTransport> transport;
+  if (transport_kind == a2a::client::PreferredTransport::kRest) {
+    transport = a2a::client::HttpJsonTransport::CreateDefault(resolved);
+  } else {
+    transport = a2a::client::JsonRpcTransport::CreateDefault(resolved, a2a::client::JsonRpcTransport::kDefaultTimeout,
+                                                             [] { return "req-1"; });
+  }
+  RecordingStreamObserver observer;
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  auto stream = transport->SubscribeTask(request, observer, {});
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  const auto cancellation_started = std::chrono::steady_clock::now();
+  stream.value()->Cancel();
+  const auto cancellation_elapsed = std::chrono::steady_clock::now() - cancellation_started;
+
+  EXPECT_LT(cancellation_elapsed, kCancellationDeadline);
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_FALSE(server.released());
+}
+
+TEST(DefaultHttpRequesterTest, RestIdleStreamCancellationWakesLibcurlPoll) {
+  ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport::kRest);
+}
+
+TEST(DefaultHttpRequesterTest, JsonRpcIdleStreamCancellationWakesLibcurlPoll) {
+  ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport::kJsonRpc);
 }
 
 TEST(DefaultHttpFetcherTest, DiscoveryUsesSharedLibcurlFetcher) {
@@ -732,6 +1112,198 @@ TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResp
   EXPECT_NE(server.request().find(R"({"hello":"world"})"), std::string::npos);
 }
 
+TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
+  LoopbackHttpServer server{std::string(kSseHeaders) + std::string(kFirstSseChunk)};
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+  std::promise<a2a::core::Result<a2a::http::Response>> completion;
+  auto completed = completion.get_future();
+  std::atomic_bool shutdown_returned{false};
+
+  const auto started = client.StartStreamRequest(
+      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+      [&client, &shutdown_returned](std::string_view) -> a2a::core::Result<void> {
+        client.Shutdown();
+        shutdown_returned.store(true);
+        return {};
+      },
+      [] { return false; }, {},
+      [&completion](a2a::core::Result<a2a::http::Response> response) { completion.set_value(std::move(response)); });
+
+  ASSERT_TRUE(started.ok()) << started.error().message();
+  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
+  EXPECT_TRUE(shutdown_returned.load());
+  EXPECT_TRUE(completed.get().ok());
+}
+
+void ExerciseConcurrentStartsAndShutdown() {
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = kUnavailableStreamUrl;
+  request.timeout = std::chrono::milliseconds(kShortStreamTimeoutMs);
+  std::barrier start_gate(static_cast<std::ptrdiff_t>(kShutdownRaceStarterCount + 1U));
+  std::vector<std::thread> starters;
+  starters.reserve(kShutdownRaceStarterCount);
+
+  for (std::size_t index = 0; index < kShutdownRaceStarterCount; ++index) {
+    starters.emplace_back([&] {
+      start_gate.arrive_and_wait();
+      (void)client.StartStreamRequest(
+          request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+          [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
+          [](const a2a::core::Result<a2a::http::Response>&) {});
+    });
+  }
+  start_gate.arrive_and_wait();
+  client.Shutdown();
+  for (auto& starter : starters) {
+    starter.join();
+  }
+  client.Shutdown();
+
+  // Rejection is the deterministic lifecycle guarantee: process thread counts
+  // also include the lazily initialized shared dispatch pool and test runtime.
+  const auto rejected = client.StartStreamRequest(
+      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+      [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; }, {},
+      [](const a2a::core::Result<a2a::http::Response>&) {});
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().message(), kClientShuttingDownMessage);
+}
+
+TEST(SharedHttpClientTest, ConcurrentStartsUseBoundedProcessReactorPoolAfterShutdown) {
+  const auto before = a2a::http::testing::CurlStreamReactorLifecycleCounts();
+
+  ExerciseConcurrentStartsAndShutdown();
+
+  const auto after = a2a::http::testing::CurlStreamReactorLifecycleCounts();
+  const std::size_t created = after.first - before.first;
+  EXPECT_LE(created, kMaximumStreamReactorPoolSize);
+  EXPECT_LE(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
+}
+
+void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,
+                             std::vector<std::function<void()>>* cancellations,
+                             std::vector<std::future<void>>* completions) {
+  for (std::size_t index = 0; index < kScalabilityStreamCount; ++index) {
+    auto completion = std::make_shared<std::promise<void>>();
+    completions->push_back(completion->get_future());
+    const auto started = client.StartStreamRequest(
+        request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+        [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; },
+        [cancellations](const std::function<void()>& cancel) { cancellations->push_back(cancel); },
+        [completion](const a2a::core::Result<a2a::http::Response>&) { completion->set_value(); });
+    if (!started.ok()) {
+      ADD_FAILURE() << started.error().message();
+      return;
+    }
+  }
+}
+
+void CancelAndWaitForScalabilityStreams(const std::vector<std::function<void()>>& cancellations,
+                                        std::vector<std::future<void>>* completions) {
+  for (const auto& cancel : cancellations) {
+    cancel();
+  }
+  for (auto& completion : *completions) {
+    EXPECT_EQ(completion.wait_for(kCancellationDeadline), std::future_status::ready);
+  }
+}
+
+void StartScalabilityStreamsAcrossClients(const a2a::http::Request& request,
+                                          std::vector<std::unique_ptr<a2a::http::Client>>* clients,
+                                          std::vector<std::function<void()>>* cancellations,
+                                          std::vector<std::future<void>>* completions) {
+  clients->reserve(kScalabilityStreamCount);
+  for (std::size_t index = 0; index < kScalabilityStreamCount; ++index) {
+    clients->push_back(std::make_unique<a2a::http::Client>());
+    auto completion = std::make_shared<std::promise<void>>();
+    completions->push_back(completion->get_future());
+    const auto started = clients->back()->StartStreamRequest(
+        request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+        [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; },
+        [cancellations](const std::function<void()>& cancel) { cancellations->push_back(cancel); },
+        [completion](const a2a::core::Result<a2a::http::Response>&) { completion->set_value(); });
+    if (!started.ok()) {
+      ADD_FAILURE() << started.error().message();
+      return;
+    }
+  }
+}
+
+TEST(SharedHttpClientTest, OneClientKeepsSixtyFourStreamsOnBoundedSharedThreads) {
+  ManyOpenSseLoopbackServer server;
+#if defined(__linux__)
+  const std::size_t baseline_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+#endif
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kCancellationRequestTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+  std::vector<std::function<void()>> cancellations;
+  std::vector<std::future<void>> completions;
+  cancellations.reserve(kScalabilityStreamCount);
+  completions.reserve(kScalabilityStreamCount);
+
+  StartScalabilityStreams(client, request, &cancellations, &completions);
+
+  ASSERT_TRUE(server.WaitForAllStreams(std::chrono::milliseconds(kStreamTimeoutMs)));
+#if defined(__linux__)
+  const std::size_t established_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+  EXPECT_LE(established_threads, baseline_threads + kMaximumSharedClientThreadGrowth);
+#endif
+  EXPECT_EQ(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
+  ASSERT_EQ(cancellations.size(), kScalabilityStreamCount);
+  CancelAndWaitForScalabilityStreams(cancellations, &completions);
+}
+
+TEST(SharedHttpClientTest, SixtyFourClientsShareBoundedProcessReactorPool) {
+  ManyOpenSseLoopbackServer server;
+#if defined(__linux__)
+  const std::size_t baseline_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+#endif
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kCancellationRequestTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+  std::vector<std::unique_ptr<a2a::http::Client>> clients;
+  std::vector<std::function<void()>> cancellations;
+  std::vector<std::future<void>> completions;
+  cancellations.reserve(kScalabilityStreamCount);
+  completions.reserve(kScalabilityStreamCount);
+
+  StartScalabilityStreamsAcrossClients(request, &clients, &cancellations, &completions);
+
+  ASSERT_TRUE(server.WaitForAllStreams(std::chrono::milliseconds(kStreamTimeoutMs)));
+  ASSERT_EQ(clients.size(), kScalabilityStreamCount);
+  ASSERT_EQ(cancellations.size(), kScalabilityStreamCount);
+  ASSERT_EQ(completions.size(), kScalabilityStreamCount);
+  EXPECT_EQ(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
+#if defined(__linux__)
+  const std::size_t established_threads = static_cast<std::size_t>(
+      std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
+  EXPECT_LE(established_threads, baseline_threads + kMaximumSharedClientThreadGrowth);
+#endif
+
+  clients.front()->Shutdown();
+
+  ASSERT_EQ(completions.front().wait_for(kCancellationDeadline), std::future_status::ready);
+  EXPECT_EQ(completions[kSameReactorClientIndex].wait_for(std::chrono::milliseconds::zero()),
+            std::future_status::timeout);
+  CancelAndWaitForScalabilityStreams(cancellations, &completions);
+}
+
 TEST(SharedHttpClientTest, StreamRequestPassesNonSuccessJsonResponseToHandlers) {
   LoopbackHttpServer server{std::string(kJsonStreamHeaders) + std::string(kJsonRpcErrorBody)};
   a2a::http::Client client;
@@ -799,6 +1371,193 @@ TEST(SharedHttpClientTest, EmptyStreamStillDeliversMetadata) {
   ExpectSuccessfulEmptyStreamResponse(response);
   ExpectEmptyStreamCallbacks(capture);
   ExpectBodylessGetStreamRequest(captured_request);
+}
+
+TEST(SharedHttpClientTest, SequentialFiniteStreamsReuseOneConnection) {
+  PersistentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture first_capture;
+  StreamRequestCapture second_capture;
+  const auto first = ExecuteCapturedStreamRequest(client, request, first_capture);
+  const auto second = ExecuteCapturedStreamRequest(client, request, second_capture);
+
+  ASSERT_TRUE(first.ok()) << first.error().message();
+  ASSERT_TRUE(second.ok()) << second.error().message();
+  EXPECT_NE(first_capture.chunks.find(kFirstSseChunk), std::string::npos);
+  EXPECT_NE(second_capture.chunks.find(kSecondSseChunk), std::string::npos);
+  EXPECT_EQ(server.accepted_connections(), 1);
+}
+
+TEST(SharedHttpClientTest, UnaryAndStreamRequestsReuseOneCurlMultiConnection) {
+  PersistentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  const auto unary = client.SendRequest(request);
+  StreamRequestCapture stream_capture;
+  const auto stream = ExecuteCapturedStreamRequest(client, request, stream_capture);
+
+  ASSERT_TRUE(unary.ok()) << unary.error().message();
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  EXPECT_NE(unary.value().body.find(kFirstSseChunk), std::string::npos);
+  EXPECT_NE(stream_capture.chunks.find(kSecondSseChunk), std::string::npos);
+  EXPECT_EQ(server.accepted_connections(), 1);
+}
+
+bool WaitForStreamInactive(const a2a::client::StreamHandle& handle) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kStreamTimeoutMs);
+  while (handle.IsActive() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(kHangPollInterval);
+  }
+  return !handle.IsActive();
+}
+
+a2a::client::ResolvedInterface MakeLoopbackInterface(a2a::client::PreferredTransport transport, int port,
+                                                     std::string_view path) {
+  a2a::client::ResolvedInterface resolved;
+  resolved.transport = transport;
+  resolved.url = BuildLoopbackUrl(port, a2a::core::http::kHttpScheme, path);
+  return resolved;
+}
+
+TEST(DefaultHttpTransportTest, LegacyEmptyStreamRequesterConstructionRemainsUnambiguous) {
+  a2a::client::ResolvedInterface rest;
+  rest.transport = a2a::client::PreferredTransport::kRest;
+  a2a::client::ResolvedInterface json_rpc;
+  json_rpc.transport = a2a::client::PreferredTransport::kJsonRpc;
+  a2a::client::HttpRequester requester;
+
+  a2a::client::HttpJsonTransport http_transport(rest, requester, {}, a2a::client::HttpJsonTransport::kDefaultTimeout);
+  a2a::client::JsonRpcTransport json_rpc_transport(json_rpc, requester, {},
+                                                   a2a::client::JsonRpcTransport::kDefaultTimeout,
+                                                   [] { return std::string(kJsonRpcRequestId); });
+
+  (void)http_transport;
+  (void)json_rpc_transport;
+}
+
+TEST(DefaultHttpTransportTest, HttpJsonUnaryAndStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server{std::string(kRestTaskBody)};
+  auto transport = a2a::client::HttpJsonTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kRest, server.port(), kLoopbackRestPath),
+      std::chrono::milliseconds(kStreamTimeoutMs));
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = client.GetTask(request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
+}
+
+TEST(DefaultHttpTransportTest, JsonRpcUnaryAndDelayedStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server{std::string(kJsonRpcTaskBody)};
+  auto transport = a2a::client::JsonRpcTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kJsonRpc, server.port(), kLoopbackJsonRpcPath),
+      std::chrono::milliseconds(kStreamTimeoutMs), [] { return std::string(kJsonRpcRequestId); });
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = client.GetTask(request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
+}
+
+TEST(SharedHttpClientTest, DestroyingCopiedClientKeepsSurvivingClientUsable) {
+  PersistentSseLoopbackServer server;
+  a2a::http::Client client;
+  {
+    const a2a::http::Client copy = client;
+    (void)copy;
+  }
+
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture capture;
+  const auto stream = ExecuteCapturedStreamRequest(client, request, capture);
+
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  EXPECT_NE(capture.chunks.find(kFirstSseChunk), std::string::npos);
+}
+
+TEST(SharedHttpClientTest, MovingClientTransfersShutdownOwnership) {
+  PersistentSseLoopbackServer server;
+  std::unique_ptr<a2a::http::Client> client;
+  {
+    a2a::http::Client source;
+    client = std::make_unique<a2a::http::Client>(std::move(source));
+  }
+
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  StreamRequestCapture capture;
+  const auto stream = ExecuteCapturedStreamRequest(*client, request, capture);
+
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  EXPECT_NE(capture.chunks.find(kFirstSseChunk), std::string::npos);
+}
+
+TEST(SharedHttpClientTest, ConcurrentSendRequestsDoNotSerializeBehindSharedEasyHandle) {
+  ConcurrentSseLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kConcurrentUnaryPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+
+  auto first = std::async(std::launch::async, [&] { return client.SendRequest(request); });
+  const bool first_started = server.WaitForFirstStream(std::chrono::milliseconds(kStreamTimeoutMs));
+
+  auto second = std::async(std::launch::async, [&] { return client.SendRequest(request); });
+  const bool second_started = server.WaitForSecondStream(kCancellationDeadline);
+  server.ReleaseFirstStream();
+
+  EXPECT_TRUE(first_started);
+  EXPECT_TRUE(second_started);
+  ASSERT_EQ(first.wait_for(kCancellationDeadline), std::future_status::ready);
+  ASSERT_EQ(second.wait_for(kCancellationDeadline), std::future_status::ready);
+  const auto first_response = first.get();
+  const auto second_response = second.get();
+  EXPECT_TRUE(first_response.ok());
+  EXPECT_TRUE(second_response.ok());
 }
 
 TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle) {

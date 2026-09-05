@@ -27,6 +27,9 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
 #include "a2a/server/agent_card/agent_card_serializer.h"
@@ -51,6 +54,10 @@ constexpr int kJsonRpcVersionNotSupported = -32009;
 constexpr int kJsonRpcServerErrorMin = -32099;
 constexpr int kJsonRpcServerErrorMax = -32000;
 constexpr std::size_t kJsonRpcSuccessEnvelopeOverhead = 38U;
+constexpr std::size_t kSseFramingOverhead = 8U;
+constexpr std::size_t kJsonRpcSseSuffixSize = 3U;
+constexpr std::string_view kSseDataPrefix = "data: ";
+constexpr std::string_view kJsonRpcSseSuffix = "}\n\n";
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 constexpr std::string_view kFlatPayloadTypeError = "JSON value does not match the request field type";
@@ -765,26 +772,42 @@ int ParseErrorCodeForRequestParsing(const core::Error& error) {
   return JsonRpcCodeFromError(error);
 }
 
-core::Result<void> AppendSseJsonRpcEvent(std::string& body, const google::protobuf::Value& id,
-                                         const lf::a2a::v1::StreamResponse& event) {
-  const auto event_value = BuildJsonValueFromMessage(event);
-  if (!event_value.ok()) {
-    return event_value.error();
+core::Result<std::string> BuildSseJsonRpcPrefix(const google::protobuf::Value& id) {
+  const auto envelope = BuildSuccessEnvelopeFromJson(id, {});
+  if (!envelope.ok()) {
+    return envelope.error();
   }
+  std::string prefix;
+  prefix.reserve(envelope.value().size() + kSseFramingOverhead);
+  prefix.append(kSseDataPrefix);
+  prefix.append(envelope.value(), 0U, envelope.value().size() - 1U);
+  return prefix;
+}
 
-  google::protobuf::Struct envelope;
-  auto* fields = envelope.mutable_fields();
-  (*fields)["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
-  (*fields)["id"] = id;
-  (*fields)["result"] = event_value.value();
-
-  const auto serialized = core::MessageToJson(envelope);
-  if (!serialized.ok()) {
-    return serialized.error();
+core::Result<void> BuildSseJsonRpcEvent(std::string& body, std::string_view prefix,
+                                        const lf::a2a::v1::StreamResponse& event) {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const bool terminal = event.has_status_update() && core::IsTerminalTaskState(event.status_update().status().state());
+  const auto event_json = [&event, terminal] {
+    const core::subscription_diagnostics::ScopedTimer serialization_timer(
+        core::subscription_diagnostics::Phase::kProtoToJson, terminal);
+    return core::MessageToJson(event);
+  }();
+#else
+  const auto event_json = core::MessageToJson(event);
+#endif
+  if (!event_json.ok()) {
+    return event_json.error();
   }
-  body += "data: ";
-  body += serialized.value();
-  body += "\n\n";
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const core::subscription_diagnostics::ScopedTimer framing_timer(
+      core::subscription_diagnostics::Phase::kFrameConstruction, terminal);
+#endif
+  body.clear();
+  body.reserve(prefix.size() + event_json.value().size() + kJsonRpcSseSuffixSize);
+  body.append(prefix);
+  body.append(event_json.value());
+  body.append(kJsonRpcSseSuffix);
   return {};
 }
 
@@ -810,6 +833,12 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
 
+  const auto prefix = BuildSseJsonRpcPrefix(id);
+  if (!prefix.ok()) {
+    return prefix.error();
+  }
+
+  std::string chunk;
   auto next = (*session)->NextFor(core::http::kSseHeartbeatInterval);
   for (; next.ok(); next = (*session)->NextFor(core::http::kSseHeartbeatInterval)) {
     const auto& event = next.value();
@@ -824,11 +853,16 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
       }
       continue;
     }
-    std::string chunk;
-    const auto append = AppendSseJsonRpcEvent(chunk, id, event.value());
+    const auto append = BuildSseJsonRpcEvent(chunk, prefix.value(), event.value());
     if (!append.ok()) {
       return append.error();
     }
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    const bool terminal =
+        event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
+    const core::subscription_diagnostics::ScopedTimer delivery_timer(
+        core::subscription_diagnostics::Phase::kHttpDelivery, terminal);
+#endif
     const auto written = WriteSseChunk(transport, chunk);
     if (!written.ok()) {
       (*session)->Cancel();
@@ -838,17 +872,31 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
   return next.error();
 }
 
-core::Result<void> BufferJsonRpcSseEvents(const google::protobuf::Value& id, ServerStreamSession& session,
-                                          std::string& body) {
-  auto next = session.Next();
-  for (; next.ok(); next = session.Next()) {
+core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& id,
+                                                const std::shared_ptr<std::unique_ptr<ServerStreamSession>>& session,
+                                                HttpByteTransport& transport) {
+  if (*session == nullptr) {
+    return core::Error::Internal("JSON-RPC streaming session is missing");
+  }
+  const auto prefix = BuildSseJsonRpcPrefix(id);
+  if (!prefix.ok()) {
+    return prefix.error();
+  }
+  std::string chunk;
+  auto next = (*session)->Next();
+  for (; next.ok(); next = (*session)->Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
       return {};
     }
-    const auto append = AppendSseJsonRpcEvent(body, id, event.value());
+    const auto append = BuildSseJsonRpcEvent(chunk, prefix.value(), event.value());
     if (!append.ok()) {
       return append.error();
+    }
+    const auto written = WriteSseChunk(transport, chunk);
+    if (!written.ok()) {
+      (*session)->Cancel();
+      return written.error();
     }
   }
   return next.error();
@@ -868,6 +916,7 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
                       .Build();
 
   if (session->IsLive()) {
+    response.stream_kind = HttpStreamKind::kLive;
     auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
     response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
       return StreamJsonRpcSseEvents(id, session_holder, transport);
@@ -875,10 +924,11 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
     return response;
   }
 
-  const auto buffered = BufferJsonRpcSseEvents(id, *session, response.body);
-  if (!buffered.ok()) {
-    return buffered.error();
-  }
+  auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
+  response.stream_kind = HttpStreamKind::kFinite;
+  response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
+    return StreamFiniteJsonRpcSseEvents(id, session_holder, transport);
+  };
   return response;
 }
 
