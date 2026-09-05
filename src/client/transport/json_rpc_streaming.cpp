@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/client/json_rpc_transport.h"
-
-#include "json_rpc_transport_internal.h"
-
 #include <atomic>
 #include <memory>
 #include <string>
@@ -12,6 +8,7 @@
 #include <thread>
 #include <utility>
 
+#include "a2a/client/json_rpc_transport.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
@@ -20,6 +17,7 @@
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
+#include "json_rpc_transport_internal.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "a2a/core/task_states.h"
 #include "core/subscription_diagnostics.h"
@@ -359,7 +357,6 @@ void RunJsonRpcSseWorker(const HttpStreamRequesterWithCancellation& stream_reque
   session.Run();
 }
 
-
 }  // namespace
 
 core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std::string_view method_name,
@@ -481,6 +478,5 @@ core::Result<void> JsonRpcTransport::Shutdown() {
   }
   return {};
 }
-
 
 }  // namespace a2a::client

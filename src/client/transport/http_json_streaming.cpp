@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/client/http_json_transport.h"
-
-#include "http_json_transport_internal.h"
-
 #include <chrono>
 #include <memory>
 #include <string>
@@ -12,12 +8,14 @@
 #include <thread>
 #include <utility>
 
+#include "a2a/client/http_json_transport.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protojson.h"
+#include "http_json_transport_internal.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "a2a/core/task_states.h"
 #include "core/subscription_diagnostics.h"
@@ -278,7 +276,6 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
   return request;
 }
 
-
 }  // namespace
 
 HttpStreamRequester MakeDefaultHttpStreamRequester() {
@@ -424,6 +421,5 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
   auto worker = StreamHandle::WorkerThread([session = std::move(session)] { session->Run(); });
   return std::unique_ptr<StreamHandle>(new StreamHandle(state, std::move(worker)));
 }
-
 
 }  // namespace a2a::client

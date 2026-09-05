@@ -6,8 +6,8 @@
 #include <string>
 #include <string_view>
 
-#include "a2a/core/error.h"
 #include "a2a/client/http_json_transport.h"
+#include "a2a/core/error.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/http/http_client.h"
 

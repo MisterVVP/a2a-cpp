@@ -109,5 +109,4 @@ std::string BuildTaskPath(std::string_view task_id) {
   return path;
 }
 
-
 }  // namespace a2a::client::http_json_internal

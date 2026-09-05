@@ -258,7 +258,7 @@ void CurlStreamReactor::CloseDescriptor(int descriptor) noexcept {
 }
 
 bool CurlStreamReactor::AddInternalDescriptor(int descriptor) const {
-  epoll_event event{.events = EPOLLIN, .data = {.fd = descriptor }};
+  epoll_event event{.events = EPOLLIN, .data = {.fd = descriptor}};
   return epoll_ctl(epoll_descriptor_, EPOLL_CTL_ADD, descriptor, &event) == 0;
 }
 
@@ -326,7 +326,7 @@ int CurlStreamReactor::HandleSocket(CURL* easy_handle, curl_socket_t socket, int
   std::uint32_t events = EPOLLERR | EPOLLHUP;
   events |= action == CURL_POLL_IN || action == CURL_POLL_INOUT ? EPOLLIN : 0U;
   events |= action == CURL_POLL_OUT || action == CURL_POLL_INOUT ? EPOLLOUT : 0U;
-  epoll_event event{.events = events, .data = {.fd = socket }};
+  epoll_event event{.events = events, .data = {.fd = socket}};
   if (epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_MOD, socket, &event) != 0 &&
       (errno != ENOENT || epoll_ctl(reactor->epoll_descriptor_, EPOLL_CTL_ADD, socket, &event) != 0)) {
     return -1;

@@ -3,16 +3,16 @@
 
 #pragma once
 
-#include <string>
-#include <string_view>
-
 #include <google/protobuf/message.h>
 #include <google/protobuf/struct.pb.h>
 
-#include "a2a/core/error.h"
+#include <string>
+#include <string_view>
+
 #include "a2a/client/json_rpc_transport.h"
-#include "a2a/http/http_client.h"
+#include "a2a/core/error.h"
 #include "a2a/core/protojson.h"
+#include "a2a/http/http_client.h"
 
 namespace a2a::client::json_rpc_internal {
 
@@ -26,12 +26,11 @@ inline constexpr char kTransportName[] = "jsonrpc";
 [[nodiscard]] core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientResponse& response,
                                                                         std::string_view expected_id);
 [[nodiscard]] core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name,
-                                                              const google::protobuf::Message& request,
-                                                              std::string_view request_id);
+                                                             const google::protobuf::Message& request,
+                                                             std::string_view request_id);
 
 template <typename T>
-[[nodiscard]] core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value,
-                                                 int response_status_code,
+[[nodiscard]] core::Result<T> ParseResultMessage(const google::protobuf::Value& result_value, int response_status_code,
                                                  bool ignore_unknown_fields = false) {
   T message;
   const auto json = core::MessageToJson(result_value);

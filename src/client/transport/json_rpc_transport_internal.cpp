@@ -211,5 +211,4 @@ core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, con
   return envelope;
 }
 
-
 }  // namespace a2a::client::json_rpc_internal
