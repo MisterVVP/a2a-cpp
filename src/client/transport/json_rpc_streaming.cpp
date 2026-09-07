@@ -50,6 +50,8 @@ constexpr std::string_view kJsonRpcInterfaceRequiredMessage = "JsonRpcTransport 
 constexpr std::string_view kJsonRpcUrlRequiredMessage = "Resolved JSON-RPC interface URL is required";
 constexpr std::string_view kEmptyRequestIdMessage = "JSON-RPC request id generator returned an empty id";
 constexpr std::string_view kTaskIdRequiredMessage = "GetTaskRequest.id is required";
+constexpr std::string_view kDefaultMtlsUnsupportedMessage =
+    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
 
 StreamCancellationRegistrar MakeStreamCancellationRegistrar(const std::shared_ptr<StreamHandle::State>& state) {
   return [weak_state = std::weak_ptr<StreamHandle::State>(state)](const std::function<void()>& callback) {
@@ -419,6 +421,9 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     async_client = default_async_stream_client_;
   }
   if (async_client != nullptr) {
+    if (http_request.mtls.has_value()) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
     const auto shutdown = async_shutdown_;
     auto shared_request = ToSharedHttpRequest(http_request);
     auto session = std::make_shared<JsonRpcSseSession>(HttpStreamRequesterWithCancellation{}, std::move(http_request),

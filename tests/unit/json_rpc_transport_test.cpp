@@ -39,6 +39,9 @@ constexpr int kHttpBadGateway = 502;
 constexpr std::chrono::milliseconds kCustomTimeout{1200};
 constexpr std::string_view kExpectedListTaskId = "task-1";
 constexpr std::string_view kJsonRpcTransportName = "jsonrpc";
+constexpr std::string_view kClientCertificatePem = "client-certificate";
+constexpr std::string_view kClientPrivateKeyPem = "client-private-key";
+constexpr std::string_view kMtlsStreamRequestId = "stream-mtls";
 constexpr std::array<std::string_view, 2> kEscapedListTasksErrorPayloads = {
     R"({"jsonrpc":"2.0","id":"req-123","re\u0073ult":{"tasks":[3]}})",
     R"({"jsonrpc":"2.0","id":"req-123","re\u0073ult":[]})",
@@ -1160,6 +1163,28 @@ TEST(JsonRpcTransportUnitTest, CancellationFromOnEventStopsCoalescedFrames) {
   observer.AllowCallbackCancel();
 
   ExpectCancellationFromOnEventResult(owner_cancel, owner_cancel_started, observer);
+}
+
+TEST(JsonRpcTransportUnitTest, DefaultStreamingRequesterRejectsMtls) {
+  class Observer final : public a2a::client::StreamObserver {
+   public:
+    void OnEvent(const lf::a2a::v1::StreamResponse&) override {}
+    void OnError(const a2a::core::Error&) override {}
+    void OnCompleted() override {}
+  } observer;
+
+  A2AClient client(JsonRpcTransport::CreateDefault(MakeResolvedJsonRpc(), JsonRpcTransport::kDefaultTimeout,
+                                                   [] { return std::string(kMtlsStreamRequestId); }));
+  CallOptions options;
+  options.mtls = a2a::client::MtlsConfig{.client_certificate_pem = std::string(kClientCertificatePem),
+                                         .client_private_key_pem = std::string(kClientPrivateKeyPem),
+                                         .trusted_ca_pem = {},
+                                         .server_name_override = {}};
+
+  const auto response = client.SendStreamingMessage(lf::a2a::v1::SendMessageRequest{}, observer, options);
+
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kValidation);
 }
 
 }  // namespace

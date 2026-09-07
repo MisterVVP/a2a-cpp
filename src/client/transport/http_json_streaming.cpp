@@ -377,6 +377,9 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
     async_client = default_async_stream_client_;
   }
   if (async_client != nullptr) {
+    if (session->request.mtls.has_value()) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
     const auto shutdown = async_shutdown_;
     const auto started = async_client->StartStreamRequest(
         ToSharedHttpRequest(session->request),

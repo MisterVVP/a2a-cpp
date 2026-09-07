@@ -3,6 +3,8 @@
 
 #include "a2a/http/http_client.h"
 
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -17,12 +19,10 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <deque>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <sstream>
 #include <system_error>
@@ -741,6 +741,7 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   }
 
   void Finish(CURLcode code) {
+    Finalize();
     (void)dispatch->Enqueue(
         [self = shared_from_this(), code] {
           DispatchCallbackScope callback_scope(self->client_state.get());
@@ -748,7 +749,6 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
           ReleaseStreamSlot(*self->client_state, std::move(self->slot));
           self->completion(std::move(result));
           self->transfer->lifetime.reset();
-          self->Finalize();
         },
         0U, true);
   }
@@ -933,7 +933,7 @@ core::Result<Response> Client::StreamRequest(
   bool completed = false;
   std::mutex cancellation_mutex;
   std::function<void()> cancel_transfer;
-  const bool needs_cancellation_watcher = !register_cancellation;
+  const bool needs_cancellation_watcher = !register_cancellation && static_cast<bool>(is_cancelled);
   const auto effective_cancellation_registrar =
       needs_cancellation_watcher
           ? std::function<void(const std::function<void()>&)>{[&cancellation_mutex, &cancel_transfer](
@@ -942,19 +942,6 @@ core::Result<Response> Client::StreamRequest(
               cancel_transfer = callback;
             }}
           : register_cancellation;
-  const auto started = StartStreamRequest(
-      request, on_metadata, on_chunk, is_cancelled, effective_cancellation_registrar,
-      [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
-        {
-          std::lock_guard lock(completion_mutex);
-          response = std::move(result);
-          completed = true;
-        }
-        completion_condition.notify_one();
-      });
-  if (!started.ok()) {
-    return started.error();
-  }
   std::atomic<bool> stop_cancellation_watcher{false};
   std::thread cancellation_watcher;
   if (needs_cancellation_watcher) {
@@ -968,12 +955,29 @@ core::Result<Response> Client::StreamRequest(
           }
           if (cancel) {
             cancel();
+            return;
           }
-          return;
         }
         std::this_thread::sleep_for(kSynchronousCancellationCheckInterval);
       }
     });
+  }
+  const auto started = StartStreamRequest(
+      request, on_metadata, on_chunk, is_cancelled, effective_cancellation_registrar,
+      [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
+        {
+          std::lock_guard lock(completion_mutex);
+          response = std::move(result);
+          completed = true;
+        }
+        completion_condition.notify_one();
+      });
+  if (!started.ok()) {
+    stop_cancellation_watcher.store(true);
+    if (cancellation_watcher.joinable()) {
+      cancellation_watcher.join();
+    }
+    return started.error();
   }
   std::unique_lock lock(completion_mutex);
   completion_condition.wait(lock, [&completed] { return completed; });
