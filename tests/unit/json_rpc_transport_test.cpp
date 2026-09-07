@@ -1168,8 +1168,8 @@ TEST(JsonRpcTransportUnitTest, CancellationFromOnEventStopsCoalescedFrames) {
 TEST(JsonRpcTransportUnitTest, DefaultStreamingRequesterRejectsMtls) {
   class Observer final : public a2a::client::StreamObserver {
    public:
-    void OnEvent(const lf::a2a::v1::StreamResponse&) override {}
-    void OnError(const a2a::core::Error&) override {}
+    void OnEvent(const lf::a2a::v1::StreamResponse& event) override { (void)event; }
+    void OnError(const a2a::core::Error& error) override { (void)error; }
     void OnCompleted() override {}
   } observer;
 
