@@ -89,6 +89,7 @@ class StreamHandle final : private core::NonCopyable {
 
     std::atomic<bool> cancel_requested{false};
     std::atomic<bool> active{true};
+    std::shared_ptr<std::atomic<bool>> transport_shutdown;
     std::mutex cancellation_mutex;
     std::function<void()> cancel_callback;
     std::mutex completion_mutex;

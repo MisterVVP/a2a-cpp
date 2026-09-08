@@ -28,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -47,6 +48,15 @@ std::size_t CurlStreamReactorPoolSize();
 
 namespace {
 
+static_assert(std::is_copy_constructible_v<a2a::client::HttpJsonTransport>);
+static_assert(std::is_copy_assignable_v<a2a::client::HttpJsonTransport>);
+static_assert(std::is_move_constructible_v<a2a::client::HttpJsonTransport>);
+static_assert(std::is_move_assignable_v<a2a::client::HttpJsonTransport>);
+static_assert(std::is_copy_constructible_v<a2a::client::JsonRpcTransport>);
+static_assert(std::is_copy_assignable_v<a2a::client::JsonRpcTransport>);
+static_assert(std::is_move_constructible_v<a2a::client::JsonRpcTransport>);
+static_assert(std::is_move_assignable_v<a2a::client::JsonRpcTransport>);
+
 constexpr int kSocketError = -1;
 constexpr int kHttpOk = 200;
 constexpr int kHttpBadGateway = 502;
@@ -62,6 +72,8 @@ constexpr int kShortStreamTimeoutMs = 100;
 constexpr int kCancellationRequestTimeoutMs = 30000;
 constexpr std::chrono::milliseconds kHangPollInterval{10};
 constexpr std::chrono::milliseconds kCancellationDeadline{1000};
+constexpr std::chrono::milliseconds kCancellationPredicateWork{20};
+constexpr int kCancellationPredicateEvaluationsBeforeCancel = 3;
 constexpr std::string_view kHttpVersion11 = "HTTP/1.1";
 constexpr std::string_view kTaskId = "task-1";
 constexpr std::string_view kResponseHeaderName = "X-Test-Header";
@@ -916,6 +928,39 @@ TEST(DefaultHttpRequesterTest, JsonRpcIdleStreamCancellationWakesLibcurlPoll) {
   ExpectDefaultStreamCancellationIsWakeupDriven(a2a::client::PreferredTransport::kJsonRpc);
 }
 
+void ExpectDefaultStreamInactiveAfterShutdown(a2a::client::PreferredTransport transport_kind) {
+  OpenSseLoopbackServer server;
+  a2a::client::ResolvedInterface resolved;
+  resolved.transport = transport_kind;
+  resolved.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  std::unique_ptr<a2a::client::ClientTransport> transport;
+  if (transport_kind == a2a::client::PreferredTransport::kRest) {
+    transport = a2a::client::HttpJsonTransport::CreateDefault(resolved);
+  } else {
+    transport = a2a::client::JsonRpcTransport::CreateDefault(resolved, a2a::client::JsonRpcTransport::kDefaultTimeout,
+                                                             [] { return std::string(kJsonRpcRequestId); });
+  }
+  RecordingStreamObserver observer;
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+  auto stream = transport->SubscribeTask(request, observer, {});
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+
+  const auto shutdown = transport->Shutdown();
+
+  ASSERT_TRUE(shutdown.ok()) << shutdown.error().message();
+  EXPECT_FALSE(stream.value()->IsActive());
+}
+
+TEST(DefaultHttpRequesterTest, RestShutdownMarksRetainedStreamInactive) {
+  ExpectDefaultStreamInactiveAfterShutdown(a2a::client::PreferredTransport::kRest);
+}
+
+TEST(DefaultHttpRequesterTest, JsonRpcShutdownMarksRetainedStreamInactive) {
+  ExpectDefaultStreamInactiveAfterShutdown(a2a::client::PreferredTransport::kJsonRpc);
+}
+
 TEST(DefaultHttpFetcherTest, DiscoveryUsesSharedLibcurlFetcher) {
   LoopbackHttpServer server(BuildHttpResponse(kAgentCardBody));
   auto client = a2a::client::DiscoveryClient::CreateDefault();
@@ -941,6 +986,35 @@ TEST(SharedHttpClientTest, StreamRequestTimesOutOpenStream) {
       [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; });
 
   EXPECT_FALSE(response.ok());
+}
+
+TEST(SharedHttpClientTest, LegacyCancellationPredicateIsEvaluatedByOnlyOneThread) {
+  HangingLoopbackServer server;
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kCancellationRequestTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+  std::atomic_bool predicate_running{false};
+  std::atomic_bool concurrent_evaluation{false};
+  std::atomic_int evaluation_count{0};
+  const auto is_cancelled = [&] {
+    if (predicate_running.exchange(true)) {
+      concurrent_evaluation.store(true);
+    }
+    std::this_thread::sleep_for(kCancellationPredicateWork);
+    const bool should_cancel = evaluation_count.fetch_add(1) + 1 >= kCancellationPredicateEvaluationsBeforeCancel;
+    predicate_running.store(false);
+    return should_cancel;
+  };
+
+  const auto response = client.StreamRequest(
+      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+      [](std::string_view) -> a2a::core::Result<void> { return {}; }, is_cancelled);
+
+  EXPECT_FALSE(response.ok());
+  EXPECT_FALSE(concurrent_evaluation.load());
 }
 
 TEST(SharedHttpClientTest, StreamRequestRejectsMissingCallbacks) {

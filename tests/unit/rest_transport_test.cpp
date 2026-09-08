@@ -27,6 +27,8 @@ constexpr std::string_view kApplicationJsonWithCharsetContentType = "Application
 constexpr std::string_view kTextPlainContentType = "text/plain";
 constexpr std::string_view kContentTypeNotSupportedReason = "CONTENT_TYPE_NOT_SUPPORTED";
 constexpr std::string_view kContentTypeNotSupportedProtocolCode = "-32005";
+constexpr std::string_view kSseErrorEventName = "event: error";
+constexpr std::string_view kFiniteProducerFailureMessage = "finite producer failed";
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -188,7 +190,7 @@ class OrderedFiniteSession final : public a2a::server::ServerStreamSession {
     }
     if (next_index_ == task_ids_.size()) {
       return fail_at_end_ ? a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>>(
-                                a2a::core::Error::Internal("finite producer failed"))
+                                a2a::core::Error::Internal(std::string(kFiniteProducerFailureMessage)))
                           : a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>>(
                                 std::optional<lf::a2a::v1::StreamResponse>{});
     }
@@ -288,8 +290,10 @@ TEST(RestTransportTest, FiniteStreamPropagatesProducerFailure) {
   CountingHttpTransport output(writes);
   const auto streamed = response.value().stream_writer(output);
 
-  ASSERT_FALSE(streamed.ok());
+  ASSERT_TRUE(streamed.ok()) << streamed.error().message();
   EXPECT_NE(output.body.find("only-task"), std::string::npos);
+  EXPECT_NE(output.body.find(kSseErrorEventName), std::string::npos);
+  EXPECT_NE(output.body.find(kFiniteProducerFailureMessage), std::string::npos);
 }
 
 void ExpectUnsupportedContentType(std::string_view path, std::string_view body) {

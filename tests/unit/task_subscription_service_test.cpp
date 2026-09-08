@@ -109,6 +109,26 @@ std::size_t DrainStatusUpdateCount(a2a::server::ServerStreamSession* session) {
   }
 }
 
+a2a::server::StreamResponseCoroutine MakeYieldThenResumeCoroutine(std::atomic_bool* resumed_after_yield) {
+  lf::a2a::v1::StreamResponse event;
+  event.mutable_task()->set_id(std::string(kTaskId));
+  co_yield event;
+  resumed_after_yield->store(true);
+}
+
+TEST(StreamResponseCoroutineTest, ReturnsYieldedValueBeforeResumingCoroutine) {
+  std::atomic_bool resumed_after_yield{false};
+  auto stream = MakeYieldThenResumeCoroutine(&resumed_after_yield);
+
+  const auto first = stream.Next();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_FALSE(resumed_after_yield.load());
+
+  const auto finished = stream.Next();
+  EXPECT_FALSE(finished.has_value());
+  EXPECT_TRUE(resumed_after_yield.load());
+}
+
 TEST(TaskSubscriptionServiceTest, FirstEventIsCurrentTask) {
   a2a::server::TaskSubscriptionService service;
   auto task = MakeTask(lf::a2a::v1::TASK_STATE_WORKING);

@@ -331,12 +331,12 @@ void CompleteAsyncJsonRpcStream(const std::shared_ptr<JsonRpcSseSession>& sessio
                                 const std::shared_ptr<std::atomic<bool>>& shutdown,
                                 core::Result<a2a::http::Response> response) {
   StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-  if (!shutdown->load()) {
-    if (!response.ok()) {
-      session->Complete(response.error());
-    } else {
-      session->Complete(ToClientHttpResponse(std::move(response.value())));
-    }
+  if (shutdown->load()) {
+    MarkInactive(*state);
+  } else if (!response.ok()) {
+    session->Complete(response.error());
+  } else {
+    session->Complete(ToClientHttpResponse(std::move(response.value())));
   }
   {
     std::lock_guard lock(state->completion_mutex);
@@ -414,7 +414,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
   auto state = std::make_shared<StreamHandle::State>();
   std::shared_ptr<a2a::http::Client> async_client;
   {
-    std::lock_guard lock(async_client_mutex_);
+    std::lock_guard lock(*async_client_mutex_);
     if (async_shutdown_->load()) {
       return core::Error::Network(kJsonRpcTransportShuttingDownMessage).WithTransport(kJsonRpcTransportName);
     }
@@ -425,6 +425,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
       return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
     }
     const auto shutdown = async_shutdown_;
+    state->transport_shutdown = shutdown;
     auto shared_request = ToSharedHttpRequest(http_request);
     auto session = std::make_shared<JsonRpcSseSession>(HttpStreamRequesterWithCancellation{}, std::move(http_request),
                                                        observer, state, request_id);
@@ -474,7 +475,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(cons
 core::Result<void> JsonRpcTransport::Shutdown() {
   std::shared_ptr<a2a::http::Client> async_client;
   {
-    std::lock_guard lock(async_client_mutex_);
+    std::lock_guard lock(*async_client_mutex_);
     async_shutdown_->store(true);
     async_client = default_async_stream_client_;
   }

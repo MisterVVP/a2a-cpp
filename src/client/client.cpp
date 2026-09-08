@@ -90,7 +90,9 @@ void StreamHandle::Cancel() {
 }
 
 bool StreamHandle::IsActive() const {
-  return state_ != nullptr && state_->active.load() && !state_->cancel_requested.load();
+  const bool transport_is_shutdown =
+      state_ != nullptr && state_->transport_shutdown != nullptr && state_->transport_shutdown->load();
+  return state_ != nullptr && state_->active.load() && !state_->cancel_requested.load() && !transport_is_shutdown;
 }
 
 A2AClient::A2AClient(std::unique_ptr<ClientTransport> transport) : transport_(std::move(transport)) {}

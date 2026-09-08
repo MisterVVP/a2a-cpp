@@ -32,6 +32,11 @@ std::optional<lf::a2a::v1::StreamResponse> StreamResponseCoroutine::WaitForNext(
   if (!handle_) {
     return std::nullopt;
   }
+  if (resume_after_yield_) {
+    resume_after_yield_ = false;
+    std::lock_guard resume_lock(handle_.promise().resume_mutex_);
+    handle_.resume();
+  }
   auto& promise = handle_.promise();
   std::unique_lock lock(promise.mutex_);
   const auto ready = [&promise] { return promise.current_value_.has_value() || promise.done_.load(); };
@@ -49,9 +54,7 @@ std::optional<lf::a2a::v1::StreamResponse> StreamResponseCoroutine::WaitForNext(
   }
   auto value = std::move(promise.current_value_);
   promise.current_value_.reset();
-  lock.unlock();
-  std::lock_guard resume_lock(promise.resume_mutex_);
-  handle_.resume();
+  resume_after_yield_ = true;
   return value;
 }
 

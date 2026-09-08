@@ -61,12 +61,15 @@ class StreamResponseCoroutine final : private core::NonCopyable {
 
   StreamResponseCoroutine() = default;
   StreamResponseCoroutine(StreamResponseCoroutine&& other) noexcept
-      : handle_(std::exchange(other.handle_, {})), started_(std::exchange(other.started_, false)) {}
+      : handle_(std::exchange(other.handle_, {})),
+        started_(std::exchange(other.started_, false)),
+        resume_after_yield_(std::exchange(other.resume_after_yield_, false)) {}
   StreamResponseCoroutine& operator=(StreamResponseCoroutine&& other) noexcept {
     if (this != &other) {
       Destroy();
       handle_ = std::exchange(other.handle_, {});
       started_ = std::exchange(other.started_, false);
+      resume_after_yield_ = std::exchange(other.resume_after_yield_, false);
     }
     return *this;
   }
@@ -94,6 +97,7 @@ class StreamResponseCoroutine final : private core::NonCopyable {
 
   std::coroutine_handle<promise_type> handle_;
   bool started_ = false;
+  bool resume_after_yield_ = false;
 };
 
 }  // namespace a2a::server

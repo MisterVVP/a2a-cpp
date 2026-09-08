@@ -934,6 +934,7 @@ core::Result<Response> Client::StreamRequest(
   std::mutex cancellation_mutex;
   std::function<void()> cancel_transfer;
   const bool needs_cancellation_watcher = !register_cancellation && static_cast<bool>(is_cancelled);
+  std::atomic<bool> cancellation_requested{false};
   const auto effective_cancellation_registrar =
       needs_cancellation_watcher
           ? std::function<void(const std::function<void()>&)>{[&cancellation_mutex, &cancel_transfer](
@@ -942,12 +943,19 @@ core::Result<Response> Client::StreamRequest(
               cancel_transfer = callback;
             }}
           : register_cancellation;
+  const auto effective_is_cancelled =
+      needs_cancellation_watcher
+          ? std::function<bool()>{[&cancellation_requested] { return cancellation_requested.load(); }}
+          : is_cancelled;
   std::atomic<bool> stop_cancellation_watcher{false};
   std::thread cancellation_watcher;
   if (needs_cancellation_watcher) {
     cancellation_watcher = std::thread([&] {
       while (!stop_cancellation_watcher.load()) {
-        if (is_cancelled()) {
+        if (!cancellation_requested.load() && is_cancelled()) {
+          cancellation_requested.store(true);
+        }
+        if (cancellation_requested.load()) {
           std::function<void()> cancel;
           {
             std::lock_guard lock(cancellation_mutex);
@@ -963,7 +971,7 @@ core::Result<Response> Client::StreamRequest(
     });
   }
   const auto started = StartStreamRequest(
-      request, on_metadata, on_chunk, is_cancelled, effective_cancellation_registrar,
+      request, on_metadata, on_chunk, effective_is_cancelled, effective_cancellation_registrar,
       [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
         {
           std::lock_guard lock(completion_mutex);

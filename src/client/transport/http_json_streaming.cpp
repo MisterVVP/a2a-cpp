@@ -331,7 +331,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
 core::Result<void> HttpJsonTransport::Shutdown() {
   std::shared_ptr<a2a::http::Client> async_client;
   {
-    std::lock_guard lock(async_client_mutex_);
+    std::lock_guard lock(*async_client_mutex_);
     async_shutdown_->store(true);
     async_client = default_async_stream_client_;
   }
@@ -370,7 +370,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
                                                                  .collecting_error_body = false});
   std::shared_ptr<a2a::http::Client> async_client;
   {
-    std::lock_guard lock(async_client_mutex_);
+    std::lock_guard lock(*async_client_mutex_);
     if (async_shutdown_->load()) {
       return core::Error::Network(kHttpTransportShuttingDownMessage).WithTransport(kHttpTransportName);
     }
@@ -381,6 +381,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
       return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
     }
     const auto shutdown = async_shutdown_;
+    state->transport_shutdown = shutdown;
     const auto started = async_client->StartStreamRequest(
         ToSharedHttpRequest(session->request),
         [session, state, shutdown](const a2a::http::Response& metadata) {
@@ -403,12 +404,12 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
         [state] { return state->cancel_requested.load(); }, MakeStreamCancellationRegistrar(state),
         [session, state, shutdown](core::Result<a2a::http::Response> response) {
           StreamHandle::State::CallbackExecutionScope callback_scope(*state);
-          if (!shutdown->load()) {
-            if (!response.ok()) {
-              session->Complete(response.error());
-            } else {
-              session->Complete(ToClientHttpResponse(std::move(response.value())));
-            }
+          if (shutdown->load()) {
+            MarkInactive(*state);
+          } else if (!response.ok()) {
+            session->Complete(response.error());
+          } else {
+            session->Complete(ToClientHttpResponse(std::move(response.value())));
           }
           {
             std::lock_guard lock(state->completion_mutex);

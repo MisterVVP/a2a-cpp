@@ -293,7 +293,10 @@ core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& me
 
 constexpr std::size_t kSseFramingOverhead = 8U;
 constexpr std::string_view kSseDataPrefix = "data: ";
+constexpr std::string_view kSseErrorEventPrefix = "event: error\ndata: ";
 constexpr std::string_view kSseEventTerminator = "\n\n";
+constexpr std::string_view kSseErrorCodeMemberName = "code";
+constexpr std::string_view kSseErrorMessageMemberName = "message";
 
 core::Result<void> BuildSseEvent(std::string& body, const lf::a2a::v1::StreamResponse& event) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
@@ -317,6 +320,25 @@ core::Result<void> BuildSseEvent(std::string& body, const lf::a2a::v1::StreamRes
   body.reserve(event_json.value().size() + kSseFramingOverhead);
   body.append(kSseDataPrefix);
   body.append(event_json.value());
+  body.append(kSseEventTerminator);
+  return {};
+}
+
+core::Result<void> BuildSseErrorEvent(std::string& body, const core::Error& error) {
+  google::protobuf::Struct payload;
+  auto* fields = payload.mutable_fields();
+  (*fields)[std::string(kSseErrorMessageMemberName)].set_string_value(error.message());
+  if (error.protocol_code().has_value()) {
+    (*fields)[std::string(kSseErrorCodeMemberName)].set_string_value(*error.protocol_code());
+  }
+  const auto payload_json = core::MessageToJson(payload);
+  if (!payload_json.ok()) {
+    return payload_json.error();
+  }
+  body.clear();
+  body.reserve(kSseErrorEventPrefix.size() + payload_json.value().size() + kSseEventTerminator.size());
+  body.append(kSseErrorEventPrefix);
+  body.append(payload_json.value());
   body.append(kSseEventTerminator);
   return {};
 }
@@ -369,7 +391,16 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
         return written.error();
       }
     }
-    return next.error();
+    const auto append_error = BuildSseErrorEvent(chunk, next.error());
+    if (!append_error.ok()) {
+      return append_error.error();
+    }
+    const auto written = WriteSseChunk(transport, chunk);
+    if (!written.ok()) {
+      (*session)->Cancel();
+      return written.error();
+    }
+    return {};
   };
   return response;
 }

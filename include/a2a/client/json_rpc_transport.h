@@ -85,7 +85,7 @@ class JsonRpcTransport final : public ClientTransport {
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;
   RequestIdGenerator id_generator_;
-  mutable std::mutex async_client_mutex_;
+  std::shared_ptr<std::mutex> async_client_mutex_ = std::make_shared<std::mutex>();
   std::shared_ptr<http::Client> default_async_stream_client_;
   std::shared_ptr<std::atomic<bool>> async_shutdown_ = std::make_shared<std::atomic<bool>>(false);
 };

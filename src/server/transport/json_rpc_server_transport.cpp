@@ -57,7 +57,20 @@ constexpr std::size_t kJsonRpcSuccessEnvelopeOverhead = 38U;
 constexpr std::size_t kSseFramingOverhead = 8U;
 constexpr std::size_t kJsonRpcSseSuffixSize = 3U;
 constexpr std::string_view kSseDataPrefix = "data: ";
+constexpr std::string_view kSseEventTerminator = "\n\n";
 constexpr std::string_view kJsonRpcSseSuffix = "}\n\n";
+constexpr std::string_view kJsonRpcErrorMemberName = "error";
+constexpr std::string_view kJsonRpcErrorCodeMemberName = "code";
+constexpr std::string_view kJsonRpcErrorMessageMemberName = "message";
+constexpr std::string_view kErrorInfoTypeMemberName = "@type";
+constexpr std::string_view kErrorInfoTypeValue = "type.googleapis.com/google.rpc.ErrorInfo";
+constexpr std::string_view kErrorInfoReasonMemberName = "reason";
+constexpr std::string_view kErrorInfoDomainMemberName = "domain";
+constexpr std::string_view kErrorInfoDomainValue = "a2a-protocol.org";
+constexpr std::string_view kErrorInfoMetadataMemberName = "metadata";
+constexpr std::string_view kErrorInfoDataMemberName = "data";
+constexpr std::string_view kProtocolCodeMemberName = "protocolCode";
+constexpr std::string_view kTransportMemberName = "transport";
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
 constexpr std::string_view kFlatPayloadTypeError = "JSON value does not match the request field type";
@@ -772,6 +785,48 @@ int ParseErrorCodeForRequestParsing(const core::Error& error) {
   return JsonRpcCodeFromError(error);
 }
 
+core::Result<std::string> BuildJsonRpcErrorEnvelope(int json_rpc_code, std::string_view message,
+                                                    const google::protobuf::Value& id,
+                                                    const std::optional<core::Error>& error) {
+  google::protobuf::Struct envelope;
+  auto* fields = envelope.mutable_fields();
+  (*fields)[std::string(core::json_rpc::kVersionMemberName)].set_string_value(std::string(core::json_rpc::kVersion));
+  (*fields)[std::string(core::json_rpc::kIdMemberName)] = id;
+
+  google::protobuf::Value error_value;
+  auto* error_fields = error_value.mutable_struct_value()->mutable_fields();
+  (*error_fields)[std::string(kJsonRpcErrorCodeMemberName)].set_number_value(json_rpc_code);
+  (*error_fields)[std::string(kJsonRpcErrorMessageMemberName)].set_string_value(std::string(message));
+
+  if (error.has_value() && json_rpc_code >= kJsonRpcServerErrorMin && json_rpc_code <= kJsonRpcServerErrorMax) {
+    google::protobuf::Value data;
+    auto* data_values = data.mutable_list_value()->mutable_values();
+    google::protobuf::Value error_info;
+    auto* info_fields = error_info.mutable_struct_value()->mutable_fields();
+    (*info_fields)[std::string(kErrorInfoTypeMemberName)].set_string_value(std::string(kErrorInfoTypeValue));
+    (*info_fields)[std::string(kErrorInfoReasonMemberName)].set_string_value(ErrorInfoReason(*error));
+    (*info_fields)[std::string(kErrorInfoDomainMemberName)].set_string_value(std::string(kErrorInfoDomainValue));
+
+    const auto& protocol_code = error->protocol_code();
+    const auto& transport = error->transport();
+    if (protocol_code.has_value() || transport.has_value()) {
+      google::protobuf::Value metadata;
+      auto* metadata_fields = metadata.mutable_struct_value()->mutable_fields();
+      if (protocol_code.has_value()) {
+        (*metadata_fields)[std::string(kProtocolCodeMemberName)].set_string_value(*protocol_code);
+      }
+      if (transport.has_value()) {
+        (*metadata_fields)[std::string(kTransportMemberName)].set_string_value(*transport);
+      }
+      (*info_fields)[std::string(kErrorInfoMetadataMemberName)] = std::move(metadata);
+    }
+    data_values->Add(std::move(error_info));
+    (*error_fields)[std::string(kErrorInfoDataMemberName)] = std::move(data);
+  }
+  (*fields)[std::string(kJsonRpcErrorMemberName)] = std::move(error_value);
+  return core::MessageToJson(envelope);
+}
+
 core::Result<std::string> BuildSseJsonRpcPrefix(const google::protobuf::Value& id) {
   const auto envelope = BuildSuccessEnvelopeFromJson(id, {});
   if (!envelope.ok()) {
@@ -808,6 +863,20 @@ core::Result<void> BuildSseJsonRpcEvent(std::string& body, std::string_view pref
   body.append(prefix);
   body.append(event_json.value());
   body.append(kJsonRpcSseSuffix);
+  return {};
+}
+
+core::Result<void> BuildSseJsonRpcErrorEvent(std::string& body, const google::protobuf::Value& id,
+                                             const core::Error& error) {
+  const auto envelope = BuildJsonRpcErrorEnvelope(JsonRpcCodeFromError(error), error.message(), id, error);
+  if (!envelope.ok()) {
+    return envelope.error();
+  }
+  body.clear();
+  body.reserve(kSseDataPrefix.size() + envelope.value().size() + kSseFramingOverhead);
+  body.append(kSseDataPrefix);
+  body.append(envelope.value());
+  body.append(kSseEventTerminator);
   return {};
 }
 
@@ -899,7 +968,16 @@ core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& i
       return written.error();
     }
   }
-  return next.error();
+  const auto append_error = BuildSseJsonRpcErrorEvent(chunk, id, next.error());
+  if (!append_error.ok()) {
+    return append_error.error();
+  }
+  const auto written = WriteSseChunk(transport, chunk);
+  if (!written.ok()) {
+    (*session)->Cancel();
+    return written.error();
+  }
+  return {};
 }
 
 core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value& id,
@@ -1234,47 +1312,8 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
                                                               const ResponseId& id,
                                                               const std::optional<core::Error>& error,
                                                               int http_status) {
-  google::protobuf::Struct envelope;
-  auto* fields = envelope.mutable_fields();
-  (*fields)["jsonrpc"].set_string_value(std::string(core::json_rpc::kVersion));
-  (*fields)["id"] = id.value();
-
-  google::protobuf::Value error_value;
-  auto* error_fields = error_value.mutable_struct_value()->mutable_fields();
-  (*error_fields)["code"].set_number_value(json_rpc_code);
-  (*error_fields)["message"].set_string_value(std::string(message));
-
-  if (error.has_value() && json_rpc_code >= kJsonRpcServerErrorMin && json_rpc_code <= kJsonRpcServerErrorMax) {
-    google::protobuf::Value data;
-    auto* data_values = data.mutable_list_value()->mutable_values();
-    google::protobuf::Value error_info;
-    auto* info_fields = error_info.mutable_struct_value()->mutable_fields();
-    (*info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
-    (*info_fields)["reason"].set_string_value(ErrorInfoReason(*error));
-    (*info_fields)["domain"].set_string_value("a2a-protocol.org");
-
-    const auto& protocol_code = error->protocol_code();
-    const auto& transport = error->transport();
-    if (protocol_code.has_value() || transport.has_value()) {
-      google::protobuf::Value metadata;
-      auto* metadata_fields = metadata.mutable_struct_value()->mutable_fields();
-      if (protocol_code.has_value()) {
-        (*metadata_fields)["protocolCode"].set_string_value(*protocol_code);
-      }
-      if (transport.has_value()) {
-        (*metadata_fields)["transport"].set_string_value(*transport);
-      }
-      (*info_fields)["metadata"] = std::move(metadata);
-    }
-    data_values->Add(std::move(error_info));
-    (*error_fields)["data"] = std::move(data);
-  }
-
-  (*fields)["error"] = std::move(error_value);
-
   auto response = HttpServerResponseBuilder().WithStatus(http_status).WithJsonContentType().WithA2aVersion().Build();
-
-  const auto body = core::MessageToJson(envelope);
+  const auto body = BuildJsonRpcErrorEnvelope(json_rpc_code, message, id.value(), error);
   if (body.ok()) {
     response.body = body.value();
   } else {
