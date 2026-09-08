@@ -100,7 +100,8 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         client_diagnostics = {"client_completion_callback": {"count": 1, "total_ns": 10, "max_ns": 10}}
         server_diagnostics = {"server_cancel_task_total": {"count": 1, "total_ns": 20, "max_ns": 20}}
-        payload = [{"driver_type": "wire_tck_sut", "transport_path": "wire_http_json",
+        payload = [{"scenario": "SubscribeToTask_FirstEventLatency",
+                    "driver_type": "wire_tck_sut", "transport_path": "wire_http_json",
                     "client_subscription_diagnostics": client_diagnostics}]
         sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
         sut_context = mock.MagicMock()
@@ -118,6 +119,96 @@ class PerformanceRunnerTest(unittest.TestCase):
 
         self.assertEqual(server_diagnostics, results[0]["server_subscription_diagnostics"])
         self.assertEqual(client_diagnostics, results[0]["client_subscription_diagnostics"])
+
+    def test_subscription_diagnostics_isolate_each_wire_scenario(self):
+        runner = load_runner_module()
+        scenarios = ("SendStreamingMessage_FiniteStream", "SubscribeToTask_FirstEventLatency")
+        client_diagnostics = {
+            scenario: {"client_completion_callback": {"count": index}}
+            for index, scenario in enumerate(scenarios, start=1)
+        }
+        server_diagnostics = {
+            Path(f"{scenario}.log"): {"server_cancel_task_total": {"count": index}}
+            for index, scenario in enumerate(scenarios, start=1)
+        }
+        contexts = []
+        for index, scenario in enumerate(scenarios):
+            sut = SimpleNamespace(host="127.0.0.1", port=1234 + index,
+                                  log_path=Path(f"{scenario}.log"))
+            context = mock.MagicMock()
+            context.__enter__.return_value = sut
+            contexts.append(context)
+        config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
+                                 duration_seconds=0, wire_driver_timeout_seconds=1,
+                                 report_dir=Path("."))
+
+        def driver_result(command, *_args, **_kwargs):
+            scenario = command[command.index("--scenarios") + 1]
+            return [{"scenario": scenario, "driver_type": "wire_tck_sut",
+                     "transport_path": "wire_grpc",
+                     "client_subscription_diagnostics": client_diagnostics[scenario]}]
+
+        with mock.patch.dict(os.environ, {"A2A_SUBSCRIPTION_DIAGNOSTICS": "1"}), \
+             mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
+             mock.patch.object(runner, "SutProcess", side_effect=contexts) as sut_process, \
+             mock.patch.object(runner, "find_available_sut_port", return_value=1235), \
+             mock.patch.object(runner, "run_command_json", side_effect=driver_result), \
+             mock.patch.object(runner, "read_subscription_diagnostics",
+                               side_effect=lambda path: server_diagnostics[path]):
+            results = runner.run_wire_driver(config, "grpc", "inmemory", 1, 1, 1234)
+
+        self.assertEqual(2, sut_process.call_count)
+        self.assertEqual(scenarios, tuple(result["scenario"] for result in results))
+        for result in results:
+            scenario = result["scenario"]
+            self.assertEqual(client_diagnostics[scenario], result["client_subscription_diagnostics"])
+            self.assertEqual(server_diagnostics[Path(f"{scenario}.log")],
+                             result["server_subscription_diagnostics"])
+        self.assertNotEqual(results[0]["server_subscription_diagnostics"],
+                            results[1]["server_subscription_diagnostics"])
+
+    def test_wire_scenarios_share_one_sut_without_subscription_diagnostics(self):
+        runner = load_runner_module()
+        scenarios = ("SendMessage_CreateTask", "GetTask_ExistingTask")
+        payload = [
+            {"scenario": scenario, "driver_type": "wire_tck_sut", "transport_path": "wire_grpc"}
+            for scenario in scenarios
+        ]
+        sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
+        context = mock.MagicMock()
+        context.__enter__.return_value = sut
+        config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
+                                 duration_seconds=0, wire_driver_timeout_seconds=1,
+                                 report_dir=Path("."))
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
+             mock.patch.object(runner, "SutProcess", return_value=context) as sut_process, \
+             mock.patch.object(runner, "run_command_json", return_value=payload):
+            results = runner.run_wire_driver(config, "grpc", "inmemory", 1, 1, 1234)
+
+        self.assertEqual(payload, results)
+        sut_process.assert_called_once()
+
+    def test_main_skips_in_process_driver_for_wire_only_selection(self):
+        runner = load_runner_module()
+        scenario = "IdleStream_ClientCancellationLatency"
+        wire_result = {"scenario": scenario, "store_backend": "inmemory",
+                       "driver_type": "wire_tck_sut", "transport_path": "wire_grpc",
+                       "transport": "grpc", "concurrency": 1, "errors": 0}
+        with mock.patch.object(runner, "run_driver") as run_driver, \
+             mock.patch.object(runner, "run_wire_driver", return_value=[wire_result]) as run_wire, \
+             mock.patch.object(runner, "find_available_sut_port", return_value=1234), \
+             mock.patch.object(runner, "write_reports") as write_reports:
+            status = runner.main([
+                "--transports", "grpc", "--store-backends", "inmemory",
+                "--concurrency", "1", "--requests", "1", "--warmup-seconds", "0",
+                "--scenarios", scenario,
+            ])
+
+        self.assertEqual(0, status)
+        run_driver.assert_not_called()
+        run_wire.assert_called_once()
+        self.assertEqual([wire_result], write_reports.call_args.args[0])
 
     def test_reads_finite_stream_connection_diagnostics(self):
         runner = load_runner_module()
