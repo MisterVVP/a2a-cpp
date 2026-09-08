@@ -1570,8 +1570,8 @@ TEST(SharedHttpClientTest, DestroyingCopiedClientKeepsSurvivingClientUsable) {
   PersistentSseLoopbackServer server;
   a2a::http::Client client;
   {
-    const a2a::http::Client copy = client;
-    (void)copy;
+    a2a::http::Client copy = client;
+    EXPECT_NE(&copy, &client);
   }
 
   a2a::http::Request request;

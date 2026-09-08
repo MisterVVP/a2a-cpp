@@ -660,8 +660,8 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
                                         std::string(kScenarioPushConfigList),
                                         std::string(kScenarioPushConfigDelete)};
   if (options.transport != kGrpcTransport) {
-    scenarios.push_back(std::string(kScenarioSendStreamingMessageFiniteStreamSharedClient));
-    scenarios.push_back(std::string(kScenarioSubscribeToTaskFirstEventLatencySharedClient));
+    scenarios.emplace_back(kScenarioSendStreamingMessageFiniteStreamSharedClient);
+    scenarios.emplace_back(kScenarioSubscribeToTaskFirstEventLatencySharedClient);
   }
   return scenarios;
 }

@@ -605,14 +605,9 @@ def run_driver(config: RunnerConfig, transport: str, store_backend: str, concurr
 
 
 
-def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int,
-                    postgres_pool_size: int, port: int) -> list[dict[str, object]]:
-    if transport not in WIRE_TRANSPORT_PATHS:
-        raise ValueError(f"unsupported wire transport: {transport}")
-    wire_scenarios = wire_scenarios_for_transport(transport, config.scenarios)
-    if not wire_scenarios:
-        return []
-    wire_driver = ensure_wire_driver(config)
+def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, store_backend: str,
+                       concurrency: int, postgres_pool_size: int, port: int,
+                       scenarios: tuple[str, ...]) -> list[dict[str, object]]:
     with SutProcess(config, store_backend, port, transport, concurrency, postgres_pool_size) as sut:
         command = [
             str(wire_driver),
@@ -624,7 +619,7 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
             "--concurrency", str(concurrency),
             "--warmup-seconds", str(config.warmup_seconds),
             "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(wire_scenarios),
+            "--scenarios", ",".join(scenarios),
         ]
         payload = run_command_json(
             command, config.wire_driver_timeout_seconds,
@@ -642,6 +637,8 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
     for result in payload:
         if result.get("driver_type") != "wire_tck_sut" or result.get("transport_path") != WIRE_TRANSPORT_PATHS[transport]:
             raise ValueError("wire performance driver returned misleading metadata")
+        if result.get("scenario") not in scenarios:
+            raise ValueError("wire performance driver returned an unrequested scenario")
         result["postgres_pool_size"] = postgres_pool_size if store_backend == "postgres" else None
         if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and "client_subscription_diagnostics" not in result:
             raise ValueError("subscription diagnostics were requested but the wire driver did not report client diagnostics")
@@ -650,6 +647,30 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
         if server_subscription_diagnostics:
             result["server_subscription_diagnostics"] = server_subscription_diagnostics
     return payload
+
+
+def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, concurrency: int,
+                    postgres_pool_size: int, port: int) -> list[dict[str, object]]:
+    if transport not in WIRE_TRANSPORT_PATHS:
+        raise ValueError(f"unsupported wire transport: {transport}")
+    wire_scenarios = wire_scenarios_for_transport(transport, config.scenarios)
+    if not wire_scenarios:
+        return []
+    wire_driver = ensure_wire_driver(config)
+    if not subscription_diagnostics_requested():
+        return run_wire_scenarios(
+            config, wire_driver, transport, store_backend, concurrency,
+            postgres_pool_size, port, wire_scenarios,
+        )
+
+    results = []
+    for index, scenario in enumerate(wire_scenarios):
+        scenario_port = port if index == 0 else find_available_sut_port()
+        results.extend(run_wire_scenarios(
+            config, wire_driver, transport, store_backend, concurrency,
+            postgres_pool_size, scenario_port, (scenario,),
+        ))
+    return results
 
 
 def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
@@ -1354,6 +1375,7 @@ def main(argv: list[str]) -> int:
         results = []
         log_workload_estimate(config)
         in_process_transport = config.transports[0]
+        selected_in_process_scenarios = in_process_scenarios(config.scenarios)
         last_schema = None
         for store_backend in config.store_backends:
             pool_sizes = config.postgres_pool_sizes if store_backend == "postgres" else (DEFAULT_POSTGRES_POOL_SIZE,)
@@ -1365,18 +1387,20 @@ def main(argv: list[str]) -> int:
                             profile_name = "write" if config.profile == POSTGRES_WRITE_PROFILE else "tail"
                             schema = (f"a2a_{profile_name}_p{postgres_pool_size}_c{concurrency}_"
                                       f"r{repetition}_{os.getpid()}")
-                        run_results = run_with_progress(
-                            "in-process",
-                            lambda schema=schema: (
-                                run_profile_coordinate(
-                                    config, in_process_transport, concurrency, postgres_pool_size,
-                                    schema or "", repetition, config.scenarios or (),
-                                ) if config.profile == POSTGRES_WRITE_PROFILE else
-                                run_driver(config, in_process_transport, store_backend, concurrency,
-                                           postgres_pool_size, in_process_scenarios(config.scenarios), schema)
-                            ),
-                            in_process_transport, store_backend, concurrency, config.requests,
-                        )
+                        run_results = []
+                        if config.profile == POSTGRES_WRITE_PROFILE or selected_in_process_scenarios:
+                            run_results = run_with_progress(
+                                "in-process",
+                                lambda schema=schema: (
+                                    run_profile_coordinate(
+                                        config, in_process_transport, concurrency, postgres_pool_size,
+                                        schema or "", repetition, config.scenarios or (),
+                                    ) if config.profile == POSTGRES_WRITE_PROFILE else
+                                    run_driver(config, in_process_transport, store_backend, concurrency,
+                                               postgres_pool_size, selected_in_process_scenarios, schema)
+                                ),
+                                in_process_transport, store_backend, concurrency, config.requests,
+                            )
                         if config.profile in POSTGRES_PROFILES:
                             for result in run_results:
                                 result["repetition"] = repetition

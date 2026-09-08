@@ -38,17 +38,21 @@ belonging to another stream, or from any external thread, waits until the target
 stream can no longer call its observer. Per-stream serialization preserves event
 order even when successive callbacks run on different shared workers.
 
-## Default HTTP network reactor
+## Default HTTP network reactor pool
 
-Streams issued through one default libcurl-backed HTTP client share a single
-`CURLM` multi handle and reactor thread. The reactor is the only thread that
-adds or removes easy handles. Start, cancellation, and shutdown operations are
-serialized through a synchronized command queue.
+Default libcurl-backed HTTP clients use a bounded, process-wide pool of at most
+four reactors. Each reactor owns a `CURLM` multi handle and thread and is the
+only thread that adds or removes easy handles from that multi handle. Start,
+cancellation, and shutdown operations are serialized through its synchronized
+command queue.
 
-The reactor is initialized lazily by the first streaming request. Constructing
-or using a client exclusively for unary requests does not start a streaming
-reactor thread; concurrent first-stream calls synchronize initialization and
-reuse the same reactor.
+Both unary and streaming HTTP transfers acquire reactor infrastructure. The
+pool creates a reactor lazily when either kind of transfer first selects an
+uninitialized pool slot; initialization is not specific to streaming requests.
+Acquired unary-request and stream slots retain their reactor affinity when they
+are reused, preserving access to that reactor's libcurl connection cache. A
+process can therefore have up to four live reactor threads, depending on which
+pool slots active clients and transfers acquire.
 
 On Linux, libcurl socket and timer callbacks maintain an `epoll` readiness set
 and a `timerfd`. An `eventfd` wakes the reactor immediately for queued commands,
@@ -69,7 +73,7 @@ to the returned `StreamHandle` and are cancelled and joined when that handle is
 cancelled or destroyed.
 
 The synchronous `a2a::http::Client::StreamRequest()` API waits for its transfer
-while network I/O progresses on the shared reactor. Injected custom stream
+while network I/O progresses on the transfer's reactor. Injected custom stream
 requesters retain their existing synchronous compatibility path.
 
 ## Handles, cancellation, and timeouts
