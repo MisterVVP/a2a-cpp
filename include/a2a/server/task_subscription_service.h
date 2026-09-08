@@ -50,7 +50,9 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     lf::a2a::v1::Task current_task;
     std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
     std::atomic_bool closed = false;
-    std::atomic_size_t queued_event_count = 0;
+    // Counts published events until Next()/NextFor() hands them to the caller,
+    // including an event already staged at a coroutine yield point.
+    std::atomic_size_t pending_delivery_count = 0;
     std::coroutine_handle<StreamResponseCoroutine::promise_type> continuation;
     std::size_t active_resumes = 0;
     std::mutex mutex;
@@ -77,6 +79,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     void Cancel() noexcept override;
 
    private:
+    void RecordDeliveredEvent(const std::optional<lf::a2a::v1::StreamResponse>& event) noexcept;
     std::shared_ptr<ServiceState> service_state_;
     std::shared_ptr<SubscriberState> state_;
     std::atomic_bool cancelled_ = false;

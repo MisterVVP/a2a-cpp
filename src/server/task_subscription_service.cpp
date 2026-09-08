@@ -82,7 +82,6 @@ class TaskSubscriptionService::SubscriberEventAwaitable final {
     }
     auto event = std::move(state_->events.front());
     state_->events.pop_front();
-    state_->queued_event_count.fetch_sub(1);
     return *event;
   }
 
@@ -100,7 +99,9 @@ TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() { Cancel();
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
   try {
-    return coroutine_.Next();
+    auto event = coroutine_.Next();
+    RecordDeliveredEvent(event);
+    return event;
   } catch (const std::exception& ex) {
     return core::Error::Internal(ex.what());
   }
@@ -109,14 +110,24 @@ core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
     std::chrono::milliseconds timeout) {
   try {
-    return coroutine_.NextFor(timeout);
+    auto event = coroutine_.NextFor(timeout);
+    RecordDeliveredEvent(event);
+    return event;
   } catch (const std::exception& ex) {
     return core::Error::Internal(ex.what());
   }
 }
 
 bool TaskSubscriptionService::SubscriptionSession::IsLive() const noexcept {
-  return state_ != nullptr && !coroutine_.IsDone();
+  return state_ != nullptr && !coroutine_.IsDone() &&
+         (!state_->closed.load() || state_->pending_delivery_count.load() != 0);
+}
+
+void TaskSubscriptionService::SubscriptionSession::RecordDeliveredEvent(
+    const std::optional<lf::a2a::v1::StreamResponse>& event) noexcept {
+  if (event.has_value() && event->has_status_update()) {
+    state_->pending_delivery_count.fetch_sub(1);
+  }
 }
 
 void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
@@ -194,7 +205,7 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
       std::lock_guard lock(subscriber->mutex);
       if (!subscriber->closed.load()) {
         subscriber->events.push_back(event);
-        subscriber->queued_event_count.fetch_add(1);
+        subscriber->pending_delivery_count.fetch_add(1);
         subscriber->closed.store(close_after_event);
       }
     }
