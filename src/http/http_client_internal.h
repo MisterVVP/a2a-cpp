@@ -81,6 +81,8 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   void WaitForPortableEvents();
   static int HandleSocket(CURL* easy_handle, curl_socket_t socket, int action, void* user_data, void* socket_data);
   static int HandleTimer(CURLM* multi_handle, long timeout_ms, void* user_data);
+  static constexpr long kDefaultPortablePollTimeoutMs = 1000L;
+  long portable_poll_timeout_ms_ = kDefaultPortablePollTimeoutMs;
 #endif
 
   CURLM* multi_handle_ = nullptr;

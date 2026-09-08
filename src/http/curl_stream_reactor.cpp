@@ -14,9 +14,11 @@
 #include <cerrno>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -357,7 +359,9 @@ int CurlStreamReactor::HandleTimer(CURLM* multi_handle, long timeout_ms, void* u
 #else
 void CurlStreamReactor::WaitForPortableEvents() {
   int ready = 0;
-  const CURLMcode poll_code = curl_multi_poll(multi_handle_, nullptr, 0, -1, &ready);
+  const long bounded_timeout =
+      (std::min)(portable_poll_timeout_ms_, static_cast<long>((std::numeric_limits<int>::max)()));
+  const CURLMcode poll_code = curl_multi_poll(multi_handle_, nullptr, 0, static_cast<int>(bounded_timeout), &ready);
   if (poll_code != CURLM_OK) {
     FailAll(CURLE_RECV_ERROR);
     return;
@@ -370,7 +374,11 @@ void CurlStreamReactor::WaitForPortableEvents() {
 }
 
 int CurlStreamReactor::HandleSocket(CURL*, curl_socket_t, int, void*, void*) { return 0; }
-int CurlStreamReactor::HandleTimer(CURLM*, long, void*) { return 0; }
+int CurlStreamReactor::HandleTimer(CURLM*, long timeout_ms, void* user_data) {
+  auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+  reactor->portable_poll_timeout_ms_ = timeout_ms >= 0 ? timeout_ms : kDefaultPortablePollTimeoutMs;
+  return 0;
+}
 #endif
 
 std::shared_ptr<CurlStreamReactor> CurlStreamReactorPool::Acquire() {
