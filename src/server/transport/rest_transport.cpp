@@ -328,8 +328,8 @@ core::Result<void> BuildSseErrorEvent(std::string& body, const core::Error& erro
   google::protobuf::Struct payload;
   auto* fields = payload.mutable_fields();
   (*fields)[std::string(kSseErrorMessageMemberName)].set_string_value(std::string(error.message()));
-  if (error.protocol_code().has_value()) {
-    (*fields)[std::string(kSseErrorCodeMemberName)].set_string_value(*error.protocol_code());
+  if (const auto& protocol_code = error.protocol_code(); protocol_code.has_value()) {
+    (*fields)[std::string(kSseErrorCodeMemberName)].set_string_value(*protocol_code);
   }
   const auto payload_json = core::MessageToJson(payload);
   if (!payload_json.ok()) {
