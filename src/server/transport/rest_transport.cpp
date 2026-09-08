@@ -327,7 +327,7 @@ core::Result<void> BuildSseEvent(std::string& body, const lf::a2a::v1::StreamRes
 core::Result<void> BuildSseErrorEvent(std::string& body, const core::Error& error) {
   google::protobuf::Struct payload;
   auto* fields = payload.mutable_fields();
-  (*fields)[std::string(kSseErrorMessageMemberName)].set_string_value(error.message());
+  (*fields)[std::string(kSseErrorMessageMemberName)].set_string_value(std::string(error.message()));
   if (error.protocol_code().has_value()) {
     (*fields)[std::string(kSseErrorCodeMemberName)].set_string_value(*error.protocol_code());
   }
