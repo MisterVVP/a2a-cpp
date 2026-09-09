@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -22,23 +23,23 @@
 #include "a2a/client/grpc_transport.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/version.h"
+#include "a2a/http/http_client.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
 #include "a2a_performance_driver.h"
+#include "sut/tck_sut.h"
 
 namespace {
 
 using namespace a2a::tests::performance;
 
 constexpr std::string_view kWireDriverType = "wire_tck_sut";
-constexpr std::string_view kHostDefault = "127.0.0.1";
 constexpr int kEndpointReserveSlack = 32;
 constexpr int kListFixtureTaskCount = 20;
-constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
-constexpr std::string_view kA2aVersionHeader = "A2A-Version";
-constexpr std::string_view kA2aVersion = "1.0";
 constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
 constexpr int kFocusedListConfigCount = 3;
 constexpr std::string_view kScenarioSendStreamingMessageFiniteStreamSharedClient =
@@ -131,7 +132,7 @@ class CountingObserver final : public a2a::client::StreamObserver {
 struct WireOptions final {
   std::string transport = std::string(kGrpcTransport);
   std::string store_backend = std::string(kInMemoryStore);
-  std::string host = std::string(kHostDefault);
+  std::string host = std::string(a2a::tests::sut::kDefaultHost);
   int port = 0;
   int requests = kDefaultRequests;
   int concurrency = kDefaultConcurrency;
@@ -143,7 +144,7 @@ struct WireOptions final {
 std::string HttpEndpoint(const WireOptions& options, std::string_view path) {
   std::string endpoint;
   endpoint.reserve(options.host.size() + path.size() + kEndpointReserveSlack);
-  endpoint.append("http://");
+  endpoint.append(a2a::core::http::kHttpScheme);
   endpoint.append(options.host);
   endpoint.push_back(':');
   endpoint.append(std::to_string(options.port));
@@ -156,7 +157,7 @@ std::string GrpcEndpoint(const WireOptions& options) {
   endpoint.reserve(options.host.size() + kEndpointReserveSlack);
   endpoint.append(options.host);
   endpoint.push_back(':');
-  endpoint.append(std::to_string(options.port + 1));
+  endpoint.append(std::to_string(options.port + a2a::tests::sut::kGrpcPortOffset));
   return endpoint;
 }
 
@@ -169,20 +170,21 @@ a2a::client::ResolvedInterface MakeResolvedInterface(const WireOptions& options)
   }
   if (options.transport == kJsonRpcTransport) {
     return {.transport = a2a::client::PreferredTransport::kJsonRpc,
-            .url = HttpEndpoint(options, "/rpc"),
+            .url = HttpEndpoint(options, a2a::tests::sut::kJsonRpcPath),
             .security_requirements = {},
             .security_schemes = {}};
   }
   return {.transport = a2a::client::PreferredTransport::kRest,
-          .url = HttpEndpoint(options, "/a2a"),
+          .url = HttpEndpoint(options, a2a::tests::sut::kRestApiBasePath),
           .security_requirements = {},
           .security_schemes = {}};
 }
 
 a2a::client::CallOptions MakeCallOptions() {
   a2a::client::CallOptions options;
-  options.headers.emplace(std::string(kA2aVersionHeader), std::string(kA2aVersion));
-  options.extensions.emplace_back(kTckRequiredExtensionUri);
+  options.headers.emplace(std::string(a2a::core::Version::kHeaderName),
+                          std::string(a2a::core::Version::kProtocolVersion));
+  options.extensions.emplace_back(a2a::tests::sut::kRequiredExtensionUri);
   return options;
 }
 
@@ -198,6 +200,20 @@ std::unique_ptr<a2a::client::A2AClient> MakeClient(const WireOptions& options) {
   }
   return std::make_unique<a2a::client::A2AClient>(a2a::client::HttpJsonTransport::CreateDefault(std::move(resolved)));
 }
+
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+bool ResetServerSubscriptionDiagnostics(const WireOptions& options) noexcept {
+  try {
+    a2a::http::Request request;
+    request.method = a2a::core::http::kMethodPost;
+    request.url = HttpEndpoint(options, a2a::tests::sut::kDiagnosticsResetPath);
+    const auto response = a2a::http::Client().SendRequest(request);
+    return response.ok() && response.value().status_code == a2a::core::http::kStatusNoContent;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+#endif
 
 std::string SeedTask(a2a::client::A2AClient* client, std::string_view message_id,
                      const a2a::client::CallOptions& call_options) {
@@ -551,9 +567,19 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  if (use_shared_http_client) {
-    warmup_client.reset();
+  // Everything above this point is warmup or fixture preparation. Release its
+  // resources and reset both processes before observing measured operations.
+  warmup_client.reset();
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  if (!ResetServerSubscriptionDiagnostics(options)) {
+    ScenarioResult failed;
+    failed.scenario = scenario;
+    failed.operations = options.requests;
+    failed.errors = options.requests;
+    return failed;
   }
+  (void)a2a::core::subscription_diagnostics::TakeSnapshot();
+#endif
   ScenarioResult result =
       RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
                           [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_client](
@@ -748,9 +774,6 @@ int main(int argc, char** argv) {
   std::cout << "[\n";
   bool first = true;
   for (const std::string& scenario : SelectedScenarios(options)) {
-#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-    (void)a2a::core::subscription_diagnostics::TakeSnapshot();
-#endif
     const auto result = RunWireScenario(options, scenario);
     WriteResultJson(options, result, first
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)

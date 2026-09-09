@@ -37,6 +37,7 @@
 
 #include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/http_constants.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
@@ -245,7 +246,18 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       awaiting_request_after_finite_stream = false;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = mux.RouteRequest(request);
+    a2a::core::Result<a2a::server::HttpServerResponse> response =
+        [&request, &mux]() -> a2a::core::Result<a2a::server::HttpServerResponse> {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+      if (request.target == kDiagnosticsResetPath) {
+        (void)a2a::core::subscription_diagnostics::TakeSnapshot();
+        a2a::server::HttpServerResponse reset_response;
+        reset_response.status_code = a2a::core::http::kStatusNoContent;
+        return reset_response;
+      }
+#endif
+      return mux.RouteRequest(request);
+    }();
     if (!response.ok()) {
       break;
     }
@@ -448,13 +460,14 @@ int RunTckSut(int argc, char** argv) {
   executor.ShutdownSubscriptions();
   std::cerr << "TCK SUT shutdown: shutting down active HTTP sockets\n";
   connection_registry.ShutdownActiveSockets();
-  EmitHttpDiagnostics();
   std::cerr << "TCK SUT shutdown: joining HTTP connection threads\n";
   for (auto& connection_thread : connection_threads) {
     if (connection_thread.joinable()) {
       connection_thread.join();
     }
   }
+  std::cerr << "TCK SUT shutdown: HTTP connection threads joined\n";
+  EmitHttpDiagnostics();
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   EmitSubscriptionDiagnostics();
 #endif

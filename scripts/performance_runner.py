@@ -688,6 +688,17 @@ def in_process_scenarios(scenarios: tuple[str, ...] | None = None) -> tuple[str,
     return tuple(scenario for scenario in scenarios if scenario in IN_PROCESS_SCENARIOS)
 
 
+def validate_runnable_plan(config: RunnerConfig) -> None:
+    if config.profile in POSTGRES_PROFILES:
+        return
+    has_in_process = bool(in_process_scenarios(config.scenarios))
+    has_wire = any(wire_scenarios_for_transport(transport, config.scenarios) for transport in config.transports)
+    if not has_in_process and not has_wire:
+        raise ValueError(
+            "selected transport/scenario combination has no runnable scenario"
+        )
+
+
 def split_csv(value: str, allowed: Iterable[str] | None = None) -> tuple[str, ...]:
     items = tuple(item.strip() for item in value.split(",") if item.strip())
     if not items:
@@ -1372,6 +1383,7 @@ def run_with_progress(label: str, runner: Callable[[], list[dict[str, object]]],
 def main(argv: list[str]) -> int:
     try:
         config = parse_args(argv)
+        validate_runnable_plan(config)
         results = []
         log_workload_estimate(config)
         in_process_transport = config.transports[0]

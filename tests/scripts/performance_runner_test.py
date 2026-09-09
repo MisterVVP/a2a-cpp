@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import io
 import json
 import os
 import socket
@@ -209,6 +210,53 @@ class PerformanceRunnerTest(unittest.TestCase):
         run_driver.assert_not_called()
         run_wire.assert_called_once()
         self.assertEqual([wire_result], write_reports.call_args.args[0])
+
+    def test_main_rejects_grpc_shared_client_only_selection(self):
+        runner = load_runner_module()
+        scenario = "SendStreamingMessage_FiniteStream_SharedClient"
+        stderr = io.StringIO()
+        with mock.patch.object(runner, "run_driver") as run_driver, \
+             mock.patch.object(runner, "run_wire_driver") as run_wire:
+            with mock.patch("sys.stderr", stderr):
+                status = runner.main([
+                    "--transports", "grpc", "--store-backends", "inmemory",
+                    "--concurrency", "1", "--requests", "1", "--warmup-seconds", "0",
+                    "--scenarios", scenario,
+                ])
+
+        self.assertEqual(2, status)
+        self.assertIn("transport/scenario combination has no runnable scenario", stderr.getvalue())
+        run_driver.assert_not_called()
+        run_wire.assert_not_called()
+
+    def test_runnable_plan_accepts_supported_and_mixed_shared_client_selections(self):
+        runner = load_runner_module()
+        scenario = "SendStreamingMessage_FiniteStream_SharedClient"
+        for transports in (("http_json",), ("grpc", "http_json")):
+            with self.subTest(transports=transports):
+                config = SimpleNamespace(
+                    profile="standard", scenarios=(scenario,), transports=transports
+                )
+                runner.validate_runnable_plan(config)
+
+    def test_runnable_plan_accepts_wire_only_selection(self):
+        runner = load_runner_module()
+        config = SimpleNamespace(
+            profile="standard", scenarios=("IdleStream_ClientCancellationLatency",),
+            transports=("grpc",)
+        )
+        runner.validate_runnable_plan(config)
+
+    def test_runnable_plan_accepts_in_process_only_selection(self):
+        runner = load_runner_module()
+        scenario = next(
+            scenario for scenario in runner.IN_PROCESS_SCENARIOS
+            if scenario not in runner.WIRE_SCENARIOS
+        )
+        config = SimpleNamespace(
+            profile=None, scenarios=(scenario,), transports=("grpc",)
+        )
+        runner.validate_runnable_plan(config)
 
     def test_reads_finite_stream_connection_diagnostics(self):
         runner = load_runner_module()
