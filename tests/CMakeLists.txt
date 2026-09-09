@@ -981,6 +981,7 @@ target_include_directories(a2a_performance_driver
 
 target_include_directories(a2a_wire_performance_driver
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/support
 )
 

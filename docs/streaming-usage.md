@@ -62,12 +62,12 @@ use libcurl's event-driven multi wakeup fallback without a fixed wake interval.
 
 `A2AClient::Destroy()` explicitly shuts down a default HTTP transport. It rejects
 new streams, wakes and drains the reactor, and cancels and detaches active
-transfers. From an external thread, destruction waits for already-dispatched
-observer work before returning. When called reentrantly from a stream callback,
-the current callback may finish naturally, but no new callback for that stream
-begins after `Destroy()` returns. A callback for another stream that was already
-executing concurrently is likewise allowed to finish naturally; shutdown does
-not forcibly terminate application code. Injected custom synchronous requesters
+transfers. It prevents further network stream activity, but it does not forcibly
+terminate or join application callback code: an observer callback that was
+already executing may finish naturally after `Destroy()` returns. Callers must
+therefore synchronize callback completion separately before destroying
+observer-owned state that another thread may still be using. No new callback for
+a stream begins after its shutdown has taken effect. Injected custom synchronous requesters
 are not owned by transport shutdown; their compatibility workers stay attached
 to the returned `StreamHandle` and are cancelled and joined when that handle is
 cancelled or destroyed.

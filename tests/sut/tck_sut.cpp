@@ -57,6 +57,7 @@ using namespace a2a::tests::sut;
 
 constexpr int kListenBacklog = 128;
 constexpr int kReuseAddress = 1;
+constexpr int kHttpNoContentStatus = 204;
 constexpr int kMaxHttpPort = 65534;
 // Keep the non-blocking accept loop responsive for HTTP wire-performance clients.
 constexpr int kAcceptRetryDelayMillis = 1;
@@ -245,7 +246,18 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       awaiting_request_after_finite_stream = false;
     }
     a2a::server::HttpServerRequest request = std::move(parsed.value());
-    auto response = mux.RouteRequest(request);
+    a2a::core::Result<a2a::server::HttpServerResponse> response =
+        [&request, &mux]() -> a2a::core::Result<a2a::server::HttpServerResponse> {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+      if (request.target == kDiagnosticsResetPath) {
+        (void)a2a::core::subscription_diagnostics::TakeSnapshot();
+        a2a::server::HttpServerResponse reset_response;
+        reset_response.status_code = kHttpNoContentStatus;
+        return reset_response;
+      }
+#endif
+      return mux.RouteRequest(request);
+    }();
     if (!response.ok()) {
       break;
     }
@@ -448,13 +460,14 @@ int RunTckSut(int argc, char** argv) {
   executor.ShutdownSubscriptions();
   std::cerr << "TCK SUT shutdown: shutting down active HTTP sockets\n";
   connection_registry.ShutdownActiveSockets();
-  EmitHttpDiagnostics();
   std::cerr << "TCK SUT shutdown: joining HTTP connection threads\n";
   for (auto& connection_thread : connection_threads) {
     if (connection_thread.joinable()) {
       connection_thread.join();
     }
   }
+  std::cerr << "TCK SUT shutdown: HTTP connection threads joined\n";
+  EmitHttpDiagnostics();
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   EmitSubscriptionDiagnostics();
 #endif

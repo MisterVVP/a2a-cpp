@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -23,10 +24,12 @@
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/protojson.h"
+#include "a2a/http/http_client.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
 #include "a2a_performance_driver.h"
+#include "sut/tck_sut.h"
 
 namespace {
 
@@ -39,6 +42,8 @@ constexpr int kListFixtureTaskCount = 20;
 constexpr std::string_view kTckRequiredExtensionUri = "urn:a2a:tck:required-extension";
 constexpr std::string_view kA2aVersionHeader = "A2A-Version";
 constexpr std::string_view kA2aVersion = "1.0";
+constexpr std::string_view kHttpPostMethod = "POST";
+constexpr int kHttpNoContentStatus = 204;
 constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
 constexpr int kFocusedListConfigCount = 3;
 constexpr std::string_view kScenarioSendStreamingMessageFiniteStreamSharedClient =
@@ -198,6 +203,20 @@ std::unique_ptr<a2a::client::A2AClient> MakeClient(const WireOptions& options) {
   }
   return std::make_unique<a2a::client::A2AClient>(a2a::client::HttpJsonTransport::CreateDefault(std::move(resolved)));
 }
+
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+bool ResetServerSubscriptionDiagnostics(const WireOptions& options) noexcept {
+  try {
+    a2a::http::Request request;
+    request.method = kHttpPostMethod;
+    request.url = HttpEndpoint(options, a2a::tests::sut::kDiagnosticsResetPath);
+    const auto response = a2a::http::Client().SendRequest(request);
+    return response.ok() && response.value().status_code == kHttpNoContentStatus;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+#endif
 
 std::string SeedTask(a2a::client::A2AClient* client, std::string_view message_id,
                      const a2a::client::CallOptions& call_options) {
@@ -551,9 +570,19 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  if (use_shared_http_client) {
-    warmup_client.reset();
+  // Everything above this point is warmup or fixture preparation. Release its
+  // resources and reset both processes before observing measured operations.
+  warmup_client.reset();
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  if (!ResetServerSubscriptionDiagnostics(options)) {
+    ScenarioResult failed;
+    failed.scenario = scenario;
+    failed.operations = options.requests;
+    failed.errors = options.requests;
+    return failed;
   }
+  (void)a2a::core::subscription_diagnostics::TakeSnapshot();
+#endif
   ScenarioResult result =
       RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
                           [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_client](
@@ -748,9 +777,6 @@ int main(int argc, char** argv) {
   std::cout << "[\n";
   bool first = true;
   for (const std::string& scenario : SelectedScenarios(options)) {
-#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-    (void)a2a::core::subscription_diagnostics::TakeSnapshot();
-#endif
     const auto result = RunWireScenario(options, scenario);
     WriteResultJson(options, result, first
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)

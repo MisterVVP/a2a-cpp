@@ -192,6 +192,9 @@ def main() -> int:
         output = process.stdout.read()
         expected_connections = f"accepted_connections={EXPECTED_COUNTED_CONNECTIONS}".encode("ascii")
         assert expected_connections in output
+        join_marker = b"TCK SUT shutdown: HTTP connection threads joined"
+        diagnostics_marker = b"A2A_HTTP_DIAGNOSTICS"
+        assert output.index(join_marker) < output.index(diagnostics_marker)
     finally:
         if idle_client is not None:
             idle_client.close()
