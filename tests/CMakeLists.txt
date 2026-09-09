@@ -855,7 +855,11 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::proto_generated
 )
 
-add_executable(tck_sut sut/tck_sut.cpp)
+add_executable(tck_sut
+  sut/tck_sut.cpp
+  sut/tck_sut_http_server.cpp
+  sut/tck_sut_store.cpp
+)
 target_include_directories(tck_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/tests/support/example_support)
 target_link_libraries(tck_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
 
@@ -941,10 +945,26 @@ gtest_discover_tests(a2a_performance_driver_test)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME subscription_diagnostics_symbol_command_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test_test.py
+  )
   if(NOT A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    if(MSVC)
+      find_program(A2A_SYMBOL_INSPECTOR NAMES dumpbin REQUIRED)
+      set(A2A_SYMBOL_INSPECTOR_ARGUMENT /symbols)
+    elseif(CMAKE_NM)
+      set(A2A_SYMBOL_INSPECTOR ${CMAKE_NM})
+      set(A2A_SYMBOL_INSPECTOR_ARGUMENT -C)
+    else()
+      find_program(A2A_SYMBOL_INSPECTOR NAMES llvm-nm nm REQUIRED)
+      set(A2A_SYMBOL_INSPECTOR_ARGUMENT -C)
+    endif()
     add_test(
       NAME subscription_diagnostics_normal_build_test
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test.py
+              --symbol-tool ${A2A_SYMBOL_INSPECTOR}
+              --symbol-argument=${A2A_SYMBOL_INSPECTOR_ARGUMENT}
               $<TARGET_FILE:a2a_core> $<TARGET_FILE:a2a_client> $<TARGET_FILE:a2a_server>
     )
   endif()
@@ -952,6 +972,13 @@ if(Python3_Interpreter_FOUND)
     NAME http_persistence_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:tck_sut>
   )
+  if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    add_test(
+      NAME http_diagnostics_reset_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_diagnostics_reset_test.py
+              $<TARGET_FILE:tck_sut>
+    )
+  endif()
   add_test(
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
