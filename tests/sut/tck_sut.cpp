@@ -37,6 +37,7 @@
 
 #include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/http_constants.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
@@ -57,7 +58,6 @@ using namespace a2a::tests::sut;
 
 constexpr int kListenBacklog = 128;
 constexpr int kReuseAddress = 1;
-constexpr int kHttpNoContentStatus = 204;
 constexpr int kMaxHttpPort = 65534;
 // Keep the non-blocking accept loop responsive for HTTP wire-performance clients.
 constexpr int kAcceptRetryDelayMillis = 1;
@@ -252,7 +252,7 @@ void HandleHttpConnection(int fd, const a2a::server::TransportMux& mux, HttpConn
       if (request.target == kDiagnosticsResetPath) {
         (void)a2a::core::subscription_diagnostics::TakeSnapshot();
         a2a::server::HttpServerResponse reset_response;
-        reset_response.status_code = kHttpNoContentStatus;
+        reset_response.status_code = a2a::core::http::kStatusNoContent;
         return reset_response;
       }
 #endif
