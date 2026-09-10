@@ -20,6 +20,7 @@
 #include <cstring>
 #include <iostream>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -95,11 +96,28 @@ class HttpConnectionRegistry final {
 };
 
 struct HttpDiagnostics final {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  // Measurement requests hold a shared lock through accounting; reset requests
+  // take the exclusive lock to establish a clean diagnostics boundary.
+  std::shared_mutex measurement_mutex;
+  std::uint64_t generation = 0;
+#endif
   std::atomic<std::uint64_t> accepted_unary_connections{0};
   std::atomic<std::uint64_t> completed_unary_operations{0};
   std::atomic<std::uint64_t> finite_stream_connections{0};
   std::atomic<std::uint64_t> completed_finite_streams{0};
   std::atomic<std::uint64_t> connections_reused_after_finite_stream{0};
+
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  void ResetCounters() noexcept {
+    ++generation;
+    accepted_unary_connections.store(0, std::memory_order_relaxed);
+    completed_unary_operations.store(0, std::memory_order_relaxed);
+    finite_stream_connections.store(0, std::memory_order_relaxed);
+    completed_finite_streams.store(0, std::memory_order_relaxed);
+    connections_reused_after_finite_stream.store(0, std::memory_order_relaxed);
+  }
+#endif
 };
 
 [[nodiscard]] bool IsDiagnosticsResetRequest(const server::HttpServerRequest& request) {
@@ -156,6 +174,9 @@ void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectio
   bool completed_unary_on_connection = false;
   bool completed_finite_stream_on_connection = false;
   bool awaiting_request_after_finite_stream = false;
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  std::uint64_t diagnostics_generation = 0;
+#endif
   while (true) {
     auto parsed = adapter.ReadRequest(socket_transport, connection_state, kHttpHostHeader);
     if (!parsed.ok()) {
@@ -163,6 +184,22 @@ void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectio
     }
     server::HttpServerRequest request = std::move(parsed.value());
     const bool is_diagnostics_reset = IsDiagnosticsResetRequest(request);
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    std::shared_lock measurement_lock(diagnostics.measurement_mutex, std::defer_lock);
+    std::unique_lock reset_lock(diagnostics.measurement_mutex, std::defer_lock);
+    if (is_diagnostics_reset) {
+      reset_lock.lock();
+      diagnostics.ResetCounters();
+    } else {
+      measurement_lock.lock();
+    }
+    if (diagnostics_generation != diagnostics.generation) {
+      diagnostics_generation = diagnostics.generation;
+      completed_unary_on_connection = false;
+      completed_finite_stream_on_connection = false;
+      awaiting_request_after_finite_stream = false;
+    }
+#endif
     if (!is_diagnostics_reset && awaiting_request_after_finite_stream) {
       diagnostics.connections_reused_after_finite_stream.fetch_add(1, std::memory_order_relaxed);
       awaiting_request_after_finite_stream = false;

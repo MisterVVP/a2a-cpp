@@ -46,8 +46,12 @@ def reset_request() -> bytes:
 
 def run_requests(port: int) -> None:
     with connect(port) as client:
+        client.sendall(request())
+        setup_response, carry = read_response(client)
+        assert setup_response.startswith(HTTP_OK)
+        assert CONNECTION_CLOSE not in setup_response
         client.sendall(reset_request())
-        reset_response, carry = read_response(client)
+        reset_response, carry = read_response(client, carry)
         assert reset_response.startswith(HTTP_NO_CONTENT)
         assert CONNECTION_CLOSE not in reset_response
         client.sendall(request(b"close"))
