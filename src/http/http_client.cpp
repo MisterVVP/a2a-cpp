@@ -117,7 +117,9 @@ constexpr std::size_t kMaxIdleRequestSlots = 64U;
 constexpr std::size_t kMaxIdleStreamSlots = 64U;
 constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
 constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
+constexpr std::size_t kStreamDispatchWorkerCount = 4U;
 constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
+constexpr std::string_view kDispatchInitializationFailureMessage = "failed to initialize HTTP stream callback executor";
 constexpr std::chrono::milliseconds kSynchronousCancellationCheckInterval{1};
 
 thread_local detail::ClientState* g_dispatch_client_state = nullptr;
@@ -550,25 +552,23 @@ CURLcode PerformCurlTransfer(CURL* handle, const std::shared_ptr<detail::CurlStr
 class StreamDispatchExecutor final {
  public:
   using Task = std::function<void()>;
+  using WorkerFactory = std::function<std::thread(Task)>;
 
-  StreamDispatchExecutor() {
-    constexpr std::size_t kWorkerCount = 4U;
-    workers_.reserve(kWorkerCount);
-    for (std::size_t index = 0; index < kWorkerCount; ++index) {
-      workers_.emplace_back([this] { Run(); });
+  StreamDispatchExecutor() : StreamDispatchExecutor([](Task task) { return std::thread(std::move(task)); }) {}
+
+  explicit StreamDispatchExecutor(const WorkerFactory& worker_factory) {
+    workers_.reserve(kStreamDispatchWorkerCount);
+    try {
+      for (std::size_t index = 0; index < kStreamDispatchWorkerCount; ++index) {
+        workers_.emplace_back(worker_factory([this] { Run(); }));
+      }
+    } catch (...) {
+      StopAndJoinWorkers();
+      throw;
     }
   }
 
-  ~StreamDispatchExecutor() {
-    {
-      std::lock_guard lock(mutex_);
-      stopping_ = true;
-    }
-    available_.notify_all();
-    for (auto& worker : workers_) {
-      worker.join();
-    }
-  }
+  ~StreamDispatchExecutor() { StopAndJoinWorkers(); }
 
   void Submit(Task task) {
     {
@@ -579,6 +579,19 @@ class StreamDispatchExecutor final {
   }
 
  private:
+  void StopAndJoinWorkers() {
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    available_.notify_all();
+    for (auto& worker : workers_) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  }
+
   void Run() {
     while (true) {
       Task task;
@@ -605,6 +618,15 @@ class StreamDispatchExecutor final {
 StreamDispatchExecutor& GetStreamDispatchExecutor() {
   static StreamDispatchExecutor executor;
   return executor;
+}
+
+core::Result<void> EnsureStreamDispatchExecutor() {
+  try {
+    (void)GetStreamDispatchExecutor();
+  } catch (const std::system_error&) {
+    return core::Error::Internal(std::string(kDispatchInitializationFailureMessage)).WithTransport(kHttpTransportName);
+  }
+  return {};
 }
 
 class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStreamDispatch> {
@@ -1016,6 +1038,10 @@ core::Result<void> Client::StartStreamRequest(
   if (!acquired_slot.ok()) {
     return acquired_slot.error();
   }
+  const auto dispatch_ready = EnsureStreamDispatchExecutor();
+  if (!dispatch_ready.ok()) {
+    return dispatch_ready.error();
+  }
   auto async_state = std::make_shared<AsyncStreamState>();
   async_state->client_state = state_;
   async_state->slot = std::move(acquired_slot.value());
@@ -1120,6 +1146,24 @@ core::Result<void> Client::StartStreamRequest(
 }
 
 namespace testing {
+
+bool StreamDispatchExecutorHandlesPartialConstructionFailure() {
+  constexpr std::size_t kSuccessfulWorkersBeforeFailure = 1U;
+  std::size_t started_workers = 0U;
+  try {
+    StreamDispatchExecutor executor([&started_workers](StreamDispatchExecutor::Task task) -> std::thread {
+      if (started_workers == kSuccessfulWorkersBeforeFailure) {
+        throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+      }
+      std::thread worker(std::move(task));
+      ++started_workers;
+      return worker;
+    });
+  } catch (const std::system_error&) {
+    return started_workers == kSuccessfulWorkersBeforeFailure;
+  }
+  return false;
+}
 
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept {
   return detail::GetCurlStreamReactorLifecycleCounts();

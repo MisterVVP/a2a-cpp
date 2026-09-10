@@ -384,7 +384,7 @@ int CurlStreamReactor::HandleTimer(CURLM*, long timeout_ms, void* user_data) {
 std::shared_ptr<CurlStreamReactor> CurlStreamReactorPool::Acquire() {
   const std::size_t index = next_reactor_.fetch_add(1U, std::memory_order_relaxed) % kPoolSize;
   std::lock_guard lock(reactor_mutexes_[index]);
-  auto reactor = reactors_[index].lock();
+  auto reactor = reactors_[index];
   if (reactor == nullptr) {
     reactor = CurlStreamReactor::Create();
     reactors_[index] = reactor;
@@ -397,7 +397,7 @@ void CurlStreamReactorPool::CancelOwner(const void* owner) {
     std::shared_ptr<CurlStreamReactor> reactor;
     {
       std::lock_guard lock(reactor_mutexes_[index]);
-      reactor = reactors_[index].lock();
+      reactor = reactors_[index];
     }
     if (reactor != nullptr) {
       reactor->CancelOwner(owner);
@@ -409,7 +409,7 @@ std::size_t CurlStreamReactorPool::size() const {
   std::size_t count = 0U;
   for (std::size_t index = 0; index < kPoolSize; ++index) {
     std::lock_guard lock(reactor_mutexes_[index]);
-    if (!reactors_[index].expired()) {
+    if (reactors_[index] != nullptr) {
       ++count;
     }
   }

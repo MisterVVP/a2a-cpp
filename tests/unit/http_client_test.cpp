@@ -41,6 +41,7 @@
 
 #if defined(A2A_HAS_LIBCURL)
 namespace a2a::http::testing {
+bool StreamDispatchExecutorHandlesPartialConstructionFailure();
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept;
 std::size_t CurlStreamReactorPoolSize();
 }  // namespace a2a::http::testing
@@ -1258,7 +1259,12 @@ TEST(SharedHttpClientTest, ConcurrentStartsUseBoundedProcessReactorPoolAfterShut
   const auto after = a2a::http::testing::CurlStreamReactorLifecycleCounts();
   const std::size_t created = after.first - before.first;
   EXPECT_LE(created, kMaximumStreamReactorPoolSize);
+  EXPECT_EQ(after.second, before.second);
   EXPECT_LE(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
+}
+
+TEST(SharedHttpClientTest, DispatchExecutorCleansUpPartiallyStartedWorkers) {
+  EXPECT_TRUE(a2a::http::testing::StreamDispatchExecutorHandlesPartialConstructionFailure());
 }
 
 void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,

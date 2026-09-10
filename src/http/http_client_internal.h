@@ -109,7 +109,9 @@ class CurlStreamReactorPool final {
  private:
   static constexpr std::size_t kPoolSize = 4U;
 
-  std::array<std::weak_ptr<CurlStreamReactor>, kPoolSize> reactors_{};
+  // Keep lazily created shards alive for the process-wide pool lifetime so a
+  // reactor can never be destroyed from its own completion callback thread.
+  std::array<std::shared_ptr<CurlStreamReactor>, kPoolSize> reactors_{};
   mutable std::array<std::mutex, kPoolSize> reactor_mutexes_{};
   std::atomic_size_t next_reactor_{0U};
 };
