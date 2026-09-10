@@ -24,6 +24,8 @@ namespace a2a::http::detail {
 
 class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamReactor> {
  public:
+  using ThreadFactory = std::function<std::thread(std::function<void()>)>;
+
   struct Transfer final {
     CURL* easy_handle = nullptr;
     // Non-owning identity; `lifetime` keeps the owning client state alive.
@@ -37,6 +39,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   };
 
   [[nodiscard]] static std::shared_ptr<CurlStreamReactor> Create();
+  [[nodiscard]] static std::shared_ptr<CurlStreamReactor> Create(const ThreadFactory& thread_factory);
   ~CurlStreamReactor();
 
   CurlStreamReactor(const CurlStreamReactor&) = delete;

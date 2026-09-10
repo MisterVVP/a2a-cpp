@@ -105,6 +105,8 @@ class StreamHandle final : private core::NonCopyable {
   StreamHandle& operator=(StreamHandle&&) noexcept;
   ~StreamHandle();
 
+  // Cancellation from inside a stream callback does not wait for callbacks already running on other streams.
+  // Keep observer-owned state alive until those concurrent callbacks return.
   void Cancel();
   [[nodiscard]] bool IsActive() const;
 

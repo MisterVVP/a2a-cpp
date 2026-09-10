@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <system_error>
 #include <utility>
 
 namespace a2a::http::detail {
@@ -35,12 +36,20 @@ constexpr std::size_t kMaximumReactorEvents = 64U;
 }  // namespace
 
 std::shared_ptr<CurlStreamReactor> CurlStreamReactor::Create() {
+  return Create([](std::function<void()> task) { return std::thread(std::move(task)); });
+}
+
+std::shared_ptr<CurlStreamReactor> CurlStreamReactor::Create(const ThreadFactory& thread_factory) {
   auto reactor = std::shared_ptr<CurlStreamReactor>(new CurlStreamReactor());
   g_curl_stream_reactors_created.fetch_add(1U, std::memory_order_relaxed);
   if (!reactor->valid_) {
     return {};
   }
-  reactor->thread_ = std::thread([reactor_pointer = reactor.get()] { reactor_pointer->Run(); });
+  try {
+    reactor->thread_ = thread_factory([reactor_pointer = reactor.get()] { reactor_pointer->Run(); });
+  } catch (const std::system_error&) {
+    return {};
+  }
   return reactor;
 }
 
@@ -70,10 +79,11 @@ void CurlStreamReactor::CancelOwner(const void* owner) {
 }
 
 void CurlStreamReactor::Shutdown() {
-  Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
-  if (thread_.joinable()) {
-    thread_.join();
+  if (!thread_.joinable()) {
+    return;
   }
+  Enqueue(Command{.type = CommandType::kShutdown, .transfer = {}});
+  thread_.join();
 }
 
 CurlStreamReactor::CurlStreamReactor() : multi_handle_(curl_multi_init()) {

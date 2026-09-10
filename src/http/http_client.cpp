@@ -137,11 +137,6 @@ class DispatchCallbackScope final {
   detail::ClientState* previous_;
 };
 
-std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() {
-  static const auto init = std::make_shared<detail::ClientGlobalState>();
-  return init;
-}
-
 struct CurlSlistDeleter final {
   void operator()(curl_slist* list) const noexcept {
     if (list != nullptr) {
@@ -629,8 +624,37 @@ class StreamDispatchExecutor final {
   bool stopping_ = false;
 };
 
+struct HttpProcessState final {
+  HttpProcessState() : global_state(std::make_shared<detail::ClientGlobalState>()) {}
+  ~HttpProcessState() {
+    // Drop the process-global curl owner while callback workers can still
+    // accept terminal work emitted by reactor teardown.
+    global_state.reset();
+    stream_dispatch_executor.reset();
+  }
+
+  HttpProcessState(const HttpProcessState&) = delete;
+  HttpProcessState& operator=(const HttpProcessState&) = delete;
+  HttpProcessState(HttpProcessState&&) = delete;
+  HttpProcessState& operator=(HttpProcessState&&) = delete;
+
+  std::unique_ptr<StreamDispatchExecutor> stream_dispatch_executor;
+  std::shared_ptr<const detail::ClientGlobalState> global_state;
+};
+
+HttpProcessState& GetHttpProcessState() {
+  static HttpProcessState state;
+  return state;
+}
+
+std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() { return GetHttpProcessState().global_state; }
+
 StreamDispatchExecutor& GetStreamDispatchExecutor() {
-  static StreamDispatchExecutor executor;
+  static StreamDispatchExecutor& executor = []() -> StreamDispatchExecutor& {
+    auto& process_state = GetHttpProcessState();
+    process_state.stream_dispatch_executor = std::make_unique<StreamDispatchExecutor>();
+    return *process_state.stream_dispatch_executor;
+  }();
   return executor;
 }
 
@@ -1177,6 +1201,18 @@ bool StreamDispatchExecutorHandlesPartialConstructionFailure() {
     return started_workers == kSuccessfulWorkersBeforeFailure;
   }
   return false;
+}
+
+bool StreamDispatchExecutorUsesProcessStateLifetime() {
+  auto& executor = GetStreamDispatchExecutor();
+  return GetHttpProcessState().stream_dispatch_executor.get() == &executor;
+}
+
+bool CurlStreamReactorHandlesThreadStartupFailure() {
+  const auto reactor = detail::CurlStreamReactor::Create([](std::function<void()>) -> std::thread {
+    throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+  });
+  return reactor == nullptr;
 }
 
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept {

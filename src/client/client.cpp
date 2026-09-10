@@ -3,6 +3,7 @@
 
 #include "a2a/client/client.h"
 
+#include <cstddef>
 #include <exception>
 #include <ranges>
 #include <string_view>
@@ -12,9 +13,16 @@
 #include "a2a/core/protocol_methods.h"
 
 namespace a2a::client {
+namespace {
+
+thread_local std::size_t g_stream_callback_depth = 0U;
+
+}  // namespace
+
 StreamHandle::State::CallbackExecutionScope::CallbackExecutionScope(State& state) : state_(state) {
   std::lock_guard lock(state_.completion_mutex);
   state_.callback_thread_id = std::this_thread::get_id();
+  ++g_stream_callback_depth;
 }
 
 StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
@@ -22,6 +30,7 @@ StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
     std::lock_guard lock(state_.completion_mutex);
     state_.callback_thread_id = {};
   }
+  --g_stream_callback_depth;
   state_.completion_condition.notify_all();
 }
 
@@ -41,7 +50,7 @@ void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& ca
 
 void StreamHandle::State::WaitForCallbackIdle() {
   std::unique_lock completion_lock(completion_mutex);
-  if (callback_thread_id == std::this_thread::get_id()) {
+  if (g_stream_callback_depth != 0U || callback_thread_id == std::this_thread::get_id()) {
     return;
   }
   completion_condition.wait(completion_lock, [this] { return callback_thread_id == std::thread::id{}; });
