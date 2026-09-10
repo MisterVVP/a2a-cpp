@@ -18,8 +18,11 @@ StreamHandle::State::CallbackExecutionScope::CallbackExecutionScope(State& state
 }
 
 StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
-  std::lock_guard lock(state_.completion_mutex);
-  state_.callback_thread_id = {};
+  {
+    std::lock_guard lock(state_.completion_mutex);
+    state_.callback_thread_id = {};
+  }
+  state_.completion_condition.notify_all();
 }
 
 void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& callback) {
@@ -34,6 +37,14 @@ void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& ca
   if (cancellation_already_requested) {
     callback();
   }
+}
+
+void StreamHandle::State::WaitForCallbackIdle() {
+  std::unique_lock completion_lock(completion_mutex);
+  if (callback_thread_id == std::this_thread::get_id()) {
+    return;
+  }
+  completion_condition.wait(completion_lock, [this] { return callback_thread_id == std::thread::id{}; });
 }
 
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
@@ -83,9 +94,11 @@ void StreamHandle::Cancel() {
   if (worker.joinable()) {
     worker.join();
   }
-  std::unique_lock completion_lock(state_->completion_mutex);
-  if (execution_mode_ == ExecutionMode::kExecutor && state_->callback_thread_id != std::this_thread::get_id()) {
-    state_->completion_condition.wait(completion_lock, [this] { return state_->completed; });
+  if (execution_mode_ == ExecutionMode::kExecutor) {
+    // Cancellation makes queued callbacks no-ops. Only a callback that was
+    // already executing can still reference the observer, so do not wait for
+    // terminal dispatch on the process-wide executor.
+    state_->WaitForCallbackIdle();
   }
 }
 

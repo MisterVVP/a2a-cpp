@@ -411,11 +411,6 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::StartSseStream(Ht
           } else {
             session->Complete(ToClientHttpResponse(std::move(response.value())));
           }
-          {
-            std::lock_guard lock(state->completion_mutex);
-            state->completed = true;
-          }
-          state->completion_condition.notify_all();
         });
     if (!started.ok()) {
       return started.error();

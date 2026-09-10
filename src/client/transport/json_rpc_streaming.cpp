@@ -338,11 +338,6 @@ void CompleteAsyncJsonRpcStream(const std::shared_ptr<JsonRpcSseSession>& sessio
   } else {
     session->Complete(ToClientHttpResponse(std::move(response.value())));
   }
-  {
-    std::lock_guard lock(state->completion_mutex);
-    state->completed = true;
-  }
-  state->completion_condition.notify_all();
 }
 
 void RunJsonRpcSseWorker(const HttpStreamRequester& stream_requester, HttpRequest http_request,

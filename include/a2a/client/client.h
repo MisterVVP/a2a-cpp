@@ -95,9 +95,9 @@ class StreamHandle final : private core::NonCopyable {
     std::mutex completion_mutex;
     std::condition_variable completion_condition;
     std::thread::id callback_thread_id;
-    bool completed = false;
 
     void RegisterCancelCallback(const std::function<void()>& callback);
+    void WaitForCallbackIdle();
   };
 
   StreamHandle() = delete;

@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -25,6 +26,36 @@ constexpr int kHttpServerError = 500;
 const std::string kContentTypeHeader = "content-type";
 const std::string kEventStreamContentType = "text/event-stream";
 const std::string kEndpointUrl = "http://127.0.0.1/a2a";
+
+TEST(StreamHandleLifecycleTest, CallbackIdleWaitDoesNotDependOnTerminalDispatch) {
+  a2a::client::StreamHandle::State state;
+  std::mutex callback_mutex;
+  std::condition_variable callback_condition;
+  bool callback_started = false;
+  bool release_callback = false;
+  std::thread callback([&] {
+    a2a::client::StreamHandle::State::CallbackExecutionScope callback_scope(state);
+    std::unique_lock lock(callback_mutex);
+    callback_started = true;
+    callback_condition.notify_all();
+    callback_condition.wait(lock, [&release_callback] { return release_callback; });
+  });
+  {
+    std::unique_lock lock(callback_mutex);
+    ASSERT_TRUE(callback_condition.wait_for(lock, kWaitTimeout, [&callback_started] { return callback_started; }));
+  }
+
+  auto idle_wait = std::async(std::launch::async, [&state] { state.WaitForCallbackIdle(); });
+  EXPECT_EQ(idle_wait.wait_for(kCancelPollInterval), std::future_status::timeout);
+  {
+    std::lock_guard lock(callback_mutex);
+    release_callback = true;
+  }
+  callback_condition.notify_all();
+
+  EXPECT_EQ(idle_wait.wait_for(kPromptCancelTimeout), std::future_status::ready);
+  callback.join();
+}
 
 class CountingObserver final : public a2a::client::StreamObserver {
  public:
