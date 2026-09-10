@@ -104,13 +104,14 @@ class CurlStreamReactorPool final {
  public:
   [[nodiscard]] std::shared_ptr<CurlStreamReactor> Acquire();
   void CancelOwner(const void* owner);
+  void ReleaseUnused();
   [[nodiscard]] std::size_t size() const;
 
  private:
   static constexpr std::size_t kPoolSize = 4U;
 
-  // Keep lazily created shards alive for the process-wide pool lifetime so a
-  // reactor can never be destroyed from its own completion callback thread.
+  // Pin created shards until client-state teardown can safely release a
+  // pool-only reactor from a non-reactor thread.
   std::array<std::shared_ptr<CurlStreamReactor>, kPoolSize> reactors_{};
   mutable std::array<std::mutex, kPoolSize> reactor_mutexes_{};
   std::atomic_size_t next_reactor_{0U};

@@ -1259,7 +1259,6 @@ TEST(SharedHttpClientTest, ConcurrentStartsUseBoundedProcessReactorPoolAfterShut
   const auto after = a2a::http::testing::CurlStreamReactorLifecycleCounts();
   const std::size_t created = after.first - before.first;
   EXPECT_LE(created, kMaximumStreamReactorPoolSize);
-  EXPECT_EQ(after.second, before.second);
   EXPECT_LE(a2a::http::testing::CurlStreamReactorPoolSize(), kMaximumStreamReactorPoolSize);
 }
 

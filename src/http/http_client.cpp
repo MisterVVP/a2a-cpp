@@ -70,6 +70,8 @@ struct StreamSlot final {
 };
 
 struct ClientState final {
+  ~ClientState();
+
   std::shared_ptr<const ClientGlobalState> global_state;
   std::atomic_size_t client_owners{1U};
   // The first unary and streaming handles share one reactor shard so common
@@ -156,6 +158,18 @@ namespace detail {
 
 ClientGlobalState::ClientGlobalState()
     : code(curl_global_init(CURL_GLOBAL_DEFAULT)), stream_reactor_pool(std::make_shared<CurlStreamReactorPool>()) {}
+
+ClientState::~ClientState() {
+  // Drop state-owned slots before releasing the pool pin. Async stream state
+  // keeps ClientState alive until reactor completion has handed lifetime to a
+  // caller or dispatch worker, so reactor destruction cannot happen on its
+  // own thread here.
+  idle_request_slots.clear();
+  idle_stream_slots.clear();
+  if (global_state != nullptr && global_state->stream_reactor_pool != nullptr) {
+    global_state->stream_reactor_pool->ReleaseUnused();
+  }
+}
 
 }  // namespace detail
 

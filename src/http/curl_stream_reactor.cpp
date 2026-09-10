@@ -405,6 +405,18 @@ void CurlStreamReactorPool::CancelOwner(const void* owner) {
   }
 }
 
+void CurlStreamReactorPool::ReleaseUnused() {
+  for (std::size_t index = 0; index < kPoolSize; ++index) {
+    std::lock_guard lock(reactor_mutexes_[index]);
+    auto& reactor = reactors_[index];
+    if (reactor != nullptr && reactor.use_count() == 1) {
+      // Keep replacement acquisition serialized with reactor shutdown so the
+      // bounded shard does not temporarily own two reactor threads.
+      reactor.reset();
+    }
+  }
+}
+
 std::size_t CurlStreamReactorPool::size() const {
   std::size_t count = 0U;
   for (std::size_t index = 0; index < kPoolSize; ++index) {
