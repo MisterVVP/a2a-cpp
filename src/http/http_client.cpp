@@ -125,6 +125,8 @@ constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1
 constexpr std::size_t kStreamDispatchWorkerCount = 4U;
 constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
 constexpr std::string_view kDispatchInitializationFailureMessage = "failed to initialize HTTP stream callback executor";
+constexpr std::string_view kSynchronousStreamFromCallbackMessage =
+    "synchronous HTTP streaming cannot run from a stream callback";
 constexpr std::chrono::milliseconds kSynchronousCancellationCheckInterval{1};
 
 thread_local detail::ClientState* g_dispatch_client_state = nullptr;
@@ -139,6 +141,13 @@ class DispatchCallbackScope final {
  private:
   detail::ClientState* previous_;
 };
+
+void StopCancellationWatcher(std::atomic<bool>& stop_requested, std::thread& watcher) {
+  stop_requested.store(true);
+  if (watcher.joinable()) {
+    watcher.join();
+  }
+}
 
 struct CurlSlistDeleter final {
   void operator()(curl_slist* list) const noexcept {
@@ -1004,6 +1013,10 @@ core::Result<Response> Client::StreamRequest(
     const Request& request, const std::function<core::Result<void>(const Response&)>& on_metadata,
     const std::function<core::Result<void>(std::string_view)>& on_chunk, const std::function<bool()>& is_cancelled,
     const std::function<void(const std::function<void()>&)>& register_cancellation) const {
+  if (g_dispatch_client_state != nullptr) {
+    return core::Error::Validation(std::string(kSynchronousStreamFromCallbackMessage))
+        .WithTransport(kHttpTransportName);
+  }
   std::mutex completion_mutex;
   std::condition_variable completion_condition;
   core::Result<Response> response = core::Error::Internal(std::string(kStreamCompletionPendingMessage));
@@ -1058,19 +1071,13 @@ core::Result<Response> Client::StreamRequest(
         completion_condition.notify_one();
       });
   if (!started.ok()) {
-    stop_cancellation_watcher.store(true);
-    if (cancellation_watcher.joinable()) {
-      cancellation_watcher.join();
-    }
+    StopCancellationWatcher(stop_cancellation_watcher, cancellation_watcher);
     return started.error();
   }
   std::unique_lock lock(completion_mutex);
   completion_condition.wait(lock, [&completed] { return completed; });
   lock.unlock();
-  stop_cancellation_watcher.store(true);
-  if (cancellation_watcher.joinable()) {
-    cancellation_watcher.join();
-  }
+  StopCancellationWatcher(stop_cancellation_watcher, cancellation_watcher);
   return response;
 }
 

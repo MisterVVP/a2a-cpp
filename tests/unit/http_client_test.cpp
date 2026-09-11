@@ -109,6 +109,8 @@ constexpr std::string_view kMetadataRejectedMessage = "metadata rejected before 
 constexpr std::string_view kGetStreamRequestLine = "GET /stream HTTP/1.1";
 constexpr std::string_view kUnavailableStreamUrl = "http://127.0.0.1:1/stream";
 constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
+constexpr std::string_view kSynchronousStreamFromCallbackMessage =
+    "synchronous HTTP streaming cannot run from a stream callback";
 constexpr std::string_view kConcurrentUnaryPath = "/unary";
 constexpr std::string_view kStreamPath = "/stream";
 constexpr std::string_view kContentLengthHeaderPrefix = "Content-Length:";
@@ -1216,6 +1218,36 @@ TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
   ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
   EXPECT_TRUE(shutdown_returned.load());
   EXPECT_TRUE(completed.get().ok());
+}
+
+TEST(SharedHttpClientTest, SynchronousStreamRequestFromChunkCallbackIsRejected) {
+  LoopbackHttpServer server{std::string(kSseHeaders) + std::string(kFirstSseChunk)};
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
+  request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
+  request.http_version = std::string(kHttpVersion11);
+  std::promise<a2a::core::Result<a2a::http::Response>> nested_completion;
+  auto nested_completed = nested_completion.get_future();
+
+  const auto started = client.StartStreamRequest(
+      request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+      [&client, &request, &nested_completion](std::string_view) -> a2a::core::Result<void> {
+        auto nested = client.StreamRequest(
+            request, [](const a2a::http::Response&) -> a2a::core::Result<void> { return {}; },
+            [](std::string_view) -> a2a::core::Result<void> { return {}; }, [] { return false; });
+        nested_completion.set_value(std::move(nested));
+        return {};
+      },
+      [] { return false; }, {}, [](const a2a::core::Result<a2a::http::Response>&) {});
+
+  ASSERT_TRUE(started.ok()) << started.error().message();
+  ASSERT_EQ(nested_completed.wait_for(kCancellationDeadline), std::future_status::ready);
+  const auto nested = nested_completed.get();
+  ASSERT_FALSE(nested.ok());
+  EXPECT_EQ(nested.error().code(), a2a::core::ErrorCode::kValidation);
+  EXPECT_EQ(nested.error().message(), kSynchronousStreamFromCallbackMessage);
 }
 
 void ExerciseConcurrentStartsAndShutdown() {
