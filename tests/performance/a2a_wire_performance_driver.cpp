@@ -303,7 +303,17 @@ OperationOutcome ExecuteIdleStreamClientCancellation(a2a::client::A2AClient* cli
   const double cancellation_latency_ms =
       static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(cancellation_duration).count()) /
       kNanosecondsPerMillisecond;
-  return {.ok = true, .event_count = observer.event_count(), .measured_latency_ms = cancellation_latency_ms};
+
+  // Local cancellation intentionally ends before server cleanup so the unary
+  // request does not contaminate the measured latency. Publishing the terminal
+  // task update wakes the server stream instead of leaving its writer blocked
+  // until the next SSE heartbeat detects the disconnected client.
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(task_id);
+  const bool server_stream_retired = client->CancelTask(cancel_request, call_options).ok();
+  return {.ok = server_stream_retired,
+          .event_count = observer.event_count(),
+          .measured_latency_ms = cancellation_latency_ms};
 }
 
 bool ExecuteWirePushCreate(a2a::client::A2AClient* client, int index, std::string_view task_id,

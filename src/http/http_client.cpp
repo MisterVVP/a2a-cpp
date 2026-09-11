@@ -660,6 +660,7 @@ void DeferUnusedReactorRelease(std::shared_ptr<detail::CurlStreamReactorPool> re
   } catch (...) {
     // The process-global pool remains an owner and releases the shard during
     // process teardown if deferred cleanup cannot be queued.
+    return;
   }
 }
 
@@ -1225,7 +1226,7 @@ bool StreamDispatchExecutorUsesProcessStateLifetime() {
 }
 
 bool CurlStreamReactorHandlesThreadStartupFailure() {
-  const auto reactor = detail::CurlStreamReactor::Create([](std::function<void()>) -> std::thread {
+  const auto reactor = detail::CurlStreamReactor::Create([](const std::function<void()>&) -> std::thread {
     throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
   });
   return reactor == nullptr;

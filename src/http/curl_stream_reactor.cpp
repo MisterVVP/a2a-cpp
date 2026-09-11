@@ -320,7 +320,9 @@ void CurlStreamReactor::ProcessSocket(int descriptor, std::uint32_t events) {
   action |= (events & (EPOLLERR | EPOLLHUP)) != 0U ? CURL_CSELECT_ERR : 0;
   int running_handles = 0;
   const CURLMcode code = curl_multi_socket_action(multi_handle_, descriptor, action, &running_handles);
-  if (code != CURLM_OK) {
+  // Removing a socket while processing an epoll batch can leave a readiness
+  // notification for that socket later in the same batch.
+  if (code != CURLM_OK && code != CURLM_BAD_SOCKET) {
     FailAll(CURLE_RECV_ERROR);
   }
 }
