@@ -32,11 +32,13 @@ number of active streams; network, server, and process resource limits still
 apply.
 
 Callback execution is marked only for the duration of each callback. Calling
-`Cancel()` recursively from that stream's callback requests cancellation and
-returns without waiting, avoiding a self-deadlock. Cancellation from a callback
-belonging to another stream, or from any external thread, waits until the target
-stream can no longer call its observer. Per-stream serialization preserves event
-order even when successive callbacks run on different shared workers.
+`Cancel()` from any stream callback requests cancellation without waiting for an
+already-running callback on the target stream. This avoids self-deadlocks and
+cross-stream cancellation cycles. An external thread calling `Cancel()` waits
+until the target stream can no longer call its observer. Code that cancels a
+stream from another stream's callback must therefore keep the target observer's
+state alive until that already-running callback returns. Per-stream serialization
+preserves event order even when successive callbacks run on different shared workers.
 
 ## Default HTTP network reactor pool
 

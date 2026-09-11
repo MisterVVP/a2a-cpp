@@ -44,6 +44,7 @@ namespace a2a::http::testing {
 bool StreamDispatchExecutorHandlesPartialConstructionFailure();
 bool StreamDispatchExecutorUsesProcessStateLifetime();
 bool CurlStreamReactorHandlesThreadStartupFailure();
+bool CurlStreamReactorPoolDefersSelfThreadRelease();
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept;
 std::size_t CurlStreamReactorPoolSize();
 }  // namespace a2a::http::testing
@@ -1274,6 +1275,10 @@ TEST(SharedHttpClientTest, DispatchExecutorLifetimeIsOwnedByProcessState) {
 
 TEST(SharedHttpClientTest, ReactorThreadStartupFailureDoesNotEscape) {
   EXPECT_TRUE(a2a::http::testing::CurlStreamReactorHandlesThreadStartupFailure());
+}
+
+TEST(SharedHttpClientTest, ReactorPoolDefersReleaseFromItsOwnThread) {
+  EXPECT_TRUE(a2a::http::testing::CurlStreamReactorPoolDefersSelfThreadRelease());
 }
 
 void StartScalabilityStreams(a2a::http::Client& client, const a2a::http::Request& request,

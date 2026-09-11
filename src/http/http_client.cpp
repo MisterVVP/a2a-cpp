@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstddef>
 #include <deque>
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -95,6 +96,8 @@ struct ClientState final {
 
 namespace {
 
+void DeferUnusedReactorRelease(std::shared_ptr<detail::CurlStreamReactorPool> reactor_pool) noexcept;
+
 constexpr std::string_view kCurlInitFailureMessage = "failed to initialize HTTP client";
 constexpr std::string_view kCurlHeaderFailureMessage = "failed to build HTTP request headers";
 constexpr std::string_view kConfigureRequestFailureMessage = "failed to configure HTTP request";
@@ -155,14 +158,14 @@ ClientGlobalState::ClientGlobalState()
     : code(curl_global_init(CURL_GLOBAL_DEFAULT)), stream_reactor_pool(std::make_shared<CurlStreamReactorPool>()) {}
 
 ClientState::~ClientState() {
-  // Drop state-owned slots before releasing the pool pin. Async stream state
-  // keeps ClientState alive until reactor completion has handed lifetime to a
-  // caller or dispatch worker, so reactor destruction cannot happen on its
-  // own thread here.
   idle_request_slots.clear();
   idle_stream_slots.clear();
-  if (global_state != nullptr && global_state->stream_reactor_pool != nullptr) {
-    global_state->stream_reactor_pool->ReleaseUnused();
+  if (global_state == nullptr || global_state->stream_reactor_pool == nullptr) {
+    return;
+  }
+  auto reactor_pool = global_state->stream_reactor_pool;
+  if (!reactor_pool->ReleaseUnused()) {
+    DeferUnusedReactorRelease(std::move(reactor_pool));
   }
 }
 
@@ -645,6 +648,19 @@ struct HttpProcessState final {
 HttpProcessState& GetHttpProcessState() {
   static HttpProcessState state;
   return state;
+}
+
+void DeferUnusedReactorRelease(std::shared_ptr<detail::CurlStreamReactorPool> reactor_pool) noexcept {
+  try {
+    auto* const executor = GetHttpProcessState().stream_dispatch_executor.get();
+    if (executor == nullptr) {
+      return;
+    }
+    executor->Submit([reactor_pool = std::move(reactor_pool)] { (void)reactor_pool->ReleaseUnused(); });
+  } catch (...) {
+    // The process-global pool remains an owner and releases the shard during
+    // process teardown if deferred cleanup cannot be queued.
+  }
 }
 
 std::shared_ptr<const detail::ClientGlobalState> EnsureCurlGlobalInit() { return GetHttpProcessState().global_state; }
@@ -1213,6 +1229,33 @@ bool CurlStreamReactorHandlesThreadStartupFailure() {
     throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
   });
   return reactor == nullptr;
+}
+
+bool CurlStreamReactorPoolDefersSelfThreadRelease() {
+  const auto dispatch_ready = EnsureStreamDispatchExecutor();
+  if (!dispatch_ready.ok()) {
+    return false;
+  }
+  auto reactor_pool = std::make_shared<detail::CurlStreamReactorPool>();
+  auto reactor = reactor_pool->Acquire();
+  if (reactor == nullptr) {
+    return false;
+  }
+  auto transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  std::promise<bool> deferred_release_promise;
+  auto deferred_release = deferred_release_promise.get_future();
+  transfer->on_complete = [reactor_pool, &deferred_release_promise](CURLcode) {
+    const bool needs_retry = !reactor_pool->ReleaseUnused();
+    if (needs_retry) {
+      DeferUnusedReactorRelease(reactor_pool);
+    }
+    deferred_release_promise.set_value(needs_retry);
+  };
+  reactor->Cancel(transfer);
+  reactor.reset();
+  const bool was_deferred = deferred_release.get();
+  const bool released_off_thread = reactor_pool->ReleaseUnused();
+  return was_deferred && released_off_thread && reactor_pool->size() == 0U;
 }
 
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept {

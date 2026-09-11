@@ -49,6 +49,7 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   void Cancel(const std::shared_ptr<Transfer>& transfer);
   void CancelOwner(const void* owner);
   void Shutdown();
+  [[nodiscard]] bool IsCurrentThread() const noexcept;
 
  private:
   enum class CommandType : std::uint8_t { kAdd, kCancel, kCancelOwner, kShutdown };
@@ -107,7 +108,9 @@ class CurlStreamReactorPool final {
  public:
   [[nodiscard]] std::shared_ptr<CurlStreamReactor> Acquire();
   void CancelOwner(const void* owner);
-  void ReleaseUnused();
+  // Returns false only when a pool-only shard is the calling reactor and its
+  // release must be retried from another thread.
+  [[nodiscard]] bool ReleaseUnused();
   [[nodiscard]] std::size_t size() const;
 
  private:

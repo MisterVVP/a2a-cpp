@@ -15,14 +15,25 @@
 namespace a2a::client {
 namespace {
 
-thread_local std::size_t g_stream_callback_depth = 0U;
+class StreamCallbackThreadContext final {
+ public:
+  static void Enter() noexcept { ++Depth(); }
+  static void Leave() noexcept { --Depth(); }
+  [[nodiscard]] static bool IsActive() noexcept { return Depth() != 0U; }
+
+ private:
+  [[nodiscard]] static std::size_t& Depth() noexcept {
+    static thread_local std::size_t depth = 0U;
+    return depth;
+  }
+};
 
 }  // namespace
 
 StreamHandle::State::CallbackExecutionScope::CallbackExecutionScope(State& state) : state_(state) {
   std::lock_guard lock(state_.completion_mutex);
   state_.callback_thread_id = std::this_thread::get_id();
-  ++g_stream_callback_depth;
+  StreamCallbackThreadContext::Enter();
 }
 
 StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
@@ -30,7 +41,7 @@ StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
     std::lock_guard lock(state_.completion_mutex);
     state_.callback_thread_id = {};
   }
-  --g_stream_callback_depth;
+  StreamCallbackThreadContext::Leave();
   state_.completion_condition.notify_all();
 }
 
@@ -50,7 +61,7 @@ void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& ca
 
 void StreamHandle::State::WaitForCallbackIdle() {
   std::unique_lock completion_lock(completion_mutex);
-  if (g_stream_callback_depth != 0U || callback_thread_id == std::this_thread::get_id()) {
+  if (StreamCallbackThreadContext::IsActive() || callback_thread_id == std::this_thread::get_id()) {
     return;
   }
   completion_condition.wait(completion_lock, [this] { return callback_thread_id == std::thread::id{}; });
