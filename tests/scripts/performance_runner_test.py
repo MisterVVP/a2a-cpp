@@ -427,6 +427,48 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("Repetition", "\n".join(lines))
         self.assertIn("| — | In-memory |", "\n".join(lines))
 
+    def test_markdown_distinguishes_streaming_latency_dimensions(self):
+        runner = load_runner_module()
+        unary = self.make_result("inmemory", None, "wire_grpc", "grpc", 1, 10.0, 50.0)
+        streaming = self.make_result("inmemory", None, "wire_grpc", "grpc", 1, 10.0, 55.0)
+        streaming["scenario"] = "SubscribeToTask_FirstEventLatency"
+        streaming[runner.FIRST_EVENT_LATENCY_FIELD] = {"p50": 0.4, "p95": 0.7}
+        streaming[runner.STREAM_COMPLETION_LATENCY_FIELD] = {"p50": 51.0, "p95": 54.0}
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"}}
+
+        summary = runner.render_markdown_summary([unary, streaming], metadata)
+
+        self.assertIn("## Streaming latency rollup", summary)
+        self.assertIn("Total operation latency, time to first event, and stream completion", summary)
+        self.assertIn(
+            "| SubscribeToTask_FirstEventLatency | Wire | gRPC | In-memory | 1 | "
+            "55.0000 | 0.4000 | 0.7000 | 51.0000 | 54.0000 |",
+            summary,
+        )
+        unary_detail = next(
+            line for line in summary.splitlines()
+            if line.startswith("| scenario | wire_tck_sut |")
+        )
+        self.assertTrue(unary_detail.endswith("| n/a | n/a | n/a | n/a |"))
+        self.assertNotIn("| 0.0000 | 0.0000 | 0.0000 | 0.0000 |", unary_detail)
+
+    def test_markdown_handles_independently_present_streaming_fields(self):
+        runner = load_runner_module()
+        finite_stream = self.make_result("inmemory", None, "wire_http_json", "http_json", 2,
+                                         8.0, 12.0)
+        finite_stream["scenario"] = "SendStreamingMessage_FiniteStream"
+        finite_stream[runner.STREAM_COMPLETION_LATENCY_FIELD] = {"p50": 9.0, "p95": 11.0}
+        lines = []
+
+        runner.append_streaming_latency_rollup(lines, [finite_stream])
+
+        rollup = "\n".join(lines)
+        self.assertIn(
+            "| SendStreamingMessage_FiniteStream | Wire | HTTP+JSON | In-memory | 2 | "
+            "12.0000 | n/a | n/a | 9.0000 | 11.0000 |",
+            rollup,
+        )
+
     def test_postgres_tail_large_tables_are_collapsible(self):
         runner = load_runner_module()
         rows = self.make_postgres_tail_rows(runner)
