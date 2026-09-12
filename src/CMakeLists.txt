@@ -48,6 +48,8 @@ target_link_libraries(a2a_core
 add_library(a2a_http STATIC
   http/curl_stream_reactor.cpp
   http/http_client.cpp
+  http/http_client_curl.cpp
+  http/http_client_streaming.cpp
 )
 add_library(a2a::http ALIAS a2a_http)
 set_target_properties(a2a_http PROPERTIES EXPORT_NAME http)

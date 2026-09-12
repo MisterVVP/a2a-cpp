@@ -16,9 +16,15 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+
+#include "a2a/http/http_client.h"
 
 namespace a2a::http::detail {
 
@@ -124,6 +130,79 @@ class CurlStreamReactorPool final {
 };
 
 [[nodiscard]] std::pair<std::size_t, std::size_t> GetCurlStreamReactorLifecycleCounts() noexcept;
+
+struct CurlSlistDeleter final {
+  void operator()(curl_slist* list) const noexcept;
+};
+
+using CurlHeaderList = std::unique_ptr<curl_slist, CurlSlistDeleter>;
+
+struct ClientGlobalState final {
+  ClientGlobalState();
+
+  CURLcode code = CURLE_OK;
+  std::shared_ptr<CurlStreamReactorPool> stream_reactor_pool;
+};
+
+struct RequestSlot final {
+  ~RequestSlot();
+
+  CURL* easy_handle = nullptr;
+  std::shared_ptr<CurlStreamReactor> reactor;
+};
+
+struct StreamSlot final {
+  ~StreamSlot();
+
+  CURL* easy_handle = nullptr;
+  std::shared_ptr<CurlStreamReactor> reactor;
+};
+
+struct ClientState final {
+  ~ClientState();
+
+  std::shared_ptr<const ClientGlobalState> global_state;
+  std::atomic_size_t client_owners{1U};
+  // The first unary and streaming handles share one reactor shard so common
+  // request -> stream sequences can reuse the same CURLM connection cache.
+  std::mutex reactor_mutex;
+  std::weak_ptr<CurlStreamReactor> primary_reactor;
+  // Blocking unary requests borrow independent easy handles. This mutex
+  // protects only the idle pool and is never held across network I/O.
+  std::mutex request_mutex;
+  std::vector<std::unique_ptr<RequestSlot>> idle_request_slots;
+  // Guards shutdown, stream accounting, and reusable stream easy handles.
+  std::mutex stream_mutex;
+  std::vector<std::unique_ptr<StreamSlot>> idle_stream_slots;
+  bool primary_stream_reactor_assigned = false;
+  std::condition_variable streams_finished;
+  std::size_t active_streams = 0;
+  bool shutting_down = false;
+  std::atomic<bool> suppress_stream_callbacks{false};
+};
+
+struct StreamHeaderContext final {
+  HeaderCapture* header_capture = nullptr;
+  StreamCallbackContext* stream_context = nullptr;
+};
+
+[[nodiscard]] std::shared_ptr<const ClientGlobalState> EnsureCurlGlobalInit();
+[[nodiscard]] bool IsDispatchingStreamCallback(const ClientState* state) noexcept;
+[[nodiscard]] std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail);
+[[nodiscard]] core::Result<CurlHeaderList> BuildHeaders(const std::vector<Header>& headers);
+[[nodiscard]] core::Result<void> ValidateStreamMetadata(StreamCallbackContext* context);
+std::size_t WriteStreamResponseHeader(char* contents, std::size_t size, std::size_t nmemb, void* user_data);
+[[nodiscard]] core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
+                                               std::string* response_body, HeaderCapture* response_headers);
+[[nodiscard]] core::Result<void> ConfigureCurlStream(CURL* handle, const Request& request,
+                                                     const CurlHeaderList& headers,
+                                                     StreamCallbackContext* stream_context,
+                                                     HeaderCapture* response_headers);
+[[nodiscard]] core::Result<std::unique_ptr<RequestSlot>> AcquireRequestSlot(ClientState& state);
+void ReleaseRequestSlot(ClientState& state, std::unique_ptr<RequestSlot> slot);
+[[nodiscard]] core::Result<std::unique_ptr<StreamSlot>> AcquireStreamSlot(ClientState& state);
+void ReleaseStreamSlot(ClientState& state, std::unique_ptr<StreamSlot> slot);
+[[nodiscard]] CURLcode PerformCurlTransfer(CURL* handle, const std::shared_ptr<CurlStreamReactor>& reactor);
 
 }  // namespace a2a::http::detail
 
