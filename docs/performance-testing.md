@@ -71,7 +71,11 @@ with in-memory speed and are not an automatic bottleneck verdict.
 
 The detailed matrix remains available in a collapsible section. Its
 `Repetition` column appears only when at least one row belongs to a repeated
-profile, such as `postgres-tail`. `results.csv` and `results.json` retain every
+profile, such as `postgres-tail`. For streaming measurements, both the detailed
+matrix and the separate, collapsible **Streaming latency rollup** distinguish
+total operation latency from first-event and stream-completion latency. Missing
+streaming dimensions are rendered as `n/a`, so unary rows are not mistaken for
+zero-latency streams. `results.csv` and `results.json` retain every
 raw row and field and are the authoritative outputs for further analysis; the
 Markdown restructuring does not transform those measurements.
 The cross-backend signals, PostgreSQL diagnostics, and `postgres-tail` median

@@ -69,6 +69,8 @@ SUT_NAME = "tck_sut"
 DEFAULT_WARMUP_SECONDS = 1.0
 DEFAULT_DURATION_SECONDS = 0.0
 DEFAULT_REPORT_DIR = "perf-artifacts"
+FIRST_EVENT_LATENCY_FIELD = "first_event_latency_ms"
+STREAM_COMPLETION_LATENCY_FIELD = "stream_completion_latency_ms"
 POSTGRES_TAIL_PROFILE = "postgres-tail"
 POSTGRES_TAIL_C1_PROFILE = "postgres-tail-c1"
 POSTGRES_WRITE_PROFILE = "postgres-write"
@@ -1021,8 +1023,8 @@ def append_detailed_matrix(lines: list[str], results: list[dict[str, object]]) -
     repetition_header = " Repetition |" if repeated else ""
     repetition_rule = " ---: |" if repeated else ""
     lines.extend(["", "## Detailed matrix results", "", "<details>", "<summary>Show all raw result rows</summary>", "",
-                  f"|{repetition_header} Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | p50 ms | p95 ms | p99 ms | Max ms |",
-                  f"|{repetition_rule} --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
+                  f"|{repetition_header} Scenario | Driver | Path | Transport | Store | Concurrency | Pool size | Success | Errors | Ops/sec | Total p50 ms | Total p95 ms | Total p99 ms | Total max ms | First event p50 ms | First event p95 ms | Completion p50 ms | Completion p95 ms |",
+                  f"|{repetition_rule} --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for result in results:
         latency = result["latency_ms"]
         assert isinstance(latency, dict)
@@ -1032,9 +1034,51 @@ def append_detailed_matrix(lines: list[str], results: list[dict[str, object]]) -
             f"{transport_label(result)} | {store_label(str(result['store_backend']))} | {result['concurrency']} | "
             f"{result.get('postgres_pool_size') or ''} | {result['success']} | {result['errors']} | "
             f"{float(result['throughput_ops_per_sec']):.2f} | {float(latency['p50']):.4f} | "
-            f"{float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} |"
+            f"{float(latency['p95']):.4f} | {float(latency['p99']):.4f} | {float(latency['max']):.4f} | "
+            f"{format_latency_percentile(result, FIRST_EVENT_LATENCY_FIELD, 'p50')} | "
+            f"{format_latency_percentile(result, FIRST_EVENT_LATENCY_FIELD, 'p95')} | "
+            f"{format_latency_percentile(result, STREAM_COMPLETION_LATENCY_FIELD, 'p50')} | "
+            f"{format_latency_percentile(result, STREAM_COMPLETION_LATENCY_FIELD, 'p95')} |"
         )
     lines.extend(["", "</details>"])
+
+
+def format_latency_percentile(result: dict[str, object], dimension: str, percentile: str) -> str:
+    latency = result.get(dimension)
+    if not isinstance(latency, dict) or percentile not in latency:
+        return "n/a"
+    return f"{float(latency[percentile]):.4f}"
+
+
+def append_streaming_latency_rollup(lines: list[str], results: list[dict[str, object]]) -> None:
+    streaming_results = [
+        result for result in results
+        if isinstance(result.get(FIRST_EVENT_LATENCY_FIELD), dict)
+        or isinstance(result.get(STREAM_COMPLETION_LATENCY_FIELD), dict)
+    ]
+    if not streaming_results:
+        return
+    lines.extend(["", "## Streaming latency rollup", "",
+                  "Total operation latency, time to first event, and stream completion are reported separately."])
+    append_collapsible_start(lines, "Show streaming latency rollup")
+    lines.extend([
+        "",
+        "| Scenario | Path | Transport | Store | Concurrency | Total p95 ms | First event p50 ms | First event p95 ms | Completion p50 ms | Completion p95 ms |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for result in streaming_results:
+        latency = result["latency_ms"]
+        assert isinstance(latency, dict)
+        lines.append(
+            f"| {result['scenario']} | {path_label(str(result['transport_path']))} | "
+            f"{transport_label(result)} | {store_label(str(result['store_backend']))} | "
+            f"{result['concurrency']} | {float(latency['p95']):.4f} | "
+            f"{format_latency_percentile(result, FIRST_EVENT_LATENCY_FIELD, 'p50')} | "
+            f"{format_latency_percentile(result, FIRST_EVENT_LATENCY_FIELD, 'p95')} | "
+            f"{format_latency_percentile(result, STREAM_COMPLETION_LATENCY_FIELD, 'p50')} | "
+            f"{format_latency_percentile(result, STREAM_COMPLETION_LATENCY_FIELD, 'p95')} |"
+        )
+    append_collapsible_end(lines)
 
 
 def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str, object],
@@ -1064,6 +1108,7 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
     if aggregates is None:
         append_grouped_result_sections(lines, results)
         append_cross_backend_markdown(lines, cross_backend_scaling(results))
+    append_streaming_latency_rollup(lines, results)
     append_detailed_matrix(lines, results)
     diagnostic_results = [result for result in results if "postgres_phase_latency_ms" in result]
     if diagnostic_results:
