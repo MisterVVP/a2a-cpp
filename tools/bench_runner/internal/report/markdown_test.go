@@ -31,6 +31,26 @@ func TestEvaluateDetectsFailuresMissingAndUntracked(t *testing.T) {
 	}
 }
 
+func TestEvaluateUsesMedianForThresholdWhenAvailable(t *testing.T) {
+	medianNS := int64(90)
+	measurements := map[string]results.Measurement{
+		"BM_Noisy": {Name: "BM_Noisy", ActualNS: 150, MedianNS: &medianNS},
+	}
+	thresholdSet := thresholds.Set{"BM_Noisy": {MaxTimeNS: 100}}
+
+	evaluation := Evaluate(measurements, thresholdSet, 1.0, false)
+
+	if evaluation.Failures != 0 {
+		t.Fatalf("Failures = %d, want 0 when median is below threshold", evaluation.Failures)
+	}
+	if evaluation.Rows[0].Status != "PASS" {
+		t.Fatalf("Status = %q, want PASS", evaluation.Rows[0].Status)
+	}
+	if evaluation.Rows[0].Ratio != 0.9 {
+		t.Fatalf("Ratio = %f, want 0.9", evaluation.Rows[0].Ratio)
+	}
+}
+
 func TestMarkdownFormatsThresholdColumnAndThousandsSeparators(t *testing.T) {
 	evaluation := Evaluation{Rows: []Row{{Benchmark: "BM_Test", ActualNS: 14200, ThresholdNS: 20000, Ratio: 0.71, Status: "PASS"}}}
 	summary := Markdown(evaluation, results.RealTimeField)
@@ -39,6 +59,9 @@ func TestMarkdownFormatsThresholdColumnAndThousandsSeparators(t *testing.T) {
 	}
 	if !strings.Contains(summary, "Measured field: `real_time`.") {
 		t.Fatalf("summary does not describe measured field: %s", summary)
+	}
+	if !strings.Contains(summary, "Threshold status and ratio use the median") {
+		t.Fatalf("summary does not describe median threshold evaluation: %s", summary)
 	}
 	if !strings.Contains(summary, "14,200") || !strings.Contains(summary, "20,000") {
 		t.Fatalf("summary does not contain formatted values: %s", summary)

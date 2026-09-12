@@ -81,6 +81,7 @@ constexpr std::string_view kScenarioSendMessageFollowUpAtHistoryDepth = "SendMes
 constexpr std::string_view kScenarioGetTaskMissingTaskError = "GetTask_MissingTaskError";
 constexpr std::string_view kScenarioSendStreamingMessageFiniteStream = "SendStreamingMessage_FiniteStream";
 constexpr std::string_view kScenarioSubscribeToTaskFirstEventLatency = "SubscribeToTask_FirstEventLatency";
+constexpr std::string_view kScenarioIdleStreamClientCancellationLatency = "IdleStream_ClientCancellationLatency";
 constexpr std::string_view kScenarioSubscribeToTaskMultiSubscriber = "SubscribeToTask_MultiSubscriber";
 constexpr std::string_view kScenarioSubscribeToTaskTerminalCompletionLatency =
     "SubscribeToTask_TerminalCompletionLatency";
@@ -153,6 +154,7 @@ struct ScenarioResult final {
   int callback_count = 0;
   int fanout_per_operation = 0;
   int total_fanout_count = 0;
+  int client_process_thread_count = 0;
   double throughput = 0.0;
   std::vector<double> latencies;
   std::vector<double> first_event_latencies;
@@ -164,6 +166,7 @@ struct ScenarioResult final {
 struct OperationOutcome final {
   bool ok = false;
   int event_count = 0;
+  double measured_latency_ms = 0.0;
   double first_event_latency_ms = 0.0;
   double completion_latency_ms = 0.0;
   int successful_deliveries = 0;
@@ -264,7 +267,8 @@ template <typename ExecuteOperation>
             }
             if (outcome.ok) {
               ++thread_result.success;
-              thread_result.latencies.push_back(latency);
+              thread_result.latencies.push_back(outcome.measured_latency_ms > 0.0 ? outcome.measured_latency_ms
+                                                                                  : latency);
               if (outcome.first_event_latency_ms > 0.0) {
                 thread_result.first_event_latencies.push_back(outcome.first_event_latency_ms);
               }

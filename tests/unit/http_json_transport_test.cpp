@@ -31,6 +31,8 @@ constexpr int kHistoryLength = 9;
 constexpr std::string_view kTaskId = "task-1";
 constexpr std::string_view kPushConfigId = "cfg-1";
 constexpr std::string_view kWebhookUrl = "https://callback.example.test/push";
+constexpr std::string_view kClientCertificatePem = "client-certificate";
+constexpr std::string_view kClientPrivateKeyPem = "client-private-key";
 constexpr int kPushListPageSize = 1;
 constexpr std::size_t kPushCrudRequestCount = 4U;
 constexpr std::string_view kTaskScopedPushCollectionUrl =
@@ -241,6 +243,27 @@ TEST(HttpJsonTransportUnitTest, GetTaskAppliesCredentialProvider) {
   const auto response = client.GetTask(request, options);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(captured.headers.at("Authorization"), "Bearer token-1");
+}
+
+TEST(HttpJsonTransportUnitTest, DefaultStreamingRequesterRejectsMtls) {
+  class Observer final : public a2a::client::StreamObserver {
+   public:
+    void OnEvent(const lf::a2a::v1::StreamResponse& event) override { (void)event; }
+    void OnError(const a2a::core::Error& error) override { (void)error; }
+    void OnCompleted() override {}
+  } observer;
+
+  A2AClient client(HttpJsonTransport::CreateDefault(MakeResolvedRest()));
+  CallOptions options;
+  options.mtls = a2a::client::MtlsConfig{.client_certificate_pem = std::string(kClientCertificatePem),
+                                         .client_private_key_pem = std::string(kClientPrivateKeyPem),
+                                         .trusted_ca_pem = {},
+                                         .server_name_override = {}};
+
+  const auto response = client.SendStreamingMessage(lf::a2a::v1::SendMessageRequest{}, observer, options);
+
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), ErrorCode::kValidation);
 }
 
 }  // namespace

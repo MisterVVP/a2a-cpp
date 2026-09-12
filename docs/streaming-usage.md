@@ -18,7 +18,65 @@ Implement `a2a::client::StreamObserver`:
 - `OnError` is called once for transport, HTTP, SSE, JSON/protobuf, or JSON-RPC envelope failures.
 - `OnCompleted` is called once after a clean server close. It is mutually exclusive with `OnError`.
 
-Observer callbacks run on the transport worker thread that owns the stream request. Keep callbacks fast, avoid blocking indefinitely, and hand work to an application executor if expensive processing is needed.
+For the default HTTP+JSON and JSON-RPC transports, observer callbacks are
+serialized per stream on a shared callback-dispatch executor. They never run on
+the shared libcurl reactor thread, and an idle stream does not reserve a dispatch
+worker. A slow callback can occupy one shared worker, so keep callbacks bounded
+and hand expensive processing to an application executor. Custom synchronous
+stream requesters retain a per-stream `StreamHandle`-owned worker compatibility path.
+
+Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
+pending body data. The reactor never waits for callback capacity: exceeding a
+limit fails and cancels only that stream. There is no fixed SDK limit on the
+number of active streams; network, server, and process resource limits still
+apply.
+
+Callback execution is marked only for the duration of each callback. Calling
+`Cancel()` from any stream callback requests cancellation without waiting for an
+already-running callback on the target stream. This avoids self-deadlocks and
+cross-stream cancellation cycles. An external thread calling `Cancel()` waits
+until the target stream can no longer call its observer. Code that cancels a
+stream from another stream's callback must therefore keep the target observer's
+state alive until that already-running callback returns. Per-stream serialization
+preserves event order even when successive callbacks run on different shared workers.
+
+## Default HTTP network reactor pool
+
+Default libcurl-backed HTTP clients use a bounded, process-wide pool of at most
+four reactors. Each reactor owns a `CURLM` multi handle and thread and is the
+only thread that adds or removes easy handles from that multi handle. Start,
+cancellation, and shutdown operations are serialized through its synchronized
+command queue.
+
+Both unary and streaming HTTP transfers acquire reactor infrastructure. The
+pool creates a reactor lazily when either kind of transfer first selects an
+uninitialized pool slot; initialization is not specific to streaming requests.
+Acquired unary-request and stream slots retain their reactor affinity when they
+are reused, preserving access to that reactor's libcurl connection cache. A
+process can therefore have up to four live reactor threads, depending on which
+pool slots active clients and transfers acquire.
+
+On Linux, libcurl socket and timer callbacks maintain an `epoll` readiness set
+and a `timerfd`. An `eventfd` wakes the reactor immediately for queued commands,
+including cancellation and shutdown, with no fixed polling interval. Socket and
+timer readiness is forwarded to `curl_multi_socket_action()`. Other platforms
+use libcurl's event-driven multi wakeup fallback without a fixed wake interval.
+
+`A2AClient::Destroy()` explicitly shuts down a default HTTP transport. It rejects
+new streams, wakes and drains the reactor, and cancels and detaches active
+transfers. It prevents further network stream activity, but it does not forcibly
+terminate or join application callback code: an observer callback that was
+already executing may finish naturally after `Destroy()` returns. Callers must
+therefore synchronize callback completion separately before destroying
+observer-owned state that another thread may still be using. No new callback for
+a stream begins after its shutdown has taken effect. Injected custom synchronous requesters
+are not owned by transport shutdown; their compatibility workers stay attached
+to the returned `StreamHandle` and are cancelled and joined when that handle is
+cancelled or destroyed.
+
+The synchronous `a2a::http::Client::StreamRequest()` API waits for its transfer
+while network I/O progresses on the transfer's reactor. Injected custom stream
+requesters retain their existing synchronous compatibility path.
 
 ## Handles, cancellation, and timeouts
 

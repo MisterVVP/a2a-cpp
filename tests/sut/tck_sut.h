@@ -13,6 +13,7 @@ constexpr int kDefaultPort = 50061;
 constexpr int kGrpcPortOffset = 1;
 constexpr std::string_view kRestApiBasePath = "/a2a";
 constexpr std::string_view kJsonRpcPath = "/rpc";
+constexpr std::string_view kDiagnosticsResetPath = "/_a2a/performance/reset-subscription-diagnostics";
 constexpr std::string_view kRequiredExtensionUri = "urn:a2a:tck:required-extension";
 constexpr std::string_view kPostgresBackend = "postgres";
 constexpr std::string_view kInMemoryBackend = "inmemory";

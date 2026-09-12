@@ -23,6 +23,9 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+#include "core/subscription_diagnostics.h"
+#endif
 #include "a2a/core/task_states.h"
 #include "a2a/server/http_adapter.h"
 
@@ -288,14 +291,55 @@ core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& me
   return response;
 }
 
-core::Result<void> AppendSseEvent(RestResponse& response, const lf::a2a::v1::StreamResponse& event) {
+constexpr std::size_t kSseFramingOverhead = 8U;
+constexpr std::string_view kSseDataPrefix = "data: ";
+constexpr std::string_view kSseErrorEventPrefix = "event: error\ndata: ";
+constexpr std::string_view kSseEventTerminator = "\n\n";
+constexpr std::string_view kSseErrorCodeMemberName = "code";
+constexpr std::string_view kSseErrorMessageMemberName = "message";
+
+core::Result<void> BuildSseEvent(std::string& body, const lf::a2a::v1::StreamResponse& event) {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const bool terminal = event.has_status_update() && core::IsTerminalTaskState(event.status_update().status().state());
+  const auto event_json = [&event, terminal] {
+    const core::subscription_diagnostics::ScopedTimer serialization_timer(
+        core::subscription_diagnostics::Phase::kProtoToJson, terminal);
+    return core::MessageToJson(event);
+  }();
+#else
   const auto event_json = core::MessageToJson(event);
+#endif
   if (!event_json.ok()) {
     return event_json.error();
   }
-  response.body += "data: ";
-  response.body += event_json.value();
-  response.body += "\n\n";
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  const core::subscription_diagnostics::ScopedTimer framing_timer(
+      core::subscription_diagnostics::Phase::kFrameConstruction, terminal);
+#endif
+  body.clear();
+  body.reserve(event_json.value().size() + kSseFramingOverhead);
+  body.append(kSseDataPrefix);
+  body.append(event_json.value());
+  body.append(kSseEventTerminator);
+  return {};
+}
+
+core::Result<void> BuildSseErrorEvent(std::string& body, const core::Error& error) {
+  google::protobuf::Struct payload;
+  auto* fields = payload.mutable_fields();
+  (*fields)[std::string(kSseErrorMessageMemberName)].set_string_value(std::string(error.message()));
+  if (const auto& protocol_code = error.protocol_code(); protocol_code.has_value()) {
+    (*fields)[std::string(kSseErrorCodeMemberName)].set_string_value(*protocol_code);
+  }
+  const auto payload_json = core::MessageToJson(payload);
+  if (!payload_json.ok()) {
+    return payload_json.error();
+  }
+  body.clear();
+  body.reserve(kSseErrorEventPrefix.size() + payload_json.value().size() + kSseEventTerminator.size());
+  body.append(kSseErrorEventPrefix);
+  body.append(payload_json.value());
+  body.append(kSseEventTerminator);
   return {};
 }
 
@@ -324,20 +368,41 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
+  response.stream_kind = HttpStreamKind::kFinite;
 
-  auto next = session->Next();
-  for (; next.ok(); next = session->Next()) {
-    const auto& event = next.value();
-    if (!event.has_value()) {
-      return response;
+  response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
+                               HttpByteTransport& transport) -> core::Result<void> {
+    if (*session == nullptr) {
+      return core::Error::Internal("Streaming response session is missing");
     }
-    const auto append = AppendSseEvent(response, event.value());
-    if (!append.ok()) {
-      return append.error();
+    std::string chunk;
+    auto next = (*session)->Next();
+    for (; next.ok(); next = (*session)->Next()) {
+      if (!next.value().has_value()) {
+        return {};
+      }
+      const auto append = BuildSseEvent(chunk, next.value().value());
+      if (!append.ok()) {
+        return append.error();
+      }
+      const auto written = WriteSseChunk(transport, chunk);
+      if (!written.ok()) {
+        (*session)->Cancel();
+        return written.error();
+      }
     }
-  }
-
-  return next.error();
+    const auto append_error = BuildSseErrorEvent(chunk, next.error());
+    if (!append_error.ok()) {
+      return append_error.error();
+    }
+    const auto written = WriteSseChunk(transport, chunk);
+    if (!written.ok()) {
+      (*session)->Cancel();
+      return written.error();
+    }
+    return {};
+  };
+  return response;
 }
 
 core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {
@@ -350,12 +415,14 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
+  response.stream_kind = HttpStreamKind::kLive;
   response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
                                HttpByteTransport& transport) -> core::Result<void> {
     if (*session == nullptr) {
       return core::Error::Internal("Subscription response session is missing");
     }
 
+    std::string chunk;
     auto next = (*session)->NextFor(core::http::kSseHeartbeatInterval);
     for (; next.ok(); next = (*session)->NextFor(core::http::kSseHeartbeatInterval)) {
       const auto& event = next.value();
@@ -370,12 +437,17 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
         }
         continue;
       }
-      RestResponse chunk;
-      const auto append = AppendSseEvent(chunk, event.value());
+      const auto append = BuildSseEvent(chunk, event.value());
       if (!append.ok()) {
         return append.error();
       }
-      const auto written = WriteSseChunk(transport, chunk.body);
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+      const bool terminal =
+          event->has_status_update() && core::IsTerminalTaskState(event->status_update().status().state());
+      const core::subscription_diagnostics::ScopedTimer delivery_timer(
+          core::subscription_diagnostics::Phase::kHttpDelivery, terminal);
+#endif
+      const auto written = WriteSseChunk(transport, chunk);
       if (!written.ok()) {
         (*session)->Cancel();
         return written.error();

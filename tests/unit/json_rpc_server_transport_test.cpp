@@ -32,6 +32,13 @@ constexpr std::string_view kHeartbeatSubscribeRequestBody =
     R"({"jsonrpc":"2.0","id":"req-sub-heartbeat","method":"a2a.subscribeToTask","params":{"id":"task-sub"}})";
 constexpr std::string_view kTenantId = "tenant-1";
 constexpr std::string_view kEscapedRequestId = "request-\"line\\break";
+constexpr std::string_view kFiniteProducerFailureMessage = "finite producer failed";
+constexpr std::string_view kFiniteStreamErrorRequestId = "req-stream-error";
+constexpr std::string_view kStreamingTaskId = "task-stream";
+constexpr std::string_view kJsonRpcErrorMemberJson = R"("error")";
+constexpr std::string_view kFiniteStreamErrorRequestBody =
+    R"({"jsonrpc":"2.0","id":"req-stream-error","method":"a2a.sendStreamingMessage",)"
+    R"("params":{"message":{"role":"ROLE_USER","taskId":"task-stream"}}})";
 
 class RecordingHttpTransport final : public a2a::server::HttpByteTransport {
  public:
@@ -74,11 +81,14 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
  public:
   class SingleEventSession final : public a2a::server::ServerStreamSession {
    public:
-    explicit SingleEventSession(lf::a2a::v1::StreamResponse event, bool is_live = false)
-        : event_(std::move(event)), is_live_(is_live) {}
+    explicit SingleEventSession(lf::a2a::v1::StreamResponse event, bool is_live = false, bool fail_at_end = false)
+        : event_(std::move(event)), is_live_(is_live), fail_at_end_(fail_at_end) {}
 
     a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
       if (consumed_) {
+        if (fail_at_end_) {
+          return a2a::core::Error::Internal(std::string(kFiniteProducerFailureMessage));
+        }
         return std::optional<lf::a2a::v1::StreamResponse>{};
       }
       consumed_ = true;
@@ -90,6 +100,7 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
    private:
     lf::a2a::v1::StreamResponse event_;
     bool is_live_ = false;
+    bool fail_at_end_ = false;
     bool consumed_ = false;
   };
 
@@ -138,7 +149,8 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
     (void)context;
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
-    return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleEventSession>(event));
+    return std::unique_ptr<a2a::server::ServerStreamSession>(
+        std::make_unique<SingleEventSession>(event, false, fail_stream_after_event));
   }
 
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SubscribeTask(
@@ -236,6 +248,7 @@ class JsonRpcEchoExecutor final : public a2a::server::AgentExecutor {
   std::string last_get_task_id;
   std::int32_t last_get_history_length = 0;
   bool fail_streaming = false;
+  bool fail_stream_after_event = false;
   std::shared_ptr<std::atomic_bool> heartbeat_cancellation;
   lf::a2a::v1::TaskState task_state = lf::a2a::v1::TASK_STATE_WORKING;
 };
@@ -703,7 +716,38 @@ TEST(JsonRpcServerTransportTest, SupportsStreamingMethodWithSseResponse) {
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
-  EXPECT_NE(response.value().body.find("task-stream"), std::string::npos);
+  EXPECT_TRUE(response.value().body.empty());
+  ASSERT_TRUE(response.value().stream_writer);
+  EXPECT_EQ(response.value().stream_kind, a2a::server::HttpStreamKind::kFinite);
+  RecordingHttpTransport output;
+  const auto write = response.value().stream_writer(output);
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(output.body.find("task-stream"), std::string::npos);
+  EXPECT_NE(output.body.find(R"("id":"req-stream")"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportTest, FiniteStreamEncodesProducerFailureBeforeClose) {
+  JsonRpcEchoExecutor executor;
+  executor.fail_stream_after_event = true;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher, {.rpc_path = "/rpc", .required_extensions = {}});
+
+  const auto response = server.Handle({.method = "POST",
+                                       .target = "/rpc",
+                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .body = std::string(kFiniteStreamErrorRequestBody),
+                                       .remote_address = {}});
+
+  ASSERT_TRUE(response.ok());
+  ASSERT_TRUE(response.value().stream_writer);
+  RecordingHttpTransport output;
+  const auto write = response.value().stream_writer(output);
+
+  ASSERT_TRUE(write.ok()) << write.error().message();
+  EXPECT_NE(output.body.find(kStreamingTaskId), std::string::npos);
+  EXPECT_NE(output.body.find(kFiniteStreamErrorRequestId), std::string::npos);
+  EXPECT_NE(output.body.find(kJsonRpcErrorMemberJson), std::string::npos);
+  EXPECT_NE(output.body.find(kFiniteProducerFailureMessage), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTask) {
@@ -723,6 +767,7 @@ TEST(JsonRpcServerTransportTest, SubscribeToTaskReturnsSseEventsForNonTerminalTa
   EXPECT_EQ(response.value().status_code, kHttpOk);
   EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
   ASSERT_TRUE(response.value().stream_writer);
+  EXPECT_EQ(response.value().stream_kind, a2a::server::HttpStreamKind::kLive);
   RecordingHttpTransport output;
   const auto write = response.value().stream_writer(output);
   ASSERT_TRUE(write.ok()) << write.error().message();

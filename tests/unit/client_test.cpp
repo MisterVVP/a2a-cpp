@@ -5,13 +5,18 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
+
+constexpr std::chrono::milliseconds kCallbackWaitDeadline{1000};
 
 class FakeClientTransport final : public a2a::client::ClientTransport {
  public:
@@ -126,6 +131,39 @@ class RecordingInterceptor final : public a2a::client::ClientInterceptor {
   std::vector<std::string>* events_;
   std::string tag_;
 };
+
+TEST(StreamHandleStateTest, CallbackWaitFromAnotherCallbackDoesNotBlock) {
+  a2a::client::StreamHandle::State source_state;
+  a2a::client::StreamHandle::State target_state;
+  std::promise<void> target_started_promise;
+  auto target_started = target_started_promise.get_future();
+  std::promise<void> release_target_promise;
+  auto release_target = release_target_promise.get_future().share();
+
+  std::thread target_callback([&] {
+    a2a::client::StreamHandle::State::CallbackExecutionScope callback_scope(target_state);
+    target_started_promise.set_value();
+    release_target.wait();
+  });
+  target_started.wait();
+
+  std::promise<void> source_started_promise;
+  auto source_started = source_started_promise.get_future();
+  auto wait_result = std::async(std::launch::async, [&] {
+    a2a::client::StreamHandle::State::CallbackExecutionScope callback_scope(source_state);
+    source_started_promise.set_value();
+    target_state.WaitForCallbackIdle();
+  });
+  source_started.wait();
+
+  const bool returned_without_target_completion =
+      wait_result.wait_for(kCallbackWaitDeadline) == std::future_status::ready;
+  release_target_promise.set_value();
+  target_callback.join();
+  wait_result.wait();
+
+  EXPECT_TRUE(returned_without_target_completion);
+}
 
 TEST(A2AClientTest, ReturnsInternalErrorWhenTransportNotConfigured) {
   a2a::client::A2AClient client(nullptr);

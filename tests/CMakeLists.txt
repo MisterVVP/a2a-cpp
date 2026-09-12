@@ -50,6 +50,14 @@ target_link_libraries(core_helpers_test
 
 gtest_discover_tests(core_helpers_test)
 
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  add_executable(subscription_diagnostics_test unit/subscription_diagnostics_test.cpp)
+  target_include_directories(subscription_diagnostics_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(subscription_diagnostics_test PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+  target_link_libraries(subscription_diagnostics_test PRIVATE a2a::core GTest::gtest_main)
+  gtest_discover_tests(subscription_diagnostics_test)
+endif()
+
 add_executable(json_value_test
   unit/json_value_test.cpp
 )
@@ -847,9 +855,18 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::proto_generated
 )
 
-add_executable(tck_sut sut/tck_sut.cpp)
+add_executable(tck_sut
+  sut/tck_sut.cpp
+  sut/tck_sut_http_server.cpp
+  sut/tck_sut_store.cpp
+)
 target_include_directories(tck_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/tests/support/example_support)
 target_link_libraries(tck_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
+
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_include_directories(tck_sut PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(tck_sut PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
   target_link_libraries(tck_sut
@@ -929,9 +946,39 @@ gtest_discover_tests(a2a_performance_driver_test)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(
+    NAME subscription_diagnostics_symbol_command_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test_test.py
+  )
+  if(NOT A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    if(MSVC)
+      find_program(A2A_SYMBOL_INSPECTOR NAMES dumpbin REQUIRED)
+      set(A2A_SYMBOL_INSPECTOR_ARGUMENT /symbols)
+    elseif(CMAKE_NM)
+      set(A2A_SYMBOL_INSPECTOR ${CMAKE_NM})
+      set(A2A_SYMBOL_INSPECTOR_ARGUMENT -C)
+    else()
+      find_program(A2A_SYMBOL_INSPECTOR NAMES llvm-nm nm REQUIRED)
+      set(A2A_SYMBOL_INSPECTOR_ARGUMENT -C)
+    endif()
+    add_test(
+      NAME subscription_diagnostics_normal_build_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test.py
+              --symbol-tool ${A2A_SYMBOL_INSPECTOR}
+              --symbol-argument=${A2A_SYMBOL_INSPECTOR_ARGUMENT}
+              $<TARGET_FILE:a2a_core> $<TARGET_FILE:a2a_client> $<TARGET_FILE:a2a_server>
+    )
+  endif()
+  add_test(
     NAME http_persistence_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:tck_sut>
   )
+  if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    add_test(
+      NAME http_diagnostics_reset_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_diagnostics_reset_test.py
+              $<TARGET_FILE:tck_sut>
+    )
+  endif()
   add_test(
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
@@ -961,6 +1008,7 @@ target_include_directories(a2a_performance_driver
 
 target_include_directories(a2a_wire_performance_driver
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/support
 )
 
@@ -977,6 +1025,11 @@ target_link_libraries(a2a_wire_performance_driver
     a2a::core
     a2a::proto_generated
 )
+
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_include_directories(a2a_wire_performance_driver PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(a2a_wire_performance_driver PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
   target_link_libraries(a2a_performance_driver

@@ -17,6 +17,29 @@ The runner writes:
 - `perf-artifacts/results.csv`
 - `perf-artifacts/summary.md`
 
+### Subscription terminal phase diagnostics
+
+Subscription attribution is compiled out of normal SDK builds. Enable runtime
+collection with the environment switch; the runner automatically configures a
+separate optimized diagnostics build with the private CMake option enabled:
+
+```bash
+A2A_SUBSCRIPTION_DIAGNOSTICS=1 \
+  ./scripts/run_performance_tests.sh
+```
+
+The normal build remains in `build/performance`; diagnostics use the isolated
+`build/performance-subscription-diagnostics` tree. `A2A_PERF_BUILD_DIR` changes
+the normal build-tree base, and the runner appends the diagnostics suffix for
+profiling runs so a diagnostics-enabled binary cannot be reused as a normal
+benchmark binary.
+
+Wire results keep `server_subscription_diagnostics` and
+`client_subscription_diagnostics` separate because the SUT and SDK client run
+in different processes. Each phase contains `count`, `total_ns`, and `max_ns`.
+`server_cancel_task_total` and `terminal_publication_total` are total timers and
+must not be added to their nested phase measurements.
+
 ### Reading the reports
 
 The Markdown summary keeps fundamentally different workloads separate. Its
@@ -132,11 +155,29 @@ The current real wire-level scenario set covers core lifecycle operations, push 
 `CancelTask_WorkingTask`, `SendMessage_FollowUpExistingTask`,
 `SendMessage_FollowUpAtHistoryDepth/8`,
 `GetTask_MissingTaskError`, `PushConfig_Create`, `PushConfig_Get`,
-`PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`, and `SubscribeToTask_FirstEventLatency`. The wire driver reuses one client/transport per
-worker thread so measured operations do not recreate gRPC channels or HTTP
-transport objects. The libcurl-backed HTTP client also keeps a reusable easy
-handle per SDK HTTP client, avoiding repeated easy-handle setup on REST and
-JSON-RPC paths. List scenarios run before mutating lifecycle scenarios and
+`PushConfig_List`, `PushConfig_Delete`, `SendStreamingMessage_FiniteStream`,
+`SubscribeToTask_FirstEventLatency`, and `IdleStream_ClientCancellationLatency`.
+The historical `SendStreamingMessage_FiniteStream` and
+`SubscribeToTask_FirstEventLatency` rows preserve the original one-client-per-worker
+topology so before/after comparisons remain equivalent to older reports. HTTP+JSON
+and JSON-RPC additionally run `SendStreamingMessage_FiniteStream_SharedClient` and
+`SubscribeToTask_FirstEventLatency_SharedClient`, where every measured worker uses
+one shared `A2AClient`. These shared-client rows are separate scalability
+coordinates and must not be substituted for the historical rows when evaluating
+regressions or issue acceptance. gRPC does not run the shared-client variants.
+The idle-stream cancellation scenario seeds a task, establishes a real subscription,
+waits for its initial event, and then measures only the synchronous local
+`StreamHandle::Cancel()` call. It does not invoke the protocol-level `CancelTask`
+operation or ask the server to publish a terminal event. For HTTP transports it
+retains the shared-client stress topology because it has no historical baseline.
+The wire driver otherwise reuses one client/transport per worker thread so
+measured operations do not recreate gRPC channels or HTTP transport objects. The
+libcurl-backed HTTP path submits both unary and streaming requests through a
+process-wide pool of at most four CURLM reactors. Reusable easy-handle slots keep
+their reactor assignment for connection-cache locality. Each client also aligns
+its first unary and streaming handles to one reactor shard, allowing common
+request-to-stream sequences to reuse that shard's connection cache while
+additional concurrent handles remain distributed across the bounded pool. List scenarios run before mutating lifecycle scenarios and
 seed a fixed fixture of 20 tasks, then measure only `ListTasks` calls, keeping
 the listed task set bounded in CI. Multi-subscriber subscription, disconnect isolation, terminal-completion subscription, and callback fan-out remain SDK in-process rows in this implementation; they are not duplicated as transport rows and must not be interpreted as full `wire_tck_sut` coverage.
 

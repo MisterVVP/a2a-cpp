@@ -44,6 +44,7 @@ inline constexpr std::string_view kTransferEncodingHeader = "transfer-encoding";
 inline constexpr std::string_view kTransferEncodingHeaderName = "Transfer-Encoding";
 inline constexpr std::string_view kTransferEncodingChunked = "chunked";
 inline constexpr std::string_view kHostHeaderName = "Host";
+inline constexpr std::string_view kAcceptHeaderName = "Accept";
 inline constexpr std::string_view kContentTypeHeaderName = "Content-Type";
 inline constexpr std::string_view kCacheControlHeaderName = "Cache-Control";
 inline constexpr std::string_view kCacheControlNoCache = "no-cache";

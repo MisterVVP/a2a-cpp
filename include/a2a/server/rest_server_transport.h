@@ -36,6 +36,7 @@ struct HttpServerResponse final {
   std::unordered_map<std::string, std::string> headers;
   std::string body;
   std::function<core::Result<void>(HttpByteTransport&)> stream_writer;
+  HttpStreamKind stream_kind = HttpStreamKind::kNone;
 };
 
 struct RestServerTransportOptions final {

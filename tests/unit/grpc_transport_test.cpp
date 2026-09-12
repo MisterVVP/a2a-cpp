@@ -384,6 +384,10 @@ TEST(GrpcTransportTest, SubscribeTaskCancellationInterruptsBlockedRead) {
   }
   canceller.join();
 
+  // A second cancellation must retain the owned-worker execution mode after
+  // the first cancellation has joined and moved the worker thread.
+  stream.value()->Cancel();
+
   EXPECT_TRUE(cancellation_completed.load());
   EXPECT_FALSE(stream.value()->IsActive());
   EXPECT_FALSE(observer.completed);

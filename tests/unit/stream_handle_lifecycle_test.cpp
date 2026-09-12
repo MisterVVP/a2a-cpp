@@ -5,10 +5,12 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
@@ -24,6 +26,36 @@ constexpr int kHttpServerError = 500;
 const std::string kContentTypeHeader = "content-type";
 const std::string kEventStreamContentType = "text/event-stream";
 const std::string kEndpointUrl = "http://127.0.0.1/a2a";
+
+TEST(StreamHandleLifecycleTest, CallbackIdleWaitDoesNotDependOnTerminalDispatch) {
+  a2a::client::StreamHandle::State state;
+  std::mutex callback_mutex;
+  std::condition_variable callback_condition;
+  bool callback_started = false;
+  bool release_callback = false;
+  std::thread callback([&] {
+    a2a::client::StreamHandle::State::CallbackExecutionScope callback_scope(state);
+    std::unique_lock lock(callback_mutex);
+    callback_started = true;
+    callback_condition.notify_all();
+    callback_condition.wait(lock, [&release_callback] { return release_callback; });
+  });
+  {
+    std::unique_lock lock(callback_mutex);
+    ASSERT_TRUE(callback_condition.wait_for(lock, kWaitTimeout, [&callback_started] { return callback_started; }));
+  }
+
+  auto idle_wait = std::async(std::launch::async, [&state] { state.WaitForCallbackIdle(); });
+  EXPECT_EQ(idle_wait.wait_for(kCancelPollInterval), std::future_status::timeout);
+  {
+    std::lock_guard lock(callback_mutex);
+    release_callback = true;
+  }
+  callback_condition.notify_all();
+
+  EXPECT_EQ(idle_wait.wait_for(kPromptCancelTimeout), std::future_status::ready);
+  callback.join();
+}
 
 class CountingObserver final : public a2a::client::StreamObserver {
  public:
@@ -164,6 +196,43 @@ TEST(StreamHandleLifecycleTest, IsActiveWhileWorkIsActiveAndCancelIsIdempotent) 
   EXPECT_FALSE(handle.value()->IsActive());
   EXPECT_EQ(observer.completions(), 0);
   EXPECT_EQ(observer.errors(), 0);
+}
+
+TEST(StreamHandleLifecycleTest, DestroyReturnsPromptlyWithInjectedSynchronousRequester) {
+  BlockingStreamFixture fixture;
+  auto client = MakeClient(fixture.MakeRequester());
+  CountingObserver observer;
+  auto handle = client->SendStreamingMessage(MakeRequest(), observer);
+  ASSERT_TRUE(handle.ok()) << handle.error().message();
+  ASSERT_TRUE(fixture.WaitUntilStarted());
+
+  std::mutex destroy_mutex;
+  std::condition_variable destroy_condition;
+  bool destroy_done = false;
+  bool destroy_ok = false;
+  std::thread destroy_thread([&] {
+    const auto destroyed = client->Destroy();
+    {
+      std::lock_guard lock(destroy_mutex);
+      destroy_done = true;
+      destroy_ok = destroyed.ok();
+    }
+    destroy_condition.notify_one();
+  });
+
+  bool destroyed_promptly = false;
+  {
+    std::unique_lock lock(destroy_mutex);
+    destroyed_promptly =
+        destroy_condition.wait_for(lock, kPromptCancelTimeout, [&destroy_done] { return destroy_done; });
+  }
+
+  handle.value()->Cancel();
+  destroy_thread.join();
+
+  EXPECT_TRUE(destroyed_promptly);
+  EXPECT_TRUE(destroy_ok);
+  EXPECT_FALSE(handle.value()->IsActive());
 }
 
 TEST(StreamHandleLifecycleTest, DestroyingActiveHandleCancelsAndJoinsSafely) {

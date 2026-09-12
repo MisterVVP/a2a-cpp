@@ -3,6 +3,7 @@
 
 #include "a2a/client/client.h"
 
+#include <cstddef>
 #include <exception>
 #include <ranges>
 #include <string_view>
@@ -12,12 +13,77 @@
 #include "a2a/core/protocol_methods.h"
 
 namespace a2a::client {
+namespace {
+
+class StreamCallbackThreadContext final {
+ public:
+  static void Enter() noexcept { ++Depth(); }
+  static void Leave() noexcept { --Depth(); }
+  [[nodiscard]] static bool IsActive() noexcept { return Depth() != 0U; }
+
+ private:
+  [[nodiscard]] static std::size_t& Depth() noexcept {
+    static thread_local std::size_t depth = 0U;
+    return depth;
+  }
+};
+
+}  // namespace
+
+StreamHandle::State::CallbackExecutionScope::CallbackExecutionScope(State& state) : state_(state) {
+  std::lock_guard lock(state_.completion_mutex);
+  state_.callback_thread_id = std::this_thread::get_id();
+  StreamCallbackThreadContext::Enter();
+}
+
+StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
+  {
+    std::lock_guard lock(state_.completion_mutex);
+    state_.callback_thread_id = {};
+  }
+  StreamCallbackThreadContext::Leave();
+  state_.completion_condition.notify_all();
+}
+
+void StreamHandle::State::RegisterCancelCallback(const std::function<void()>& callback) {
+  bool cancellation_already_requested = false;
+  {
+    std::lock_guard lock(cancellation_mutex);
+    cancellation_already_requested = cancel_requested.load();
+    if (!cancellation_already_requested) {
+      cancel_callback = callback;
+    }
+  }
+  if (cancellation_already_requested) {
+    callback();
+  }
+}
+
+void StreamHandle::State::WaitForCallbackIdle() {
+  std::unique_lock completion_lock(completion_mutex);
+  if (StreamCallbackThreadContext::IsActive() || callback_thread_id == std::this_thread::get_id()) {
+    return;
+  }
+  completion_condition.wait(completion_lock, [this] { return callback_thread_id == std::thread::id{}; });
+}
+
 StreamHandle::StreamHandle(std::shared_ptr<State> state, WorkerThread worker)
     : state_(std::move(state)), worker_(std::move(worker)) {}
 
+StreamHandle::StreamHandle(std::shared_ptr<State> state)
+    : state_(std::move(state)), execution_mode_(ExecutionMode::kExecutor) {}
+
 StreamHandle::StreamHandle(StreamHandle&&) noexcept = default;
 
-StreamHandle& StreamHandle::operator=(StreamHandle&&) noexcept = default;
+StreamHandle& StreamHandle::operator=(StreamHandle&& other) noexcept {
+  if (this != &other) {
+    Cancel();
+    state_ = std::move(other.state_);
+    worker_ = std::move(other.worker_);
+    execution_mode_ = other.execution_mode_;
+  }
+  return *this;
+}
 
 StreamHandle::~StreamHandle() { Cancel(); }
 
@@ -48,10 +114,18 @@ void StreamHandle::Cancel() {
   if (worker.joinable()) {
     worker.join();
   }
+  if (execution_mode_ == ExecutionMode::kExecutor) {
+    // Cancellation makes queued callbacks no-ops. Only a callback that was
+    // already executing can still reference the observer, so do not wait for
+    // terminal dispatch on the process-wide executor.
+    state_->WaitForCallbackIdle();
+  }
 }
 
 bool StreamHandle::IsActive() const {
-  return state_ != nullptr && state_->active.load() && !state_->cancel_requested.load();
+  const bool transport_is_shutdown =
+      state_ != nullptr && state_->transport_shutdown != nullptr && state_->transport_shutdown->load();
+  return state_ != nullptr && state_->active.load() && !state_->cancel_requested.load() && !transport_is_shutdown;
 }
 
 A2AClient::A2AClient(std::unique_ptr<ClientTransport> transport) : transport_(std::move(transport)) {}

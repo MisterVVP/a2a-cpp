@@ -229,7 +229,8 @@ TEST(TaskIdGeneratorTest, LifecycleValidatesAuthoritativeTaskForSendRequest) {
   different_snapshot.set_id(std::string(kDifferentSnapshotTaskId));
   auto matching_context = mismatch;
   matching_context.mutable_message()->set_context_id(working.context_id());
-  const auto different_snapshot_validation = lifecycle.ValidateTaskForSendRequest(matching_context, different_snapshot);
+  const auto different_snapshot_validation =
+      a2a::server::TaskLifecycleService::ValidateTaskForSendRequest(matching_context, different_snapshot);
   ASSERT_FALSE(different_snapshot_validation.ok());
   EXPECT_EQ(different_snapshot_validation.error().code(), a2a::core::ErrorCode::kValidation);
 

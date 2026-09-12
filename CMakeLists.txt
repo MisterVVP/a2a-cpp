@@ -17,6 +17,12 @@ option(A2A_BUILD_EXAMPLES "Build example binaries" ON)
 option(A2A_BUILD_BENCHMARKS "Build a2a-cpp performance benchmarks" OFF)
 option(A2A_ENABLE_LIBCURL "Build default libcurl-backed outbound HTTP support" ON)
 option(A2A_ENABLE_POSTGRES_STORE "Build PostgreSQL-backed A2A stores" OFF)
+option(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS
+       "Build internal subscription profiling diagnostics" OFF)
+
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS AND NOT A2A_ENABLE_TESTING)
+  message(FATAL_ERROR "Subscription diagnostics are available only in testing/performance development builds")
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
