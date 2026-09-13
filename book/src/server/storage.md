@@ -101,7 +101,8 @@ happens during store construction rather than on the request path.
 
 If any task-aware helper or trigger is present, the whole
 `task-aware-push-config-v3` migration is required. Validation checks all helper
-implementations and markers, owner privileges, absence of `PUBLIC EXECUTE`, the
+implementations and markers, owner privileges, the effective push-store role's
+`EXECUTE` privilege on the task-lock helper, absence of `PUBLIC EXECUTE`, the
 enabled advisory-lock `BEFORE DELETE` and cleanup `AFTER DELETE` row triggers
 without `WHEN` clauses, and the cleanup owner's ability to bypass any row-level
 security enabled on the push-config table. Partial or stale installations fail

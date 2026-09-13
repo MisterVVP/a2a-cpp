@@ -39,6 +39,9 @@ constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
 constexpr std::string_view kPostgresTaskAwarePushSchemaRequiredMessage =
     "PostgreSQL task-aware push configuration requires task-aware-push-config-v3; apply the migration in "
     "docs/storage.md before pairing this push store with a local PostgreSQL task store";
+constexpr std::string_view kPostgresPushTaskLockExecuteRequiredMessage =
+    "PostgreSQL push store role requires EXECUTE on a2a_lock_task_for_push_config(TEXT) for task-aware creation; "
+    "grant helper EXECUTE to the effective push-store role";
 constexpr std::string_view kPushConfigProvenanceColumnName = "local_postgres_task";
 constexpr std::string_view kPostgresAfterDeleteRowTriggerType = "9";
 constexpr std::string_view kPostgresBeforeDeleteRowTriggerType = "11";
@@ -49,10 +52,11 @@ constexpr int kPostgresPushSchemaParameterCount = 24;
 constexpr std::string_view kTaskLockExpectedTableReferenceCount = "4";
 constexpr std::string_view kCleanupExpectedTableReferenceCount = "1";
 constexpr std::string_view kTaskDeleteLockExpectedTableReferenceCount = "1";
-constexpr int kPostgresPushSchemaCheckCount = 14;
+constexpr int kPostgresPushSchemaCheckCount = 15;
 constexpr int kPostgresPushSchemaBaseCheckCount = 2;
 constexpr int kPostgresPushSchemaTaskAwarePresenceColumn = 2;
 constexpr int kPostgresPushSchemaTaskAwareFirstCheckColumn = 3;
+constexpr int kPostgresPushSchemaTaskLockExecuteColumn = 14;
 constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "WITH relations AS MATERIALIZED ("
     "SELECT schema_namespace.oid AS schema_oid, "
@@ -182,7 +186,9 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "AND task_delete_lock_trigger.tgtype = $22::smallint "
     "AND (task_delete_lock_trigger.tgenabled = $10::pg_catalog.\"char\" "
     "OR task_delete_lock_trigger.tgenabled = $11::pg_catalog.\"char\") "
-    "AND task_delete_lock_trigger.tgnargs = 0 AND task_delete_lock_trigger.tgqual IS NULL) "
+    "AND task_delete_lock_trigger.tgnargs = 0 AND task_delete_lock_trigger.tgqual IS NULL), "
+    "CASE WHEN lock_function.oid IS NULL THEN FALSE "
+    "ELSE pg_catalog.has_function_privilege(lock_function.oid, 'EXECUTE') END "
     "FROM relations CROSS JOIN lock_function CROSS JOIN delete_function CROSS JOIN task_delete_lock_function");
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
@@ -390,10 +396,14 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
   if (!IsPostgresTrue(result.get(), kPostgresPushSchemaTaskAwarePresenceColumn)) {
     return false;
   }
-  for (int column = kPostgresPushSchemaTaskAwareFirstCheckColumn; column < kPostgresPushSchemaCheckCount; ++column) {
+  for (int column = kPostgresPushSchemaTaskAwareFirstCheckColumn; column < kPostgresPushSchemaTaskLockExecuteColumn;
+       ++column) {
     if (!IsPostgresTrue(result.get(), column)) {
       return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
     }
+  }
+  if (!IsPostgresTrue(result.get(), kPostgresPushSchemaTaskLockExecuteColumn)) {
+    return core::Error::Internal(std::string(kPostgresPushTaskLockExecuteRequiredMessage));
   }
   return true;
 }

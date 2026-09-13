@@ -205,7 +205,8 @@ store construction; request paths do not query the catalogs.
 If any task-aware helper or trigger is present, construction requires the whole
 `task-aware-push-config-v3` migration and rejects partial or stale installations.
 Validation covers all `SECURITY DEFINER` helper implementations and migration
-markers, their owners' required privileges, absence of `PUBLIC EXECUTE`, exact
+markers, their owners' required privileges, the effective push-store role's
+`EXECUTE` privilege on the task-lock helper, absence of `PUBLIC EXECUTE`, exact
 `BEFORE DELETE` advisory-lock and `AFTER DELETE` cleanup trigger wiring without a
 `WHEN` clause, and the cleanup owner's ability to bypass any row-level security
 enabled on the push-config table. Function-body checks
