@@ -296,6 +296,7 @@ constexpr std::string_view kRevokePushDeleteOperation = "revoke push delete from
 constexpr std::string_view kRevokeTaskSelectOperation = "revoke task select from security definer owner";
 constexpr std::string_view kRevokeLocalTaskAwarePrivilegesOperation = "revoke local task-aware push privileges";
 constexpr std::string_view kRevokeTaskLockExecuteOperation = "revoke task-lock helper execute";
+constexpr std::string_view kGrantTaskLockExecuteOperation = "grant task-lock helper execute";
 constexpr std::string_view kExpectedTaskLockExecuteError =
     "PostgreSQL push store role requires EXECUTE on a2a_lock_task_for_push_config(TEXT)";
 constexpr std::string_view kOutdatedManagedPushSchemaAcceptedMessage =
@@ -965,6 +966,15 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   std::string sql = "REVOKE EXECUTE ON FUNCTION ";
   sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
   sql.append("(text) FROM ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildGrantTaskLockExecuteSql(std::string_view schema, std::string_view role) {
+  std::string sql = "GRANT EXECUTE ON FUNCTION ";
+  sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
+  sql.append("(text) TO ");
   sql.append(a2a::server::stores::QuoteSqlIdentifier(role));
   sql.push_back(';');
   return sql;
@@ -2024,6 +2034,25 @@ void ExpectExternalAuthorityPushOnlyRoleWorks(std::string_view dsn_value) {
   ExpectExternalAuthorityPushOnlyCreateSucceeds(role_dsn, schema, external_task_store);
 }
 
+void ExpectTaskLockPrivilegeRefresh(a2a::server::stores::PostgresPushNotificationStore& role_push_store,
+                                    a2a::server::stores::PostgresTaskStore& owner_task_store, PGconn* connection,
+                                    std::string_view schema, std::string_view role) {
+  AddPostgresTask(owner_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  const auto local_created = role_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      owner_task_store);
+  ASSERT_FALSE(local_created.ok());
+  EXPECT_NE(local_created.error().message().find(kExpectedTaskLockExecuteError), std::string_view::npos);
+
+  ExpectPostgresExecOk(connection, BuildGrantTaskLockExecuteSql(schema, role), kGrantTaskLockExecuteOperation);
+  ASSERT_TRUE(role_push_store
+                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId),
+                                                                                   std::string(kAtomicCreateConfigId)),
+                                         owner_task_store)
+                  .ok());
+}
+
 void ExpectTaskLockExecuteCheckedOnlyForLocalPath(std::string_view dsn_value) {
   const std::string schema = MakePostgresTestSchema(kLockInvokerPrivilegeSchemaSuffix);
   const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = std::string(dsn_value),
@@ -2049,14 +2078,7 @@ void ExpectTaskLockExecuteCheckedOnlyForLocalPath(std::string_view dsn_value) {
       a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId), std::string(kMixedCreateConfigId)),
       external_task_store);
   ASSERT_TRUE(external_created.ok());
-
-  AddPostgresTask(owner_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
-                  kOldTargetTaskTimestampSeconds);
-  const auto local_created = role_push_store.CreateOrUpdateForTask(
-      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
-      owner_task_store);
-  ASSERT_FALSE(local_created.ok());
-  EXPECT_NE(local_created.error().message().find(kExpectedTaskLockExecuteError), std::string_view::npos);
+  ExpectTaskLockPrivilegeRefresh(role_push_store, owner_task_store, connection.value().get(), schema, role.role());
 }
 
 void ExpectLocalCreateFirstScenario(std::string_view dsn_value) {
