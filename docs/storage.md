@@ -205,8 +205,7 @@ store construction; request paths do not query the catalogs.
 If any task-aware helper or trigger is present, construction requires the whole
 `task-aware-push-config-v3` migration and rejects partial or stale installations.
 Validation covers all `SECURITY DEFINER` helper implementations and migration
-markers, their owners' required privileges, the effective push-store role's
-`EXECUTE` privilege on the task-lock helper, absence of `PUBLIC EXECUTE`, exact
+markers, their owners' required privileges, absence of `PUBLIC EXECUTE`, exact
 `BEFORE DELETE` advisory-lock and `AFTER DELETE` cleanup trigger wiring without a
 `WHEN` clause, and the cleanup owner's ability to bypass any row-level security
 enabled on the push-config table. Function-body checks
@@ -220,7 +219,9 @@ only to SDK roles authorized to create push notification configurations. The
 invoking push-store role needs task-table `SELECT` plus lock-helper `EXECUTE`,
 but it does not need task-table `UPDATE`; the helper's owner needs schema `USAGE`
 and task-table `SELECT`. Push-only roles paired with an external authoritative
-`TaskStore` do not need task-table access or lock-helper execution. PostgreSQL
+`TaskStore` do not need task-table access or lock-helper execution. The push store
+validates the invoking role's lock-helper `EXECUTE` privilege only when
+`CreateOrUpdateForTask` selects the local PostgreSQL atomic path. PostgreSQL
 row-level security on the task table is allowed for external-authority/push-only
 use, but the local task-aware create path rejects it explicitly because a
 `SECURITY DEFINER` lock must not bypass caller row policies. If row-level

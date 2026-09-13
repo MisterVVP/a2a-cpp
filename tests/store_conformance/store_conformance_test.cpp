@@ -2017,8 +2017,6 @@ void ExpectExternalAuthorityPushOnlyRoleWorks(std::string_view dsn_value) {
   ASSERT_TRUE(role.Create().ok());
   ExpectPostgresExecOk(connection.value().get(), BuildRevokeLocalTaskAwarePrivilegesSql(schema, role.role()),
                        kRevokeLocalTaskAwarePrivilegesOperation);
-  ExpectPostgresExecOk(connection.value().get(), BuildDropTaskAwarePushSchemaSql(schema),
-                       kMutateManagedPushSchemaOperation);
   const std::string role_dsn = BuildRoleDsn(dsn_value, role.role());
   ASSERT_FALSE(role_dsn.empty());
   a2a::server::InMemoryTaskStore external_task_store;
@@ -2026,7 +2024,7 @@ void ExpectExternalAuthorityPushOnlyRoleWorks(std::string_view dsn_value) {
   ExpectExternalAuthorityPushOnlyCreateSucceeds(role_dsn, schema, external_task_store);
 }
 
-void ExpectManagedTaskAwareSchemaRequiresInvokerExecute(std::string_view dsn_value) {
+void ExpectTaskLockExecuteCheckedOnlyForLocalPath(std::string_view dsn_value) {
   const std::string schema = MakePostgresTestSchema(kLockInvokerPrivilegeSchemaSuffix);
   const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = std::string(dsn_value),
                                                                 .schema = schema};
@@ -2044,12 +2042,21 @@ void ExpectManagedTaskAwareSchemaRequiresInvokerExecute(std::string_view dsn_val
   const a2a::server::stores::PostgresStoreOptions role_options{
       .connection_string = role_dsn, .schema = schema, .auto_create_schema = false};
 
-  try {
-    (void)a2a::server::stores::PostgresPushNotificationStore(role_options);
-    FAIL() << kOutdatedManagedPushSchemaAcceptedMessage;
-  } catch (const std::runtime_error& error) {
-    EXPECT_NE(std::string_view(error.what()).find(kExpectedTaskLockExecuteError), std::string_view::npos);
-  }
+  a2a::server::stores::PostgresPushNotificationStore role_push_store(role_options);
+  a2a::server::InMemoryTaskStore external_task_store;
+  AddExternalAuthorityTask(external_task_store);
+  const auto external_created = role_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kMixedCreateTaskId), std::string(kMixedCreateConfigId)),
+      external_task_store);
+  ASSERT_TRUE(external_created.ok());
+
+  AddPostgresTask(owner_task_store, kAtomicCreateTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  const auto local_created = role_push_store.CreateOrUpdateForTask(
+      a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId), std::string(kAtomicCreateConfigId)),
+      owner_task_store);
+  ASSERT_FALSE(local_created.ok());
+  EXPECT_NE(local_created.error().message().find(kExpectedTaskLockExecuteError), std::string_view::npos);
 }
 
 void ExpectLocalCreateFirstScenario(std::string_view dsn_value) {
@@ -4040,12 +4047,12 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTaskLockOwnerPrivi
   ExpectSecurityDefinerOwnerPrivilegesRequired(kLockOwnerPrivilegeSchemaSuffix, SecurityDefinerOwnerCase::kTaskLock);
 }
 
-TEST(StoreConformanceTest, ExternallyManagedTaskAwarePushSchemaRequiresInvokerExecute) {
+TEST(StoreConformanceTest, TaskLockExecuteIsCheckedOnlyForLocalPath) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
   }
-  ExpectManagedTaskAwareSchemaRequiresInvokerExecute(dsn_value);
+  ExpectTaskLockExecuteCheckedOnlyForLocalPath(dsn_value);
 }
 
 TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupOwnerPrivileges) {
