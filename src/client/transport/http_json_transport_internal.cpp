@@ -17,7 +17,7 @@
 namespace a2a::client::http_json_internal {
 namespace {
 
-constexpr char kHttpTransportName[] = "http";
+constexpr const char* kHttpTransportName = "http";
 constexpr std::string_view kUnsupportedVersionMessage = "Server returned unsupported A2A-Version header";
 constexpr std::string_view kHttpRequestFailurePrefix = "HTTP request failed for ";
 constexpr std::string_view kProtocolCodeMemberName = "code";
