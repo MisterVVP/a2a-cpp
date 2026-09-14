@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -73,7 +74,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;
   bool task_aware_schema_available_ = false;
-  bool task_lock_execute_available_ = false;
+  mutable std::atomic_bool task_lock_execute_available_ = false;
   std::string local_upsert_sql_;
   std::string external_upsert_sql_;
   std::string get_sql_;

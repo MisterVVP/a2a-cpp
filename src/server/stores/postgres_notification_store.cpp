@@ -446,7 +446,7 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
     throw std::runtime_error(std::string(prepared.error().message()));
   }
   task_aware_schema_available_ = prepared.value().task_aware_schema_available;
-  task_lock_execute_available_ = prepared.value().task_lock_execute_available;
+  task_lock_execute_available_.store(prepared.value().task_lock_execute_available, std::memory_order_relaxed);
 }
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<PostgresConnectionPool> pool,
@@ -467,7 +467,7 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
     throw std::runtime_error(std::string(prepared.error().message()));
   }
   task_aware_schema_available_ = prepared.value().task_aware_schema_available;
-  task_lock_execute_available_ = prepared.value().task_lock_execute_available;
+  task_lock_execute_available_.store(prepared.value().task_lock_execute_available, std::memory_order_relaxed);
 }
 
 PostgresPushNotificationStore::~PostgresPushNotificationStore() = default;
@@ -530,7 +530,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
 }
 
 core::Result<bool> PostgresPushNotificationStore::HasTaskLockExecutePrivilege() const {
-  if (task_lock_execute_available_) {
+  if (task_lock_execute_available_.load(std::memory_order_relaxed)) {
     return true;
   }
   auto lease = pool_->Acquire();
@@ -550,7 +550,11 @@ core::Result<bool> PostgresPushNotificationStore::HasTaskLockExecutePrivilege() 
       PQnfields(result.get()) != kPostgresTaskLockExecuteCheckCount) {
     return core::Error::Internal(std::string(kPostgresPushTaskLockExecuteRequiredMessage));
   }
-  return IsPostgresTrue(result.get(), kPostgresTaskLockExecuteCheckColumn);
+  const bool task_lock_execute_available = IsPostgresTrue(result.get(), kPostgresTaskLockExecuteCheckColumn);
+  if (task_lock_execute_available) {
+    task_lock_execute_available_.store(true, std::memory_order_relaxed);
+  }
+  return task_lock_execute_available;
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdateForTask(

@@ -2051,6 +2051,14 @@ void ExpectTaskLockPrivilegeRefresh(a2a::server::stores::PostgresPushNotificatio
                                                                                    std::string(kAtomicCreateConfigId)),
                                          owner_task_store)
                   .ok());
+
+  a2a::server::stores::ResetPostgresOperationDiagnosticsForTesting();
+  ASSERT_TRUE(role_push_store
+                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(std::string(kAtomicCreateTaskId),
+                                                                                   std::string(kAtomicCreateConfigId)),
+                                         owner_task_store)
+                  .ok());
+  ExpectSingleTaskAwarePushUpsertDiagnostics(a2a::server::stores::TakePostgresOperationDiagnosticsForTesting());
 }
 
 void ExpectTaskLockExecuteCheckedOnlyForLocalPath(std::string_view dsn_value) {
