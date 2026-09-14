@@ -180,7 +180,7 @@ storage authority.
 
 When `auto_create_schema=true`, schema initialization creates or upgrades the
 task/push tables, provenance column, shared push-lock helper, exclusive task-delete
-lock helper and `BEFORE DELETE` trigger, cleanup helper and `AFTER DELETE` trigger,
+lock helper and `BEFORE DELETE` trigger, cleanup helper and `AFTER DELETE`/`AFTER TRUNCATE` triggers,
 sequences, and task indexes, and removes the legacy push-to-task foreign key. During
 the issue #206 write-saturation experiment, initialization also drops both push
 secondary indexes: `idx_a2a_push_configs_task` and
@@ -188,7 +188,7 @@ secondary indexes: `idx_a2a_push_configs_task` and
 remains available for task-prefix filtering; list queries explicitly sort by
 `created_sequence ASC` to preserve deterministic creation order and pagination
 semantics. The migration objects are installed transactionally and the
-`task-aware-push-config-v3` markers are written last.
+`task-aware-push-config-v4` markers are written last.
 
 ## Externally managed PostgreSQL schemas
 
@@ -199,14 +199,14 @@ task-delete lock helper and trigger, cleanup helper, and cleanup trigger are all
 absent, construction succeeds for a push-only store paired with an external
 authoritative `TaskStore`. Attempting to pair that store with a local PostgreSQL
 task store fails before the push write with an actionable
-`task-aware-push-config-v3` migration error. Capability detection happens during
+`task-aware-push-config-v4` migration error. Capability detection happens during
 store construction; request paths do not query the catalogs.
 
 If any task-aware helper or trigger is present, construction requires the whole
-`task-aware-push-config-v3` migration and rejects partial or stale installations.
+`task-aware-push-config-v4` migration and rejects partial or stale installations.
 Validation covers all `SECURITY DEFINER` helper implementations and migration
 markers, their owners' required privileges, absence of `PUBLIC EXECUTE`, exact
-`BEFORE DELETE` advisory-lock and `AFTER DELETE` cleanup trigger wiring without a
+`BEFORE DELETE` advisory-lock and `AFTER DELETE`/`AFTER TRUNCATE` cleanup trigger wiring without a
 `WHEN` clause, and the cleanup owner's ability to bypass any row-level security
 enabled on the push-config table. Function-body checks
 preserve the exact case of quoted schema/table identifiers so a similarly named
@@ -321,6 +321,11 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $a2a$
 BEGIN
+  IF TG_OP = 'TRUNCATE' THEN
+    DELETE FROM public.a2a_push_notification_configs
+    WHERE local_postgres_task;
+    RETURN NULL;
+  END IF;
   DELETE FROM public.a2a_push_notification_configs
   WHERE task_id = OLD.id AND local_postgres_task;
   RETURN OLD;
@@ -335,17 +340,25 @@ AFTER DELETE ON public.a2a_tasks
 FOR EACH ROW
 EXECUTE FUNCTION public.a2a_delete_task_push_configs();
 
+DROP TRIGGER IF EXISTS a2a_truncate_task_push_configs_trigger ON public.a2a_tasks;
+CREATE TRIGGER a2a_truncate_task_push_configs_trigger
+AFTER TRUNCATE ON public.a2a_tasks
+FOR EACH STATEMENT
+EXECUTE FUNCTION public.a2a_delete_task_push_configs();
+
 COMMENT ON FUNCTION public.a2a_lock_task_for_delete()
-  IS 'task-aware-push-config-v3';
+  IS 'task-aware-push-config-v4';
 
 COMMENT ON FUNCTION public.a2a_delete_task_push_configs()
-  IS 'task-aware-push-config-v3';
+  IS 'task-aware-push-config-v4';
 
 COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
-  IS 'task-aware-push-config-v3';
+  IS 'task-aware-push-config-v4';
 
 COMMIT;
 ```
+
+The statement-level truncate trigger deletes every locally owned push configuration in the same transaction as a direct `TRUNCATE public.a2a_tasks`. Externally owned rows (`local_postgres_task=FALSE`) remain available because their authoritative task storage is outside this table. `TRUNCATE ... CASCADE` must include the push-config table only when the operator intentionally wants to remove those externally owned rows too.
 
 The migration markers are written last inside the transaction, so a partial
 migration is never accepted. Existing push configurations are marked as

@@ -292,11 +292,33 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionBody(std::string_view push_table) {
   std::string body;
-  body.reserve(push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
-  body.append("BEGIN DELETE FROM ");
+  body.reserve((2U * push_table.size()) + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  body.append("BEGIN IF TG_OP = 'TRUNCATE' THEN DELETE FROM ");
+  body.append(push_table);
+  body.append(" WHERE local_postgres_task; RETURN NULL; END IF; DELETE FROM ");
   body.append(push_table);
   body.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END");
   return body;
+}
+
+[[nodiscard]] std::string BuildTruncateTaskPushConfigsTriggerSql(std::string_view function,
+                                                                 std::string_view task_table) {
+  const std::string trigger = QuoteSqlIdentifier(kTruncateTaskPushConfigsTrigger);
+  std::string sql;
+  sql.reserve((2U * trigger.size()) + function.size() + (2U * task_table.size()) +
+              kDeleteTaskPushConfigsTriggerSqlReserveSlack);
+  sql.append("DROP TRIGGER IF EXISTS ");
+  sql.append(trigger);
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append("; CREATE TRIGGER ");
+  sql.append(trigger);
+  sql.append(" AFTER TRUNCATE ON ");
+  sql.append(task_table);
+  sql.append(" FOR EACH STATEMENT EXECUTE FUNCTION ");
+  sql.append(function);
+  sql.append("();");
+  return sql;
 }
 
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
@@ -775,6 +797,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
       BuildDeleteTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
+  const std::string create_truncate_task_push_configs_trigger =
+      BuildTruncateTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
   const std::string revoke_delete_task_push_configs_function =
       BuildRevokeDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function);
   const std::string mark_delete_task_push_configs_migration =
@@ -811,6 +835,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_delete_task_push_configs_function,
                                                       revoke_delete_task_push_configs_function,
                                                       create_delete_task_push_configs_trigger,
+                                                      create_truncate_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
                                                       drop_redundant_push_configs_task_index,
                                                       drop_push_configs_created_sequence_index,

@@ -242,6 +242,7 @@ constexpr std::string_view kExternalProvenanceConfigId = "external-provenance-co
 constexpr std::string_view kTransitionProvenanceConfigId = "transition-provenance-config";
 constexpr std::string_view kTaskIdColumn = "id";
 constexpr std::string_view kDeleteProvenanceTaskOperation = "delete provenance test task";
+constexpr std::string_view kTruncateProvenanceTasksOperation = "truncate provenance test tasks";
 constexpr std::string_view kSplitRoleSetupOperation = "set up split-role push store";
 constexpr std::string_view kSplitRoleCleanupOperation = "clean up split-role push store";
 constexpr std::string_view kGrantTaskSelectOperation = "grant read-only task access";
@@ -257,6 +258,8 @@ constexpr std::string_view kSuppressedDeleteSchemaSuffix = "push_suppressed_task
 constexpr std::string_view kExternalMigrationSchemaSuffix = "push_external_schema_migration";
 constexpr std::string_view kManagedValidationSchemaSuffix = "push_managed_validation";
 constexpr std::string_view kMissingCleanupTriggerSchemaSuffix = "push_external_schema_missing_cleanup";
+constexpr std::string_view kMissingTruncateCleanupTriggerSchemaSuffix = "missing_truncate_cleanup";
+constexpr std::string_view kTruncateProvenanceSchemaSuffix = "push_truncate_provenance";
 constexpr std::string_view kMissingDeleteLockTriggerSchemaSuffix = "push_external_schema_missing_delete_lock";
 constexpr std::string_view kLegacyForeignKeySchemaSuffix = "push_schema_legacy_fk";
 constexpr std::string_view kCleanupImplementationSchemaSuffix = "push_schema_cleanup_impl";
@@ -288,6 +291,7 @@ constexpr std::string_view kEnablePushRowLevelSecurityOperation = "enable push r
 constexpr std::string_view kExpectedTaskRowLevelSecurityError =
     "PostgreSQL task-aware push configuration does not support row-level security on a2a_tasks";
 constexpr std::string_view kDropPushCleanupTriggerOperation = "drop push cleanup trigger";
+constexpr std::string_view kDropTruncatePushCleanupTriggerOperation = "drop truncate push cleanup trigger";
 constexpr std::string_view kSecurityDefinerOwnerRolePrefix = "a2a_push_security_owner_";
 constexpr std::string_view kGrantSchemaCreateOperation = "grant schema create to security definer owner";
 constexpr std::string_view kAlterSecurityDefinerOwnerOperation = "alter security definer owner";
@@ -746,6 +750,10 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
   sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kDeleteTaskPushConfigsTrigger));
   sql.append(" ON ");
   sql.append(task_table);
+  sql.append("; DROP TRIGGER ");
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kTruncateTaskPushConfigsTrigger));
+  sql.append(" ON ");
+  sql.append(task_table);
   sql.append("; DROP FUNCTION ");
   sql.append(a2a::server::stores::TaskPushConfigLockFunction(schema));
   sql.append("(text); DROP FUNCTION ");
@@ -838,6 +846,15 @@ void AppendUriEncoded(std::string& output, std::string_view value) {
 [[nodiscard]] std::string BuildDropPushCleanupTriggerSql(std::string_view schema) {
   std::string sql = "DROP TRIGGER ";
   sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kDeleteTaskPushConfigsTrigger));
+  sql.append(" ON ");
+  sql.append(a2a::server::stores::TaskTable(schema));
+  sql.push_back(';');
+  return sql;
+}
+
+[[nodiscard]] std::string BuildDropTruncatePushCleanupTriggerSql(std::string_view schema) {
+  std::string sql = "DROP TRIGGER ";
+  sql.append(a2a::server::stores::QuoteSqlIdentifier(a2a::server::stores::kTruncateTaskPushConfigsTrigger));
   sql.append(" ON ");
   sql.append(a2a::server::stores::TaskTable(schema));
   sql.push_back(';');
@@ -3892,6 +3909,38 @@ TEST(StoreConformanceTest, LocalTaskDeletionPreservesExternalTaskStoreConfigs) {
   ExpectPushConfigPresent(push_store, kProvenanceTaskId, kExternalProvenanceConfigId);
 }
 
+TEST(StoreConformanceTest, TaskTableTruncateRemovesOnlyLocalPushConfigs) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const a2a::server::stores::PostgresStoreOptions options{
+      .connection_string = dsn_value, .schema = MakePostgresTestSchema(kTruncateProvenanceSchemaSuffix)};
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  a2a::server::stores::PostgresPushNotificationStore push_store(options);
+  AddPostgresTask(task_store, kProvenanceTaskId, kPushListContextId, lf::a2a::v1::TASK_STATE_WORKING,
+                  kOldTargetTaskTimestampSeconds);
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdateForTask(a2a::tests::store_conformance::MakeConfig(
+                                             std::string(kProvenanceTaskId), std::string(kLocalProvenanceConfigId)),
+                                         task_store)
+                  .ok());
+  ASSERT_TRUE(push_store
+                  .CreateOrUpdate(a2a::tests::store_conformance::MakeConfig(std::string(kProvenanceTaskId),
+                                                                            std::string(kExternalProvenanceConfigId)))
+                  .ok());
+
+  auto connection = push_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+  std::string truncate_sql = "TRUNCATE ";
+  truncate_sql.append(a2a::server::stores::TaskTable(options.schema));
+  ASSERT_TRUE(
+      a2a::server::stores::Exec(connection.value().get(), truncate_sql, kTruncateProvenanceTasksOperation).ok());
+
+  ExpectPushConfigMissing(push_store, kProvenanceTaskId, kLocalProvenanceConfigId);
+  ExpectPushConfigPresent(push_store, kProvenanceTaskId, kExternalProvenanceConfigId);
+}
+
 TEST(StoreConformanceTest, ConflictUpdateUsesLatestTaskStoreProvenance) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -4005,6 +4054,25 @@ TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresCleanupTrigger) {
   ASSERT_TRUE(connection.ok());
   ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildDropPushCleanupTriggerSql(schema),
                                         kDropPushCleanupTriggerOperation)
+                  .ok());
+  const a2a::server::stores::PostgresStoreOptions managed_options{
+      .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};
+
+  ExpectManagedPushSchemaRejected(managed_options);
+}
+
+TEST(StoreConformanceTest, ExternallyManagedPushSchemaRequiresTruncateCleanupTrigger) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const std::string schema = MakePostgresTestSchema(kMissingTruncateCleanupTriggerSchemaSuffix);
+  const a2a::server::stores::PostgresStoreOptions owner_options{.connection_string = dsn_value, .schema = schema};
+  a2a::server::stores::PostgresPushNotificationStore owner_store(owner_options);
+  auto connection = owner_store.AcquireConnectionForTesting();
+  ASSERT_TRUE(connection.ok());
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), BuildDropTruncatePushCleanupTriggerSql(schema),
+                                        kDropTruncatePushCleanupTriggerOperation)
                   .ok());
   const a2a::server::stores::PostgresStoreOptions managed_options{
       .connection_string = dsn_value, .schema = schema, .auto_create_schema = false};

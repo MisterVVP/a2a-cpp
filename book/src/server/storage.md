@@ -87,7 +87,7 @@ When `auto_create_schema=true`, the SDK installs the provenance column, shared
 push-lock helper, exclusive task-delete lock helper with a `BEFORE DELETE`
 trigger, cleanup helper with an `AFTER DELETE` trigger, sequences, and indexes,
 removes the legacy push-to-task foreign key, and writes the
-`task-aware-push-config-v3` migration markers last.
+`task-aware-push-config-v4` migration markers last.
 
 ## Externally managed PostgreSQL schemas
 
@@ -100,7 +100,7 @@ fails before writing until the migration is installed. Capability detection
 happens during store construction rather than on the request path.
 
 If any task-aware helper or trigger is present, the whole
-`task-aware-push-config-v3` migration is required. Validation checks all helper
+`task-aware-push-config-v4` migration is required. Validation checks all helper
 implementations and markers, owner privileges, absence of `PUBLIC EXECUTE`, the
 enabled advisory-lock `BEFORE DELETE` and cleanup `AFTER DELETE` row triggers
 without `WHEN` clauses, and the cleanup owner's ability to bypass any row-level
@@ -212,6 +212,11 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $a2a$
 BEGIN
+  IF TG_OP = 'TRUNCATE' THEN
+    DELETE FROM public.a2a_push_notification_configs
+    WHERE local_postgres_task;
+    RETURN NULL;
+  END IF;
   DELETE FROM public.a2a_push_notification_configs
   WHERE task_id = OLD.id AND local_postgres_task;
   RETURN OLD;
@@ -226,17 +231,25 @@ AFTER DELETE ON public.a2a_tasks
 FOR EACH ROW
 EXECUTE FUNCTION public.a2a_delete_task_push_configs();
 
+DROP TRIGGER IF EXISTS a2a_truncate_task_push_configs_trigger ON public.a2a_tasks;
+CREATE TRIGGER a2a_truncate_task_push_configs_trigger
+AFTER TRUNCATE ON public.a2a_tasks
+FOR EACH STATEMENT
+EXECUTE FUNCTION public.a2a_delete_task_push_configs();
+
 COMMENT ON FUNCTION public.a2a_lock_task_for_delete()
-  IS 'task-aware-push-config-v3';
+  IS 'task-aware-push-config-v4';
 
 COMMENT ON FUNCTION public.a2a_delete_task_push_configs()
-  IS 'task-aware-push-config-v3';
+  IS 'task-aware-push-config-v4';
 
 COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
-  IS 'task-aware-push-config-v3';
+  IS 'task-aware-push-config-v4';
 
 COMMIT;
 ```
+
+The statement-level truncate trigger deletes every locally owned push configuration in the same transaction as a direct `TRUNCATE public.a2a_tasks`. Externally owned rows (`local_postgres_task=FALSE`) remain available because their authoritative task storage is outside this table. `TRUNCATE ... CASCADE` must include the push-config table only when the operator intentionally wants to remove those externally owned rows too.
 
 The migration markers are written last inside the transaction, so partial
 migrations are rejected. Existing rows receive the conservative external or
