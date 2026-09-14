@@ -40,11 +40,12 @@ using json_rpc_internal::ValidateResponseVersion;
 constexpr std::string_view kEmptyJsonObject = "{}";
 constexpr std::string_view kStreamingSuccessRequiresSseMessage =
     "JSON-RPC streaming success response must use text/event-stream";
-constexpr char kJsonRpcTransportName[] = "jsonrpc";
-constexpr char kJsonRpcTransportShuttingDownMessage[] = "JSON-RPC transport is shutting down";
-constexpr char kJsonRpcStreamRequesterNotConfiguredMessage[] = "HTTP stream requester is not configured";
-constexpr char kJsonRpcStreamContentTypeMessage[] = "JSON-RPC stream response must use text/event-stream";
-constexpr char kJsonRpcStreamMetadataOrderMessage[] = "JSON-RPC stream metadata must be validated before body chunks";
+constexpr const char* kJsonRpcTransportName = "jsonrpc";
+constexpr const char* kJsonRpcTransportShuttingDownMessage = "JSON-RPC transport is shutting down";
+constexpr const char* kJsonRpcStreamRequesterNotConfiguredMessage = "HTTP stream requester is not configured";
+constexpr const char* kJsonRpcStreamContentTypeMessage = "JSON-RPC stream response must use text/event-stream";
+constexpr const char* kJsonRpcStreamMetadataOrderMessage =
+    "JSON-RPC stream metadata must be validated before body chunks";
 constexpr std::string_view kStreamStatusErrorMessage = "JSON-RPC stream returned non-success HTTP status";
 constexpr std::string_view kJsonRpcInterfaceRequiredMessage = "JsonRpcTransport requires a JSON-RPC interface";
 constexpr std::string_view kJsonRpcUrlRequiredMessage = "Resolved JSON-RPC interface URL is required";

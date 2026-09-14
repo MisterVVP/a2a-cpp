@@ -28,7 +28,7 @@
 namespace a2a::http {
 namespace {
 
-constexpr char kHttpTransportName[] = "http";
+constexpr const char* kHttpTransportName = "http";
 constexpr std::string_view kStreamCompletionPendingMessage = "HTTP stream completion is pending";
 constexpr std::string_view kCurlInitFailureMessage = "failed to initialize HTTP client";
 constexpr std::string_view kCurlMultiInitFailureMessage = "failed to initialize HTTP stream poller";

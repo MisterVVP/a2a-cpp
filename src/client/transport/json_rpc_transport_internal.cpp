@@ -19,7 +19,7 @@ namespace a2a::client::json_rpc_internal {
 namespace {
 
 constexpr std::size_t kJsonRpcRequestEnvelopeOverhead = 45U;
-constexpr char kJsonRpcTransportName[] = "jsonrpc";
+constexpr const char* kJsonRpcTransportName = "jsonrpc";
 constexpr std::string_view kUnsupportedVersionMessage = "Server returned unsupported A2A-Version header";
 constexpr std::string_view kInvalidErrorPayloadMessage = "JSON-RPC error payload must be an object";
 constexpr std::string_view kRequestFailedMessage = "JSON-RPC request failed";

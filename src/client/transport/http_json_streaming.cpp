@@ -38,11 +38,11 @@ constexpr int kHttpOkMin = 200;
 constexpr int kHttpOkMax = 299;
 constexpr std::string_view kDefaultMtlsUnsupportedMessage =
     "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
-constexpr char kHttpTransportName[] = "http";
-constexpr char kHttpTransportShuttingDownMessage[] = "HTTP transport is shutting down";
-constexpr char kHttpStreamRequesterNotConfiguredMessage[] = "HTTP stream requester is not configured";
-constexpr char kHttpStreamContentTypeMessage[] = "HTTP stream response must use text/event-stream";
-constexpr char kHttpStreamMetadataOrderMessage[] = "HTTP stream metadata must be validated before body chunks";
+constexpr const char* kHttpTransportName = "http";
+constexpr const char* kHttpTransportShuttingDownMessage = "HTTP transport is shutting down";
+constexpr const char* kHttpStreamRequesterNotConfiguredMessage = "HTTP stream requester is not configured";
+constexpr const char* kHttpStreamContentTypeMessage = "HTTP stream response must use text/event-stream";
+constexpr const char* kHttpStreamMetadataOrderMessage = "HTTP stream metadata must be validated before body chunks";
 constexpr std::string_view kRemoteStreamErrorMessage = "Remote stream reported error event";
 constexpr std::string_view kErrorEventName = "error";
 constexpr std::string_view kCodeMemberName = "code";

@@ -362,7 +362,7 @@ class PersistentSseLoopbackServer final : private a2a::core::NonCopyable {
 
 class PersistentUnaryThenSseLoopbackServer final : private a2a::core::NonCopyable {
  public:
-  explicit PersistentUnaryThenSseLoopbackServer(std::string unary_body)
+  explicit PersistentUnaryThenSseLoopbackServer(const std::string& unary_body)
       : unary_response_(BuildUnaryResponse(unary_body)) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     EXPECT_NE(fd_, kSocketError);
