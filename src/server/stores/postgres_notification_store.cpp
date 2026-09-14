@@ -33,12 +33,16 @@ constexpr std::string_view kPushConfigGetOperation = "get postgres push notifica
 constexpr std::string_view kPushConfigSerializationErrorMessage =
     "failed to parse stored TaskPushNotificationConfig protobuf";
 constexpr std::string_view kValidatePostgresPushSchemaOperation = "validate postgres push notification schema";
+constexpr std::string_view kValidatePostgresTaskLockExecuteOperation = "validate postgres task-lock execute privilege";
 constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
     "PostgreSQL push-notification schema has an invalid or incomplete task-aware-push-config-v3 migration; apply "
     "the migration in docs/storage.md before using auto_create_schema=false";
 constexpr std::string_view kPostgresTaskAwarePushSchemaRequiredMessage =
     "PostgreSQL task-aware push configuration requires task-aware-push-config-v3; apply the migration in "
     "docs/storage.md before pairing this push store with a local PostgreSQL task store";
+constexpr std::string_view kPostgresPushTaskLockExecuteRequiredMessage =
+    "PostgreSQL push store role requires EXECUTE on a2a_lock_task_for_push_config(TEXT) for task-aware creation; "
+    "grant helper EXECUTE to the effective push-store role";
 constexpr std::string_view kPushConfigProvenanceColumnName = "local_postgres_task";
 constexpr std::string_view kPostgresAfterDeleteRowTriggerType = "9";
 constexpr std::string_view kPostgresBeforeDeleteRowTriggerType = "11";
@@ -49,10 +53,14 @@ constexpr int kPostgresPushSchemaParameterCount = 24;
 constexpr std::string_view kTaskLockExpectedTableReferenceCount = "4";
 constexpr std::string_view kCleanupExpectedTableReferenceCount = "1";
 constexpr std::string_view kTaskDeleteLockExpectedTableReferenceCount = "1";
-constexpr int kPostgresPushSchemaCheckCount = 14;
+constexpr int kPostgresPushSchemaCheckCount = 15;
 constexpr int kPostgresPushSchemaBaseCheckCount = 2;
 constexpr int kPostgresPushSchemaTaskAwarePresenceColumn = 2;
 constexpr int kPostgresPushSchemaTaskAwareFirstCheckColumn = 3;
+constexpr int kPostgresPushSchemaTaskLockExecuteColumn = 14;
+constexpr int kPostgresTaskLockExecuteCheckCount = 1;
+constexpr int kPostgresTaskLockExecuteCheckColumn = 0;
+constexpr std::string_view kPostgresTextFunctionArguments = "(text)";
 constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "WITH relations AS MATERIALIZED ("
     "SELECT schema_namespace.oid AS schema_oid, "
@@ -182,8 +190,12 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "AND task_delete_lock_trigger.tgtype = $22::smallint "
     "AND (task_delete_lock_trigger.tgenabled = $10::pg_catalog.\"char\" "
     "OR task_delete_lock_trigger.tgenabled = $11::pg_catalog.\"char\") "
-    "AND task_delete_lock_trigger.tgnargs = 0 AND task_delete_lock_trigger.tgqual IS NULL) "
+    "AND task_delete_lock_trigger.tgnargs = 0 AND task_delete_lock_trigger.tgqual IS NULL), "
+    "CASE WHEN lock_function.oid IS NULL THEN FALSE "
+    "ELSE pg_catalog.has_function_privilege(lock_function.oid, 'EXECUTE') END "
     "FROM relations CROSS JOIN lock_function CROSS JOIN delete_function CROSS JOIN task_delete_lock_function");
+constexpr auto kValidatePostgresTaskLockExecuteSql =
+    std::to_array("SELECT pg_catalog.has_function_privilege($1::pg_catalog.regprocedure, 'EXECUTE')");
 
 [[nodiscard]] core::Result<std::size_t> ParsePushListPageToken(std::string_view page_token) {
   if (page_token.empty()) {
@@ -337,7 +349,13 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
   return qualified;
 }
 
-[[nodiscard]] core::Result<bool> ValidateManagedPushSchema(PGconn* connection, const PostgresStoreOptions& options) {
+struct PushSchemaCapabilities final {
+  bool task_aware_schema_available;
+  bool task_lock_execute_available;
+};
+
+[[nodiscard]] core::Result<PushSchemaCapabilities> ValidateManagedPushSchema(PGconn* connection,
+                                                                             const PostgresStoreOptions& options) {
   const std::string expected_lock_body = ExpectedTaskPushConfigLockFunctionBody(options.schema);
   const std::string expected_task_delete_lock_body = ExpectedTaskDeleteLockFunctionBody(options.schema);
   const std::string quoted_task_table = TaskTable(options.schema);
@@ -388,17 +406,21 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     }
   }
   if (!IsPostgresTrue(result.get(), kPostgresPushSchemaTaskAwarePresenceColumn)) {
-    return false;
+    return PushSchemaCapabilities{};
   }
-  for (int column = kPostgresPushSchemaTaskAwareFirstCheckColumn; column < kPostgresPushSchemaCheckCount; ++column) {
+  for (int column = kPostgresPushSchemaTaskAwareFirstCheckColumn; column < kPostgresPushSchemaTaskLockExecuteColumn;
+       ++column) {
     if (!IsPostgresTrue(result.get(), column)) {
       return core::Error::Internal(std::string(kPostgresPushSchemaMigrationRequiredMessage));
     }
   }
-  return true;
+  return PushSchemaCapabilities{
+      .task_aware_schema_available = true,
+      .task_lock_execute_available = IsPostgresTrue(result.get(), kPostgresPushSchemaTaskLockExecuteColumn)};
 }
 
-[[nodiscard]] core::Result<bool> PreparePushSchema(PGconn* connection, const PostgresStoreOptions& options) {
+[[nodiscard]] core::Result<PushSchemaCapabilities> PreparePushSchema(PGconn* connection,
+                                                                     const PostgresStoreOptions& options) {
   auto initialized = InitializeSchema(connection, options);
   if (!initialized.ok()) {
     return initialized.error();
@@ -423,7 +445,8 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(PostgresStoreOption
   if (!prepared.ok()) {
     throw std::runtime_error(std::string(prepared.error().message()));
   }
-  task_aware_schema_available_ = prepared.value();
+  task_aware_schema_available_ = prepared.value().task_aware_schema_available;
+  task_lock_execute_available_.store(prepared.value().task_lock_execute_available, std::memory_order_relaxed);
 }
 
 PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<PostgresConnectionPool> pool,
@@ -443,7 +466,8 @@ PostgresPushNotificationStore::PostgresPushNotificationStore(std::shared_ptr<Pos
   if (!prepared.ok()) {
     throw std::runtime_error(std::string(prepared.error().message()));
   }
-  task_aware_schema_available_ = prepared.value();
+  task_aware_schema_available_ = prepared.value().task_aware_schema_available;
+  task_lock_execute_available_.store(prepared.value().task_lock_execute_available, std::memory_order_relaxed);
 }
 
 PostgresPushNotificationStore::~PostgresPushNotificationStore() = default;
@@ -505,6 +529,34 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
   return config;
 }
 
+core::Result<bool> PostgresPushNotificationStore::HasTaskLockExecutePrivilege() const {
+  if (task_lock_execute_available_.load(std::memory_order_relaxed)) {
+    return true;
+  }
+  auto lease = pool_->Acquire();
+  if (!lease.ok()) {
+    return lease.error();
+  }
+  std::string function_signature = TaskPushConfigLockFunction(options_.schema);
+  function_signature.append(kPostgresTextFunctionArguments);
+  const std::array<const char*, kPostgresTaskLockExecuteCheckCount> values = {function_signature.c_str()};
+  PgResult result(PQexecParams(lease.value().get(), kValidatePostgresTaskLockExecuteSql.data(),
+                               static_cast<int>(values.size()), nullptr, values.data(), nullptr, nullptr, 0));
+  const auto checked = CheckTuples(lease.value().get(), result.get(), kValidatePostgresTaskLockExecuteOperation);
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  if (PQntuples(result.get()) != kPostgresTaskLockExecuteCheckCount ||
+      PQnfields(result.get()) != kPostgresTaskLockExecuteCheckCount) {
+    return core::Error::Internal(std::string(kPostgresPushTaskLockExecuteRequiredMessage));
+  }
+  const bool task_lock_execute_available = IsPostgresTrue(result.get(), kPostgresTaskLockExecuteCheckColumn);
+  if (task_lock_execute_available) {
+    task_lock_execute_available_.store(true, std::memory_order_relaxed);
+  }
+  return task_lock_execute_available;
+}
+
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationStore::CreateOrUpdateForTask(
     const lf::a2a::v1::TaskPushNotificationConfig& config, const TaskStore& task_store) {
   const auto validation = ValidatePushConfig(config);
@@ -527,6 +579,13 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> PostgresPushNotificationSt
         return task.error();
       }
       return core::Error::Internal(std::string(kPostgresTaskAwarePushSchemaRequiredMessage));
+    }
+    const auto task_lock_execute_available = HasTaskLockExecutePrivilege();
+    if (!task_lock_execute_available.ok()) {
+      return task_lock_execute_available.error();
+    }
+    if (!task_lock_execute_available.value()) {
+      return core::Error::Internal(std::string(kPostgresPushTaskLockExecuteRequiredMessage));
     }
     return Upsert(config, UpsertPath::kLocalAtomic);
   }

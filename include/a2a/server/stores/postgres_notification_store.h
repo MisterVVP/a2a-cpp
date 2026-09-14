@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -63,6 +64,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
       const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path);
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> UpsertOnConnection(
       PGconn* connection, const lf::a2a::v1::TaskPushNotificationConfig& config, UpsertPath path);
+  [[nodiscard]] core::Result<bool> HasTaskLockExecutePrivilege() const;
   [[nodiscard]] core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetInternal(std::string_view task_id,
                                                                                   std::string_view config_id) const;
   [[nodiscard]] core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListInternal(
@@ -72,6 +74,7 @@ class PostgresPushNotificationStore final : public a2a::server::PushNotification
   PostgresStoreOptions options_;
   PostgresStorageIdentity storage_identity_;
   bool task_aware_schema_available_ = false;
+  mutable std::atomic_bool task_lock_execute_available_ = false;
   std::string local_upsert_sql_;
   std::string external_upsert_sql_;
   std::string get_sql_;

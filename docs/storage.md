@@ -219,7 +219,9 @@ only to SDK roles authorized to create push notification configurations. The
 invoking push-store role needs task-table `SELECT` plus lock-helper `EXECUTE`,
 but it does not need task-table `UPDATE`; the helper's owner needs schema `USAGE`
 and task-table `SELECT`. Push-only roles paired with an external authoritative
-`TaskStore` do not need task-table access or lock-helper execution. PostgreSQL
+`TaskStore` do not need task-table access or lock-helper execution. The push store
+validates the invoking role's lock-helper `EXECUTE` privilege only when
+`CreateOrUpdateForTask` selects the local PostgreSQL atomic path. PostgreSQL
 row-level security on the task table is allowed for external-authority/push-only
 use, but the local task-aware create path rejects it explicitly because a
 `SECURITY DEFINER` lock must not bypass caller row policies. If row-level

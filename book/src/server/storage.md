@@ -114,7 +114,9 @@ Grant the push-lock helper only to roles authorized to create push configuration
 The invoking push role needs task-table `SELECT` plus helper `EXECUTE`; neither
 the caller nor the helper owner needs task-table `UPDATE`. Push-only roles paired
 with an external authoritative `TaskStore` do not need task-table access or helper
-execution. Task-table row-level security is allowed for those external-authority
+execution. The push store checks the invoking role's helper `EXECUTE` privilege
+only when `CreateOrUpdateForTask` selects the local PostgreSQL atomic path.
+Task-table row-level security is allowed for those external-authority
 paths but is rejected when the local task-aware create helper is invoked. If
 push-table row-level security is enabled, the cleanup helper owner must bypass it
 via table ownership without `FORCE ROW LEVEL SECURITY`, or via `BYPASSRLS` or
