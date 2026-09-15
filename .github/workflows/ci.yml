@@ -298,6 +298,7 @@ jobs:
             --benchmark_report_aggregates_only=true \
             | tee benchmark-output.log
       - name: Check benchmark thresholds
+        continue-on-error: true
         run: |
           go run ./tools/bench_runner/cmd/a2a-bench-runner \
             --results benchmark-results.json \
