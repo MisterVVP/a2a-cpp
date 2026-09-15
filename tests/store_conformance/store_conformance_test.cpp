@@ -261,6 +261,7 @@ constexpr std::string_view kMissingCleanupTriggerSchemaSuffix = "push_external_s
 constexpr std::string_view kMissingTruncateCleanupTriggerSchemaSuffix = "missing_truncate_cleanup";
 constexpr std::string_view kTruncateProvenanceSchemaSuffix = "push_truncate_provenance";
 constexpr std::string_view kTruncateIsolationSchemaSuffix = "push_truncate_isolation";
+constexpr std::string_view kTruncateTokenSchemaSuffix = "TRUNCATE";
 constexpr std::string_view kMissingDeleteLockTriggerSchemaSuffix = "missing_delete_lock_trigger";
 constexpr std::string_view kLegacyForeignKeySchemaSuffix = "push_schema_legacy_fk";
 constexpr std::string_view kCleanupImplementationSchemaSuffix = "push_schema_cleanup_impl";
@@ -4082,6 +4083,18 @@ TEST(StoreConformanceTest, AutoCreatedTaskAwarePushSchemaPassesManagedValidation
   }
   const a2a::server::stores::PostgresStoreOptions options{
       .connection_string = dsn_value, .schema = MakePostgresTestSchema(kManagedValidationSchemaSuffix)};
+
+  a2a::server::stores::PostgresTaskStore task_store(options);
+  EXPECT_NO_THROW(static_cast<void>(a2a::server::stores::PostgresPushNotificationStore(options)));
+}
+
+TEST(StoreConformanceTest, AutoCreatedTaskAwarePushSchemaWithTruncateTokenPassesManagedValidation) {
+  const char* dsn_value = GetPostgresDsn();
+  if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
+    GTEST_SKIP() << kPostgresDsnMissingSkipMessage;
+  }
+  const a2a::server::stores::PostgresStoreOptions options{.connection_string = dsn_value,
+                                                          .schema = MakePostgresTestSchema(kTruncateTokenSchemaSuffix)};
 
   a2a::server::stores::PostgresTaskStore task_store(options);
   EXPECT_NO_THROW(static_cast<void>(a2a::server::stores::PostgresPushNotificationStore(options)));
