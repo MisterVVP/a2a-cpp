@@ -35,29 +35,30 @@ constexpr std::string_view kPushConfigSerializationErrorMessage =
 constexpr std::string_view kValidatePostgresPushSchemaOperation = "validate postgres push notification schema";
 constexpr std::string_view kValidatePostgresTaskLockExecuteOperation = "validate postgres task-lock execute privilege";
 constexpr std::string_view kPostgresPushSchemaMigrationRequiredMessage =
-    "PostgreSQL push-notification schema has an invalid or incomplete task-aware-push-config-v3 migration; apply "
+    "PostgreSQL push-notification schema has an invalid or incomplete task-aware-push-config-v4 migration; apply "
     "the migration in docs/storage.md before using auto_create_schema=false";
 constexpr std::string_view kPostgresTaskAwarePushSchemaRequiredMessage =
-    "PostgreSQL task-aware push configuration requires task-aware-push-config-v3; apply the migration in "
+    "PostgreSQL task-aware push configuration requires task-aware-push-config-v4; apply the migration in "
     "docs/storage.md before pairing this push store with a local PostgreSQL task store";
 constexpr std::string_view kPostgresPushTaskLockExecuteRequiredMessage =
     "PostgreSQL push store role requires EXECUTE on a2a_lock_task_for_push_config(TEXT) for task-aware creation; "
     "grant helper EXECUTE to the effective push-store role";
 constexpr std::string_view kPushConfigProvenanceColumnName = "local_postgres_task";
 constexpr std::string_view kPostgresAfterDeleteRowTriggerType = "9";
+constexpr std::string_view kPostgresAfterTruncateStatementTriggerType = "32";
 constexpr std::string_view kPostgresBeforeDeleteRowTriggerType = "11";
 constexpr std::string_view kPostgresTriggerEnabledForOrigin = "O";
 constexpr std::string_view kPostgresTriggerEnabledAlways = "A";
 constexpr std::string_view kPostgresTrueValue = "t";
-constexpr int kPostgresPushSchemaParameterCount = 24;
+constexpr int kPostgresPushSchemaParameterCount = 27;
 constexpr std::string_view kTaskLockExpectedTableReferenceCount = "4";
-constexpr std::string_view kCleanupExpectedTableReferenceCount = "1";
+constexpr std::string_view kCleanupExpectedTableReferenceCount = "2";
 constexpr std::string_view kTaskDeleteLockExpectedTableReferenceCount = "1";
-constexpr int kPostgresPushSchemaCheckCount = 15;
+constexpr int kPostgresPushSchemaCheckCount = 16;
 constexpr int kPostgresPushSchemaBaseCheckCount = 2;
 constexpr int kPostgresPushSchemaTaskAwarePresenceColumn = 2;
 constexpr int kPostgresPushSchemaTaskAwareFirstCheckColumn = 3;
-constexpr int kPostgresPushSchemaTaskLockExecuteColumn = 14;
+constexpr int kPostgresPushSchemaTaskLockExecuteColumn = 15;
 constexpr int kPostgresTaskLockExecuteCheckCount = 1;
 constexpr int kPostgresTaskLockExecuteCheckColumn = 0;
 constexpr std::string_view kPostgresTextFunctionArguments = "(text)";
@@ -85,6 +86,13 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
     "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 AND trigger.tgname = $7 "
     "AND NOT trigger.tgisinternal), "
+    "truncate_cleanup_trigger AS MATERIALIZED ("
+    "SELECT trigger.tgfoid, trigger.tgtype, trigger.tgenabled, trigger.tgnargs, trigger.tgqual "
+    "FROM pg_catalog.pg_trigger AS trigger "
+    "JOIN pg_catalog.pg_class AS relation ON relation.oid = trigger.tgrelid "
+    "JOIN pg_catalog.pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace "
+    "WHERE relation_namespace.nspname = $1 AND relation.relname = $8 AND trigger.tgname = $25 "
+    "AND NOT trigger.tgisinternal), "
     "task_delete_lock_function AS MATERIALIZED ("
     "SELECT routine.oid, routine.proacl, routine.proowner, routine.prosecdef, routine.provolatile, routine.proconfig, "
     "routine.prorettype, routine.prosrc, pg_catalog.obj_description(routine.oid, 'pg_proc') AS migration_id FROM "
@@ -110,7 +118,8 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "SELECT 1 FROM pg_catalog.pg_constraint AS foreign_key WHERE foreign_key.contype = 'f' "
     "AND foreign_key.conrelid = relations.push_oid AND foreign_key.confrelid = relations.task_oid), "
     "lock_function.oid IS NOT NULL OR delete_function.oid IS NOT NULL OR EXISTS (SELECT 1 FROM cleanup_trigger) "
-    "OR task_delete_lock_function.oid IS NOT NULL OR EXISTS (SELECT 1 FROM task_delete_lock_trigger), "
+    "OR EXISTS (SELECT 1 FROM truncate_cleanup_trigger) OR task_delete_lock_function.oid IS NOT NULL "
+    "OR EXISTS (SELECT 1 FROM task_delete_lock_trigger), "
     "lock_function.oid IS NOT NULL AND relations.task_oid IS NOT NULL AND lock_function.migration_id = $5 "
     "AND lock_function.prosecdef AND lock_function.provolatile = 'v' "
     "AND lock_function.prorettype = 'pg_catalog.bool'::pg_catalog.regtype "
@@ -141,6 +150,9 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "AND 'search_path=pg_catalog' = ANY(delete_function.proconfig) "
     "AND pg_catalog.regexp_replace(pg_catalog.lower(delete_function.prosrc), '[[:space:]\"]+', '', 'g') = "
     "pg_catalog.regexp_replace(pg_catalog.lower($15::text), '[[:space:]\"]+', '', 'g') "
+    "AND pg_catalog.length(delete_function.prosrc) - "
+    "pg_catalog.length(pg_catalog.replace(delete_function.prosrc, pg_catalog.quote_literal($27::text), '')) = "
+    "pg_catalog.length(pg_catalog.quote_literal($27::text)) "
     "AND ((pg_catalog.length(delete_function.prosrc) - "
     "pg_catalog.length(pg_catalog.replace(delete_function.prosrc, $16::text, ''))) = "
     "$19::integer * pg_catalog.length($16::text) OR "
@@ -166,6 +178,12 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "AND (cleanup_trigger.tgenabled = $10::pg_catalog.\"char\" "
     "OR cleanup_trigger.tgenabled = $11::pg_catalog.\"char\") "
     "AND cleanup_trigger.tgnargs = 0 AND cleanup_trigger.tgqual IS NULL), "
+    "EXISTS (SELECT 1 FROM truncate_cleanup_trigger "
+    "WHERE truncate_cleanup_trigger.tgfoid = delete_function.oid "
+    "AND truncate_cleanup_trigger.tgtype = $26::smallint "
+    "AND (truncate_cleanup_trigger.tgenabled = $10::pg_catalog.\"char\" "
+    "OR truncate_cleanup_trigger.tgenabled = $11::pg_catalog.\"char\") "
+    "AND truncate_cleanup_trigger.tgnargs = 0 AND truncate_cleanup_trigger.tgqual IS NULL), "
     "task_delete_lock_function.oid IS NOT NULL AND task_delete_lock_function.migration_id = $5 "
     "AND task_delete_lock_function.prosecdef AND task_delete_lock_function.provolatile = 'v' "
     "AND task_delete_lock_function.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype "
@@ -388,6 +406,9 @@ struct PushSchemaCapabilities final {
       std::string(kPostgresBeforeDeleteRowTriggerType),
       expected_task_delete_lock_body,
       std::string(kTaskDeleteLockExpectedTableReferenceCount),
+      std::string(kTruncateTaskPushConfigsTrigger),
+      std::string(kPostgresAfterTruncateStatementTriggerType),
+      std::string(kPostgresTruncateTriggerOperation),
   };
   std::array<const char*, kPostgresPushSchemaParameterCount> values{};
   std::ranges::transform(parameter_storage, values.begin(), [](const std::string& value) { return value.c_str(); });

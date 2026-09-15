@@ -42,6 +42,8 @@ constexpr std::string_view kPostgresPushTaskSelectRequiredMessage =
     "PostgreSQL push store role requires SELECT on a2a_tasks for task-aware creation";
 constexpr std::string_view kPostgresTaskAwarePushSnapshotIsolationUnsupportedMessage =
     "PostgreSQL task-aware push configuration requires read-committed transaction isolation";
+constexpr std::string_view kPostgresTaskTruncateSnapshotIsolationUnsupportedMessage =
+    "PostgreSQL task truncation cleanup requires read-committed transaction isolation";
 constexpr auto kCurrentUserSql = std::to_array("SELECT current_user");
 constinit const std::string kBeginSchemaTransactionSql = "BEGIN";
 constinit const std::string kCommitSchemaTransactionSql = "COMMIT";
@@ -291,12 +293,57 @@ thread_local PostgresOperationDiagnostics g_operation_diagnostics;
 }
 
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionBody(std::string_view push_table) {
+  const std::string truncate_operation = SqlStringLiteral(kPostgresTruncateTriggerOperation);
+  const std::string transaction_isolation_setting = SqlStringLiteral(kTransactionIsolationSetting);
+  const std::string repeatable_read_isolation = SqlStringLiteral(kRepeatableReadIsolation);
+  const std::string serializable_isolation = SqlStringLiteral(kSerializableIsolation);
+  const std::string isolation_error_code = SqlStringLiteral(kFeatureNotSupportedSqlState);
+  const std::string isolation_error_message =
+      SqlStringLiteral(kPostgresTaskTruncateSnapshotIsolationUnsupportedMessage);
   std::string body;
-  body.reserve(push_table.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
-  body.append("BEGIN DELETE FROM ");
+  body.reserve((2U * push_table.size()) + truncate_operation.size() + transaction_isolation_setting.size() +
+               repeatable_read_isolation.size() + serializable_isolation.size() + isolation_error_code.size() +
+               isolation_error_message.size() + kDeleteTaskPushConfigsFunctionSqlReserveSlack);
+  body.append("BEGIN IF TG_OP = ");
+  body.append(truncate_operation);
+  body.append(" THEN IF pg_catalog.current_setting(");
+  body.append(transaction_isolation_setting);
+  body.append(") IN (");
+  body.append(repeatable_read_isolation);
+  body.append(", ");
+  body.append(serializable_isolation);
+  body.append(") THEN RAISE EXCEPTION USING ERRCODE = ");
+  body.append(isolation_error_code);
+  body.append(", MESSAGE = ");
+  body.append(isolation_error_message);
+  body.append("; END IF; DELETE FROM ");
+  body.append(push_table);
+  body.append(" WHERE local_postgres_task; RETURN NULL; END IF; DELETE FROM ");
   body.append(push_table);
   body.append(" WHERE task_id = OLD.id AND local_postgres_task; RETURN OLD; END");
   return body;
+}
+
+[[nodiscard]] std::string BuildTruncateTaskPushConfigsTriggerSql(std::string_view function,
+                                                                 std::string_view task_table) {
+  const std::string trigger = QuoteSqlIdentifier(kTruncateTaskPushConfigsTrigger);
+  std::string sql;
+  sql.reserve((2U * trigger.size()) + function.size() + (2U * task_table.size()) +
+              kDeleteTaskPushConfigsTriggerSqlReserveSlack);
+  sql.append("DROP TRIGGER IF EXISTS ");
+  sql.append(trigger);
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append("; CREATE TRIGGER ");
+  sql.append(trigger);
+  sql.append(" AFTER ");
+  sql.append(kPostgresTruncateTriggerOperation);
+  sql.append(" ON ");
+  sql.append(task_table);
+  sql.append(" FOR EACH STATEMENT EXECUTE FUNCTION ");
+  sql.append(function);
+  sql.append("();");
+  return sql;
 }
 
 [[nodiscard]] std::string BuildDeleteTaskPushConfigsFunctionSql(std::string_view function,
@@ -775,6 +822,8 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       BuildDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function, push_configs);
   const std::string create_delete_task_push_configs_trigger =
       BuildDeleteTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
+  const std::string create_truncate_task_push_configs_trigger =
+      BuildTruncateTaskPushConfigsTriggerSql(delete_task_push_configs_function, tasks);
   const std::string revoke_delete_task_push_configs_function =
       BuildRevokeDeleteTaskPushConfigsFunctionSql(delete_task_push_configs_function);
   const std::string mark_delete_task_push_configs_migration =
@@ -811,6 +860,7 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
                                                       create_delete_task_push_configs_function,
                                                       revoke_delete_task_push_configs_function,
                                                       create_delete_task_push_configs_trigger,
+                                                      create_truncate_task_push_configs_trigger,
                                                       add_push_configs_created_sequence,
                                                       drop_redundant_push_configs_task_index,
                                                       drop_push_configs_created_sequence_index,
