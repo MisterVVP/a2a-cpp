@@ -3961,7 +3961,8 @@ TEST(StoreConformanceTest, TaskTableTruncateRemovesOnlyLocalPushConfigs) {
 
   auto connection = push_store.AcquireConnectionForTesting();
   ASSERT_TRUE(connection.ok());
-  std::string truncate_sql = "TRUNCATE ";
+  std::string truncate_sql(a2a::server::stores::kPostgresTruncateTriggerOperation);
+  truncate_sql.push_back(' ');
   truncate_sql.append(a2a::server::stores::TaskTable(options.schema));
   ASSERT_TRUE(
       a2a::server::stores::Exec(connection.value().get(), truncate_sql, kTruncateProvenanceTasksOperation).ok());
@@ -3986,7 +3987,8 @@ void ExpectTaskTableTruncateRejectsSnapshotIsolation(std::string_view isolation_
   ASSERT_TRUE(
       a2a::server::stores::Exec(connection.value().get(), std::string(isolation_sql), kSetTruncateIsolationOperation)
           .ok());
-  std::string truncate_sql = "TRUNCATE ";
+  std::string truncate_sql(a2a::server::stores::kPostgresTruncateTriggerOperation);
+  truncate_sql.push_back(' ');
   truncate_sql.append(a2a::server::stores::TaskTable(options.schema));
   const auto truncated = a2a::server::stores::Exec(connection.value().get(), truncate_sql, kTruncateTasksOperation);
 
