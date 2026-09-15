@@ -85,7 +85,7 @@ task-delete cleanup trigger.
 
 When `auto_create_schema=true`, the SDK installs the provenance column, shared
 push-lock helper, exclusive task-delete lock helper with a `BEFORE DELETE`
-trigger, cleanup helper with an `AFTER DELETE` trigger, sequences, and indexes,
+trigger, cleanup helper with `AFTER DELETE` row and `AFTER TRUNCATE` statement triggers, sequences, and indexes,
 removes the legacy push-to-task foreign key, and writes the
 `task-aware-push-config-v4` migration markers last.
 
@@ -94,7 +94,7 @@ removes the legacy push-to-task foreign key, and writes the
 When `auto_create_schema=false`, the push-notification store always validates
 the provenance column and absence of the legacy push-to-task foreign key. If the
 push-lock helper, task-delete lock helper and trigger, cleanup helper, and
-cleanup trigger are all absent, construction is allowed for push-only use with
+cleanup `AFTER DELETE` and `AFTER TRUNCATE` triggers are all absent, construction is allowed for push-only use with
 an external authoritative `TaskStore`; local PostgreSQL task-aware creation then
 fails before writing until the migration is installed. Capability detection
 happens during store construction rather than on the request path.
@@ -102,7 +102,7 @@ happens during store construction rather than on the request path.
 If any task-aware helper or trigger is present, the whole
 `task-aware-push-config-v4` migration is required. Validation checks all helper
 implementations and markers, owner privileges, absence of `PUBLIC EXECUTE`, the
-enabled advisory-lock `BEFORE DELETE` and cleanup `AFTER DELETE` row triggers
+enabled advisory-lock `BEFORE DELETE`, cleanup `AFTER DELETE` row, and cleanup `AFTER TRUNCATE` statement triggers
 without `WHEN` clauses, and the cleanup owner's ability to bypass any row-level
 security enabled on the push-config table. Partial or stale installations fail
 construction.
@@ -213,6 +213,12 @@ SET search_path = pg_catalog
 AS $a2a$
 BEGIN
   IF TG_OP = 'TRUNCATE' THEN
+    IF pg_catalog.current_setting('transaction_isolation') IN
+        ('repeatable read', 'serializable') THEN
+      RAISE EXCEPTION USING
+        ERRCODE = '0A000',
+        MESSAGE = 'PostgreSQL task truncation cleanup requires read-committed transaction isolation';
+    END IF;
     DELETE FROM public.a2a_push_notification_configs
     WHERE local_postgres_task;
     RETURN NULL;
@@ -249,7 +255,7 @@ COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
 COMMIT;
 ```
 
-The statement-level truncate trigger deletes every locally owned push configuration in the same transaction as a direct `TRUNCATE public.a2a_tasks`. Externally owned rows (`local_postgres_task=FALSE`) remain available because their authoritative task storage is outside this table. `TRUNCATE ... CASCADE` must include the push-config table only when the operator intentionally wants to remove those externally owned rows too.
+The statement-level truncate trigger deletes every locally owned push configuration in the same transaction as a direct `TRUNCATE public.a2a_tasks`. It rejects repeatable-read and serializable transactions because cleanup under a stale transaction snapshot could miss a concurrently committed local push configuration. Externally owned rows (`local_postgres_task=FALSE`) remain available because their authoritative task storage is outside this table. `TRUNCATE ... CASCADE` must include the push-config table only when the operator intentionally wants to remove those externally owned rows too.
 
 The migration markers are written last inside the transaction, so partial
 migrations are rejected. Existing rows receive the conservative external or

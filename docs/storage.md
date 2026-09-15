@@ -322,6 +322,12 @@ SET search_path = pg_catalog
 AS $a2a$
 BEGIN
   IF TG_OP = 'TRUNCATE' THEN
+    IF pg_catalog.current_setting('transaction_isolation') IN
+        ('repeatable read', 'serializable') THEN
+      RAISE EXCEPTION USING
+        ERRCODE = '0A000',
+        MESSAGE = 'PostgreSQL task truncation cleanup requires read-committed transaction isolation';
+    END IF;
     DELETE FROM public.a2a_push_notification_configs
     WHERE local_postgres_task;
     RETURN NULL;
@@ -358,7 +364,7 @@ COMMENT ON FUNCTION public.a2a_lock_task_for_push_config(TEXT)
 COMMIT;
 ```
 
-The statement-level truncate trigger deletes every locally owned push configuration in the same transaction as a direct `TRUNCATE public.a2a_tasks`. Externally owned rows (`local_postgres_task=FALSE`) remain available because their authoritative task storage is outside this table. `TRUNCATE ... CASCADE` must include the push-config table only when the operator intentionally wants to remove those externally owned rows too.
+The statement-level truncate trigger deletes every locally owned push configuration in the same transaction as a direct `TRUNCATE public.a2a_tasks`. It rejects repeatable-read and serializable transactions because cleanup under a stale transaction snapshot could miss a concurrently committed local push configuration. Externally owned rows (`local_postgres_task=FALSE`) remain available because their authoritative task storage is outside this table. `TRUNCATE ... CASCADE` must include the push-config table only when the operator intentionally wants to remove those externally owned rows too.
 
 The migration markers are written last inside the transaction, so a partial
 migration is never accepted. Existing push configurations are marked as

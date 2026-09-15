@@ -50,7 +50,7 @@ constexpr std::string_view kPostgresBeforeDeleteRowTriggerType = "11";
 constexpr std::string_view kPostgresTriggerEnabledForOrigin = "O";
 constexpr std::string_view kPostgresTriggerEnabledAlways = "A";
 constexpr std::string_view kPostgresTrueValue = "t";
-constexpr int kPostgresPushSchemaParameterCount = 26;
+constexpr int kPostgresPushSchemaParameterCount = 27;
 constexpr std::string_view kTaskLockExpectedTableReferenceCount = "4";
 constexpr std::string_view kCleanupExpectedTableReferenceCount = "2";
 constexpr std::string_view kTaskDeleteLockExpectedTableReferenceCount = "1";
@@ -150,6 +150,9 @@ constexpr auto kValidatePostgresPushSchemaSql = std::to_array(
     "AND 'search_path=pg_catalog' = ANY(delete_function.proconfig) "
     "AND pg_catalog.regexp_replace(pg_catalog.lower(delete_function.prosrc), '[[:space:]\"]+', '', 'g') = "
     "pg_catalog.regexp_replace(pg_catalog.lower($15::text), '[[:space:]\"]+', '', 'g') "
+    "AND pg_catalog.length(delete_function.prosrc) - "
+    "pg_catalog.length(pg_catalog.replace(delete_function.prosrc, $27::text, '')) = "
+    "pg_catalog.length($27::text) "
     "AND ((pg_catalog.length(delete_function.prosrc) - "
     "pg_catalog.length(pg_catalog.replace(delete_function.prosrc, $16::text, ''))) = "
     "$19::integer * pg_catalog.length($16::text) OR "
@@ -405,6 +408,7 @@ struct PushSchemaCapabilities final {
       std::string(kTaskDeleteLockExpectedTableReferenceCount),
       std::string(kTruncateTaskPushConfigsTrigger),
       std::string(kPostgresAfterTruncateStatementTriggerType),
+      std::string(kPostgresTruncateTriggerOperation),
   };
   std::array<const char*, kPostgresPushSchemaParameterCount> values{};
   std::ranges::transform(parameter_storage, values.begin(), [](const std::string& value) { return value.c_str(); });
