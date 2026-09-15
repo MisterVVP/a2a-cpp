@@ -89,6 +89,7 @@ constexpr std::string_view kTaskDeleteLockFunction = "a2a_lock_task_for_delete";
 constexpr std::string_view kTaskPushConfigMigrationId = "task-aware-push-config-v4";
 constexpr std::string_view kDeleteTaskPushConfigsTrigger = "a2a_delete_task_push_configs_trigger";
 constexpr std::string_view kTruncateTaskPushConfigsTrigger = "a2a_truncate_task_push_configs_trigger";
+constexpr std::string_view kPostgresTruncateTriggerOperation = "TRUNCATE";
 constexpr std::string_view kTaskDeleteLockTrigger = "a2a_lock_task_for_delete_trigger";
 constexpr std::size_t kDeleteTaskPushConfigsFunctionSqlReserveSlack = 160U;
 constexpr std::size_t kDeleteTaskPushConfigsTriggerSqlReserveSlack = 192U;
