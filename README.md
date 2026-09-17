@@ -127,10 +127,10 @@ Contributors should read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 See [`benchmarks/README.md`](benchmarks/README.md) for microbenchmarks and
 [`docs/performance-testing.md`](docs/performance-testing.md) for workload tests.
 
+## Production tutorials
+
+After the focused examples in `examples/apps/`, try the realistic multi-process applications in `examples/tutorials/`. Both discover Agent Cards and delegate over HTTP+JSON, run offline in deterministic mode, and optionally use an OpenAI-compatible endpoint. Run `./scripts/run_tutorials.sh` for the downstream-install smoke flow. The suggested learning path is `hello_agent` → Job Application Assistant or Customer Support Copilot → a future streaming tutorial.
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
-
-### Production tutorials
-
-After the focused examples in `examples/apps/`, try the realistic multi-process applications in `examples/tutorials/`. Both discover Agent Cards and delegate over HTTP+JSON, run offline in deterministic mode, and optionally use an OpenAI-compatible endpoint. Run `./scripts/run_tutorials.sh` for the downstream-install smoke flow. The suggested learning path is `hello_agent` → Job Application Assistant or Customer Support Copilot → a future streaming tutorial.

@@ -12,14 +12,14 @@ cmake --build "${work}/sdk" --parallel
 cmake --install "${work}/sdk"
 run_one() { local name="$1" specialist="$2" coordinator="$3" sport="$4" cport="$5" client="$6"; shift 6; local source="${root}/examples/tutorials/${name}" build="${work}/${name}"; cmake -S "${source}" -B "${build}" -DCMAKE_PREFIX_PATH="${prefix}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; cmake --build "${build}" --parallel; A2A_TUTORIAL_MODEL_PROVIDER=deterministic "${build}/${specialist}" "127.0.0.1:${sport}" >"${build}/specialist.log" 2>&1 & pids+=("$!"); wait_ready "http://127.0.0.1:${sport}" "${pids[-1]}"; A2A_TUTORIAL_MODEL_PROVIDER=deterministic A2A_TUTORIAL_SPECIALIST_URL="http://127.0.0.1:${sport}" "${build}/${coordinator}" "127.0.0.1:${cport}" >"${build}/coordinator.log" 2>&1 & pids+=("$!"); wait_ready "http://127.0.0.1:${cport}" "${pids[-1]}"; "${build}/${client}" --coordinator-url "http://127.0.0.1:${cport}" "$@" | tee "${build}/client.log"; }
 run_one job_application_assistant profile_analyst application_coordinator 8081 8080 application_client --resume-file "${root}/examples/tutorials/job_application_assistant/samples/resume.txt" --job-file "${root}/examples/tutorials/job_application_assistant/samples/job_description.txt"
-rg -q "Structured analysis|Application draft" "${work}/job_application_assistant/client.log"
+grep -Eq "Structured analysis|Application draft" "${work}/job_application_assistant/client.log"
 run_one customer_support_copilot support_specialist support_coordinator 8181 8180 support_client --ticket-file "${root}/examples/tutorials/customer_support_copilot/samples/billing_currency_ticket.txt"
-rg -q "Customer response|Internal support notes|billing" "${work}/customer_support_copilot/client.log"
+grep -Eq "Customer response|Internal support notes|billing" "${work}/customer_support_copilot/client.log"
 "${work}/customer_support_copilot/support_client" --coordinator-url http://127.0.0.1:8180 --ticket-file "${root}/examples/tutorials/customer_support_copilot/samples/unknown_ticket.txt" >"${work}/customer_support_copilot/unknown.log"
-rg -q "category: other" "${work}/customer_support_copilot/unknown.log"
-rg -q "escalate: true" "${work}/customer_support_copilot/unknown.log"
+grep -Fq "category: other" "${work}/customer_support_copilot/unknown.log"
+grep -Fq "escalate: true" "${work}/customer_support_copilot/unknown.log"
 if A2A_TUTORIAL_MODEL_PROVIDER=invalid "${work}/job_application_assistant/profile_analyst" 127.0.0.1:9081 >/dev/null 2>"${work}/invalid-provider.log"; then echo "invalid provider unexpectedly succeeded" >&2; exit 1; fi
-rg -q "unsupported model provider" "${work}/invalid-provider.log"
+grep -Fq "unsupported model provider" "${work}/invalid-provider.log"
 if A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible "${work}/job_application_assistant/profile_analyst" 127.0.0.1:9081 >/dev/null 2>"${work}/missing-model-config.log"; then echo "incomplete model config unexpectedly succeeded" >&2; exit 1; fi
-rg -q "requires model base URL and model name" "${work}/missing-model-config.log"
+grep -Fq "requires model base URL and model name" "${work}/missing-model-config.log"
 echo "Tutorial smoke tests passed"

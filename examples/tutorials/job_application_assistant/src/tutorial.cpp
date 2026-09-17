@@ -259,6 +259,26 @@ a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_u
       a2a::client::HttpJsonTransport::CreateDefault(std::move(resolved.value()), kRequestTimeout));
   return client.SendMessage(request);
 }
+namespace {
+void RenderAnalysis(const google::protobuf::Struct& analysis, std::ostringstream* output) {
+  const auto& fields = analysis.fields();
+  const auto summary = fields.find("match_summary");
+  if (summary != fields.end()) {
+    *output << "Match summary: " << summary->second.string_value() << '\n';
+  }
+  for (const auto* const name : {"strengths", "gaps", "suggested_cv_emphasis"}) {
+    const auto found = fields.find(name);
+    if (found == fields.end()) {
+      continue;
+    }
+    *output << name << ":\n";
+    for (const auto& value : found->second.list_value().values()) {
+      *output << "- " << value.string_value() << '\n';
+    }
+  }
+}
+}  // namespace
+
 std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
   if (!response.has_task()) {
     return {};
@@ -270,20 +290,7 @@ std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
       if (part.has_text()) {
         output << part.text() << '\n';
       } else if (part.has_data()) {
-        const auto& fields = part.data().struct_value().fields();
-        auto summary = fields.find("match_summary");
-        if (summary != fields.end()) {
-          output << "Match summary: " << summary->second.string_value() << '\n';
-        }
-        for (const auto* const name : {"strengths", "gaps", "suggested_cv_emphasis"}) {
-          auto found = fields.find(name);
-          if (found != fields.end()) {
-            output << name << ":\n";
-            for (const auto& value : found->second.list_value().values()) {
-              output << "- " << value.string_value() << '\n';
-            }
-          }
-        }
+        RenderAnalysis(part.data().struct_value(), &output);
       }
     }
   }
@@ -316,9 +323,10 @@ int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool 
   skill->set_name(coordinator ? "Prepare Job Application" : "Analyze Candidate Fit");
   skill->set_description("Structured job application assistance");
   skill->add_tags("tutorial");
-  a2a::server::RestServerTransport server(
-      &dispatcher, std::move(card),
-      {.rest_api_base_path = kRestPath, .require_version_header = true, .include_legacy_transport_fields = false});
+  a2a::server::RestServerTransport server(&dispatcher, std::move(card),
+                                          {.rest_api_base_path = std::string(kRestPath),
+                                           .require_version_header = true,
+                                           .include_legacy_transport_fields = false});
   const int listener = Listen(parsed.value().host, parsed.value().port);
   if (listener < 0) {
     std::cerr << "unable to listen on " << endpoint << '\n';

@@ -6,9 +6,9 @@
 #include "a2a/v1/a2a.pb.h"
 
 namespace job_tutorial {
-inline constexpr char kCoordinatorDefault[] = "127.0.0.1:8080";
-inline constexpr char kAnalystDefault[] = "127.0.0.1:8081";
-inline constexpr char kRestPath[] = "/a2a";
+inline constexpr std::string_view kCoordinatorDefault = "127.0.0.1:8080";
+inline constexpr std::string_view kAnalystDefault = "127.0.0.1:8081";
+inline constexpr std::string_view kRestPath = "/a2a";
 [[nodiscard]] a2a::core::Result<std::string> ReadFile(std::string_view path);
 [[nodiscard]] a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_url,
                                                                        const lf::a2a::v1::SendMessageRequest& request);

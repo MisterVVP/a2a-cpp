@@ -251,14 +251,14 @@ a2a::core::Result<std::string> ReadFile(std::string_view path) {
   }
   return contents.str();
 }
-lf::a2a::v1::SendMessageRequest TicketRequest(std::string_view resume, std::string_view job) {
+lf::a2a::v1::SendMessageRequest TicketRequest(std::string_view ticket, std::string_view unused) {
   lf::a2a::v1::SendMessageRequest request;
   auto* message = request.mutable_message();
   message->set_message_id("support-ticket-request");
   message->set_role(lf::a2a::v1::ROLE_USER);
   auto* fields = message->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
-  (*fields)[kResume].set_string_value(std::string(resume));
-  (*fields)[kJob].set_string_value(std::string(job));
+  (*fields)[kResume].set_string_value(std::string(ticket));
+  (*fields)[kJob].set_string_value(std::string(unused));
   return request;
 }
 a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_url,
@@ -277,6 +277,22 @@ a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_u
       a2a::client::HttpJsonTransport::CreateDefault(std::move(resolved.value()), kRequestTimeout));
   return client.SendMessage(request);
 }
+namespace {
+void RenderDiagnosis(const google::protobuf::Struct& diagnosis, std::ostringstream* output) {
+  const auto& fields = diagnosis.fields();
+  for (const auto* const name : {"category", "priority", "likely_cause", "escalation_reason", "knowledge_source"}) {
+    const auto found = fields.find(name);
+    if (found != fields.end()) {
+      *output << name << ": " << found->second.string_value() << '\n';
+    }
+  }
+  const auto escalate = fields.find("escalate");
+  if (escalate != fields.end()) {
+    *output << "escalate: " << (escalate->second.bool_value() ? "true" : "false") << '\n';
+  }
+}
+}  // namespace
+
 std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
   if (!response.has_task()) {
     return {};
@@ -288,18 +304,7 @@ std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
       if (part.has_text()) {
         output << part.text() << '\n';
       } else if (part.has_data()) {
-        const auto& fields = part.data().struct_value().fields();
-        for (const auto* const name :
-             {"category", "priority", "likely_cause", "escalation_reason", "knowledge_source"}) {
-          auto found = fields.find(name);
-          if (found != fields.end()) {
-            output << name << ": " << found->second.string_value() << '\n';
-          }
-        }
-        auto escalate = fields.find("escalate");
-        if (escalate != fields.end()) {
-          output << "escalate: " << (escalate->second.bool_value() ? "true" : "false") << '\n';
-        }
+        RenderDiagnosis(part.data().struct_value(), &output);
       }
     }
   }
@@ -332,9 +337,10 @@ int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool 
   skill->set_name(coordinator ? "Resolve Support Ticket" : "Diagnose Support Ticket");
   skill->set_description("Structured Northstar Cloud support");
   skill->add_tags("tutorial");
-  a2a::server::RestServerTransport server(
-      &dispatcher, std::move(card),
-      {.rest_api_base_path = kRestPath, .require_version_header = true, .include_legacy_transport_fields = false});
+  a2a::server::RestServerTransport server(&dispatcher, std::move(card),
+                                          {.rest_api_base_path = std::string(kRestPath),
+                                           .require_version_header = true,
+                                           .include_legacy_transport_fields = false});
   const int listener = Listen(parsed.value().host, parsed.value().port);
   if (listener < 0) {
     std::cerr << "unable to listen on " << endpoint << '\n';
