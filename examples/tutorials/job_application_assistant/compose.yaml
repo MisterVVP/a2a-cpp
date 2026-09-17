@@ -1,0 +1,14 @@
+services:
+  profile-analyst:
+    build: {context: ../../.., dockerfile: examples/tutorials/job_application_assistant/Dockerfile}
+    command: ["/opt/tutorial/profile_analyst", "0.0.0.0:8081"]
+    healthcheck: {test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8081/.well-known/agent-card.json"], interval: 2s, timeout: 1s, retries: 20}
+    environment: {A2A_TUTORIAL_MODEL_PROVIDER: deterministic, A2A_TUTORIAL_PUBLIC_URL: "http://profile-analyst:8081/a2a"}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  application-coordinator:
+    build: {context: ../../.., dockerfile: examples/tutorials/job_application_assistant/Dockerfile}
+    command: ["/opt/tutorial/application_coordinator", "0.0.0.0:8080"]
+    environment: {A2A_TUTORIAL_MODEL_PROVIDER: deterministic, A2A_TUTORIAL_SPECIALIST_URL: "http://profile-analyst:8081", A2A_TUTORIAL_PUBLIC_URL: "http://application-coordinator:8080/a2a"}
+    depends_on: [profile-analyst]
+    ports: ["8080:8080"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
