@@ -47,7 +47,9 @@ From the repository root:
 
 ```bash
 docker compose -f examples/tutorials/customer_support_copilot/compose.yaml up --build -d
-docker compose -f examples/tutorials/customer_support_copilot/compose.yaml exec support-coordinator /opt/tutorial/support_client # add the sample CLI flags shown by the runner
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml exec support-coordinator ./support_client \
+  --coordinator-url http://support-coordinator:8180 \
+  --ticket-file samples/billing_currency_ticket.txt
 docker compose -f examples/tutorials/customer_support_copilot/compose.yaml down --remove-orphans
 ```
 

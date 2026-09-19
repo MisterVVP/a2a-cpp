@@ -47,7 +47,10 @@ From the repository root:
 
 ```bash
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build -d
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator /opt/tutorial/application_client # add the sample CLI flags shown by the runner
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator ./application_client \
+  --coordinator-url http://application-coordinator:8080 \
+  --resume-file samples/resume.txt \
+  --job-file samples/job_description.txt
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
 ```
 
