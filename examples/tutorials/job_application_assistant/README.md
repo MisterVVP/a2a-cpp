@@ -67,21 +67,40 @@ docker compose -f examples/tutorials/job_application_assistant/compose.yaml \
 ```
 
 Instead of exporting the key, create an ignored local `compose.gemini.local.yaml`:
-+
-+```yaml
-+services:
-+  profile-analyst:
-+    environment:
-+      GEMINI_API_KEY: "your-free-tier-key"
-+  application-coordinator:
-+    environment:
-+      GEMINI_API_KEY: "your-free-tier-key"
-+```
-+
-+Then add it as a third `-f` file. Do not put a real key into the tracked `compose.gemini.yaml`.
+
+```yaml
+services:
+  profile-analyst:
+    environment:
+      GEMINI_API_KEY: "your-free-tier-key"
+  application-coordinator:
+    environment:
+      GEMINI_API_KEY: "your-free-tier-key"
+```
+
+Then add it as a third `-f` file. Do not put a real key into the tracked `compose.gemini.yaml`.
 
 Gemini OpenAI compatibility:
 https://ai.google.dev/gemini-api/docs/openai
+
+The Gemini adapter retries transient HTTP `408`, `429`, and `5xx` responses with bounded exponential backoff.
+The default remains `gemini-3.8-flash`. To try another Gemini model without editing YAML:
+
+Git Bash:
+
+```bash
+export GEMINI_MODEL=gemini-3.7-flash
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml \
+  -f examples/tutorials/job_application_assistant/compose.gemini.yaml up -d --force-recreate
+```
+
+Windows PowerShell:
+
+```powershell
+$env:GEMINI_MODEL="gemini-3.7-flash"
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml `
+  -f examples/tutorials/job_application_assistant/compose.gemini.yaml up -d --force-recreate
+```
 
 For any OpenAI-compatible chat-completions endpoint:
 

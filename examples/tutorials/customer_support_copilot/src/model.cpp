@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "a2a/core/protojson.h"
 #include "a2a/http/http_client.h"
@@ -19,10 +20,40 @@ constexpr std::string_view kName = "A2A_TUTORIAL_MODEL_NAME";
 constexpr std::string_view kKey = "A2A_TUTORIAL_MODEL_API_KEY";
 constexpr std::string_view kTimeout = "A2A_TUTORIAL_MODEL_TIMEOUT_MS";
 constexpr std::string_view kGeminiApiKey = "GEMINI_API_KEY";
+constexpr std::string_view kGeminiModelEnv = "GEMINI_MODEL";
 constexpr std::string_view kGeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/";
 constexpr std::string_view kGeminiModel = "gemini-3.8-flash";
 constexpr int kHttpSuccessMinimum = 200;
 constexpr int kHttpSuccessMaximum = 300;
+constexpr int kRequestTimeoutStatus = 408;
+constexpr int kRateLimitedStatus = 429;
+constexpr int kServerErrorMinimum = 500;
+constexpr int kServerErrorMaximum = 600;
+constexpr int kModelMaxAttempts = 3;
+constexpr int kRetryBackoffMultiplier = 2;
+constexpr std::chrono::milliseconds kInitialRetryDelay{1000};
+
+bool IsTransientStatus(int status) noexcept {
+  return status == kRequestTimeoutStatus || status == kRateLimitedStatus ||
+         (status >= kServerErrorMinimum && status < kServerErrorMaximum);
+}
+
+a2a::core::Result<a2a::http::Response> SendWithRetry(const a2a::http::Client& client,
+                                                     const a2a::http::Request& request) {
+  auto retry_delay = kInitialRetryDelay;
+  for (int attempt = 1; attempt <= kModelMaxAttempts; ++attempt) {
+    auto response = client.SendRequest(request);
+    if (response.ok() && !IsTransientStatus(response.value().status_code)) {
+      return response;
+    }
+    if (attempt == kModelMaxAttempts) {
+      return response;
+    }
+    std::this_thread::sleep_for(retry_delay);
+    retry_delay *= kRetryBackoffMultiplier;
+  }
+  return a2a::core::Error::Internal("model request retry loop exhausted");
+}
 std::string Env(std::string_view role, std::string_view suffix, std::string_view fallback = {}) {
   std::string name("A2A_TUTORIAL_");
   name.append(role);
@@ -69,7 +100,7 @@ class OpenAi final : public TextModel {
     if (!config_.api_key.empty()) {
       request.headers.push_back({"Authorization", std::string("Bearer ").append(config_.api_key)});
     }
-    auto response = client_.SendRequest(request);
+    auto response = SendWithRetry(client_, request);
     if (!response.ok()) {
       return response.error();
     }
@@ -127,7 +158,11 @@ a2a::core::Result<ModelConfig> LoadModelConfig(std::string_view role) {
       config.base_url = kGeminiBaseUrl;
     }
     if (config.model.empty()) {
-      config.model = kGeminiModel;
+      if (const char* value = std::getenv(kGeminiModelEnv.data()); value != nullptr) {
+        config.model = value;
+      } else {
+        config.model = kGeminiModel;
+      }
     }
     if (config.api_key.empty()) {
       if (const char* value = std::getenv(kGeminiApiKey.data()); value != nullptr) {

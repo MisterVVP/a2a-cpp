@@ -28,7 +28,7 @@ namespace job_tutorial {
 namespace {
 constexpr int kBacklog = 16;
 constexpr std::chrono::milliseconds kPoll{50};
-constexpr std::chrono::milliseconds kRequestTimeout{10000};
+constexpr std::chrono::milliseconds kRequestTimeout{240000};
 constexpr std::string_view kResume = "resume";
 constexpr std::string_view kJob = "job_description";
 constexpr std::string_view kAnalysisArtifact = "candidate-fit-analysis";
@@ -134,16 +134,20 @@ std::string JobAnalysisPrompt(std::string_view resume, std::string_view job) {
             "fields: match_summary (string), strengths (array of strings), gaps (array of strings), "
             "important_job_requirements (array of strings), resume_evidence (array of strings), "
             "suggested_cv_emphasis (array of strings).\n\nRESUME:\n"
-         << resume << "\n\nJOB DESCRIPTION:\n" << job;
+         << resume << "\n\nJOB DESCRIPTION:\n"
+         << job;
   return prompt.str();
 }
 
 std::string ApplicationDraftPrompt(std::string_view resume, std::string_view job, std::string_view analysis_json) {
   std::ostringstream prompt;
-  prompt << "Write a concise job-application message. Use only facts present in the resume and the specialist analysis. "
-            "Do not fabricate experience or hide identified gaps. Return only the application message, without "
-            "analysis or Markdown headings.\n\nRESUME:\n"
-         << resume << "\n\nJOB DESCRIPTION:\n" << job << "\n\nSPECIALIST ANALYSIS JSON:\n" << analysis_json;
+  prompt
+      << "Write a concise job-application message. Use only facts present in the resume and the specialist analysis. "
+         "Do not fabricate experience or hide identified gaps. Return only the application message, without "
+         "analysis or Markdown headings.\n\nRESUME:\n"
+      << resume << "\n\nJOB DESCRIPTION:\n"
+      << job << "\n\nSPECIALIST ANALYSIS JSON:\n"
+      << analysis_json;
   return prompt.str();
 }
 
@@ -216,8 +220,8 @@ class Executor final : public a2a::server::AgentExecutor {
       return analysis_json.error();
     }
     std::string draft = Draft(data);
-    auto generated = model_->Generate(ApplicationDraftPrompt(resume->second.string_value(), job->second.string_value(),
-                                                              analysis_json.value()));
+    auto generated = model_->Generate(
+        ApplicationDraftPrompt(resume->second.string_value(), job->second.string_value(), analysis_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }

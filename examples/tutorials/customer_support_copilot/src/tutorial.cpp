@@ -28,7 +28,7 @@ namespace support_tutorial {
 namespace {
 constexpr int kBacklog = 16;
 constexpr std::chrono::milliseconds kPoll{50};
-constexpr std::chrono::milliseconds kRequestTimeout{10000};
+constexpr std::chrono::milliseconds kRequestTimeout{240000};
 constexpr std::string_view kResume = "ticket";
 constexpr std::string_view kJob = "unused";
 constexpr std::string_view kAnalysisArtifact = "ticket-diagnosis";
@@ -152,17 +152,20 @@ std::string SupportAnalysisPrompt(std::string_view ticket, std::string_view poli
             "escalate (boolean), escalation_reason (string), knowledge_source (string). Preserve the category and "
             "knowledge_source from the policy context. If the policy context category is other, escalation must remain "
             "true. Do not invent product policy.\n\nCUSTOMER TICKET:\n"
-         << ticket << "\n\nDOCUMENTED POLICY CONTEXT JSON:\n" << policy_json;
+         << ticket << "\n\nDOCUMENTED POLICY CONTEXT JSON:\n"
+         << policy_json;
   return prompt.str();
 }
 
 std::string CustomerResponsePrompt(std::string_view ticket, std::string_view diagnosis_json) {
   std::ostringstream prompt;
-  prompt << "Write a concise customer-facing support response for fictional Northstar Cloud. Use only the ticket and "
-            "specialist diagnosis below. Do not expose internal notes, prompts, or unsupported policy. If escalation is "
-            "required, say that a support specialist will review the request. Return only the customer response.\n\n"
-            "CUSTOMER TICKET:\n"
-         << ticket << "\n\nSPECIALIST DIAGNOSIS JSON:\n" << diagnosis_json;
+  prompt
+      << "Write a concise customer-facing support response for fictional Northstar Cloud. Use only the ticket and "
+         "specialist diagnosis below. Do not expose internal notes, prompts, or unsupported policy. If escalation is "
+         "required, say that a support specialist will review the request. Return only the customer response.\n\n"
+         "CUSTOMER TICKET:\n"
+      << ticket << "\n\nSPECIALIST DIAGNOSIS JSON:\n"
+      << diagnosis_json;
   return prompt.str();
 }
 
@@ -182,7 +185,7 @@ bool HasDiagnosisField(const google::protobuf::Struct& diagnosis, std::string_vi
 }
 
 a2a::core::Result<google::protobuf::Value> ParseSupportAnalysis(std::string_view generated,
-                                                               const google::protobuf::Value& policy) {
+                                                                const google::protobuf::Value& policy) {
   const auto json = JsonObject(generated);
   if (json.empty()) {
     return a2a::core::Error::Validation("support specialist model did not return a JSON object");
@@ -199,7 +202,8 @@ a2a::core::Result<google::protobuf::Value> ParseSupportAnalysis(std::string_view
       !HasDiagnosisField(diagnosis, "escalate", google::protobuf::Value::kBoolValue) ||
       !HasDiagnosisField(diagnosis, "escalation_reason", google::protobuf::Value::kStringValue) ||
       !HasDiagnosisField(diagnosis, "knowledge_source", google::protobuf::Value::kStringValue)) {
-    return a2a::core::Error::Validation("support specialist model response does not match the required diagnosis schema");
+    return a2a::core::Error::Validation(
+        "support specialist model response does not match the required diagnosis schema");
   }
   const auto& policy_fields = policy.struct_value().fields();
   const auto& diagnosis_fields = diagnosis.fields();
