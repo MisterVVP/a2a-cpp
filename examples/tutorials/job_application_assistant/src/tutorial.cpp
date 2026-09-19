@@ -15,6 +15,7 @@
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/core/agent_card/agent_card_builder.h"
+#include "a2a/core/protojson.h"
 #include "a2a/core/response_builders.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/dispatcher.h"
@@ -126,6 +127,64 @@ std::string Draft(const google::protobuf::Value& analysis) {
          "welcome a discussion about that requirement rather than imply experience I have not provided.\n";
 }
 
+std::string JobAnalysisPrompt(std::string_view resume, std::string_view job) {
+  std::ostringstream prompt;
+  prompt << "You are the Profile Analyst in a job-application workflow. Analyze only the evidence supplied below. "
+            "Do not invent candidate experience. Return ONLY one JSON object, with no Markdown, using exactly these "
+            "fields: match_summary (string), strengths (array of strings), gaps (array of strings), "
+            "important_job_requirements (array of strings), resume_evidence (array of strings), "
+            "suggested_cv_emphasis (array of strings).\n\nRESUME:\n"
+         << resume << "\n\nJOB DESCRIPTION:\n" << job;
+  return prompt.str();
+}
+
+std::string ApplicationDraftPrompt(std::string_view resume, std::string_view job, std::string_view analysis_json) {
+  std::ostringstream prompt;
+  prompt << "Write a concise job-application message. Use only facts present in the resume and the specialist analysis. "
+            "Do not fabricate experience or hide identified gaps. Return only the application message, without "
+            "analysis or Markdown headings.\n\nRESUME:\n"
+         << resume << "\n\nJOB DESCRIPTION:\n" << job << "\n\nSPECIALIST ANALYSIS JSON:\n" << analysis_json;
+  return prompt.str();
+}
+
+std::string_view JsonObject(std::string_view generated) {
+  const auto begin = generated.find('{');
+  const auto end = generated.rfind('}');
+  if (begin == std::string_view::npos || end == std::string_view::npos || begin > end) {
+    return {};
+  }
+  return generated.substr(begin, end - begin + 1);
+}
+
+bool HasAnalysisField(const google::protobuf::Struct& analysis, std::string_view name,
+                      google::protobuf::Value::KindCase kind) {
+  const auto found = analysis.fields().find(std::string(name));
+  return found != analysis.fields().end() && found->second.kind_case() == kind;
+}
+
+a2a::core::Result<google::protobuf::Value> ParseJobAnalysis(std::string_view generated) {
+  const auto json = JsonObject(generated);
+  if (json.empty()) {
+    return a2a::core::Error::Validation("profile analyst model did not return a JSON object");
+  }
+  google::protobuf::Struct analysis;
+  auto status = a2a::core::JsonToMessage(json, &analysis);
+  if (!status.ok()) {
+    return a2a::core::Error::Validation("profile analyst model returned malformed JSON");
+  }
+  if (!HasAnalysisField(analysis, "match_summary", google::protobuf::Value::kStringValue) ||
+      !HasAnalysisField(analysis, "strengths", google::protobuf::Value::kListValue) ||
+      !HasAnalysisField(analysis, "gaps", google::protobuf::Value::kListValue) ||
+      !HasAnalysisField(analysis, "important_job_requirements", google::protobuf::Value::kListValue) ||
+      !HasAnalysisField(analysis, "resume_evidence", google::protobuf::Value::kListValue) ||
+      !HasAnalysisField(analysis, "suggested_cv_emphasis", google::protobuf::Value::kListValue)) {
+    return a2a::core::Error::Validation("profile analyst model response does not match the required analysis schema");
+  }
+  google::protobuf::Value value;
+  *value.mutable_struct_value() = std::move(analysis);
+  return value;
+}
+
 class Executor final : public a2a::server::AgentExecutor {
  public:
   Executor(bool coordinator, std::string specialist_url, std::unique_ptr<TextModel> model)
@@ -152,9 +211,13 @@ class Executor final : public a2a::server::AgentExecutor {
       return a2a::core::Error::Internal("profile analyst returned no analysis artifact");
     }
     const auto& data = delegated.value().task().artifacts(0).parts(0).data();
+    auto analysis_json = a2a::core::MessageToJson(data);
+    if (!analysis_json.ok()) {
+      return analysis_json.error();
+    }
     std::string draft = Draft(data);
-    auto generated =
-        model_->Generate("Write a concise cover note using only supplied resume evidence; never fabricate experience.");
+    auto generated = model_->Generate(ApplicationDraftPrompt(resume->second.string_value(), job->second.string_value(),
+                                                              analysis_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }
@@ -184,11 +247,17 @@ class Executor final : public a2a::server::AgentExecutor {
 
  private:
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> Specialist(std::string_view resume, std::string_view job) {
-    auto analysis = Analyze(resume, job);
-    auto generated =
-        model_->Generate("Analyze candidate fit as JSON using only supplied evidence; never fabricate experience.");
+    google::protobuf::Value analysis = Analyze(resume, job);
+    auto generated = model_->Generate(JobAnalysisPrompt(resume, job));
     if (!generated.ok()) {
       return generated.error();
+    }
+    if (!generated.value().empty()) {
+      auto parsed = ParseJobAnalysis(generated.value());
+      if (!parsed.ok()) {
+        return parsed.error();
+      }
+      analysis = std::move(parsed.value());
     }
     lf::a2a::v1::SendMessageResponse response;
     *response.mutable_task() = CompletedTask("Profile analysis complete", analysis);

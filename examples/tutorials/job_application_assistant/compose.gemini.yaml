@@ -1,0 +1,10 @@
+services:
+  profile-analyst:
+    environment:
+      A2A_TUTORIAL_MODEL_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+  application-coordinator:
+    environment:
+      A2A_TUTORIAL_MODEL_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}

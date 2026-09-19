@@ -27,6 +27,61 @@ Deterministic mode is the default and performs no model HTTP request:
 export A2A_TUTORIAL_MODEL_PROVIDER=deterministic
 ```
 
+### Gemini free tier
+
+The tutorial has a `gemini` provider preset for Google's OpenAI-compatible API. It defaults to:
+
+```text
+base URL: https://generativelanguage.googleapis.com/v1beta/openai/
+model:    gemini-3.8-flash
+```
+
+Only a Gemini API key is required. Google currently lists `gemini-3.8-flash` as available on the Gemini API free tier;
+free-tier limits and data-use terms apply and may change.
+
+Windows PowerShell:
+
+```powershell
+$env:GEMINI_API_KEY="your-free-tier-key"
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml `
+  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml up --build -d
+```
+
+Git Bash:
+
+```bash
+export GEMINI_API_KEY='your-free-tier-key'
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml \
+  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml up --build -d
+```
+
+Then run:
+
+```bash
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml \
+  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml \
+  exec support-coordinator ./support_client \
+  --coordinator-url http://support-coordinator:8180 \
+  --ticket-file samples/billing_currency_ticket.txt
+```
+
+Instead of exporting the key, create an ignored local `compose.gemini.local.yaml`:
++
++```yaml
++services:
++  support-specialist:
++    environment:
++      GEMINI_API_KEY: "your-free-tier-key"
++  support-coordinator:
++    environment:
++      GEMINI_API_KEY: "your-free-tier-key"
++```
++
++Then add it as a third `-f` file. Do not put a real key into the tracked `compose.gemini.yaml`.
+
+Gemini OpenAI compatibility:
+https://ai.google.dev/gemini-api/docs/openai
+
 For any OpenAI-compatible chat-completions endpoint:
 
 ```bash
@@ -36,6 +91,8 @@ export A2A_TUTORIAL_MODEL_NAME=your-model
 export A2A_TUTORIAL_MODEL_API_KEY=... # optional (for example, Ollama)
 export A2A_TUTORIAL_MODEL_TIMEOUT_MS=30000
 ```
+
+`gemini` is a convenience preset; `openai_compatible` remains available for OpenAI, Ollama, and other compatible APIs.
 
 Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` to configure roles independently. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
 

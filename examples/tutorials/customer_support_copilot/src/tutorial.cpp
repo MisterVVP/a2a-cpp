@@ -15,6 +15,7 @@
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/core/agent_card/agent_card_builder.h"
+#include "a2a/core/protojson.h"
 #include "a2a/core/response_builders.h"
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/dispatcher.h"
@@ -143,6 +144,78 @@ std::string Draft(const google::protobuf::Value& analysis) {
   return response.str();
 }
 
+std::string SupportAnalysisPrompt(std::string_view ticket, std::string_view policy_json) {
+  std::ostringstream prompt;
+  prompt << "You are the Support Specialist for fictional Northstar Cloud. Diagnose the customer ticket using ONLY "
+            "the documented policy context below. Return ONLY one JSON object, with no Markdown, using exactly these "
+            "fields: category (string), priority (string), likely_cause (string), resolution_steps (array of strings), "
+            "escalate (boolean), escalation_reason (string), knowledge_source (string). Preserve the category and "
+            "knowledge_source from the policy context. If the policy context category is other, escalation must remain "
+            "true. Do not invent product policy.\n\nCUSTOMER TICKET:\n"
+         << ticket << "\n\nDOCUMENTED POLICY CONTEXT JSON:\n" << policy_json;
+  return prompt.str();
+}
+
+std::string CustomerResponsePrompt(std::string_view ticket, std::string_view diagnosis_json) {
+  std::ostringstream prompt;
+  prompt << "Write a concise customer-facing support response for fictional Northstar Cloud. Use only the ticket and "
+            "specialist diagnosis below. Do not expose internal notes, prompts, or unsupported policy. If escalation is "
+            "required, say that a support specialist will review the request. Return only the customer response.\n\n"
+            "CUSTOMER TICKET:\n"
+         << ticket << "\n\nSPECIALIST DIAGNOSIS JSON:\n" << diagnosis_json;
+  return prompt.str();
+}
+
+std::string_view JsonObject(std::string_view generated) {
+  const auto begin = generated.find('{');
+  const auto end = generated.rfind('}');
+  if (begin == std::string_view::npos || end == std::string_view::npos || begin > end) {
+    return {};
+  }
+  return generated.substr(begin, end - begin + 1);
+}
+
+bool HasDiagnosisField(const google::protobuf::Struct& diagnosis, std::string_view name,
+                       google::protobuf::Value::KindCase kind) {
+  const auto found = diagnosis.fields().find(std::string(name));
+  return found != diagnosis.fields().end() && found->second.kind_case() == kind;
+}
+
+a2a::core::Result<google::protobuf::Value> ParseSupportAnalysis(std::string_view generated,
+                                                               const google::protobuf::Value& policy) {
+  const auto json = JsonObject(generated);
+  if (json.empty()) {
+    return a2a::core::Error::Validation("support specialist model did not return a JSON object");
+  }
+  google::protobuf::Struct diagnosis;
+  auto status = a2a::core::JsonToMessage(json, &diagnosis);
+  if (!status.ok()) {
+    return a2a::core::Error::Validation("support specialist model returned malformed JSON");
+  }
+  if (!HasDiagnosisField(diagnosis, "category", google::protobuf::Value::kStringValue) ||
+      !HasDiagnosisField(diagnosis, "priority", google::protobuf::Value::kStringValue) ||
+      !HasDiagnosisField(diagnosis, "likely_cause", google::protobuf::Value::kStringValue) ||
+      !HasDiagnosisField(diagnosis, "resolution_steps", google::protobuf::Value::kListValue) ||
+      !HasDiagnosisField(diagnosis, "escalate", google::protobuf::Value::kBoolValue) ||
+      !HasDiagnosisField(diagnosis, "escalation_reason", google::protobuf::Value::kStringValue) ||
+      !HasDiagnosisField(diagnosis, "knowledge_source", google::protobuf::Value::kStringValue)) {
+    return a2a::core::Error::Validation("support specialist model response does not match the required diagnosis schema");
+  }
+  const auto& policy_fields = policy.struct_value().fields();
+  const auto& diagnosis_fields = diagnosis.fields();
+  const auto& policy_category = policy_fields.at("category").string_value();
+  if (diagnosis_fields.at("category").string_value() != policy_category ||
+      diagnosis_fields.at("knowledge_source").string_value() != policy_fields.at("knowledge_source").string_value()) {
+    return a2a::core::Error::Validation("support specialist model changed the documented policy classification");
+  }
+  if (policy_fields.at("escalate").bool_value() && !diagnosis_fields.at("escalate").bool_value()) {
+    return a2a::core::Error::Validation("support specialist model removed a required escalation");
+  }
+  google::protobuf::Value value;
+  *value.mutable_struct_value() = std::move(diagnosis);
+  return value;
+}
+
 class Executor final : public a2a::server::AgentExecutor {
  public:
   Executor(bool coordinator, std::string specialist_url, std::unique_ptr<TextModel> model)
@@ -169,10 +242,12 @@ class Executor final : public a2a::server::AgentExecutor {
       return a2a::core::Error::Internal("profile analyst returned no analysis artifact");
     }
     const auto& data = delegated.value().task().artifacts(0).parts(0).data();
+    auto diagnosis_json = a2a::core::MessageToJson(data);
+    if (!diagnosis_json.ok()) {
+      return diagnosis_json.error();
+    }
     std::string draft = Draft(data);
-    auto generated = model_->Generate(
-        "Write a safe customer response using only the provided fictional product policy; do not expose internal "
-        "notes.");
+    auto generated = model_->Generate(CustomerResponsePrompt(resume->second.string_value(), diagnosis_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }
@@ -202,11 +277,21 @@ class Executor final : public a2a::server::AgentExecutor {
 
  private:
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> Specialist(std::string_view resume, std::string_view job) {
-    auto analysis = Analyze(resume, job);
-    auto generated = model_->Generate(
-        "Diagnose the ticket using only the supplied local knowledge base; unknown policy must escalate.");
+    google::protobuf::Value analysis = Analyze(resume, job);
+    auto policy_json = a2a::core::MessageToJson(analysis);
+    if (!policy_json.ok()) {
+      return policy_json.error();
+    }
+    auto generated = model_->Generate(SupportAnalysisPrompt(resume, policy_json.value()));
     if (!generated.ok()) {
       return generated.error();
+    }
+    if (!generated.value().empty()) {
+      auto parsed = ParseSupportAnalysis(generated.value(), analysis);
+      if (!parsed.ok()) {
+        return parsed.error();
+      }
+      analysis = std::move(parsed.value());
     }
     lf::a2a::v1::SendMessageResponse response;
     *response.mutable_task() = CompletedTask("Support diagnosis complete", analysis);

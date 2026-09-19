@@ -22,4 +22,6 @@ if A2A_TUTORIAL_MODEL_PROVIDER=invalid "${work}/job_application_assistant/profil
 grep -Fq "unsupported model provider" "${work}/invalid-provider.log"
 if A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible "${work}/job_application_assistant/profile_analyst" 127.0.0.1:9081 >/dev/null 2>"${work}/missing-model-config.log"; then echo "incomplete model config unexpectedly succeeded" >&2; exit 1; fi
 grep -Fq "requires model base URL and model name" "${work}/missing-model-config.log"
+if A2A_TUTORIAL_MODEL_PROVIDER=gemini "${work}/job_application_assistant/profile_analyst" 127.0.0.1:9081 >/dev/null 2>"${work}/missing-gemini-key.log"; then echo "gemini without API key unexpectedly succeeded" >&2; exit 1; fi
+grep -Fq "gemini requires GEMINI_API_KEY or a model API key" "${work}/missing-gemini-key.log"
 echo "Tutorial smoke tests passed"
