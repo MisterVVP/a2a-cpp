@@ -2,7 +2,7 @@ services:
   support-specialist:
     build: {context: ../../.., dockerfile: examples/tutorials/customer_support_copilot/Dockerfile}
     command: ["/opt/tutorial/support_specialist", "0.0.0.0:8181"]
-    healthcheck: {test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8181/.well-known/agent-card.json"], interval: 2s, timeout: 1s, retries: 20}
+    healthcheck: {test: ["CMD", "wget", "-q", "-T", "1", "-O", "/dev/null", "http://127.0.0.1:8181/.well-known/agent-card.json"], interval: 2s, timeout: 1s, retries: 20}
     environment: {A2A_TUTORIAL_MODEL_PROVIDER: deterministic, A2A_TUTORIAL_PUBLIC_URL: "http://support-specialist:8181/a2a"}
     extra_hosts: ["host.docker.internal:host-gateway"]
   support-coordinator:
