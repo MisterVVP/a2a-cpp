@@ -1,0 +1,1 @@
+Jordan Lee is a fictional backend engineer. Built C++20 services for distributed telemetry, improved reliability, and shipped services in Docker containers. Mentored two engineers and wrote automated tests.

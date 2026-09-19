@@ -1,0 +1,1 @@
+Our fictional Northstar Cloud invoice is in USD. Can we change the workspace billing currency to EUR?

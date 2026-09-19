@@ -46,3 +46,6 @@ Run selected apps:
 ```bash
 ./scripts/run_examples.sh hello_agent streaming_server push_notifications
 ```
+## Learning paths
+
+`apps/` contains focused, deterministic capability examples. `tutorials/` contains realistic, separately deployable multi-process applications that consume the installed public SDK. The recommended path is `hello_agent`, then either the Job Application Assistant or Customer Support Copilot, followed by a future streaming tutorial.

@@ -1,0 +1,15 @@
+*
+!.dockerignore
+!CMakeLists.txt
+!cmake/
+!cmake/**
+!include/
+!include/**
+!proto/
+!proto/**
+!src/
+!src/**
+!third_party/
+!third_party/**
+!examples/tutorials/
+!examples/tutorials/**
