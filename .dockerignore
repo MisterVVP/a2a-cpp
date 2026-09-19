@@ -1,0 +1,22 @@
+# Tutorial images build the SDK from source, but do not need developer builds,
+# repository metadata, documentation, tests, or package-manager caches. Keep an
+# allowlist so ignored multi-gigabyte build trees are never sent to Docker
+# Desktop's Linux VM.
+**
+!.dockerignore
+!CMakeLists.txt
+
+!cmake/
+!cmake/**
+!include/
+!include/**
+!proto/
+!proto/**
+!src/
+!src/**
+!third_party/
+!third_party/**
+
+!examples/
+!examples/tutorials/
+!examples/tutorials/**
