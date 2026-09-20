@@ -21,27 +21,29 @@ Start `profile_analyst` on `8081`, then `application_coordinator` on `8080`, and
 
 ## Model backends
 
-Deterministic mode is the default and performs no model HTTP request:
+### Without AI (default)
+
+No model configuration is required. Native runs and Docker Compose fall back to the deterministic backend, which makes no model HTTP requests. To override inherited model settings explicitly, set:
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=deterministic
 ```
 
-### OpenAI-compatible endpoints
+### With an OpenAI-compatible model
 
-For any OpenAI-compatible chat-completions endpoint:
+Export the shared settings before starting the native processes or running the Docker Compose commands below. Compose forwards them to both tutorial agents and uses the displayed defaults only when a setting is absent.
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
 export A2A_TUTORIAL_MODEL_BASE_URL=https://provider.example/v1
 export A2A_TUTORIAL_MODEL_NAME=your-model
-export A2A_TUTORIAL_MODEL_API_KEY=... # optional (for example, Ollama)
+export A2A_TUTORIAL_MODEL_API_KEY=your-api-key # omit only for endpoints that do not require one
 export A2A_TUTORIAL_MODEL_TIMEOUT_MS=30000
 ```
 
-Use the same variables for every compatible service rather than provider-specific keys or configuration files. For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, select a model available on the free tier, and assign the key to `A2A_TUTORIAL_MODEL_API_KEY`; free-tier availability and limits may change.
+For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, set `A2A_TUTORIAL_MODEL_NAME` to a model available on the free tier, and put the key in `A2A_TUTORIAL_MODEL_API_KEY`. A model name is required; free-tier availability and limits may change.
 
-Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` to configure roles independently. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
+Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` for role-specific native configuration. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
 
 For Ollama use `http://127.0.0.1:11434/v1` on the host. From Linux Compose use `http://host.docker.internal:11434/v1`; the Compose file provides the explicit `host-gateway` mapping. No model is downloaded automatically.
 
