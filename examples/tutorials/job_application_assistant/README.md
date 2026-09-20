@@ -39,7 +39,7 @@ export A2A_TUTORIAL_MODEL_API_KEY=... # optional (for example, Ollama)
 export A2A_TUTORIAL_MODEL_TIMEOUT_MS=30000
 ```
 
-Use the same variables for every compatible service rather than provider-specific keys or configuration files. For example, Google's Gemini OpenAI-compatible endpoint can be selected by setting the base URL to `https://generativelanguage.googleapis.com/v1beta/openai`, the model name to a model available to your account, and `A2A_TUTORIAL_MODEL_API_KEY` to its API key.
+Use the same variables for every compatible service rather than provider-specific keys or configuration files. For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, select a model available on the free tier, and assign the key to `A2A_TUTORIAL_MODEL_API_KEY`; free-tier availability and limits may change.
 
 Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` to configure roles independently. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
 
