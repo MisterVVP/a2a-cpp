@@ -13,16 +13,11 @@ namespace job_tutorial {
 namespace {
 constexpr std::string_view kDeterministic = "deterministic";
 constexpr std::string_view kOpenAi = "openai_compatible";
-constexpr std::string_view kGemini = "gemini";
 constexpr std::string_view kProvider = "A2A_TUTORIAL_MODEL_PROVIDER";
 constexpr std::string_view kBaseUrl = "A2A_TUTORIAL_MODEL_BASE_URL";
 constexpr std::string_view kName = "A2A_TUTORIAL_MODEL_NAME";
 constexpr std::string_view kKey = "A2A_TUTORIAL_MODEL_API_KEY";
 constexpr std::string_view kTimeout = "A2A_TUTORIAL_MODEL_TIMEOUT_MS";
-constexpr std::string_view kGeminiApiKey = "GEMINI_API_KEY";
-constexpr std::string_view kGeminiModelEnv = "GEMINI_MODEL";
-constexpr std::string_view kGeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/";
-constexpr std::string_view kGeminiModel = "gemini-3.8-flash";
 constexpr int kHttpSuccessMinimum = 200;
 constexpr int kHttpSuccessMaximum = 300;
 constexpr int kRequestTimeoutStatus = 408;
@@ -153,31 +148,11 @@ a2a::core::Result<ModelConfig> LoadModelConfig(std::string_view role) {
   if (config.timeout.count() <= 0) {
     return a2a::core::Error::Validation("model timeout must be positive");
   }
-  if (config.provider == kGemini) {
-    if (config.base_url.empty()) {
-      config.base_url = kGeminiBaseUrl;
-    }
-    if (config.model.empty()) {
-      if (const char* value = std::getenv(kGeminiModelEnv.data()); value != nullptr) {
-        config.model = value;
-      } else {
-        config.model = kGeminiModel;
-      }
-    }
-    if (config.api_key.empty()) {
-      if (const char* value = std::getenv(kGeminiApiKey.data()); value != nullptr) {
-        config.api_key = value;
-      }
-    }
-  }
-  if (config.provider != kDeterministic && config.provider != kOpenAi && config.provider != kGemini) {
+  if (config.provider != kDeterministic && config.provider != kOpenAi) {
     return a2a::core::Error::Validation("unsupported model provider: " + config.provider);
   }
   if (config.provider == kOpenAi && (config.base_url.empty() || config.model.empty())) {
     return a2a::core::Error::Validation("openai_compatible requires model base URL and model name");
-  }
-  if (config.provider == kGemini && config.api_key.empty()) {
-    return a2a::core::Error::Validation("gemini requires GEMINI_API_KEY or a model API key");
   }
   return config;
 }

@@ -21,102 +21,51 @@ Start `support_specialist` on `8181`, then `support_coordinator` on `8180`, and 
 
 ## Model backends
 
-Deterministic mode is the default and performs no model HTTP request:
+### Without AI (default)
+
+No model configuration is required. Native runs and Docker Compose fall back to the deterministic backend, which makes no model HTTP requests. To override inherited model settings explicitly, set:
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=deterministic
 ```
 
-### Gemini free tier
+### With an OpenAI-compatible model
 
-The tutorial has a `gemini` provider preset for Google's OpenAI-compatible API. It defaults to:
-
-```text
-base URL: https://generativelanguage.googleapis.com/v1beta/openai/
-model:    gemini-3.8-flash
-```
-
-Only a Gemini API key is required. Google currently lists `gemini-3.8-flash` as available on the Gemini API free tier;
-free-tier limits and data-use terms apply and may change.
-
-Windows PowerShell:
-
-```powershell
-$env:GEMINI_API_KEY="your-free-tier-key"
-docker compose -f examples/tutorials/customer_support_copilot/compose.yaml `
-  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml up --build -d
-```
-
-Git Bash:
-
-```bash
-export GEMINI_API_KEY='your-free-tier-key'
-docker compose -f examples/tutorials/customer_support_copilot/compose.yaml \
-  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml up --build -d
-```
-
-Then run:
-
-```bash
-docker compose -f examples/tutorials/customer_support_copilot/compose.yaml \
-  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml \
-  exec support-coordinator ./support_client \
-  --coordinator-url http://support-coordinator:8180 \
-  --ticket-file samples/billing_currency_ticket.txt
-```
-
-Instead of exporting the key, create an ignored local `compose.gemini.local.yaml`:
-
-```yaml
-services:
-  support-specialist:
-    environment:
-      GEMINI_API_KEY: "your-free-tier-key"
-  support-coordinator:
-    environment:
-      GEMINI_API_KEY: "your-free-tier-key"
-```
-
-Then add it as a third `-f` file. Do not put a real key into the tracked `compose.gemini.yaml`.
-
-Gemini OpenAI compatibility:
-https://ai.google.dev/gemini-api/docs/openai
-
-The Gemini adapter retries transient HTTP `408`, `429`, and `5xx` responses with bounded exponential backoff.
-The default remains `gemini-3.8-flash`. To try another Gemini model without editing YAML:
-
-Git Bash:
-
-```bash
-export GEMINI_MODEL=gemini-3.7-flash
-docker compose -f examples/tutorials/customer_support_copilot/compose.yaml \
-  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml up -d --force-recreate
-```
-
-Windows PowerShell:
-
-```powershell
-$env:GEMINI_MODEL="gemini-3.7-flash"
-docker compose -f examples/tutorials/customer_support_copilot/compose.yaml `
-  -f examples/tutorials/customer_support_copilot/compose.gemini.yaml up -d --force-recreate
-```
-
-For any OpenAI-compatible chat-completions endpoint:
+Export the shared settings before starting the native processes or running the Docker Compose commands below. Compose forwards them to both tutorial agents and uses the displayed defaults only when a setting is absent.
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
 export A2A_TUTORIAL_MODEL_BASE_URL=https://provider.example/v1
 export A2A_TUTORIAL_MODEL_NAME=your-model
-export A2A_TUTORIAL_MODEL_API_KEY=... # optional (for example, Ollama)
+export A2A_TUTORIAL_MODEL_API_KEY=your-api-key # omit only for endpoints that do not require one
 export A2A_TUTORIAL_MODEL_TIMEOUT_MS=30000
 ```
 
-`gemini` is a convenience preset; `openai_compatible` remains available for OpenAI, Ollama, and other compatible APIs.
-
-Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` to configure roles independently. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
+Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` for role-specific native configuration. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
 
 For Ollama use `http://127.0.0.1:11434/v1` on the host. From Linux Compose use `http://host.docker.internal:11434/v1`; the Compose file provides the explicit `host-gateway` mapping. No model is downloaded automatically.
 
+#### Gemini free tier docker compose example
+For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, set `A2A_TUTORIAL_MODEL_NAME` to a model available on the free tier, and put the key in `A2A_TUTORIAL_MODEL_API_KEY`. A model name is required; free-tier availability and limits may change.
+
+1. Start agents.  
+```bash
+export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible && \
+export A2A_TUTORIAL_MODEL_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai && \
+export A2A_TUTORIAL_MODEL_API_KEY=<YOUR_API_KEY> && \
+export A2A_TUTORIAL_MODEL_NAME=gemini-3.8-flash && \
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml up --build -d
+```
+2. Send a new request.  
+```bash
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml exec support-coordinator ./support_client \
+  --coordinator-url http://support-coordinator:8180 \
+  --ticket-file samples/billing_currency_ticket.txt
+```
+3. Stop agents  
+```bash
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml down --remove-orphans
+```
 ## Docker Compose
 
 From the repository root:
