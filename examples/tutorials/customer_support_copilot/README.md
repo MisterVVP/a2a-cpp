@@ -41,12 +41,31 @@ export A2A_TUTORIAL_MODEL_API_KEY=your-api-key # omit only for endpoints that do
 export A2A_TUTORIAL_MODEL_TIMEOUT_MS=30000
 ```
 
-For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, set `A2A_TUTORIAL_MODEL_NAME` to a model available on the free tier, and put the key in `A2A_TUTORIAL_MODEL_API_KEY`. A model name is required; free-tier availability and limits may change.
-
 Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` for role-specific native configuration. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
 
 For Ollama use `http://127.0.0.1:11434/v1` on the host. From Linux Compose use `http://host.docker.internal:11434/v1`; the Compose file provides the explicit `host-gateway` mapping. No model is downloaded automatically.
 
+#### Gemini free tier docker compose example
+For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, set `A2A_TUTORIAL_MODEL_NAME` to a model available on the free tier, and put the key in `A2A_TUTORIAL_MODEL_API_KEY`. A model name is required; free-tier availability and limits may change.
+
+1. Start agents.  
+```bash
+export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible && \
+export A2A_TUTORIAL_MODEL_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai && \
+export A2A_TUTORIAL_MODEL_API_KEY=<YOUR_API_KEY> && \
+export A2A_TUTORIAL_MODEL_NAME=gemini-3.8-flash && \
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml up --build -d
+```
+2. Send a new request.  
+```bash
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml exec support-coordinator ./support_client \
+  --coordinator-url http://support-coordinator:8180 \
+  --ticket-file samples/billing_currency_ticket.txt
+```
+3. Stop agents  
+```bash
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml down --remove-orphans
+```
 ## Docker Compose
 
 From the repository root:
