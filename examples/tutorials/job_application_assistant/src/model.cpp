@@ -1,6 +1,7 @@
 #include "model.h"
 
 #include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -18,6 +19,9 @@ constexpr std::string_view kBaseUrl = "A2A_TUTORIAL_MODEL_BASE_URL";
 constexpr std::string_view kName = "A2A_TUTORIAL_MODEL_NAME";
 constexpr std::string_view kKey = "A2A_TUTORIAL_MODEL_API_KEY";
 constexpr std::string_view kTimeout = "A2A_TUTORIAL_MODEL_TIMEOUT_MS";
+constexpr std::string_view kDeterministicWarning =
+    "WARNING: tutorial is running with the deterministic backend. "
+    "Configure an AI model to run in agentic mode.";
 constexpr int kHttpSuccessMinimum = 200;
 constexpr int kHttpSuccessMaximum = 300;
 constexpr int kRequestTimeoutStatus = 408;
@@ -158,6 +162,7 @@ a2a::core::Result<ModelConfig> LoadModelConfig(std::string_view role) {
 }
 a2a::core::Result<std::unique_ptr<TextModel>> CreateModel(const ModelConfig& config) {
   if (config.provider == kDeterministic) {
+    std::cerr << kDeterministicWarning << '\n';
     return std::unique_ptr<TextModel>(std::make_unique<Deterministic>());
   }
   return std::unique_ptr<TextModel>(std::make_unique<OpenAi>(config));

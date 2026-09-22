@@ -48,7 +48,6 @@ This builds `profile_analyst`, `application_coordinator`, and `application_clien
 In the first terminal, from the repository root:
 
 ```bash
-A2A_TUTORIAL_MODEL_PROVIDER=deterministic \
 ./build-tutorials/job_application_assistant/profile_analyst 127.0.0.1:8081
 ```
 
@@ -63,7 +62,6 @@ curl --fail http://127.0.0.1:8081/.well-known/agent-card.json
 In a second terminal, from the repository root:
 
 ```bash
-A2A_TUTORIAL_MODEL_PROVIDER=deterministic \
 A2A_TUTORIAL_SPECIALIST_URL=http://127.0.0.1:8081 \
 ./build-tutorials/job_application_assistant/application_coordinator 127.0.0.1:8080
 ```
@@ -87,56 +85,35 @@ In a third terminal, from the repository root:
 
 Stop the coordinator and profile analyst with `Ctrl+C` when finished.
 
-The repository-level `scripts/run_tutorials.sh` builds and runs both tutorials with bounded Agent Card readiness checks and automatic cleanup. The commands above are intended for running only this tutorial manually on a Linux host.
+Without the AI model configuration below, both agents use the deterministic fallback backend and print a warning at startup. The repository-level `scripts/run_tutorials.sh` builds and runs both tutorials with bounded Agent Card readiness checks and automatic cleanup.
 
-## Model backends
+## AI model configuration
 
-### Without AI (default)
-
-No model configuration is required. Native runs and Docker Compose fall back to the deterministic backend, which makes no model HTTP requests. To override inherited model settings explicitly, set:
-
-```bash
-export A2A_TUTORIAL_MODEL_PROVIDER=deterministic
-```
-
-### With an OpenAI-compatible model
-
-Export the shared settings before starting the native processes or running the Docker Compose commands below. Compose forwards them to both tutorial agents and uses the displayed defaults only when a setting is absent.
+Configure an AI model to run the tutorial in agentic mode. Set these four environment variables before starting the host-native agents or Docker Compose:
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
 export A2A_TUTORIAL_MODEL_BASE_URL=https://provider.example/v1
 export A2A_TUTORIAL_MODEL_NAME=your-model
-export A2A_TUTORIAL_MODEL_API_KEY=your-api-key # omit only for endpoints that do not require one
-export A2A_TUTORIAL_MODEL_TIMEOUT_MS=30000
+export A2A_TUTORIAL_MODEL_API_KEY=your-api-key
 ```
 
-Prefix these settings with `A2A_TUTORIAL_COORDINATOR_` or `A2A_TUTORIAL_SPECIALIST_` for role-specific native configuration. Credentials are sent only as an Authorization header and are never logged. Do not commit keys; a ChatGPT subscription or product login is not an API credential.
+If they are not configured, the tutorial falls back to the deterministic backend. Deterministic mode is intended for offline smoke testing and does not make AI model requests. The model request timeout defaults to 30 seconds.
 
-For Ollama use `http://127.0.0.1:11434/v1` on the host. From Linux Compose use `http://host.docker.internal:11434/v1`; the Compose file provides the explicit `host-gateway` mapping. No model is downloaded automatically.
+Credentials are sent only as an Authorization header and are never logged. Do not commit API keys.
 
-#### Gemini free tier docker compose example
-For the Gemini free tier, create a Google AI Studio API key, use `https://generativelanguage.googleapis.com/v1beta/openai` as the base URL, set `A2A_TUTORIAL_MODEL_NAME` to a model available on the free tier, and put the key in `A2A_TUTORIAL_MODEL_API_KEY`. A model name is required; free-tier availability and limits may change.
+### Gemini free tier example
 
-1. Start agents.  
+Create an API key in Google AI Studio, then export:
+
 ```bash
-export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible && \
-export A2A_TUTORIAL_MODEL_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai && \
-export A2A_TUTORIAL_MODEL_API_KEY=<YOUR_API_KEY> && \
-export A2A_TUTORIAL_MODEL_NAME=gemini-3.8-flash && \
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build -d
+export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
+export A2A_TUTORIAL_MODEL_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+export A2A_TUTORIAL_MODEL_NAME=gemini-3.8-flash
+export A2A_TUTORIAL_MODEL_API_KEY=<YOUR_API_KEY>
 ```
-2. Send a new request.  
-```bash
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator ./application_client \
-  --coordinator-url http://application-coordinator:8080 \
-  --resume-file samples/resume.txt \
-  --job-file samples/job_description.txt
-```
-3. Stop agents  
-```bash
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
-```
+
+With these variables exported, use the same host-native commands above or the Docker Compose commands below. Free-tier availability and rate limits may change; see the [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) documentation.
 
 ## Docker Compose
 
@@ -151,7 +128,7 @@ docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
 ```
 
-Only the coordinator port is published. Service DNS is used for delegation, containers run as a non-root user, and deterministic mode is the default.
+Only the coordinator port is published. Service DNS is used for delegation and containers run as a non-root user. If the four AI model variables are not set, Docker Compose uses the deterministic fallback.
 
 ## Troubleshooting
 
