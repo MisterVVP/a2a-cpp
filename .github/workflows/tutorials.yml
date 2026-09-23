@@ -1,0 +1,17 @@
+name: Tutorials
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  host-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/install_build_deps.sh
+      - run: ./scripts/run_tutorials.sh
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/run_tutorial_docker_smoke.sh

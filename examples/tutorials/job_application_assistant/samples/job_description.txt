@@ -1,0 +1,1 @@
+Fictional Acme Observatory seeks a backend engineer with modern C++, distributed systems, Docker, and Kubernetes experience. Clear communication and reliable testing are important.

@@ -66,3 +66,7 @@ For Visual Studio, add `--config RelWithDebInfo` to the build and run `build-ins
 ```
 
 For documentation-only edits, use `mdbook build book` instead of the full code validation flow.
+
+## Continue with a production tutorial
+
+The programs under `examples/apps/` are focused deterministic capability examples. The standalone projects under `examples/tutorials/` are realistic multi-process applications: a CLI discovers a coordinator, which discovers and delegates to a specialist over HTTP+JSON. After `hello_agent`, run either `job_application_assistant` or `customer_support_copilot` with `./scripts/run_tutorials.sh`; a streaming production tutorial is the planned next step.
