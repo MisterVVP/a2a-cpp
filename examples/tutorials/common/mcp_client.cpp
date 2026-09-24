@@ -5,8 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/core/http_utils.h"
 #include "a2a/core/protojson.h"
-#include "a2a/core/string_utils.h"
 #include "a2a/http/http_client.h"
 #include "google/protobuf/struct.pb.h"
 
@@ -30,13 +30,10 @@ std::string Json(const google::protobuf::Message& message) {
   return json.ok() ? std::move(json.value()) : std::string{};
 }
 
-std::optional<std::string> FindHeader(const a2a::http::Response& response, std::string_view name) {
-  for (const auto& header : response.headers) {
-    if (a2a::core::strings::EqualsAsciiCaseInsensitive(header.name, name)) {
-      return header.value;
-    }
-  }
-  return std::nullopt;
+std::string JsonString(std::string_view value) {
+  google::protobuf::Value json_value;
+  json_value.set_string_value(std::string(value));
+  return Json(json_value);
 }
 
 std::vector<a2a::http::Header> Headers(const std::optional<std::string>& session_id) {
@@ -76,7 +73,9 @@ a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string bod
                                             ? "MCP resource request failed"
                                             : message->second.string_value());
   }
-  return McpResponse{.envelope = std::move(envelope), .session_id = FindHeader(response.value(), kSessionHeader)};
+  const auto session = a2a::core::http::FindHeaderValue(response.value().headers, kSessionHeader);
+  return McpResponse{.envelope = std::move(envelope),
+                     .session_id = session.has_value() ? std::optional<std::string>(*session) : std::nullopt};
 }
 
 a2a::core::Result<void> ValidateInitialization(const McpResponse& response) {
@@ -118,10 +117,11 @@ Client::Client(std::string endpoint, std::chrono::milliseconds timeout)
     : endpoint_(std::move(endpoint)), timeout_(timeout) {}
 
 a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const {
-  auto initialized = Post(
-      endpoint_,
-      R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"}}})",
-      timeout_);
+  std::ostringstream initialization_payload;
+  initialization_payload << R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":)"
+                         << JsonString(kProtocolVersion)
+                         << R"(,"capabilities":{},"clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"}}})";
+  auto initialized = Post(endpoint_, initialization_payload.str(), timeout_);
   if (!initialized.ok()) {
     return initialized.error();
   }

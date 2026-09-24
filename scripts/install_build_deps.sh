@@ -58,6 +58,8 @@ install_debian_dependencies() {
     clang-format
     clang-tidy
     lcov
+    python3
+    python3-venv
   )
   local sudo_command=()
   if [[ "${EUID}" -ne 0 ]]; then

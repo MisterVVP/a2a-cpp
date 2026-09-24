@@ -242,6 +242,9 @@ class Executor final : public a2a::server::AgentExecutor {
     if ((resume == input->fields().end()) == (ticket_resource == input->fields().end())) {
       return a2a::core::Error::Validation("exactly one of ticket or ticket_resource is required");
     }
+    if (resume != input->fields().end() && job == input->fields().end()) {
+      return a2a::core::Error::Validation("unused is required with an inline ticket");
+    }
     if (!coordinator_) {
       if (ticket_resource != input->fields().end()) {
         tutorial_mcp::Client mcp(mcp_url_, kMcpTimeout);
