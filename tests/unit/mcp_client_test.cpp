@@ -1,3 +1,5 @@
+#include "mcp_client.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -14,12 +16,12 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "mcp_client.h"
 
 namespace {
 constexpr int kSocketError = -1;
 constexpr int kOk = 200;
 constexpr int kAccepted = 202;
+constexpr int kNoContent = 204;
 constexpr std::size_t kResponseCapacityOverhead = 128;
 constexpr std::size_t kReceiveBufferSize = 4096;
 constexpr auto kTimeout = std::chrono::seconds(2);
@@ -65,11 +67,13 @@ class ScriptedServer final {
   ScriptedServer(const ScriptedServer&) = delete;
   ScriptedServer& operator=(const ScriptedServer&) = delete;
   ~ScriptedServer() {
+    if (socket_ != kSocketError) {
+      (void)::shutdown(socket_, SHUT_RDWR);
+      ::close(socket_);
+      socket_ = kSocketError;
+    }
     if (worker_.joinable()) {
       worker_.join();
-    }
-    if (socket_ != kSocketError) {
-      ::close(socket_);
     }
   }
 
@@ -135,8 +139,12 @@ class ScriptedServer final {
 };
 
 std::vector<std::string> SuccessfulExchange(std::string_view read_body) {
-  return {HttpResponse(kOk, InitializeResult(), "mCp-SeSsIoN-iD: unit-session\r\n"),
-          HttpResponse(kAccepted, {}), HttpResponse(kOk, read_body)};
+  return {HttpResponse(kOk, InitializeResult(), "mCp-SeSsIoN-iD: unit-session\r\n"), HttpResponse(kAccepted, {}),
+          HttpResponse(kOk, read_body), HttpResponse(kNoContent, {})};
+}
+
+std::vector<std::string> InitializationExchange(std::string_view body) {
+  return {HttpResponse(kOk, body, "Mcp-Session-Id: unit-session\r\n"), HttpResponse(kNoContent, {})};
 }
 
 TEST(McpClientTest, ReadsTextAndForwardsNegotiatedSession) {
@@ -146,36 +154,42 @@ TEST(McpClientTest, ReadsTextAndForwardsNegotiatedSession) {
   ASSERT_TRUE(result.ok()) << result.error().message();
   EXPECT_EQ(result.value(), kText);
   const auto requests = server.requests();
-  ASSERT_EQ(requests.size(), 3U);
+  ASSERT_EQ(requests.size(), 4U);
   EXPECT_NE(requests[0].find(R"("protocolVersion":"2025-06-18")"), std::string::npos);
   EXPECT_NE(requests[1].find("Mcp-Session-Id: unit-session"), std::string::npos);
   EXPECT_NE(requests[2].find("Mcp-Session-Id: unit-session"), std::string::npos);
   EXPECT_NE(requests[2].find(R"("uri":"fixture://resource")"), std::string::npos);
+  EXPECT_EQ(requests[3].find("DELETE /mcp HTTP/1.1"), 0U);
+  EXPECT_NE(requests[3].find("Mcp-Session-Id: unit-session"), std::string::npos);
 }
 
-TEST(McpClientTest, RejectsMalformedInitializationEnvelope) {
-  ScriptedServer server({HttpResponse(kOk, "not-json")});
+TEST(McpClientTest, RejectsMalformedInitializationEnvelopeAndTerminatesSession) {
+  ScriptedServer server(InitializationExchange("not-json"));
   const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message().find("invalid JSON"), std::string::npos);
+  const auto requests = server.requests();
+  ASSERT_EQ(requests.size(), 2U);
+  EXPECT_EQ(requests[1].find("DELETE /mcp HTTP/1.1"), 0U);
 }
 
 TEST(McpClientTest, RejectsUnsupportedVersion) {
-  ScriptedServer server({HttpResponse(kOk, InitializeResult("unsupported"))});
+  ScriptedServer server(InitializationExchange(InitializeResult("unsupported")));
   const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message().find("unsupported protocol version"), std::string::npos);
 }
 
 TEST(McpClientTest, RejectsMissingResourcesCapability) {
-  ScriptedServer server({HttpResponse(kOk, InitializeResult(kVersion, false))});
+  ScriptedServer server(InitializationExchange(InitializeResult(kVersion, false)));
   const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message().find("resources capability"), std::string::npos);
 }
 
 TEST(McpClientTest, RejectsInitializationNotificationFailure) {
-  ScriptedServer server({HttpResponse(kOk, InitializeResult()), HttpResponse(kOk, "{}")});
+  ScriptedServer server({HttpResponse(kOk, InitializeResult(), "Mcp-Session-Id: unit-session\r\n"),
+                         HttpResponse(kOk, "{}"), HttpResponse(kNoContent, {})});
   const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message().find("notification was not accepted"), std::string::npos);
@@ -183,8 +197,7 @@ TEST(McpClientTest, RejectsInitializationNotificationFailure) {
 
 TEST(McpClientTest, RejectsInvalidResourceContentShapes) {
   constexpr std::array<std::string_view, 3> invalid_results = {
-      R"({"jsonrpc":"2.0","id":1,"result":{}})",
-      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[]}})",
+      R"({"jsonrpc":"2.0","id":1,"result":{}})", R"({"jsonrpc":"2.0","id":1,"result":{"contents":[]}})",
       R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"blob":"AA=="}]}})"};
   for (const auto body : invalid_results) {
     ScriptedServer server(SuccessfulExchange(body));

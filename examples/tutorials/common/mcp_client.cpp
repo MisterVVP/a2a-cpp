@@ -49,7 +49,8 @@ std::vector<a2a::http::Header> Headers(const std::optional<std::string>& session
 }
 
 a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string body, std::chrono::milliseconds timeout,
-                                    const std::optional<std::string>& session_id = std::nullopt) {
+                                    const std::optional<std::string>& session_id = std::nullopt,
+                                    std::optional<std::string>* response_session_id = nullptr) {
   a2a::http::Request request{
       .method = "POST", .url = endpoint, .headers = Headers(session_id), .body = std::move(body), .timeout = timeout};
   auto response = a2a::http::Client{}.SendRequest(request);
@@ -60,6 +61,10 @@ a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string bod
   }
   if (response.value().status_code != kOk) {
     return a2a::core::Error::Internal("MCP service returned HTTP " + std::to_string(response.value().status_code));
+  }
+  const auto response_session = a2a::core::http::FindHeaderValue(response.value().headers, kSessionHeader);
+  if (response_session_id != nullptr) {
+    *response_session_id = response_session.has_value() ? std::optional<std::string>(*response_session) : std::nullopt;
   }
   google::protobuf::Struct envelope;
   auto parsed = a2a::core::JsonToMessage(response.value().body, &envelope);
@@ -73,10 +78,32 @@ a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string bod
                                             ? "MCP resource request failed"
                                             : message->second.string_value());
   }
-  const auto session = a2a::core::http::FindHeaderValue(response.value().headers, kSessionHeader);
-  return McpResponse{.envelope = std::move(envelope),
-                     .session_id = session.has_value() ? std::optional<std::string>(*session) : std::nullopt};
+  return McpResponse{
+      .envelope = std::move(envelope),
+      .session_id = response_session.has_value() ? std::optional<std::string>(*response_session) : std::nullopt};
 }
+
+class SessionCleanup final {
+ public:
+  SessionCleanup(const std::string& endpoint, std::chrono::milliseconds timeout,
+                 const std::optional<std::string>& session_id)
+      : endpoint_(endpoint), timeout_(timeout), session_id_(session_id) {}
+  SessionCleanup(const SessionCleanup&) = delete;
+  SessionCleanup& operator=(const SessionCleanup&) = delete;
+  ~SessionCleanup() {
+    if (!session_id_.has_value()) {
+      return;
+    }
+    const a2a::http::Request request{
+        .method = "DELETE", .url = endpoint_, .headers = Headers(session_id_), .body = {}, .timeout = timeout_};
+    (void)a2a::http::Client{}.SendRequest(request);
+  }
+
+ private:
+  const std::string& endpoint_;
+  std::chrono::milliseconds timeout_;
+  const std::optional<std::string>& session_id_;
+};
 
 a2a::core::Result<void> ValidateInitialization(const McpResponse& response) {
   const auto result = response.envelope.fields().find("result");
@@ -121,7 +148,9 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
   initialization_payload << R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":)"
                          << JsonString(kProtocolVersion)
                          << R"(,"capabilities":{},"clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"}}})";
-  auto initialized = Post(endpoint_, initialization_payload.str(), timeout_);
+  std::optional<std::string> session_id;
+  auto initialized = Post(endpoint_, initialization_payload.str(), timeout_, std::nullopt, &session_id);
+  const SessionCleanup session_cleanup(endpoint_, timeout_, session_id);
   if (!initialized.ok()) {
     return initialized.error();
   }
@@ -129,7 +158,7 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
   if (!validation.ok()) {
     return validation.error();
   }
-  auto notified = NotifyInitialized(endpoint_, timeout_, initialized.value().session_id);
+  auto notified = NotifyInitialized(endpoint_, timeout_, session_id);
   if (!notified.ok()) {
     return notified.error();
   }
@@ -138,7 +167,7 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
   uri_value.set_string_value(std::string(uri));
   std::ostringstream payload;
   payload << R"({"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":)" << Json(uri_value) << "}}";
-  auto response = Post(endpoint_, payload.str(), timeout_, initialized.value().session_id);
+  auto response = Post(endpoint_, payload.str(), timeout_, session_id);
   if (!response.ok()) {
     return response.error();
   }
