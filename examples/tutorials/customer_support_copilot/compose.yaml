@@ -6,6 +6,10 @@ x-model-environment: &model-environment
   A2A_TUTORIAL_MODEL_TIMEOUT_MS: "${A2A_TUTORIAL_MODEL_TIMEOUT_MS:-30000}"
 
 services:
+  ticket-mcp-server:
+    build: {context: ../../.., dockerfile: examples/tutorials/mcp_server/Dockerfile}
+    command: ["--fixture-set", "customer_support", "--fixture-root", "/fixtures/customer_support", "--host", "0.0.0.0", "--port", "8190"]
+    healthcheck: {test: ["CMD", "wget", "-q", "-T", "1", "-O", "/dev/null", "http://127.0.0.1:8190/health"], interval: 2s, timeout: 1s, retries: 20}
   support-specialist:
     build: {context: ../../.., dockerfile: examples/tutorials/customer_support_copilot/Dockerfile}
     command: ["/opt/tutorial/support_specialist", "0.0.0.0:8181"]
@@ -13,6 +17,9 @@ services:
     environment:
       <<: *model-environment
       A2A_TUTORIAL_PUBLIC_URL: "http://support-specialist:8181/a2a"
+      A2A_TUTORIAL_MCP_URL: "http://ticket-mcp-server:8190/mcp"
+    depends_on:
+      ticket-mcp-server: {condition: service_healthy}
     extra_hosts: ["host.docker.internal:host-gateway"]
   support-coordinator:
     build: {context: ../../.., dockerfile: examples/tutorials/customer_support_copilot/Dockerfile}
@@ -21,6 +28,7 @@ services:
       <<: *model-environment
       A2A_TUTORIAL_SPECIALIST_URL: "http://support-specialist:8181"
       A2A_TUTORIAL_PUBLIC_URL: "http://support-coordinator:8180/a2a"
-    depends_on: [support-specialist]
+    depends_on:
+      support-specialist: {condition: service_healthy}
     ports: ["8180:8180"]
     extra_hosts: ["host.docker.internal:host-gateway"]

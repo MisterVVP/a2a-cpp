@@ -6,6 +6,10 @@ x-model-environment: &model-environment
   A2A_TUTORIAL_MODEL_TIMEOUT_MS: "${A2A_TUTORIAL_MODEL_TIMEOUT_MS:-30000}"
 
 services:
+  document-mcp-server:
+    build: {context: ../../.., dockerfile: examples/tutorials/mcp_server/Dockerfile}
+    command: ["--fixture-set", "job_application", "--fixture-root", "/fixtures/job_application", "--host", "0.0.0.0", "--port", "8090"]
+    healthcheck: {test: ["CMD", "wget", "-q", "-T", "1", "-O", "/dev/null", "http://127.0.0.1:8090/health"], interval: 2s, timeout: 1s, retries: 20}
   profile-analyst:
     build: {context: ../../.., dockerfile: examples/tutorials/job_application_assistant/Dockerfile}
     command: ["/opt/tutorial/profile_analyst", "0.0.0.0:8081"]
@@ -13,6 +17,9 @@ services:
     environment:
       <<: *model-environment
       A2A_TUTORIAL_PUBLIC_URL: "http://profile-analyst:8081/a2a"
+      A2A_TUTORIAL_MCP_URL: "http://document-mcp-server:8090/mcp"
+    depends_on:
+      document-mcp-server: {condition: service_healthy}
     extra_hosts: ["host.docker.internal:host-gateway"]
   application-coordinator:
     build: {context: ../../.., dockerfile: examples/tutorials/job_application_assistant/Dockerfile}
@@ -21,6 +28,7 @@ services:
       <<: *model-environment
       A2A_TUTORIAL_SPECIALIST_URL: "http://profile-analyst:8081"
       A2A_TUTORIAL_PUBLIC_URL: "http://application-coordinator:8080/a2a"
-    depends_on: [profile-analyst]
+    depends_on:
+      profile-analyst: {condition: service_healthy}
     ports: ["8080:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"]

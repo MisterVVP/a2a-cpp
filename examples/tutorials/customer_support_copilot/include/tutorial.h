@@ -13,7 +13,8 @@ inline constexpr std::string_view kRestPath = "/a2a";
 [[nodiscard]] a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_url,
                                                                        const lf::a2a::v1::SendMessageRequest& request);
 [[nodiscard]] lf::a2a::v1::SendMessageRequest TicketRequest(std::string_view ticket, std::string_view unused);
+[[nodiscard]] lf::a2a::v1::SendMessageRequest TicketResourceRequest(std::string_view ticket_resource);
 [[nodiscard]] int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool coordinator,
-                                 std::string_view specialist_url);
+                                 std::string_view specialist_url, std::string_view mcp_url);
 [[nodiscard]] std::string Render(const lf::a2a::v1::SendMessageResponse& response);
 }  // namespace support_tutorial
