@@ -22,14 +22,18 @@
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/network_utils.h"
 #include "a2a/server/rest_server_transport.h"
+#include "mcp_client.h"
 #include "model.h"
+#include "resource_validation.h"
 
 namespace job_tutorial {
 namespace {
 constexpr int kBacklog = 16;
 constexpr std::chrono::milliseconds kPoll{50};
 constexpr std::chrono::milliseconds kRequestTimeout{240000};
+constexpr std::chrono::milliseconds kMcpTimeout{5000};
 constexpr std::string_view kResume = "resume";
+constexpr std::string_view kResumeResource = "resume_resource";
 constexpr std::string_view kJob = "job_description";
 constexpr std::string_view kAnalysisArtifact = "candidate-fit-analysis";
 constexpr std::string_view kDraftArtifact = "application-draft";
@@ -191,8 +195,11 @@ a2a::core::Result<google::protobuf::Value> ParseJobAnalysis(std::string_view gen
 
 class Executor final : public a2a::server::AgentExecutor {
  public:
-  Executor(bool coordinator, std::string specialist_url, std::unique_ptr<TextModel> model)
-      : coordinator_(coordinator), specialist_url_(std::move(specialist_url)), model_(std::move(model)) {}
+  Executor(bool coordinator, std::string specialist_url, std::string mcp_url, std::unique_ptr<TextModel> model)
+      : coordinator_(coordinator),
+        specialist_url_(std::move(specialist_url)),
+        mcp_url_(std::move(mcp_url)),
+        model_(std::move(model)) {}
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& /*context*/) override {
     const auto* input = Input(request);
@@ -200,12 +207,29 @@ class Executor final : public a2a::server::AgentExecutor {
       return a2a::core::Error::Validation("structured resume and job_description are required");
     }
     const auto resume = input->fields().find(kResume);
+    const auto resume_resource = input->fields().find(kResumeResource);
     const auto job = input->fields().find(kJob);
-    if (resume == input->fields().end() || job == input->fields().end()) {
-      return a2a::core::Error::Validation("resume and job_description are required");
+    if ((resume == input->fields().end()) == (resume_resource == input->fields().end()) ||
+        job == input->fields().end()) {
+      return a2a::core::Error::Validation(
+          "exactly one of resume or resume_resource, plus job_description, is required");
+    }
+    if (resume_resource != input->fields().end()) {
+      auto resource_validation = tutorial_mcp::ValidateResourceUriField(resume_resource->second, kResumeResource);
+      if (!resource_validation.ok()) {
+        return resource_validation.error();
+      }
     }
     if (!coordinator_) {
-      return Specialist(resume->second.string_value(), job->second.string_value());
+      if (resume != input->fields().end()) {
+        return Specialist(resume->second.string_value(), job->second.string_value());
+      }
+      tutorial_mcp::Client mcp(mcp_url_, kMcpTimeout);
+      auto retrieved = mcp.ReadResource(resume_resource->second.string_value());
+      if (!retrieved.ok()) {
+        return retrieved.error();
+      }
+      return Specialist(retrieved.value(), job->second.string_value());
     }
     auto delegated = Send(specialist_url_, request);
     if (!delegated.ok()) {
@@ -220,8 +244,10 @@ class Executor final : public a2a::server::AgentExecutor {
       return analysis_json.error();
     }
     std::string draft = Draft(data);
-    auto generated = model_->Generate(
-        ApplicationDraftPrompt(resume->second.string_value(), job->second.string_value(), analysis_json.value()));
+    const std::string_view resume_text =
+        resume == input->fields().end() ? std::string_view{} : resume->second.string_value();
+    auto generated =
+        model_->Generate(ApplicationDraftPrompt(resume_text, job->second.string_value(), analysis_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }
@@ -269,6 +295,7 @@ class Executor final : public a2a::server::AgentExecutor {
   }
   bool coordinator_;
   std::string specialist_url_;
+  std::string mcp_url_;
   std::unique_ptr<TextModel> model_;
 };
 
@@ -313,6 +340,16 @@ lf::a2a::v1::SendMessageRequest JobRequest(std::string_view resume, std::string_
   message->set_role(lf::a2a::v1::ROLE_USER);
   auto* fields = message->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
   (*fields)[kResume].set_string_value(std::string(resume));
+  (*fields)[kJob].set_string_value(std::string(job));
+  return request;
+}
+lf::a2a::v1::SendMessageRequest JobResourceRequest(std::string_view resume_resource, std::string_view job) {
+  lf::a2a::v1::SendMessageRequest request;
+  auto* message = request.mutable_message();
+  message->set_message_id("job-application-resource-request");
+  message->set_role(lf::a2a::v1::ROLE_USER);
+  auto* fields = message->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
+  (*fields)[kResumeResource].set_string_value(std::string(resume_resource));
   (*fields)[kJob].set_string_value(std::string(job));
   return request;
 }
@@ -370,7 +407,7 @@ std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
   return output.str();
 }
 int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool coordinator,
-                   std::string_view specialist_url) {
+                   std::string_view specialist_url, std::string_view mcp_url) {
   auto parsed = a2a::server::ParseHostPortEndpoint(endpoint);
   if (!parsed.ok()) {
     std::cerr << parsed.error().message() << '\n';
@@ -386,7 +423,7 @@ int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool 
     std::cerr << model.error().message() << '\n';
     return 1;
   }
-  Executor executor(coordinator, std::string(specialist_url), std::move(model.value()));
+  Executor executor(coordinator, std::string(specialist_url), std::string(mcp_url), std::move(model.value()));
   a2a::server::Dispatcher dispatcher(&executor);
   auto card =
       a2a::core::AgentCardBuilder::RestPreset(coordinator ? "Application Coordinator" : "Profile Analyst", public_url)

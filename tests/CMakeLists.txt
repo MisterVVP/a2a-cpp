@@ -146,6 +146,18 @@ target_link_libraries(http_client_test
 
 gtest_discover_tests(http_client_test)
 
+add_executable(mcp_client_test
+  unit/mcp_client_test.cpp
+  ${PROJECT_SOURCE_DIR}/examples/tutorials/common/mcp_client.cpp
+)
+
+target_include_directories(mcp_client_test PRIVATE ${PROJECT_SOURCE_DIR}/examples/tutorials/common)
+target_link_libraries(mcp_client_test PRIVATE a2a::http a2a::core GTest::gtest_main)
+if(WIN32)
+  target_link_libraries(mcp_client_test PRIVATE ws2_32)
+endif()
+gtest_discover_tests(mcp_client_test)
+
 add_executable(core_protojson_golden_test
   unit/core_protojson_golden_test.cpp
 )

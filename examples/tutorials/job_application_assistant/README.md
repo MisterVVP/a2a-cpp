@@ -3,8 +3,19 @@
 This standalone C++20 downstream application demonstrates real HTTP+JSON A2A delegation.
 
 ```text
-application_client --A2A--> application_coordinator --Agent Card discovery + A2A--> profile_analyst
+User / application_client
+    | A2A
+    v
+application_coordinator
+    | Agent Card discovery + A2A
+    v
+profile_analyst
+    | MCP resources/read
+    v
+official Python SDK MCP server (seeded local resource)
 ```
+
+**A2A connects independent agents. MCP connects an individual agent to its tools and resources.** MCP is deliberately confined to the specialist and does not alter A2A discovery, transport, or messages between agents.
 
 The client discovers the coordinator; the coordinator is both an A2A server and a client that discovers the separately running specialist. Input is resume and job description; output is structured fit analysis and a cover note. Business contracts use structured `DataPart` values and structured artifacts.
 
@@ -43,11 +54,35 @@ cmake --build build-tutorials/job_application_assistant --parallel
 
 This builds `profile_analyst`, `application_coordinator`, and `application_client`.
 
-### 3. Start the profile analyst
+### 3. Start the local MCP resource server
 
-In the first terminal, from the repository root:
+#### Terminal 1 — MCP server
+
+From the repository root, create the environment and start the server:
 
 ```bash
+python3 -m venv build-tutorials/mcp-venv
+build-tutorials/mcp-venv/bin/python -m pip install --requirement examples/tutorials/mcp_server/requirements.txt
+build-tutorials/mcp-venv/bin/python examples/tutorials/mcp_server/server.py \
+  --fixture-set job_application \
+  --fixture-root examples/tutorials/job_application_assistant/samples \
+  --host 127.0.0.1 --port 8090
+```
+
+Leave this process running. The server uses the official MCP Python SDK and exposes deterministic fixtures without credentials.
+
+#### Terminal 2 — Verify readiness and start the specialist
+
+From the repository root, verify that the MCP server is ready:
+
+```bash
+curl --fail http://127.0.0.1:8090/health
+```
+
+After the readiness check succeeds, start the specialist with its bounded-timeout MCP endpoint in the same terminal:
+
+```bash
+A2A_TUTORIAL_MCP_URL=http://127.0.0.1:8090/mcp \
 ./build-tutorials/job_application_assistant/profile_analyst 127.0.0.1:8081
 ```
 
@@ -59,7 +94,7 @@ curl --fail http://127.0.0.1:8081/.well-known/agent-card.json
 
 ### 4. Start the coordinator
 
-In a second terminal, from the repository root:
+In another terminal, from the repository root:
 
 ```bash
 A2A_TUTORIAL_SPECIALIST_URL=http://127.0.0.1:8081 \
@@ -74,16 +109,18 @@ curl --fail http://127.0.0.1:8080/.well-known/agent-card.json
 
 ### 5. Run the client
 
-In a third terminal, from the repository root:
+In another terminal, from the repository root:
 
 ```bash
 ./build-tutorials/job_application_assistant/application_client \
   --coordinator-url http://127.0.0.1:8080 \
-  --resume-file examples/tutorials/job_application_assistant/samples/resume.txt \
+  --resume-resource resume://candidate/alex \
   --job-file examples/tutorials/job_application_assistant/samples/job_description.txt
 ```
 
-Stop the coordinator and profile analyst with `Ctrl+C` when finished.
+The identifier `resume://candidate/alex` is sent over A2A; only `profile_analyst` resolves it through MCP. The legacy file option remains available for migration and offline comparison.
+
+Stop the MCP server, coordinator, and profile analyst in their respective terminals with `Ctrl+C` when finished.
 
 Without the AI model configuration below, both agents use the deterministic fallback backend and print a warning at startup. The repository-level `scripts/run_tutorials.sh` builds and runs both tutorials with bounded Agent Card readiness checks and automatic cleanup.
 
@@ -123,12 +160,18 @@ From the repository root:
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build -d
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator ./application_client \
   --coordinator-url http://application-coordinator:8080 \
-  --resume-file samples/resume.txt \
+  --resume-resource resume://candidate/alex \
   --job-file samples/job_description.txt
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
 ```
 
 Only the coordinator port is published. Service DNS is used for delegation and containers run as a non-root user. If the four AI model variables are not set, Docker Compose uses the deterministic fallback.
+
+## Replacing the local resource server
+
+Set `A2A_TUTORIAL_MCP_URL` on `profile_analyst` to a trusted MCP Streamable HTTP endpoint that exposes the same resource URI contract. A production adapter can front Google Drive, Linear, or another system; keep authentication in runtime secret configuration, enforce TLS and access controls, and never pass provider credentials through A2A. The official-SDK local server remains the default CI path. The tutorial C++ client supports textual MCP resources; provider-specific tools and OAuth require an adapter.
+
+The deliberately small tutorial client supports MCP protocol version `2025-06-18`, JSON responses, optional session IDs, and one `resources/read` result whose first item contains non-empty text. It does not implement SSE response parsing, OAuth, MCP tools, subscriptions, binary resources, or provider-specific discovery. The resource-mode coordinator receives the specialist's normalized analysis rather than the original resume; an external integration should extend that structured result when its drafting model needs more source evidence.
 
 ## Troubleshooting
 

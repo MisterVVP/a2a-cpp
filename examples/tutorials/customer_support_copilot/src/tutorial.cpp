@@ -22,14 +22,18 @@
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/network_utils.h"
 #include "a2a/server/rest_server_transport.h"
+#include "mcp_client.h"
 #include "model.h"
+#include "resource_validation.h"
 
 namespace support_tutorial {
 namespace {
 constexpr int kBacklog = 16;
 constexpr std::chrono::milliseconds kPoll{50};
 constexpr std::chrono::milliseconds kRequestTimeout{240000};
+constexpr std::chrono::milliseconds kMcpTimeout{5000};
 constexpr std::string_view kResume = "ticket";
+constexpr std::string_view kTicketResource = "ticket_resource";
 constexpr std::string_view kJob = "unused";
 constexpr std::string_view kAnalysisArtifact = "ticket-diagnosis";
 constexpr std::string_view kDraftArtifact = "customer-response";
@@ -222,8 +226,11 @@ a2a::core::Result<google::protobuf::Value> ParseSupportAnalysis(std::string_view
 
 class Executor final : public a2a::server::AgentExecutor {
  public:
-  Executor(bool coordinator, std::string specialist_url, std::unique_ptr<TextModel> model)
-      : coordinator_(coordinator), specialist_url_(std::move(specialist_url)), model_(std::move(model)) {}
+  Executor(bool coordinator, std::string specialist_url, std::string mcp_url, std::unique_ptr<TextModel> model)
+      : coordinator_(coordinator),
+        specialist_url_(std::move(specialist_url)),
+        mcp_url_(std::move(mcp_url)),
+        model_(std::move(model)) {}
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& /*context*/) override {
     const auto* input = Input(request);
@@ -231,11 +238,29 @@ class Executor final : public a2a::server::AgentExecutor {
       return a2a::core::Error::Validation("structured ticket is required");
     }
     const auto resume = input->fields().find(kResume);
+    const auto ticket_resource = input->fields().find(kTicketResource);
     const auto job = input->fields().find(kJob);
-    if (resume == input->fields().end() || job == input->fields().end()) {
-      return a2a::core::Error::Validation("ticket is required");
+    if ((resume == input->fields().end()) == (ticket_resource == input->fields().end())) {
+      return a2a::core::Error::Validation("exactly one of ticket or ticket_resource is required");
+    }
+    if (resume != input->fields().end() && job == input->fields().end()) {
+      return a2a::core::Error::Validation("unused is required with an inline ticket");
+    }
+    if (ticket_resource != input->fields().end()) {
+      auto resource_validation = tutorial_mcp::ValidateResourceUriField(ticket_resource->second, kTicketResource);
+      if (!resource_validation.ok()) {
+        return resource_validation.error();
+      }
     }
     if (!coordinator_) {
+      if (ticket_resource != input->fields().end()) {
+        tutorial_mcp::Client mcp(mcp_url_, kMcpTimeout);
+        auto retrieved = mcp.ReadResource(ticket_resource->second.string_value());
+        if (!retrieved.ok()) {
+          return retrieved.error();
+        }
+        return Specialist(retrieved.value(), "");
+      }
       return Specialist(resume->second.string_value(), job->second.string_value());
     }
     auto delegated = Send(specialist_url_, request);
@@ -251,7 +276,9 @@ class Executor final : public a2a::server::AgentExecutor {
       return diagnosis_json.error();
     }
     std::string draft = Draft(data);
-    auto generated = model_->Generate(CustomerResponsePrompt(resume->second.string_value(), diagnosis_json.value()));
+    const std::string_view ticket_text =
+        resume == input->fields().end() ? std::string_view{} : resume->second.string_value();
+    auto generated = model_->Generate(CustomerResponsePrompt(ticket_text, diagnosis_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }
@@ -303,6 +330,7 @@ class Executor final : public a2a::server::AgentExecutor {
   }
   bool coordinator_;
   std::string specialist_url_;
+  std::string mcp_url_;
   std::unique_ptr<TextModel> model_;
 };
 
@@ -348,6 +376,15 @@ lf::a2a::v1::SendMessageRequest TicketRequest(std::string_view ticket, std::stri
   auto* fields = message->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
   (*fields)[kResume].set_string_value(std::string(ticket));
   (*fields)[kJob].set_string_value(std::string(unused));
+  return request;
+}
+lf::a2a::v1::SendMessageRequest TicketResourceRequest(std::string_view ticket_resource) {
+  lf::a2a::v1::SendMessageRequest request;
+  auto* message = request.mutable_message();
+  message->set_message_id("support-ticket-resource-request");
+  message->set_role(lf::a2a::v1::ROLE_USER);
+  auto* fields = message->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
+  (*fields)[kTicketResource].set_string_value(std::string(ticket_resource));
   return request;
 }
 a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_url,
@@ -400,7 +437,7 @@ std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
   return output.str();
 }
 int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool coordinator,
-                   std::string_view specialist_url) {
+                   std::string_view specialist_url, std::string_view mcp_url) {
   auto parsed = a2a::server::ParseHostPortEndpoint(endpoint);
   if (!parsed.ok()) {
     std::cerr << parsed.error().message() << '\n';
@@ -416,7 +453,7 @@ int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool 
     std::cerr << model.error().message() << '\n';
     return 1;
   }
-  Executor executor(coordinator, std::string(specialist_url), std::move(model.value()));
+  Executor executor(coordinator, std::string(specialist_url), std::string(mcp_url), std::move(model.value()));
   a2a::server::Dispatcher dispatcher(&executor);
   auto card =
       a2a::core::AgentCardBuilder::RestPreset(coordinator ? "Support Coordinator" : "Support Specialist", public_url)

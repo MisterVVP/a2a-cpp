@@ -8,5 +8,5 @@ int main(int argc, char** argv) {
   const char* configured_public_url = std::getenv("A2A_TUTORIAL_PUBLIC_URL");
   const std::string public_url = configured_public_url != nullptr ? configured_public_url : "http://127.0.0.1:8080/a2a";
   return job_tutorial::RunAgentServer(endpoint, public_url, true,
-                                      specialist != nullptr ? specialist : "http://127.0.0.1:8081");
+                                      specialist != nullptr ? specialist : "http://127.0.0.1:8081", "");
 }
