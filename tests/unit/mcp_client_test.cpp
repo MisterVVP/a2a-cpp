@@ -35,6 +35,7 @@ constexpr int kSocketError = -1;
 constexpr int kOk = 200;
 constexpr int kAccepted = 202;
 constexpr int kNoContent = 204;
+constexpr int kInternalServerError = 500;
 constexpr std::size_t kResponseCapacityOverhead = 128;
 constexpr std::size_t kReceiveBufferSize = 4096;
 constexpr int kReceiveBufferLength = static_cast<int>(kReceiveBufferSize);
@@ -122,11 +123,11 @@ class ScriptedServer final {
     if (socket_ != kSocketError) {
       ShutdownSocket(socket_);
       CloseSocket(socket_);
-      socket_ = kSocketError;
     }
     if (worker_.joinable()) {
       worker_.join();
     }
+    socket_ = kSocketError;
 #ifdef _WIN32
     if (winsock_started_) {
       (void)::WSACleanup();
@@ -231,6 +232,66 @@ TEST(McpClientTest, RejectsMalformedInitializationEnvelopeAndTerminatesSession) 
   const auto requests = server.requests();
   ASSERT_EQ(requests.size(), 2U);
   EXPECT_EQ(requests[1].find("DELETE /mcp HTTP/1.1"), 0U);
+}
+
+TEST(McpClientTest, RejectsInitializationResponseWithoutJsonRpcVersion) {
+  ScriptedServer server(
+      InitializationExchange(R"({"id":0,"result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("missing jsonrpc"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsUnsupportedJsonRpcVersion) {
+  ScriptedServer server(InitializationExchange(
+      R"({"jsonrpc":"1.0","id":0,"result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("unsupported JSON-RPC version"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsMismatchedInitializationResponseId) {
+  ScriptedServer server(InitializationExchange(
+      R"({"jsonrpc":"2.0","id":99,"result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("id does not match"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsInitializationResponseWithoutId) {
+  ScriptedServer server(InitializationExchange(
+      R"({"jsonrpc":"2.0","result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("missing id"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsInvalidInitializationResponseIdType) {
+  ScriptedServer server(InitializationExchange(
+      R"({"jsonrpc":"2.0","id":"0","result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("id must be a number"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsMismatchedResourceResponseId) {
+  ScriptedServer server(SuccessfulExchange(
+      R"({"jsonrpc":"2.0","id":99,"result":{"contents":[{"uri":"fixture://resource","text":"fixture text"}]}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("id does not match"), std::string::npos);
+}
+
+TEST(McpClientTest, TerminatesSessionReturnedWithInitializationHttpError) {
+  ScriptedServer server(
+      {HttpResponse(kInternalServerError, {}, "Mcp-Session-Id: unit-session\r\n"), HttpResponse(kNoContent, {})});
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("HTTP 500"), std::string::npos);
+  const auto requests = server.requests();
+  ASSERT_EQ(requests.size(), 2U);
+  EXPECT_EQ(requests[1].find("DELETE /mcp HTTP/1.1"), 0U);
+  EXPECT_NE(requests[1].find("Mcp-Session-Id: unit-session"), std::string::npos);
 }
 
 TEST(McpClientTest, RejectsUnsupportedVersion) {

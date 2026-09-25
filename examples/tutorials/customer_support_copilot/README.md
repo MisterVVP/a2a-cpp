@@ -56,7 +56,9 @@ This builds `support_specialist`, `support_coordinator`, and `support_client`.
 
 ### 3. Start the local MCP resource server
 
-In the first terminal, from the repository root:
+#### Terminal 1 — MCP server
+
+From the repository root, create the environment and start the server:
 
 ```bash
 python3 -m venv build-tutorials/mcp-venv
@@ -65,10 +67,19 @@ build-tutorials/mcp-venv/bin/python examples/tutorials/mcp_server/server.py \
   --fixture-set customer_support \
   --fixture-root examples/tutorials/customer_support_copilot/samples \
   --host 127.0.0.1 --port 8190
+```
+
+Leave this process running. The server uses the official MCP Python SDK and exposes deterministic fixtures without credentials.
+
+#### Terminal 2 — Verify readiness and start the specialist
+
+From the repository root, verify that the MCP server is ready:
+
+```bash
 curl --fail http://127.0.0.1:8190/health
 ```
 
-The server uses the official MCP Python SDK and exposes deterministic fixtures without credentials. In a second terminal, start the specialist with its bounded-timeout MCP endpoint:
+After the readiness check succeeds, start the specialist with its bounded-timeout MCP endpoint in the same terminal:
 
 ```bash
 A2A_TUTORIAL_MCP_URL=http://127.0.0.1:8190/mcp \
@@ -108,7 +119,7 @@ In another terminal, from the repository root:
 
 The identifier `ticket://northstar/billing-currency` is sent over A2A; only `support_specialist` resolves it through MCP. The legacy file option remains available for migration and offline comparison.
 
-Stop the MCP server, coordinator, and specialist with `Ctrl+C` when finished.
+Stop the MCP server, coordinator, and specialist in their respective terminals with `Ctrl+C` when finished.
 
 Without the AI model configuration below, both agents use the deterministic fallback backend and print a warning at startup. The repository-level `scripts/run_tutorials.sh` builds and runs both tutorials with bounded Agent Card readiness checks and automatic cleanup.
 

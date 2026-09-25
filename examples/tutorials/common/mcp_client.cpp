@@ -14,15 +14,17 @@ namespace tutorial_mcp {
 namespace {
 constexpr int kOk = 200;
 constexpr int kAccepted = 202;
+constexpr int kInitializeRequestId = 0;
+constexpr int kReadResourceRequestId = 1;
 constexpr std::string_view kContentType = "application/json";
 constexpr std::string_view kAccept = "application/json, text/event-stream";
+constexpr std::string_view kJsonRpcVersion = "2.0";
 constexpr std::string_view kProtocolVersion = "2025-06-18";
 constexpr std::string_view kSessionHeader = "Mcp-Session-Id";
 constexpr std::string_view kProtocolHeader = "MCP-Protocol-Version";
 
 struct McpResponse final {
   google::protobuf::Struct envelope;
-  std::optional<std::string> session_id;
 };
 
 std::string Json(const google::protobuf::Message& message) {
@@ -48,7 +50,32 @@ std::vector<a2a::http::Header> Headers(const std::optional<std::string>& session
   return headers;
 }
 
-a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string body, std::chrono::milliseconds timeout,
+a2a::core::Result<void> ValidateJsonRpcEnvelope(const google::protobuf::Struct& envelope, int expected_id) {
+  const auto version = envelope.fields().find("jsonrpc");
+  if (version == envelope.fields().end()) {
+    return a2a::core::Error::Validation("MCP response is missing jsonrpc");
+  }
+  if (version->second.kind_case() != google::protobuf::Value::kStringValue) {
+    return a2a::core::Error::Validation("MCP response jsonrpc must be a string");
+  }
+  if (version->second.string_value() != kJsonRpcVersion) {
+    return a2a::core::Error::Validation("MCP response uses an unsupported JSON-RPC version");
+  }
+  const auto id = envelope.fields().find("id");
+  if (id == envelope.fields().end()) {
+    return a2a::core::Error::Validation("MCP response is missing id");
+  }
+  if (id->second.kind_case() != google::protobuf::Value::kNumberValue) {
+    return a2a::core::Error::Validation("MCP response id must be a number");
+  }
+  if (id->second.number_value() != static_cast<double>(expected_id)) {
+    return a2a::core::Error::Validation("MCP response id does not match the request");
+  }
+  return {};
+}
+
+a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string body, int expected_id,
+                                    std::chrono::milliseconds timeout,
                                     const std::optional<std::string>& session_id = std::nullopt,
                                     std::optional<std::string>* response_session_id = nullptr) {
   a2a::http::Request request{
@@ -59,17 +86,21 @@ a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string bod
     message.append(response.error().message());
     return a2a::core::Error::Internal(std::move(message));
   }
-  if (response.value().status_code != kOk) {
-    return a2a::core::Error::Internal("MCP service returned HTTP " + std::to_string(response.value().status_code));
-  }
   const auto response_session = a2a::core::http::FindHeaderValue(response.value().headers, kSessionHeader);
   if (response_session_id != nullptr) {
     *response_session_id = response_session.has_value() ? std::optional<std::string>(*response_session) : std::nullopt;
+  }
+  if (response.value().status_code != kOk) {
+    return a2a::core::Error::Internal("MCP service returned HTTP " + std::to_string(response.value().status_code));
   }
   google::protobuf::Struct envelope;
   auto parsed = a2a::core::JsonToMessage(response.value().body, &envelope);
   if (!parsed.ok()) {
     return a2a::core::Error::Internal("MCP service returned invalid JSON");
+  }
+  auto envelope_validation = ValidateJsonRpcEnvelope(envelope, expected_id);
+  if (!envelope_validation.ok()) {
+    return envelope_validation.error();
   }
   const auto error = envelope.fields().find("error");
   if (error != envelope.fields().end()) {
@@ -78,9 +109,7 @@ a2a::core::Result<McpResponse> Post(const std::string& endpoint, std::string bod
                                             ? "MCP resource request failed"
                                             : message->second.string_value());
   }
-  return McpResponse{
-      .envelope = std::move(envelope),
-      .session_id = response_session.has_value() ? std::optional<std::string>(*response_session) : std::nullopt};
+  return McpResponse{.envelope = std::move(envelope)};
 }
 
 class SessionCleanup final {
@@ -149,7 +178,8 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
                          << JsonString(kProtocolVersion)
                          << R"(,"capabilities":{},"clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"}}})";
   std::optional<std::string> session_id;
-  auto initialized = Post(endpoint_, initialization_payload.str(), timeout_, std::nullopt, &session_id);
+  auto initialized =
+      Post(endpoint_, initialization_payload.str(), kInitializeRequestId, timeout_, std::nullopt, &session_id);
   const SessionCleanup session_cleanup(endpoint_, timeout_, session_id);
   if (!initialized.ok()) {
     return initialized.error();
@@ -167,7 +197,7 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
   uri_value.set_string_value(std::string(uri));
   std::ostringstream payload;
   payload << R"({"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":)" << Json(uri_value) << "}}";
-  auto response = Post(endpoint_, payload.str(), timeout_, session_id);
+  auto response = Post(endpoint_, payload.str(), kReadResourceRequestId, timeout_, session_id);
   if (!response.ok()) {
     return response.error();
   }
