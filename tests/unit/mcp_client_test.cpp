@@ -1,9 +1,14 @@
 #include "mcp_client.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <array>
 #include <chrono>
@@ -18,16 +23,56 @@
 #include "gtest/gtest.h"
 
 namespace {
+#ifdef _WIN32
+using Socket = SOCKET;
+using SocketLength = int;
+constexpr Socket kSocketError = INVALID_SOCKET;
+#else
+using Socket = int;
+using SocketLength = socklen_t;
 constexpr int kSocketError = -1;
+#endif
 constexpr int kOk = 200;
 constexpr int kAccepted = 202;
 constexpr int kNoContent = 204;
 constexpr std::size_t kResponseCapacityOverhead = 128;
 constexpr std::size_t kReceiveBufferSize = 4096;
+constexpr int kReceiveBufferLength = static_cast<int>(kReceiveBufferSize);
 constexpr auto kTimeout = std::chrono::seconds(2);
 constexpr std::string_view kVersion = "2025-06-18";
 constexpr std::string_view kUri = "fixture://resource";
 constexpr std::string_view kText = "fixture text";
+
+void CloseSocket(Socket socket) {
+#ifdef _WIN32
+  (void)::closesocket(socket);
+#else
+  (void)::close(socket);
+#endif
+}
+
+void ShutdownSocket(Socket socket) {
+#ifdef _WIN32
+  (void)::shutdown(socket, SD_BOTH);
+#else
+  (void)::shutdown(socket, SHUT_RDWR);
+#endif
+}
+
+void SendResponse(Socket socket, std::string_view response) {
+#ifdef _WIN32
+  (void)::send(socket, response.data(), static_cast<int>(response.size()), 0);
+#else
+  (void)::send(socket, response.data(), response.size(), 0);
+#endif
+}
+
+#ifdef _WIN32
+bool StartSockets() {
+  WSADATA wsa_data{};
+  return ::WSAStartup(MAKEWORD(2, 2), &wsa_data) == 0;
+}
+#endif
 
 std::string HttpResponse(int status, std::string_view body, std::string_view extra_headers = {}) {
   std::string response;
@@ -50,15 +95,22 @@ std::string InitializeResult(std::string_view version = kVersion, bool resources
 class ScriptedServer final {
  public:
   explicit ScriptedServer(std::vector<std::string> responses) : responses_(std::move(responses)) {
+#ifdef _WIN32
+    winsock_started_ = StartSockets();
+    EXPECT_TRUE(winsock_started_);
+    if (!winsock_started_) {
+      return;
+    }
+#endif
     socket_ = ::socket(AF_INET, SOCK_STREAM, 0);
     EXPECT_NE(socket_, kSocketError);
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = 0;
-    EXPECT_EQ(::bind(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+    EXPECT_EQ(::bind(socket_, reinterpret_cast<sockaddr*>(&address), static_cast<SocketLength>(sizeof(address))), 0);
     EXPECT_EQ(::listen(socket_, static_cast<int>(responses_.size())), 0);
-    socklen_t size = sizeof(address);
+    auto size = static_cast<SocketLength>(sizeof(address));
     EXPECT_EQ(::getsockname(socket_, reinterpret_cast<sockaddr*>(&address), &size), 0);
     port_ = ntohs(address.sin_port);
     worker_ = std::thread([this] { Serve(); });
@@ -68,13 +120,18 @@ class ScriptedServer final {
   ScriptedServer& operator=(const ScriptedServer&) = delete;
   ~ScriptedServer() {
     if (socket_ != kSocketError) {
-      (void)::shutdown(socket_, SHUT_RDWR);
-      ::close(socket_);
+      ShutdownSocket(socket_);
+      CloseSocket(socket_);
       socket_ = kSocketError;
     }
     if (worker_.joinable()) {
       worker_.join();
     }
+#ifdef _WIN32
+    if (winsock_started_) {
+      (void)::WSACleanup();
+    }
+#endif
   }
 
   [[nodiscard]] std::string endpoint() const {
@@ -88,11 +145,11 @@ class ScriptedServer final {
   }
 
  private:
-  static std::string ReadRequest(int client) {
+  static std::string ReadRequest(Socket client) {
     std::string request;
     std::array<char, kReceiveBufferSize> buffer{};
     while (request.find("\r\n\r\n") == std::string::npos) {
-      const auto count = ::recv(client, buffer.data(), buffer.size(), 0);
+      const auto count = ::recv(client, buffer.data(), kReceiveBufferLength, 0);
       if (count <= 0) {
         return request;
       }
@@ -105,7 +162,7 @@ class ScriptedServer final {
     }
     const auto length = std::stoul(request.substr(length_start + std::string_view("Content-Length:").size()));
     while (request.size() - body_start < length) {
-      const auto count = ::recv(client, buffer.data(), buffer.size(), 0);
+      const auto count = ::recv(client, buffer.data(), kReceiveBufferLength, 0);
       if (count <= 0) {
         break;
       }
@@ -116,7 +173,7 @@ class ScriptedServer final {
 
   void Serve() {
     for (const auto& response : responses_) {
-      const int client = ::accept(socket_, nullptr, nullptr);
+      const Socket client = ::accept(socket_, nullptr, nullptr);
       if (client == kSocketError) {
         return;
       }
@@ -125,17 +182,20 @@ class ScriptedServer final {
         std::scoped_lock lock(mutex_);
         requests_.push_back(std::move(request));
       }
-      (void)::send(client, response.data(), response.size(), 0);
-      ::close(client);
+      SendResponse(client, response);
+      CloseSocket(client);
     }
   }
 
-  int socket_ = kSocketError;
+  Socket socket_ = kSocketError;
   std::uint16_t port_ = 0;
   std::vector<std::string> responses_;
   mutable std::mutex mutex_;
   std::vector<std::string> requests_;
   std::thread worker_;
+#ifdef _WIN32
+  bool winsock_started_ = false;
+#endif
 };
 
 std::vector<std::string> SuccessfulExchange(std::string_view read_body) {
