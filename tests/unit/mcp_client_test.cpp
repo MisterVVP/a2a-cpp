@@ -326,4 +326,28 @@ TEST(McpClientTest, RejectsInvalidResourceContentShapes) {
     EXPECT_FALSE(result.ok());
   }
 }
+
+TEST(McpClientTest, RejectsResourceContentWithoutUri) {
+  ScriptedServer server(
+      SuccessfulExchange(R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"text":"fixture text"}]}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("content URI is missing"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsNonStringResourceContentUri) {
+  ScriptedServer server(
+      SuccessfulExchange(R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":7,"text":"fixture text"}]}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("content URI must be a string"), std::string::npos);
+}
+
+TEST(McpClientTest, RejectsMismatchedResourceContentUri) {
+  ScriptedServer server(SuccessfulExchange(
+      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://different","text":"fixture text"}]}})"));
+  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("content URI does not match"), std::string::npos);
+}
 }  // namespace

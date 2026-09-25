@@ -210,6 +210,16 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
     return a2a::core::Error::Internal("MCP resource contents are missing");
   }
   const auto& fields = contents->second.list_value().values(0).struct_value().fields();
+  const auto resource_uri = fields.find("uri");
+  if (resource_uri == fields.end()) {
+    return a2a::core::Error::Validation("MCP resource content URI is missing");
+  }
+  if (resource_uri->second.kind_case() != google::protobuf::Value::kStringValue) {
+    return a2a::core::Error::Validation("MCP resource content URI must be a string");
+  }
+  if (resource_uri->second.string_value() != uri) {
+    return a2a::core::Error::Validation("MCP resource content URI does not match the request");
+  }
   const auto text = fields.find("text");
   if (text == fields.end() || text->second.string_value().empty()) {
     return a2a::core::Error::Internal("MCP resource text is missing");
