@@ -24,6 +24,7 @@
 #include "a2a/server/rest_server_transport.h"
 #include "mcp_client.h"
 #include "model.h"
+#include "resource_validation.h"
 
 namespace job_tutorial {
 namespace {
@@ -212,6 +213,12 @@ class Executor final : public a2a::server::AgentExecutor {
         job == input->fields().end()) {
       return a2a::core::Error::Validation(
           "exactly one of resume or resume_resource, plus job_description, is required");
+    }
+    if (resume_resource != input->fields().end()) {
+      auto resource_validation = tutorial_mcp::ValidateResourceUriField(resume_resource->second, kResumeResource);
+      if (!resource_validation.ok()) {
+        return resource_validation.error();
+      }
     }
     if (!coordinator_) {
       if (resume != input->fields().end()) {

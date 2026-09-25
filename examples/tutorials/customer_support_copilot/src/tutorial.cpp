@@ -24,6 +24,7 @@
 #include "a2a/server/rest_server_transport.h"
 #include "mcp_client.h"
 #include "model.h"
+#include "resource_validation.h"
 
 namespace support_tutorial {
 namespace {
@@ -244,6 +245,12 @@ class Executor final : public a2a::server::AgentExecutor {
     }
     if (resume != input->fields().end() && job == input->fields().end()) {
       return a2a::core::Error::Validation("unused is required with an inline ticket");
+    }
+    if (ticket_resource != input->fields().end()) {
+      auto resource_validation = tutorial_mcp::ValidateResourceUriField(ticket_resource->second, kTicketResource);
+      if (!resource_validation.ok()) {
+        return resource_validation.error();
+      }
     }
     if (!coordinator_) {
       if (ticket_resource != input->fields().end()) {

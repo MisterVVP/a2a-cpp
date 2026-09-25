@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "resource_validation.h"
 
 namespace {
 #ifdef _WIN32
@@ -36,6 +37,8 @@ constexpr int kOk = 200;
 constexpr int kAccepted = 202;
 constexpr int kNoContent = 204;
 constexpr int kInternalServerError = 500;
+constexpr std::size_t kInvalidResourceValueCount = 4;
+constexpr double kNumericResourceUri = 1.0;
 constexpr std::size_t kResponseCapacityOverhead = 128;
 constexpr std::size_t kReceiveBufferSize = 4096;
 constexpr int kReceiveBufferLength = static_cast<int>(kReceiveBufferSize);
@@ -43,6 +46,8 @@ constexpr auto kTimeout = std::chrono::seconds(2);
 constexpr std::string_view kVersion = "2025-06-18";
 constexpr std::string_view kUri = "fixture://resource";
 constexpr std::string_view kText = "fixture text";
+constexpr std::string_view kResumeResourceField = "resume_resource";
+constexpr std::string_view kTicketResourceField = "ticket_resource";
 
 void CloseSocket(Socket socket) {
 #ifdef _WIN32
@@ -349,5 +354,24 @@ TEST(McpClientTest, RejectsMismatchedResourceContentUri) {
   const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message().find("content URI does not match"), std::string::npos);
+}
+
+TEST(ResourceValidationTest, AcceptsNonEmptyStringUri) {
+  google::protobuf::Value value;
+  value.set_string_value(std::string(kUri));
+  EXPECT_TRUE(tutorial_mcp::ValidateResourceUriField(value, kResumeResourceField).ok());
+}
+
+TEST(ResourceValidationTest, RejectsEmptyOrNonStringUri) {
+  std::array<google::protobuf::Value, kInvalidResourceValueCount> invalid_values;
+  invalid_values[0].set_string_value("");
+  invalid_values[1].set_number_value(kNumericResourceUri);
+  invalid_values[2].set_bool_value(true);
+  invalid_values[3].set_null_value(google::protobuf::NULL_VALUE);
+  for (const auto& value : invalid_values) {
+    const auto result = tutorial_mcp::ValidateResourceUriField(value, kTicketResourceField);
+    ASSERT_FALSE(result.ok());
+    EXPECT_NE(result.error().message().find("ticket_resource must be a non-empty string"), std::string::npos);
+  }
 }
 }  // namespace
