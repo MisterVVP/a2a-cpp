@@ -226,10 +226,12 @@ a2a::core::Result<google::protobuf::Value> ParseSupportAnalysis(std::string_view
 
 class Executor final : public a2a::server::AgentExecutor {
  public:
-  Executor(bool coordinator, std::string specialist_url, std::string mcp_url, std::unique_ptr<TextModel> model)
+  Executor(bool coordinator, std::string specialist_url, std::string mcp_url, std::string mcp_token,
+           std::unique_ptr<TextModel> model)
       : coordinator_(coordinator),
         specialist_url_(std::move(specialist_url)),
         mcp_url_(std::move(mcp_url)),
+        mcp_token_(std::move(mcp_token)),
         model_(std::move(model)) {}
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& /*context*/) override {
@@ -254,7 +256,7 @@ class Executor final : public a2a::server::AgentExecutor {
     }
     if (!coordinator_) {
       if (ticket_resource != input->fields().end()) {
-        tutorial_mcp::Client mcp(mcp_url_, kMcpTimeout);
+        tutorial_mcp::Client mcp(mcp_url_, mcp_token_, kMcpTimeout);
         auto retrieved = mcp.ReadResource(ticket_resource->second.string_value());
         if (!retrieved.ok()) {
           return retrieved.error();
@@ -331,6 +333,7 @@ class Executor final : public a2a::server::AgentExecutor {
   bool coordinator_;
   std::string specialist_url_;
   std::string mcp_url_;
+  std::string mcp_token_;
   std::unique_ptr<TextModel> model_;
 };
 
@@ -437,7 +440,7 @@ std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
   return output.str();
 }
 int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool coordinator,
-                   std::string_view specialist_url, std::string_view mcp_url) {
+                   std::string_view specialist_url, std::string_view mcp_url, std::string_view mcp_token) {
   auto parsed = a2a::server::ParseHostPortEndpoint(endpoint);
   if (!parsed.ok()) {
     std::cerr << parsed.error().message() << '\n';
@@ -453,7 +456,8 @@ int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool 
     std::cerr << model.error().message() << '\n';
     return 1;
   }
-  Executor executor(coordinator, std::string(specialist_url), std::string(mcp_url), std::move(model.value()));
+  Executor executor(coordinator, std::string(specialist_url), std::string(mcp_url), std::string(mcp_token),
+                    std::move(model.value()));
   a2a::server::Dispatcher dispatcher(&executor);
   auto card =
       a2a::core::AgentCardBuilder::RestPreset(coordinator ? "Support Coordinator" : "Support Specialist", public_url)

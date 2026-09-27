@@ -1,0 +1,39 @@
+{
+  "realm": "a2a-tutorial",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "clients": [
+    {
+      "clientId": "mcp-gateway",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET}",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "mcp-agent",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${A2A_TUTORIAL_MCP_AGENT_SECRET}",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "mcp-gateway-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "mcp-gateway",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

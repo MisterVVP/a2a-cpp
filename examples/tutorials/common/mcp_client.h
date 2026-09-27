@@ -10,11 +10,12 @@ namespace tutorial_mcp {
 
 class Client final {
  public:
-  explicit Client(std::string endpoint, std::chrono::milliseconds timeout);
+  Client(std::string endpoint, std::string bearer_token, std::chrono::milliseconds timeout);
   [[nodiscard]] a2a::core::Result<std::string> ReadResource(std::string_view uri) const;
 
  private:
   std::string endpoint_;
+  std::string bearer_token_;
   std::chrono::milliseconds timeout_;
 };
 

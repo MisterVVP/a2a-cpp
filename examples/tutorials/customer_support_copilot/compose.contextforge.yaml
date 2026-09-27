@@ -1,0 +1,42 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      A2A_TUTORIAL_MCP_AGENT_SECRET: "${A2A_TUTORIAL_MCP_AGENT_SECRET:?generate with run_tutorial_docker_smoke.sh}"
+      A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET:?generate with run_tutorial_docker_smoke.sh}"
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
+      KC_HOSTNAME: http://keycloak:8080
+    volumes:
+      - ./contextforge/keycloak-realm.json:/opt/keycloak/data/import/a2a-tutorial-realm.json:ro
+    ports: ["8280:8080"]
+  contextforge:
+    image: ghcr.io/ibm/mcp-context-forge:1.0.10
+    environment:
+      HOST: 0.0.0.0
+      DATABASE_URL: sqlite:///./mcp.db
+      AUTH_REQUIRED: "true"
+      MCP_CLIENT_AUTH_ENABLED: "true"
+      MCP_REQUIRE_AUTH: "true"
+      TRANSPORT_TYPE: streamablehttp
+      MCP_INBOUND_PROTOCOL_MODE: auto
+      SSO_ENABLED: "true"
+      SSO_KEYCLOAK_ENABLED: "true"
+      SSO_API_TOKEN_AUTH_ENABLED: "true"
+      SSO_AUTO_CREATE_USERS: "true"
+      SSO_PRESERVE_ADMIN_AUTH: "true"
+      JWT_SECRET_KEY: "${A2A_TUTORIAL_CONTEXTFORGE_JWT_SECRET:?generate with run_tutorial_docker_smoke.sh}"
+      AUTH_ENCRYPTION_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_AUTH_ENCRYPTION_SECRET:?generate with run_tutorial_docker_smoke.sh}"
+      PLATFORM_ADMIN_EMAIL: admin@example.com
+      PLATFORM_ADMIN_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
+      SSO_KEYCLOAK_BASE_URL: http://keycloak:8080
+      SSO_KEYCLOAK_REALM: a2a-tutorial
+      SSO_KEYCLOAK_CLIENT_ID: mcp-gateway
+      SSO_KEYCLOAK_CLIENT_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET:?generate with run_tutorial_docker_smoke.sh}"
+    depends_on: [keycloak]
+    ports: ["4444:4444"]
+  support-specialist:
+    env_file: "${A2A_TUTORIAL_MCP_ENV_FILE:?bootstrap ContextForge before starting agents}"
+    depends_on:
+      contextforge: {condition: service_started}
