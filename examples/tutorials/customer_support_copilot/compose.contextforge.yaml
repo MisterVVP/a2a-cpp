@@ -28,6 +28,7 @@ services:
       SSO_PRESERVE_ADMIN_AUTH: "true"
       JWT_SECRET_KEY: "${A2A_TUTORIAL_CONTEXTFORGE_JWT_SECRET:?generate with run_tutorial_docker_smoke.sh}"
       AUTH_ENCRYPTION_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_AUTH_ENCRYPTION_SECRET:?generate with run_tutorial_docker_smoke.sh}"
+      DEFAULT_USER_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
       PLATFORM_ADMIN_EMAIL: admin@example.com
       PLATFORM_ADMIN_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
       SSO_KEYCLOAK_BASE_URL: http://keycloak:8080
