@@ -8,11 +8,12 @@ temporary_directory="$(mktemp -d)"
 export A2A_TUTORIAL_MCP_ENV_FILE="${temporary_directory}/mcp.env"
 : >"${A2A_TUTORIAL_MCP_ENV_FILE}"
 random_secret() { openssl rand -hex 32; }
+random_encryption_key() { openssl rand -base64 32 | tr '+/' '-_'; }
 export A2A_TUTORIAL_MCP_AGENT_SECRET="$(random_secret)"
 export A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET="$(random_secret)"
 export A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD="$(random_secret)"
 export A2A_TUTORIAL_CONTEXTFORGE_JWT_SECRET="$(random_secret)"
-export A2A_TUTORIAL_CONTEXTFORGE_AUTH_ENCRYPTION_SECRET="$(random_secret)"
+export A2A_TUTORIAL_CONTEXTFORGE_AUTH_ENCRYPTION_SECRET="$(random_encryption_key)"
 compose_support=(docker compose -f "${support_compose}" -f "${contextforge_compose}")
 cleanup() {
   docker compose -f "${job_compose}" down --remove-orphans || true
@@ -36,7 +37,11 @@ docker compose -f "${job_compose}" exec -T application-coordinator ./application
 "${compose_support[@]}" up -d keycloak
 wait_for_url http://127.0.0.1:8280/realms/a2a-tutorial/.well-known/openid-configuration
 "${compose_support[@]}" up -d contextforge
-wait_for_url http://127.0.0.1:4444/health
+if ! wait_for_url http://127.0.0.1:4444/health; then
+  "${compose_support[@]}" ps contextforge >&2
+  "${compose_support[@]}" logs --no-color contextforge >&2
+  exit 1
+fi
 "${root}/scripts/bootstrap_tutorial_contextforge.sh"
 server_id="$(sed -n 's/^A2A_TUTORIAL_MCP_SERVER_ID=//p' "${A2A_TUTORIAL_MCP_ENV_FILE}")"
 unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --request POST \
