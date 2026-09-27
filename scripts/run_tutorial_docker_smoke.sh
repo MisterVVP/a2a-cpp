@@ -34,6 +34,9 @@ wait_for_url http://127.0.0.1:8080/.well-known/agent-card.json
 docker compose -f "${job_compose}" exec -T application-coordinator ./application_client \
   --coordinator-url http://application-coordinator:8080 --resume-file samples/resume.txt \
   --job-file samples/job_description.txt | grep -F "Application draft"
+# Build the support agents before issuing the five-minute Keycloak access token.
+# Otherwise a cold CI build can consume the token's lifetime before the MCP call.
+"${compose_support[@]}" build support-specialist support-coordinator
 "${compose_support[@]}" up -d keycloak
 wait_for_url http://127.0.0.1:8280/realms/a2a-tutorial/.well-known/openid-configuration
 "${compose_support[@]}" up -d contextforge
@@ -53,7 +56,7 @@ unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_c
 [[ "${unauthenticated_status}" == 401 || "${unauthenticated_status}" == 403 ]] || {
   echo "Unauthenticated MCP request unexpectedly returned HTTP ${unauthenticated_status}" >&2; exit 1;
 }
-"${compose_support[@]}" up --build -d support-specialist support-coordinator
+"${compose_support[@]}" up -d support-specialist support-coordinator
 wait_for_url http://127.0.0.1:8180/.well-known/agent-card.json
 "${compose_support[@]}" exec -T support-coordinator ./support_client \
   --coordinator-url http://support-coordinator:8180 \
