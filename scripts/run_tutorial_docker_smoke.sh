@@ -23,7 +23,7 @@ trap cleanup EXIT INT TERM
 wait_for_url() {
   local url="$1"
   for attempt in $(seq 1 120); do
-    curl --fail --silent --show-error "${url}" >/dev/null && return
+    curl --fail --silent "${url}" >/dev/null 2>&1 && return
     [[ "${attempt}" == 120 ]] && { echo "Timed out waiting for ${url}" >&2; return 1; }
     sleep 1
   done

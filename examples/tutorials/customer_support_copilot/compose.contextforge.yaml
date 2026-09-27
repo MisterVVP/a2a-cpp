@@ -12,7 +12,7 @@ services:
       - ./contextforge/keycloak-realm.json:/opt/keycloak/data/import/a2a-tutorial-realm.json:ro
     ports: ["8280:8080"]
   contextforge:
-    image: ghcr.io/ibm/mcp-context-forge:1.0.10
+    image: ghcr.io/ibm/mcp-context-forge:v1.0.10
     environment:
       HOST: 0.0.0.0
       DATABASE_URL: sqlite:///./mcp.db
