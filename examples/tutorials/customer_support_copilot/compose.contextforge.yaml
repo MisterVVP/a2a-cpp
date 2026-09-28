@@ -24,6 +24,10 @@ services:
     environment:
       HOST: 0.0.0.0
       DATABASE_URL: sqlite:///./mcp.db
+      # ContextForge's trusted-provider cache is process-local. The tutorial updates
+      # Keycloak trust dynamically, so one worker keeps auth deterministic in CI.
+      GUNICORN_WORKERS: "1"
+      LEGACY_API_ENABLED: "false"
       AUTH_REQUIRED: "true"
       MCP_CLIENT_AUTH_ENABLED: "true"
       MCP_REQUIRE_AUTH: "true"
