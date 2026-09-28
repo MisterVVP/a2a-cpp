@@ -4,6 +4,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 contextforge_url="${A2A_TUTORIAL_CONTEXTFORGE_URL:-http://127.0.0.1:4444}"
 keycloak_url="${A2A_TUTORIAL_KEYCLOAK_URL:-https://keycloak:8443}"
 keycloak_host_port="${A2A_TUTORIAL_KEYCLOAK_HOST_PORT:-8443}"
+keycloak_issuer="https://keycloak:8443/realms/a2a-tutorial"
 env_file="${A2A_TUTORIAL_MCP_ENV_FILE:?A2A_TUTORIAL_MCP_ENV_FILE is required}"
 : "${A2A_TUTORIAL_CA_CERT:?tutorial CA certificate is required}"
 : "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?admin password is required}"
@@ -33,7 +34,8 @@ for path in /v1/resources /resources; do
   resource_response="$(request_json POST "${contextforge_url}${path}" "$(jq -c 'del(.visibility)' <<<"${resource_payload}")" "${admin_token}" 2>/dev/null)" && break
 done
 resource_id="$(jq -er '.id // .resource.id' <<<"${resource_response}")" || { echo 'ContextForge resource registration failed' >&2; exit 1; }
-server_payload="$(jq -cn --arg id "${resource_id}" '{server:{name:"a2a-cpp-support-tutorial",description:"Customer Support Copilot MCP resources",associated_resources:[$id]},visibility:"public"}')"
+server_payload="$(jq -cn --arg id "${resource_id}" --arg issuer "${keycloak_issuer}" \
+  '{server:{name:"a2a-cpp-support-tutorial",description:"Customer Support Copilot MCP resources",associated_resources:[$id],oauth_enabled:true,oauth_config:{authorization_servers:[$issuer],client_id:"mcp-gateway"}},visibility:"public"}')"
 server_response=""
 for path in /v1/servers /servers; do
   server_response="$(request_json POST "${contextforge_url}${path}" "${server_payload}" "${admin_token}" 2>/dev/null)" && break
@@ -56,11 +58,10 @@ token = sys.stdin.read()
 payload = token.split(".")[1]
 payload += "=" * (-len(payload) % 4)
 claims = json.loads(base64.urlsafe_b64decode(payload))
-safe_names = ("iss", "aud", "azp", "exp", "preferred_username")
+safe_names = ("iss", "aud", "azp", "exp", "preferred_username", "email", "email_verified")
 print(json.dumps({name: claims.get(name) for name in safe_names}, separators=(",", ":")))
 ')" || { echo 'Keycloak token payload is malformed' >&2; exit 1; }
-expected_issuer='https://keycloak:8443/realms/a2a-tutorial'
-jq -e --arg expected "${expected_issuer}" '.iss == $expected' <<<"${token_claims}" >/dev/null || {
+jq -e --arg expected "${keycloak_issuer}" '.iss == $expected' <<<"${token_claims}" >/dev/null || {
   echo 'Keycloak token issuer does not match the configured HTTPS issuer' >&2; exit 1;
 }
 jq -e '([.aud] | flatten | index("mcp-gateway")) != null' <<<"${token_claims}" >/dev/null || {
@@ -73,6 +74,14 @@ jq -e --argjson now "$(date +%s)" '(.exp | type == "number") and .exp > $now' \
   <<<"${token_claims}" >/dev/null || { echo 'Keycloak token is expired or has no expiry' >&2; exit 1; }
 jq -e '.preferred_username | type == "string" and length > 0' <<<"${token_claims}" >/dev/null || {
   echo 'Keycloak token has no preferred_username' >&2; exit 1;
+}
+jq -e '.email == "svc-mcp-agent@keycloak.service.local" and .email_verified == true' \
+  <<<"${token_claims}" >/dev/null || {
+  echo 'Keycloak token has no verified ContextForge service-account email' >&2; exit 1;
+}
+curl --fail-with-body --silent --show-error \
+  -H "Authorization: Bearer ${access_token}" "${contextforge_url}/v1/tools?limit=1" >/dev/null || {
+  echo 'ContextForge service-account provisioning failed' >&2; exit 1;
 }
 umask 077
 {

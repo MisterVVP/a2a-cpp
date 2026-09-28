@@ -73,14 +73,19 @@ if ! wait_for_url http://127.0.0.1:4444/health; then
 fi
 "${root}/scripts/bootstrap_tutorial_contextforge.sh"
 server_id="$(sed -n 's/^A2A_TUTORIAL_MCP_SERVER_ID=//p' "${A2A_TUTORIAL_MCP_ENV_FILE}")"
-unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --request POST \
+unauthenticated_headers="${temporary_directory}/mcp-unauthenticated.headers"
+unauthenticated_status="$(curl --silent --dump-header "${unauthenticated_headers}" --output /dev/null \
+  --write-out '%{http_code}' --request POST \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: resources/read' \
   -H 'Mcp-Name: ticket://northstar/billing-currency' \
   --data '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ticket://northstar/billing-currency"}}' \
   "http://127.0.0.1:4444/servers/${server_id}/mcp/")"
-[[ "${unauthenticated_status}" == 401 || "${unauthenticated_status}" == 403 ]] || {
-  echo "Unauthenticated MCP request unexpectedly returned HTTP ${unauthenticated_status}" >&2; exit 1;
+[[ "${unauthenticated_status}" == 401 ]] || {
+  echo "Unauthenticated OAuth-protected MCP request returned HTTP ${unauthenticated_status}, expected 401" >&2; exit 1;
+}
+grep -Eiq '^www-authenticate:.*resource_metadata=' "${unauthenticated_headers}" || {
+  echo 'Unauthenticated MCP response did not advertise RFC 9728 resource metadata' >&2; exit 1;
 }
 token="$(sed -n 's/^A2A_TUTORIAL_MCP_TOKEN=//p' "${A2A_TUTORIAL_MCP_ENV_FILE}")"
 preflight_body="${temporary_directory}/mcp-preflight.json"
