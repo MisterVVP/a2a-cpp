@@ -5,7 +5,7 @@ contextforge_url="${A2A_TUTORIAL_CONTEXTFORGE_URL:-http://127.0.0.1:4444}"
 keycloak_url="${A2A_TUTORIAL_KEYCLOAK_URL:-https://keycloak:8443}"
 keycloak_host_port="${A2A_TUTORIAL_KEYCLOAK_HOST_PORT:-8443}"
 keycloak_issuer="https://keycloak:8443/realms/a2a-tutorial"
-service_principal_email="svc-mcp-agent@keycloak.service.local"
+service_principal_email="svc-mcp-agent@example.com"
 env_file="${A2A_TUTORIAL_MCP_ENV_FILE:?A2A_TUTORIAL_MCP_ENV_FILE is required}"
 : "${A2A_TUTORIAL_CA_CERT:?tutorial CA certificate is required}"
 : "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?admin password is required}"
@@ -26,6 +26,27 @@ admin_token="$(request_json POST "${contextforge_url}/v1/auth/login" "${login_pa
 request_json PUT "${contextforge_url}/v1/auth/sso/admin/providers/keycloak" \
   '{"trusted_for_api_auth":true,"api_audience":"mcp-gateway"}' "${admin_token}" >/dev/null || {
   echo 'ContextForge Keycloak provider configuration failed' >&2; exit 1;
+}
+service_principal_password="Aa1!$(openssl rand -hex 32)"
+service_principal_payload="$(jq -cn --arg email "${service_principal_email}" --arg password "${service_principal_password}" \
+  '{email:$email,password:$password,full_name:"A2A tutorial MCP agent",is_admin:false,is_active:true,password_change_required:false}')"
+request_json POST "${contextforge_url}/v1/auth/email/admin/users" \
+  "${service_principal_payload}" "${admin_token}" >/dev/null || {
+  echo 'ContextForge service-principal user creation failed' >&2; exit 1;
+}
+unset service_principal_password
+
+service_role_payload='{"name":"a2a_tutorial_mcp_reader","description":"Least-privilege role for the Customer Support Copilot MCP client","scope":"global","permissions":["servers.use","resources.read"],"is_system_role":false}'
+service_role_response="$(request_json POST "${contextforge_url}/v1/rbac/roles" "${service_role_payload}" "${admin_token}")" || {
+  echo 'ContextForge service-principal role creation failed' >&2; exit 1;
+}
+service_role_id="$(jq -er '.id' <<<"${service_role_response}")" || {
+  echo 'ContextForge service-principal role response is missing an id' >&2; exit 1;
+}
+service_role_assignment="$(jq -cn --arg role_id "${service_role_id}" '{role_id:$role_id,scope:"global",scope_id:null}')"
+request_json POST "${contextforge_url}/v1/rbac/users/${service_principal_email}/roles" \
+  "${service_role_assignment}" "${admin_token}" >/dev/null || {
+  echo 'ContextForge service-principal role assignment failed' >&2; exit 1;
 }
 ticket="$(cat "${root}/examples/tutorials/customer_support_copilot/samples/billing_currency_ticket.txt")"
 resource_payload="$(jq -cn --arg content "${ticket}" '{resource:{name:"Billing currency ticket",uri:"ticket://northstar/billing-currency",description:"Deterministic Customer Support Copilot fixture",mime_type:"text/plain",content:$content},visibility:"public"}')"
@@ -79,16 +100,6 @@ jq -e --arg expected "${service_principal_email}" '.preferred_username == $expec
 jq -e '.clientId == "mcp-agent" and .email == null' <<<"${token_claims}" >/dev/null || {
   echo 'Keycloak token is not an email-less mcp-agent service token' >&2; exit 1;
 }
-provisioning_body="$(mktemp)"
-provisioning_status="$(curl --silent --show-error --output "${provisioning_body}" --write-out '%{http_code}' \
-  -H "Authorization: Bearer ${access_token}" "${contextforge_url}/v1/tools?limit=1")"
-if [[ ! "${provisioning_status}" =~ ^2[0-9][0-9]$ ]]; then
-  echo "ContextForge service-account provisioning failed with HTTP ${provisioning_status}" >&2
-  cat "${provisioning_body}" >&2
-  rm -f "${provisioning_body}"
-  exit 1
-fi
-rm -f "${provisioning_body}"
 umask 077
 {
   printf 'A2A_TUTORIAL_MCP_URL=http://contextforge:4444/servers/%s/mcp/\n' "${server_id}"

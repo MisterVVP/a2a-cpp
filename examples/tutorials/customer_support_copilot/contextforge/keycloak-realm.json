@@ -4,7 +4,7 @@
   "accessTokenLifespan": 300,
   "users": [
     {
-      "username": "svc-mcp-agent@keycloak.service.local",
+      "username": "svc-mcp-agent@example.com",
       "enabled": true,
       "serviceAccountClientId": "mcp-agent"
     }
