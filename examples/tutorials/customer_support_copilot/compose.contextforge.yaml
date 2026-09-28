@@ -1,16 +1,24 @@
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.4
-    command: ["start-dev", "--import-realm"]
+    command:
+      - start-dev
+      - --import-realm
+      - --https-certificate-file=/run/tutorial-tls/keycloak.crt
+      - --https-certificate-key-file=/run/tutorial-tls/keycloak.key
+      - --https-port=8443
+      - --http-enabled=false
     environment:
       A2A_TUTORIAL_MCP_AGENT_SECRET: "${A2A_TUTORIAL_MCP_AGENT_SECRET:?generate with run_tutorial_docker_smoke.sh}"
       A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET:?generate with run_tutorial_docker_smoke.sh}"
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
-      KC_HOSTNAME: http://keycloak:8080
+      KC_HOSTNAME: https://keycloak:8443
     volumes:
       - ./contextforge/keycloak-realm.json:/opt/keycloak/data/import/a2a-tutorial-realm.json:ro
-    ports: ["8280:8080"]
+      - "${A2A_TUTORIAL_TLS_DIR:?generate certificates with run_tutorial_docker_smoke.sh}/keycloak.crt:/run/tutorial-tls/keycloak.crt:ro"
+      - "${A2A_TUTORIAL_TLS_DIR}/keycloak.key:/run/tutorial-tls/keycloak.key:ro"
+    ports: ["8443:8443"]
   contextforge:
     image: ghcr.io/ibm/mcp-context-forge:v1.0.10
     environment:
@@ -26,16 +34,22 @@ services:
       SSO_API_TOKEN_AUTH_ENABLED: "true"
       SSO_AUTO_CREATE_USERS: "true"
       SSO_PRESERVE_ADMIN_AUTH: "true"
+      # CI/tutorial-only: Keycloak intentionally runs on this isolated private Docker network.
+      # Production deployments should allow private IdPs only when explicitly required and controlled.
+      SSRF_ALLOW_PRIVATE_NETWORKS: "true"
+      SSL_CERT_FILE: /run/tutorial-ca/ca.crt
       JWT_SECRET_KEY: "${A2A_TUTORIAL_CONTEXTFORGE_JWT_SECRET:?generate with run_tutorial_docker_smoke.sh}"
       AUTH_ENCRYPTION_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_AUTH_ENCRYPTION_SECRET:?generate with run_tutorial_docker_smoke.sh}"
       DEFAULT_USER_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
       PLATFORM_ADMIN_EMAIL: admin@example.com
       PLATFORM_ADMIN_PASSWORD: "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?generate with run_tutorial_docker_smoke.sh}"
-      SSO_KEYCLOAK_BASE_URL: http://keycloak:8080
+      SSO_KEYCLOAK_BASE_URL: https://keycloak:8443
       SSO_KEYCLOAK_REALM: a2a-tutorial
       SSO_KEYCLOAK_CLIENT_ID: mcp-gateway
       SSO_KEYCLOAK_CLIENT_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET:?generate with run_tutorial_docker_smoke.sh}"
     depends_on: [keycloak]
+    volumes:
+      - "${A2A_TUTORIAL_CA_CERT:?generate certificates with run_tutorial_docker_smoke.sh}:/run/tutorial-ca/ca.crt:ro"
     ports: ["4444:4444"]
   support-specialist:
     env_file: "${A2A_TUTORIAL_MCP_ENV_FILE:?bootstrap ContextForge before starting agents}"
