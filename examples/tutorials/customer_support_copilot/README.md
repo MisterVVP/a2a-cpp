@@ -46,7 +46,7 @@ support_client --coordinator-url http://support-coordinator:8180 \
   --ticket-resource ticket://northstar/billing-currency
 ```
 
-The specialist alone receives `A2A_TUTORIAL_MCP_URL` and `A2A_TUTORIAL_MCP_TOKEN`; neither value is forwarded in A2A messages or Agent Cards. The client sends a stateless MCP `2026-07-28` `resources/read` request with its bearer token. ContextForge validates the Keycloak signature, issuer, expiry, token type, and `mcp-gateway` audience.
+The specialist alone receives `A2A_TUTORIAL_MCP_URL` and `A2A_TUTORIAL_MCP_TOKEN`; neither value is forwarded in A2A messages or Agent Cards. The client sends a stateless MCP `2025-11-25` `resources/read` request with its bearer token. ContextForge validates the Keycloak signature, issuer, expiry, token type, and `mcp-gateway` audience.
 
 The local Docker environment uses its ephemeral CA solely for deterministic development and CI; the CA and Keycloak server key are deleted during cleanup. TLS verification remains enabled. Production deployments must use certificates and secrets from a real secret-management system rather than process environment files. No SaaS account or checked-in secret is required.
 

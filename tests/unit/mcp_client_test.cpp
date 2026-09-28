@@ -211,11 +211,11 @@ TEST(McpClientTest, SendsStatelessAuthenticatedProtocolRequestAndReadsText) {
   EXPECT_EQ(result.value(), kText);
   const auto requests = server.requests();
   ASSERT_EQ(requests.size(), 1U);
-  EXPECT_NE(requests[0].find("MCP-Protocol-Version: 2026-07-28"), std::string::npos);
+  EXPECT_NE(requests[0].find("MCP-Protocol-Version: 2025-11-25"), std::string::npos);
   EXPECT_NE(requests[0].find("Mcp-Method: resources/read"), std::string::npos);
   EXPECT_NE(requests[0].find("Mcp-Name: fixture://resource"), std::string::npos);
   EXPECT_NE(requests[0].find("Authorization: Bearer unit-secret"), std::string::npos);
-  EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/protocolVersion":"2026-07-28")"), std::string::npos);
+  EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/protocolVersion":"2025-11-25")"), std::string::npos);
   EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/clientInfo")"), std::string::npos);
   EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/clientCapabilities":{})"), std::string::npos);
 }

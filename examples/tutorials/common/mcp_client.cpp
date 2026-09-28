@@ -14,7 +14,7 @@ constexpr int kRequestId = 1;
 constexpr int kMinimumSuccessStatus = 200;
 constexpr int kMaximumSuccessStatus = 299;
 constexpr std::string_view kJsonRpcVersion = "2.0";
-constexpr std::string_view kProtocolVersion = "2026-07-28";
+constexpr std::string_view kProtocolVersion = "2025-11-25";
 constexpr std::string_view kMethod = "resources/read";
 
 std::string JsonString(std::string_view value) {
@@ -27,7 +27,7 @@ std::string JsonString(std::string_view value) {
 std::string RequestBody(std::string_view uri) {
   std::ostringstream body;
   body << R"({"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":)" << JsonString(uri)
-       << R"(,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",)"
+       << R"(,"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25",)"
           R"("io.modelcontextprotocol/clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"},)"
           R"("io.modelcontextprotocol/clientCapabilities":{}}}})";
   return body.str();

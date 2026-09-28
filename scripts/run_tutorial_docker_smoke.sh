@@ -80,7 +80,7 @@ unauthenticated_headers="${temporary_directory}/mcp-unauthenticated.headers"
 unauthenticated_status="$(curl --silent --dump-header "${unauthenticated_headers}" --output /dev/null \
   --write-out '%{http_code}' --request POST \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: resources/read' \
+  -H 'MCP-Protocol-Version: 2025-11-25' -H 'Mcp-Method: resources/read' \
   -H 'Mcp-Name: ticket://northstar/billing-currency' \
   --data '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ticket://northstar/billing-currency"}}' \
   "http://127.0.0.1:4444/servers/${server_id}/mcp/")"
@@ -94,9 +94,9 @@ token="$(sed -n 's/^A2A_TUTORIAL_MCP_TOKEN=//p' "${A2A_TUTORIAL_MCP_ENV_FILE}")"
 preflight_body="${temporary_directory}/mcp-preflight.json"
 preflight_status="$(curl --silent --show-error --output "${preflight_body}" --write-out '%{http_code}' \
   --request POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: resources/read' \
+  -H 'MCP-Protocol-Version: 2025-11-25' -H 'Mcp-Method: resources/read' \
   -H 'Mcp-Name: ticket://northstar/billing-currency' -H "Authorization: Bearer ${token}" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ticket://northstar/billing-currency","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ticket://northstar/billing-currency","_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25","io.modelcontextprotocol/clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' \
   "http://127.0.0.1:4444/servers/${server_id}/mcp/")"
 if [[ ! "${preflight_status}" =~ ^2[0-9][0-9]$ ]] || ! grep -Fq billing "${preflight_body}"; then
   echo "Authenticated MCP preflight failed with HTTP ${preflight_status}" >&2
