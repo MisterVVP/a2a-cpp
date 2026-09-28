@@ -18,10 +18,10 @@ request_json() {
 }
 login_payload="$(jq -cn --arg password "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD}" \
   '{email:"admin@example.com",password:$password}')"
-admin_token="$(request_json POST "${contextforge_url}/auth/login" "${login_payload}" | jq -er '.access_token')" || {
+admin_token="$(request_json POST "${contextforge_url}/v1/auth/login" "${login_payload}" | jq -er '.access_token')" || {
   echo 'ContextForge admin login failed' >&2; exit 1;
 }
-request_json PUT "${contextforge_url}/auth/sso/admin/providers/keycloak" \
+request_json PUT "${contextforge_url}/v1/auth/sso/admin/providers/keycloak" \
   '{"trusted_for_api_auth":true,"api_audience":"mcp-gateway"}' "${admin_token}" >/dev/null || {
   echo 'ContextForge Keycloak provider configuration failed' >&2; exit 1;
 }
