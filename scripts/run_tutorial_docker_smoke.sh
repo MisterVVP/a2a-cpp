@@ -71,7 +71,10 @@ if ! wait_for_url http://127.0.0.1:4444/health; then
   "${compose_support[@]}" logs --no-color contextforge >&2
   exit 1
 fi
-"${root}/scripts/bootstrap_tutorial_contextforge.sh"
+if ! "${root}/scripts/bootstrap_tutorial_contextforge.sh"; then
+  "${compose_support[@]}" logs --no-color contextforge >&2
+  exit 1
+fi
 server_id="$(sed -n 's/^A2A_TUTORIAL_MCP_SERVER_ID=//p' "${A2A_TUTORIAL_MCP_ENV_FILE}")"
 unauthenticated_headers="${temporary_directory}/mcp-unauthenticated.headers"
 unauthenticated_status="$(curl --silent --dump-header "${unauthenticated_headers}" --output /dev/null \

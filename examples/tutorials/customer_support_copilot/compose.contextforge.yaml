@@ -28,6 +28,7 @@ services:
       # Keycloak trust dynamically, so one worker keeps auth deterministic in CI.
       GUNICORN_WORKERS: "1"
       LEGACY_API_ENABLED: "false"
+      LOG_LEVEL: WARNING
       AUTH_REQUIRED: "true"
       MCP_CLIENT_AUTH_ENABLED: "true"
       MCP_REQUIRE_AUTH: "true"

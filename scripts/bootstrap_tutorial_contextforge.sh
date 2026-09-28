@@ -58,7 +58,7 @@ token = sys.stdin.read()
 payload = token.split(".")[1]
 payload += "=" * (-len(payload) % 4)
 claims = json.loads(base64.urlsafe_b64decode(payload))
-safe_names = ("iss", "aud", "azp", "exp", "preferred_username", "email", "email_verified")
+safe_names = ("iss", "aud", "azp", "exp", "preferred_username", "clientId", "email")
 print(json.dumps({name: claims.get(name) for name in safe_names}, separators=(",", ":")))
 ')" || { echo 'Keycloak token payload is malformed' >&2; exit 1; }
 jq -e --arg expected "${keycloak_issuer}" '.iss == $expected' <<<"${token_claims}" >/dev/null || {
@@ -72,17 +72,22 @@ jq -e '.azp == "mcp-agent"' <<<"${token_claims}" >/dev/null || {
 }
 jq -e --argjson now "$(date +%s)" '(.exp | type == "number") and .exp > $now' \
   <<<"${token_claims}" >/dev/null || { echo 'Keycloak token is expired or has no expiry' >&2; exit 1; }
-jq -e '.preferred_username | type == "string" and length > 0' <<<"${token_claims}" >/dev/null || {
-  echo 'Keycloak token has no preferred_username' >&2; exit 1;
+jq -e '.preferred_username == "svc-mcp-agent@keycloak.service.local"' <<<"${token_claims}" >/dev/null || {
+  echo 'Keycloak service-account username does not match the ContextForge principal' >&2; exit 1;
 }
-jq -e '.email == "svc-mcp-agent@keycloak.service.local" and .email_verified == true' \
-  <<<"${token_claims}" >/dev/null || {
-  echo 'Keycloak token has no verified ContextForge service-account email' >&2; exit 1;
+jq -e '.clientId == "mcp-agent" and .email == null' <<<"${token_claims}" >/dev/null || {
+  echo 'Keycloak token is not an email-less mcp-agent service token' >&2; exit 1;
 }
-curl --fail-with-body --silent --show-error \
-  -H "Authorization: Bearer ${access_token}" "${contextforge_url}/v1/tools?limit=1" >/dev/null || {
-  echo 'ContextForge service-account provisioning failed' >&2; exit 1;
-}
+provisioning_body="$(mktemp)"
+provisioning_status="$(curl --silent --show-error --output "${provisioning_body}" --write-out '%{http_code}' \
+  -H "Authorization: Bearer ${access_token}" "${contextforge_url}/v1/tools?limit=1")"
+if [[ ! "${provisioning_status}" =~ ^2[0-9][0-9]$ ]]; then
+  echo "ContextForge service-account provisioning failed with HTTP ${provisioning_status}" >&2
+  cat "${provisioning_body}" >&2
+  rm -f "${provisioning_body}"
+  exit 1
+fi
+rm -f "${provisioning_body}"
 umask 077
 {
   printf 'A2A_TUTORIAL_MCP_URL=http://contextforge:4444/servers/%s/mcp/\n' "${server_id}"

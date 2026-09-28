@@ -2,6 +2,13 @@
   "realm": "a2a-tutorial",
   "enabled": true,
   "accessTokenLifespan": 300,
+  "users": [
+    {
+      "username": "svc-mcp-agent@keycloak.service.local",
+      "enabled": true,
+      "serviceAccountClientId": "mcp-agent"
+    }
+  ],
   "clients": [
     {
       "clientId": "mcp-gateway",
@@ -34,28 +41,14 @@
           }
         },
         {
-          "name": "mcp-agent-email",
+          "name": "mcp-agent-client-id",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-hardcoded-claim-mapper",
           "consentRequired": false,
           "config": {
-            "claim.name": "email",
-            "claim.value": "svc-mcp-agent@keycloak.service.local",
+            "claim.name": "clientId",
+            "claim.value": "mcp-agent",
             "jsonType.label": "String",
-            "id.token.claim": "false",
-            "access.token.claim": "true",
-            "userinfo.token.claim": "false"
-          }
-        },
-        {
-          "name": "mcp-agent-email-verified",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-hardcoded-claim-mapper",
-          "consentRequired": false,
-          "config": {
-            "claim.name": "email_verified",
-            "claim.value": "true",
-            "jsonType.label": "boolean",
             "id.token.claim": "false",
             "access.token.claim": "true",
             "userinfo.token.claim": "false"
