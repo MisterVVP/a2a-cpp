@@ -37,6 +37,8 @@ services:
       # CI/tutorial-only: Keycloak intentionally runs on this isolated private Docker network.
       # Production deployments should allow private IdPs only when explicitly required and controlled.
       SSRF_ALLOW_PRIVATE_NETWORKS: "true"
+      # This tutorial has only one trusted gateway DNS name; do not allow arbitrary UAID domains.
+      UAID_ALLOWED_DOMAINS: '["contextforge"]'
       SSL_CERT_FILE: /run/tutorial-ca/ca.crt
       JWT_SECRET_KEY: "${A2A_TUTORIAL_CONTEXTFORGE_JWT_SECRET:?generate with run_tutorial_docker_smoke.sh}"
       AUTH_ENCRYPTION_SECRET: "${A2A_TUTORIAL_CONTEXTFORGE_AUTH_ENCRYPTION_SECRET:?generate with run_tutorial_docker_smoke.sh}"
