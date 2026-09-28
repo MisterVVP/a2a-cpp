@@ -5,6 +5,7 @@ contextforge_url="${A2A_TUTORIAL_CONTEXTFORGE_URL:-http://127.0.0.1:4444}"
 keycloak_url="${A2A_TUTORIAL_KEYCLOAK_URL:-https://keycloak:8443}"
 keycloak_host_port="${A2A_TUTORIAL_KEYCLOAK_HOST_PORT:-8443}"
 keycloak_issuer="https://keycloak:8443/realms/a2a-tutorial"
+service_principal_email="svc-mcp-agent@keycloak.service.local"
 env_file="${A2A_TUTORIAL_MCP_ENV_FILE:?A2A_TUTORIAL_MCP_ENV_FILE is required}"
 : "${A2A_TUTORIAL_CA_CERT:?tutorial CA certificate is required}"
 : "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?admin password is required}"
@@ -72,7 +73,7 @@ jq -e '.azp == "mcp-agent"' <<<"${token_claims}" >/dev/null || {
 }
 jq -e --argjson now "$(date +%s)" '(.exp | type == "number") and .exp > $now' \
   <<<"${token_claims}" >/dev/null || { echo 'Keycloak token is expired or has no expiry' >&2; exit 1; }
-jq -e '.preferred_username == "svc-mcp-agent@keycloak.service.local"' <<<"${token_claims}" >/dev/null || {
+jq -e --arg expected "${service_principal_email}" '.preferred_username == $expected' <<<"${token_claims}" >/dev/null || {
   echo 'Keycloak service-account username does not match the ContextForge principal' >&2; exit 1;
 }
 jq -e '.clientId == "mcp-agent" and .email == null' <<<"${token_claims}" >/dev/null || {
