@@ -1,95 +1,49 @@
 # Job Application Assistant
 
-This standalone C++20 downstream application demonstrates real HTTP+JSON A2A delegation.
+A standalone C++20 tutorial for HTTP+JSON A2A delegation.
 
 ```text
-application_client --A2A--> application_coordinator --Agent Card discovery + A2A--> profile_analyst
+application_client -> A2A coordinator -> A2A profile analyst
 ```
 
-The client discovers the coordinator; the coordinator is both an A2A server and a client that discovers the separately running specialist. Input is resume and job description; output is structured fit analysis and a cover note. Business contracts use structured `DataPart` values and structured artifacts.
+The client sends a resume and job description to the coordinator, which delegates analysis to the specialist and returns structured analysis plus an application draft.
 
-## Host-native build and run on Linux
+## Run locally on Linux
 
-The tutorial is a standalone downstream CMake project. It uses `find_package(a2a_cpp CONFIG REQUIRED)`, so the SDK must first be installed to a local prefix. Pointing `CMAKE_PREFIX_PATH` at the repository or tutorial source directory is not sufficient.
-
-Run the following commands from the `a2a-cpp` repository root.
-
-### 1. Build and install the SDK locally
+From the repository root:
 
 ```bash
-export A2A_INSTALL_DIR="$PWD/build-tutorials/install"
-
-cmake -S . -B build-tutorials/sdk \
-  -DA2A_ENABLE_TESTING=OFF \
-  -DA2A_BUILD_EXAMPLES=OFF \
-  -DA2A_ENABLE_POSTGRES_STORE=OFF \
-  -DCMAKE_INSTALL_PREFIX="$A2A_INSTALL_DIR"
-
-cmake --build build-tutorials/sdk --parallel
-cmake --install build-tutorials/sdk
+./scripts/run_tutorials.sh
 ```
 
-If the SDK source changes, rebuild and reinstall it before rebuilding the tutorial.
+This builds and installs the SDK, builds both standalone tutorials as downstream CMake projects, runs their deterministic smoke flows, and cleans up the local agent processes.
 
-### 2. Build this tutorial
+## Run with Docker Compose
+
+To run only this tutorial in Docker:
 
 ```bash
-cmake -S examples/tutorials/job_application_assistant \
-  -B build-tutorials/job_application_assistant \
-  -DCMAKE_PREFIX_PATH="$A2A_INSTALL_DIR"
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build -d
 
-cmake --build build-tutorials/job_application_assistant --parallel
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator ./application_client \
+  --coordinator-url http://application-coordinator:8080 \
+  --resume-file samples/resume.txt \
+  --job-file samples/job_description.txt
+
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
 ```
 
-This builds `profile_analyst`, `application_coordinator`, and `application_client`.
+Only the coordinator port is published; delegation uses Docker service DNS.
 
-### 3. Start the profile analyst
-
-In the first terminal, from the repository root:
+To run the repository Docker smoke for both tutorials instead:
 
 ```bash
-./build-tutorials/job_application_assistant/profile_analyst 127.0.0.1:8081
+./scripts/run_tutorial_docker_smoke.sh
 ```
 
-Verify that its Agent Card is available:
+## Optional model configuration
 
-```bash
-curl --fail http://127.0.0.1:8081/.well-known/agent-card.json
-```
-
-### 4. Start the coordinator
-
-In a second terminal, from the repository root:
-
-```bash
-A2A_TUTORIAL_SPECIALIST_URL=http://127.0.0.1:8081 \
-./build-tutorials/job_application_assistant/application_coordinator 127.0.0.1:8080
-```
-
-Verify that its Agent Card is available:
-
-```bash
-curl --fail http://127.0.0.1:8080/.well-known/agent-card.json
-```
-
-### 5. Run the client
-
-In a third terminal, from the repository root:
-
-```bash
-./build-tutorials/job_application_assistant/application_client \
-  --coordinator-url http://127.0.0.1:8080 \
-  --resume-file examples/tutorials/job_application_assistant/samples/resume.txt \
-  --job-file examples/tutorials/job_application_assistant/samples/job_description.txt
-```
-
-Stop the coordinator and profile analyst with `Ctrl+C` when finished.
-
-Without the AI model configuration below, both agents use the deterministic fallback backend and print a warning at startup. The repository-level `scripts/run_tutorials.sh` builds and runs both tutorials with bounded Agent Card readiness checks and automatic cleanup.
-
-## AI model configuration
-
-Configure an AI model to run the tutorial in agentic mode. Set these four environment variables before starting the host-native agents or Docker Compose:
+Both local and Docker runs use the deterministic backend unless these variables are set:
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
@@ -98,38 +52,12 @@ export A2A_TUTORIAL_MODEL_NAME=your-model
 export A2A_TUTORIAL_MODEL_API_KEY=your-api-key
 ```
 
-If they are not configured, the tutorial falls back to the deterministic backend. Deterministic mode is intended for offline smoke testing and does not make AI model requests. The model request timeout defaults to 30 seconds.
-
-Credentials are sent only as an Authorization header and are never logged. Do not commit API keys.
-
-### Gemini free tier example
-
-Create an API key in Google AI Studio, then export:
-
-```bash
-export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
-export A2A_TUTORIAL_MODEL_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-export A2A_TUTORIAL_MODEL_NAME=gemini-3.8-flash
-export A2A_TUTORIAL_MODEL_API_KEY=<YOUR_API_KEY>
-```
-
-With these variables exported, use the same host-native commands above or the Docker Compose commands below. Free-tier availability and rate limits may change; see the [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai) documentation.
-
-## Docker Compose
-
-From the repository root:
-
-```bash
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build -d
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator ./application_client \
-  --coordinator-url http://application-coordinator:8080 \
-  --resume-file samples/resume.txt \
-  --job-file samples/job_description.txt
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
-```
-
-Only the coordinator port is published. Service DNS is used for delegation and containers run as a non-root user. If the four AI model variables are not set, Docker Compose uses the deterministic fallback.
+Do not commit API keys.
 
 ## Troubleshooting
 
-Readiness is the Agent Card URL `/.well-known/agent-card.json`, not an arbitrary delay. Check `docker compose logs` if it does not become available. Bind endpoints and advertised public URLs are independently configurable. Requests and provider calls have bounded timeouts; invalid provider configuration fails at startup.
+Agent readiness is exposed at `/.well-known/agent-card.json`. For Docker runs, use:
+
+```bash
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml logs
+```

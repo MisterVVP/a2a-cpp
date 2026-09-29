@@ -129,7 +129,19 @@ See [`benchmarks/README.md`](benchmarks/README.md) for microbenchmarks and
 
 ## Production tutorials
 
-After the focused examples in `examples/apps/`, try the realistic multi-process applications in `examples/tutorials/`. Both discover Agent Cards and delegate over HTTP+JSON, run offline in deterministic mode, and optionally use an OpenAI-compatible endpoint. Run `./scripts/run_tutorials.sh` for the downstream-install smoke flow. The suggested learning path is `hello_agent` → Job Application Assistant or Customer Support Copilot → a future streaming tutorial.
+The standalone tutorials under `examples/tutorials/` use real processes, Agent Card discovery, and HTTP+JSON A2A delegation. They run without external credentials in deterministic mode and can optionally use an OpenAI-compatible model.
+
+From the repository root:
+
+```bash
+# Local Linux build/install and smoke run for both tutorials
+./scripts/run_tutorials.sh
+
+# Docker Compose smoke run for both tutorials
+./scripts/run_tutorial_docker_smoke.sh
+```
+
+The Docker flow also exercises the Customer Support Copilot MCP/OAuth path with ContextForge and Keycloak. See the [Job Application Assistant](examples/tutorials/job_application_assistant/README.md) and [Customer Support Copilot](examples/tutorials/customer_support_copilot/README.md) READMEs for the individual flows.
 
 ## License
 
