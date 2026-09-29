@@ -132,7 +132,9 @@ services:
       - |
         /opt/tutorial/support_client \
           --coordinator-url http://support-coordinator:8180 \
-          --ticket-resource ticket://northstar/billing-currency | grep -F billing
+          --ticket-resource ticket://northstar/billing-currency > /tmp/support-smoke.out
+        cat /tmp/support-smoke.out
+        grep -Fq billing /tmp/support-smoke.out
     depends_on:
       support-coordinator: {condition: service_healthy}
 

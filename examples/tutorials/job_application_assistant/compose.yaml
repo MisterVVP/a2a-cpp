@@ -34,6 +34,8 @@ services:
         /opt/tutorial/application_client \
           --coordinator-url http://application-coordinator:8080 \
           --resume-file samples/resume.txt \
-          --job-file samples/job_description.txt | grep -F "Application draft"
+          --job-file samples/job_description.txt > /tmp/application-smoke.out
+        cat /tmp/application-smoke.out
+        grep -Fq "Application draft" /tmp/application-smoke.out
     depends_on:
       application-coordinator: {condition: service_healthy}
