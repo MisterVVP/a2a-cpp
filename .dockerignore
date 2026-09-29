@@ -13,3 +13,7 @@
 !third_party/**
 !examples/tutorials/
 !examples/tutorials/**
+!scripts/
+!scripts/bootstrap_tutorial_contextforge.sh
+!scripts/init_tutorial_contextforge_runtime.sh
+!scripts/verify_tutorial_contextforge.sh

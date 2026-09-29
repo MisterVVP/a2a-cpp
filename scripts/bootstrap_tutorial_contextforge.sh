@@ -3,7 +3,6 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 contextforge_url="${A2A_TUTORIAL_CONTEXTFORGE_URL:-http://127.0.0.1:4444}"
 keycloak_url="${A2A_TUTORIAL_KEYCLOAK_URL:-https://keycloak:8443}"
-keycloak_host_port="${A2A_TUTORIAL_KEYCLOAK_HOST_PORT:-8443}"
 keycloak_issuer="https://keycloak:8443/realms/a2a-tutorial"
 service_principal_email="svc-mcp-agent@example.com"
 env_file="${A2A_TUTORIAL_MCP_ENV_FILE:?A2A_TUTORIAL_MCP_ENV_FILE is required}"
@@ -27,7 +26,7 @@ request_json PUT "${contextforge_url}/v1/auth/sso/admin/providers/keycloak" \
   '{"trusted_for_api_auth":true,"api_audience":"mcp-gateway"}' "${admin_token}" >/dev/null || {
   echo 'ContextForge Keycloak provider configuration failed' >&2; exit 1;
 }
-service_principal_password="Aa1!$(openssl rand -hex 32)"
+service_principal_password="Aa1!$(openssl rand -hex 32 | sed 's/../&!/g')"
 service_principal_payload="$(jq -cn --arg email "${service_principal_email}" --arg password "${service_principal_password}" \
   '{email:$email,password:$password,full_name:"A2A tutorial MCP agent",is_admin:false,is_active:true,password_change_required:false}')"
 request_json POST "${contextforge_url}/v1/auth/email/admin/users" \
@@ -64,8 +63,7 @@ for path in /v1/servers /servers; do
 done
 server_id="$(jq -er '.id // .server.id' <<<"${server_response}")" || { echo 'ContextForge virtual-server creation failed' >&2; exit 1; }
 access_token="$(curl --fail-with-body --silent --show-error --request POST \
-  --cacert "${A2A_TUTORIAL_CA_CERT}" --resolve "keycloak:${keycloak_host_port}:127.0.0.1" \
-  --noproxy keycloak \
+  --cacert "${A2A_TUTORIAL_CA_CERT}" \
   --data-urlencode grant_type=client_credentials --data-urlencode client_id=mcp-agent \
   --data-urlencode "client_secret=${A2A_TUTORIAL_MCP_AGENT_SECRET}" \
   "${keycloak_url}/realms/a2a-tutorial/protocol/openid-connect/token" | jq -er '.access_token')" || {
@@ -107,4 +105,5 @@ umask 077
   printf 'A2A_TUTORIAL_MCP_SERVER_ID=%s\n' "${server_id}"
 } >"${env_file}"
 printf '%s\n' "${token_claims}" >"${env_file}.claims"
+chmod 0644 "${env_file}" "${env_file}.claims"
 echo 'ContextForge tutorial resource and OAuth access were configured'

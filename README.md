@@ -134,14 +134,18 @@ The standalone tutorials under `examples/tutorials/` use real processes, Agent C
 From the repository root:
 
 ```bash
-# Local Linux build/install and smoke run for both tutorials
+# Native Linux build/install and smoke run
 ./scripts/run_tutorials.sh
-
-# Docker Compose smoke run for both tutorials
-./scripts/run_tutorial_docker_smoke.sh
 ```
 
-The Docker flow also exercises the Customer Support Copilot MCP/OAuth path with ContextForge and Keycloak. See the [Job Application Assistant](examples/tutorials/job_application_assistant/README.md) and [Customer Support Copilot](examples/tutorials/customer_support_copilot/README.md) READMEs for the individual flows.
+The containerized smoke is host-independent and requires Docker Compose 2.20.3 or newer. It works with Docker Engine on Linux/macOS and Docker Desktop on Windows without WSL:
+
+```text
+docker compose -f examples/tutorials/compose.yaml run --build --rm tutorials-smoke
+docker compose -f examples/tutorials/compose.yaml down --volumes --remove-orphans
+```
+
+On Linux/macOS, `./scripts/run_tutorial_docker_smoke.sh` is a convenience wrapper around the same Compose flow. The Docker run also exercises the Customer Support Copilot MCP/OAuth path with ContextForge and Keycloak. See the [Job Application Assistant](examples/tutorials/job_application_assistant/README.md) and [Customer Support Copilot](examples/tutorials/customer_support_copilot/README.md) READMEs for individual commands.
 
 ## License
 

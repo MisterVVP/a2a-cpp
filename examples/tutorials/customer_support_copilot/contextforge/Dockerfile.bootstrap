@@ -1,0 +1,7 @@
+FROM alpine:3.22
+RUN apk add --no-cache bash ca-certificates curl jq openssl python3
+WORKDIR /workspace
+COPY scripts/init_tutorial_contextforge_runtime.sh /workspace/scripts/
+COPY scripts/bootstrap_tutorial_contextforge.sh /workspace/scripts/
+COPY scripts/verify_tutorial_contextforge.sh /workspace/scripts/
+COPY examples/tutorials/customer_support_copilot/samples /workspace/examples/tutorials/customer_support_copilot/samples

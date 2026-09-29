@@ -6,23 +6,15 @@ A standalone C++20 tutorial for A2A delegation from a support coordinator to a s
 support_client -> A2A coordinator -> A2A specialist
 ```
 
-The tutorial has two supported modes: local file input and Docker Compose with MCP + OAuth.
-
 ## Run locally on Linux
 
-Local mode reads the ticket from a file and does not require MCP, OAuth, or external credentials.
-
-From the repository root:
+Local mode reads the ticket from a file and does not require MCP or OAuth:
 
 ```bash
 ./scripts/run_tutorials.sh
 ```
 
-This builds and installs the SDK, builds both standalone tutorials as downstream CMake projects, runs their deterministic smoke flows, and cleans up the local agent processes. The Customer Support run uses:
-
-```text
-examples/tutorials/customer_support_copilot/samples/billing_currency_ticket.txt
-```
+The script builds and installs the SDK, builds both tutorials as downstream CMake projects, runs their deterministic smoke flows, and cleans up the agent processes.
 
 ## Run with Docker Compose
 
@@ -32,26 +24,27 @@ Docker mode exercises the production-style resource flow:
 Keycloak -> access token -> A2A specialist -> ContextForge -> ticket resource
 ```
 
-Use the repository smoke script:
+Docker owns all generated secrets, TLS material, and MCP runtime state through named volumes, so no host Bash, OpenSSL, jq, or WSL is required. Docker Compose 2.20.3 or newer is required.
 
-```bash
-./scripts/run_tutorial_docker_smoke.sh
+From the repository root, run this on Linux, macOS, PowerShell, CMD, or Git Bash:
+
+```text
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml -f examples/tutorials/customer_support_copilot/compose.contextforge.yaml run --build --rm support-smoke
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml -f examples/tutorials/customer_support_copilot/compose.contextforge.yaml down --volumes --remove-orphans
 ```
 
-This is the supported Docker Compose entry point. It runs both tutorials; for Customer Support it:
+The Compose flow generates ephemeral secrets and certificates, starts Keycloak and ContextForge, bootstraps a least-privilege MCP principal and ticket resource, verifies OAuth-protected MCP `2025-11-25` `resources/read`, and runs the A2A client.
 
-- builds the coordinator and specialist containers;
-- generates ephemeral secrets and a local TLS certificate authority;
-- starts Keycloak and ContextForge using `compose.yaml` plus `compose.contextforge.yaml`;
-- bootstraps the ticket resource, virtual MCP server, and least-privilege service principal;
-- verifies unauthenticated rejection and authenticated MCP `2025-11-25` `resources/read`;
-- runs the A2A request and removes the temporary containers, secrets, and certificates.
+To run both production tutorials in Docker:
 
-Do not run `compose.contextforge.yaml` by itself: it expects the generated TLS files, secrets, MCP environment file, and bootstrap state created by the smoke script.
+```text
+docker compose -f examples/tutorials/compose.yaml run --build --rm tutorials-smoke
+docker compose -f examples/tutorials/compose.yaml down --volumes --remove-orphans
+```
 
 ## Optional model configuration
 
-Both local and Docker runs use the deterministic backend unless these variables are set:
+The deterministic backend is used unless these variables are set:
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
@@ -60,8 +53,12 @@ export A2A_TUTORIAL_MODEL_NAME=your-model
 export A2A_TUTORIAL_MODEL_API_KEY=your-api-key
 ```
 
-Do not commit API keys.
+Use the equivalent environment-variable syntax for your shell on Windows. Do not commit API keys.
 
 ## Troubleshooting
 
-Agent readiness is exposed at `/.well-known/agent-card.json`; ContextForge readiness is `/health`. On Docker failures, inspect the logs printed by `run_tutorial_docker_smoke.sh`.
+Agent readiness is `/.well-known/agent-card.json`; ContextForge readiness is `/health`. Inspect the Compose logs on failure:
+
+```text
+docker compose -f examples/tutorials/customer_support_copilot/compose.yaml -f examples/tutorials/customer_support_copilot/compose.contextforge.yaml logs
+```

@@ -10,40 +10,33 @@ The client sends a resume and job description to the coordinator, which delegate
 
 ## Run locally on Linux
 
-From the repository root:
-
 ```bash
 ./scripts/run_tutorials.sh
 ```
 
-This builds and installs the SDK, builds both standalone tutorials as downstream CMake projects, runs their deterministic smoke flows, and cleans up the local agent processes.
+The script builds and installs the SDK, builds both tutorials as downstream CMake projects, runs their deterministic smoke flows, and cleans up the agent processes.
 
 ## Run with Docker Compose
 
-To run only this tutorial in Docker:
+Docker Compose runs the specialist, coordinator, and client entirely in Linux containers. Docker Desktop on Windows is supported without WSL.
 
-```bash
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build -d
+From the repository root:
 
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml exec application-coordinator ./application_client \
-  --coordinator-url http://application-coordinator:8080 \
-  --resume-file samples/resume.txt \
-  --job-file samples/job_description.txt
-
+```text
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml run --build --rm application-smoke
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
 ```
 
-Only the coordinator port is published; delegation uses Docker service DNS.
+To run both production tutorials in Docker:
 
-To run the repository Docker smoke for both tutorials instead:
-
-```bash
-./scripts/run_tutorial_docker_smoke.sh
+```text
+docker compose -f examples/tutorials/compose.yaml run --build --rm tutorials-smoke
+docker compose -f examples/tutorials/compose.yaml down --volumes --remove-orphans
 ```
 
 ## Optional model configuration
 
-Both local and Docker runs use the deterministic backend unless these variables are set:
+The deterministic backend is used unless these variables are set:
 
 ```bash
 export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
@@ -52,12 +45,12 @@ export A2A_TUTORIAL_MODEL_NAME=your-model
 export A2A_TUTORIAL_MODEL_API_KEY=your-api-key
 ```
 
-Do not commit API keys.
+Use the equivalent environment-variable syntax for your shell on Windows. Do not commit API keys.
 
 ## Troubleshooting
 
-Agent readiness is exposed at `/.well-known/agent-card.json`. For Docker runs, use:
+Agent readiness is `/.well-known/agent-card.json`. Inspect logs with:
 
-```bash
+```text
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml logs
 ```
