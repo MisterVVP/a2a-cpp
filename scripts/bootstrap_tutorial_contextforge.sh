@@ -5,6 +5,9 @@ contextforge_url="${A2A_TUTORIAL_CONTEXTFORGE_URL:-http://127.0.0.1:4444}"
 keycloak_url="${A2A_TUTORIAL_KEYCLOAK_URL:-https://keycloak:8443}"
 keycloak_issuer="https://keycloak:8443/realms/a2a-tutorial"
 service_principal_email="svc-mcp-agent@example.com"
+service_role_name="a2a_tutorial_mcp_reader"
+resource_uri="ticket://northstar/billing-currency"
+server_name="a2a-cpp-support-tutorial"
 env_file="${A2A_TUTORIAL_MCP_ENV_FILE:?A2A_TUTORIAL_MCP_ENV_FILE is required}"
 : "${A2A_TUTORIAL_CA_CERT:?tutorial CA certificate is required}"
 : "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD:?admin password is required}"
@@ -13,8 +16,20 @@ request_json() {
   local method="$1" url="$2" body="$3" token="${4:-}" response
   local -a authorization=()
   [[ -n "${token}" ]] && authorization=(-H "Authorization: Bearer ${token}")
-  response="$(curl --fail-with-body --silent --show-error --request "${method}" \
-    -H 'Content-Type: application/json' "${authorization[@]}" --data "${body}" "${url}")" || return 1
+  if ! response="$(curl --fail-with-body --silent --show-error --request "${method}" \
+    -H 'Content-Type: application/json' "${authorization[@]}" --data "${body}" "${url}")"; then
+    [[ -n "${response}" ]] && printf '%s\n' "${response}" >&2
+    return 1
+  fi
+  printf '%s' "${response}"
+}
+request_get_json() {
+  local url="$1" token="$2" response
+  if ! response="$(curl --fail-with-body --silent --show-error \
+    -H "Authorization: Bearer ${token}" "${url}")"; then
+    [[ -n "${response}" ]] && printf '%s\n' "${response}" >&2
+    return 1
+  fi
   printf '%s' "${response}"
 }
 login_payload="$(jq -cn --arg password "${A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD}" \
@@ -26,42 +41,83 @@ request_json PUT "${contextforge_url}/v1/auth/sso/admin/providers/keycloak" \
   '{"trusted_for_api_auth":true,"api_audience":"mcp-gateway"}' "${admin_token}" >/dev/null || {
   echo 'ContextForge Keycloak provider configuration failed' >&2; exit 1;
 }
-service_principal_password="Aa1!$(openssl rand -hex 32 | sed 's/../&!/g')"
-service_principal_payload="$(jq -cn --arg email "${service_principal_email}" --arg password "${service_principal_password}" \
-  '{email:$email,password:$password,full_name:"A2A tutorial MCP agent",is_admin:false,is_active:true,password_change_required:false}')"
-request_json POST "${contextforge_url}/v1/auth/email/admin/users" \
-  "${service_principal_payload}" "${admin_token}" >/dev/null || {
-  echo 'ContextForge service-principal user creation failed' >&2; exit 1;
-}
-unset service_principal_password
 
-service_role_payload='{"name":"a2a_tutorial_mcp_reader","description":"Least-privilege role for the Customer Support Copilot MCP client","scope":"global","permissions":["servers.use","resources.read"],"is_system_role":false}'
-service_role_response="$(request_json POST "${contextforge_url}/v1/rbac/roles" "${service_role_payload}" "${admin_token}")" || {
-  echo 'ContextForge service-principal role creation failed' >&2; exit 1;
+users_response="$(request_get_json "${contextforge_url}/v1/auth/email/admin/users" "${admin_token}")" || {
+  echo 'ContextForge user lookup failed' >&2; exit 1;
 }
-service_role_id="$(jq -er '.id' <<<"${service_role_response}")" || {
-  echo 'ContextForge service-principal role response is missing an id' >&2; exit 1;
+if ! jq -e --arg email "${service_principal_email}" 'any(.[]; .email == $email)' <<<"${users_response}" >/dev/null; then
+  service_principal_password="Aa1!$(openssl rand -hex 32 | sed 's/../&!/g')"
+  service_principal_payload="$(jq -cn --arg email "${service_principal_email}" --arg password "${service_principal_password}" \
+    '{email:$email,password:$password,full_name:"A2A tutorial MCP agent",is_admin:false,is_active:true,password_change_required:false}')"
+  request_json POST "${contextforge_url}/v1/auth/email/admin/users" \
+    "${service_principal_payload}" "${admin_token}" >/dev/null || {
+    echo 'ContextForge service-principal user creation failed' >&2; exit 1;
+  }
+  unset service_principal_password
+fi
+
+roles_response="$(request_get_json "${contextforge_url}/v1/rbac/roles?scope=global" "${admin_token}")" || {
+  echo 'ContextForge role lookup failed' >&2; exit 1;
 }
-service_role_assignment="$(jq -cn --arg role_id "${service_role_id}" '{role_id:$role_id,scope:"global",scope_id:null}')"
-request_json POST "${contextforge_url}/v1/rbac/users/${service_principal_email}/roles" \
-  "${service_role_assignment}" "${admin_token}" >/dev/null || {
-  echo 'ContextForge service-principal role assignment failed' >&2; exit 1;
+service_role_id="$(jq -r --arg name "${service_role_name}" \
+  'first(.[] | select(.name == $name and .scope == "global") | .id) // empty' <<<"${roles_response}")"
+if [[ -z "${service_role_id}" ]]; then
+  service_role_payload="$(jq -cn --arg name "${service_role_name}" \
+    '{name:$name,description:"Least-privilege role for the Customer Support Copilot MCP client",scope:"global",permissions:["servers.use","resources.read"],is_system_role:false}')"
+  service_role_response="$(request_json POST "${contextforge_url}/v1/rbac/roles" "${service_role_payload}" "${admin_token}")" || {
+    echo 'ContextForge service-principal role creation failed' >&2; exit 1;
+  }
+  service_role_id="$(jq -er '.id' <<<"${service_role_response}")" || {
+    echo 'ContextForge service-principal role response is missing an id' >&2; exit 1;
+  }
+fi
+
+assignments_response="$(request_get_json "${contextforge_url}/v1/rbac/users/${service_principal_email}/roles?scope=global" "${admin_token}")" || {
+  echo 'ContextForge service-principal role lookup failed' >&2; exit 1;
 }
-ticket="$(cat "${root}/examples/tutorials/customer_support_copilot/samples/billing_currency_ticket.txt")"
-resource_payload="$(jq -cn --arg content "${ticket}" '{resource:{name:"Billing currency ticket",uri:"ticket://northstar/billing-currency",description:"Deterministic Customer Support Copilot fixture",mime_type:"text/plain",content:$content},visibility:"public"}')"
-resource_response=""
-for path in /v1/resources /resources; do
-  resource_response="$(request_json POST "${contextforge_url}${path}" "${resource_payload}" "${admin_token}" 2>/dev/null)" && break
-  resource_response="$(request_json POST "${contextforge_url}${path}" "$(jq -c 'del(.visibility)' <<<"${resource_payload}")" "${admin_token}" 2>/dev/null)" && break
-done
-resource_id="$(jq -er '.id // .resource.id' <<<"${resource_response}")" || { echo 'ContextForge resource registration failed' >&2; exit 1; }
-server_payload="$(jq -cn --arg id "${resource_id}" --arg issuer "${keycloak_issuer}" \
-  '{server:{name:"a2a-cpp-support-tutorial",description:"Customer Support Copilot MCP resources",associated_resources:[$id],oauth_enabled:true,oauth_config:{authorization_servers:[$issuer],client_id:"mcp-gateway"}},visibility:"public"}')"
-server_response=""
-for path in /v1/servers /servers; do
-  server_response="$(request_json POST "${contextforge_url}${path}" "${server_payload}" "${admin_token}" 2>/dev/null)" && break
-done
-server_id="$(jq -er '.id // .server.id' <<<"${server_response}")" || { echo 'ContextForge virtual-server creation failed' >&2; exit 1; }
+if ! jq -e --arg role_id "${service_role_id}" \
+  'any(.[]; .role_id == $role_id and .scope == "global" and .is_active == true)' <<<"${assignments_response}" >/dev/null; then
+  service_role_assignment="$(jq -cn --arg role_id "${service_role_id}" '{role_id:$role_id,scope:"global",scope_id:null}')"
+  request_json POST "${contextforge_url}/v1/rbac/users/${service_principal_email}/roles" \
+    "${service_role_assignment}" "${admin_token}" >/dev/null || {
+    echo 'ContextForge service-principal role assignment failed' >&2; exit 1;
+  }
+fi
+
+resources_response="$(request_get_json "${contextforge_url}/v1/resources?include_inactive=true" "${admin_token}")" || {
+  echo 'ContextForge resource lookup failed' >&2; exit 1;
+}
+resource_id="$(jq -r --arg uri "${resource_uri}" 'first(.[] | select(.uri == $uri) | .id) // empty' <<<"${resources_response}")"
+if [[ -z "${resource_id}" ]]; then
+  ticket="$(cat "${root}/examples/tutorials/customer_support_copilot/samples/billing_currency_ticket.txt")"
+  resource_payload="$(jq -cn --arg content "${ticket}" --arg uri "${resource_uri}" \
+    '{resource:{name:"Billing currency ticket",uri:$uri,description:"Deterministic Customer Support Copilot fixture",mime_type:"text/plain",content:$content},visibility:"public"}')"
+  resource_response=""
+  for path in /v1/resources /resources; do
+    resource_response="$(request_json POST "${contextforge_url}${path}" "${resource_payload}" "${admin_token}" 2>/dev/null)" && break
+    resource_response="$(request_json POST "${contextforge_url}${path}" "$(jq -c 'del(.visibility)' <<<"${resource_payload}")" "${admin_token}" 2>/dev/null)" && break
+  done
+  resource_id="$(jq -er '.id // .resource.id' <<<"${resource_response}")" || {
+    echo 'ContextForge resource registration failed' >&2; exit 1;
+  }
+fi
+
+servers_response="$(request_get_json "${contextforge_url}/v1/servers?include_inactive=true" "${admin_token}")" || {
+  echo 'ContextForge virtual-server lookup failed' >&2; exit 1;
+}
+server_id="$(jq -r --arg name "${server_name}" 'first(.[] | select(.name == $name) | .id) // empty' <<<"${servers_response}")"
+if [[ -z "${server_id}" ]]; then
+  server_payload="$(jq -cn --arg id "${resource_id}" --arg issuer "${keycloak_issuer}" --arg name "${server_name}" \
+    '{server:{name:$name,description:"Customer Support Copilot MCP resources",associated_resources:[$id],oauth_enabled:true,oauth_config:{authorization_servers:[$issuer],client_id:"mcp-gateway"}},visibility:"public"}')"
+  server_response=""
+  for path in /v1/servers /servers; do
+    server_response="$(request_json POST "${contextforge_url}${path}" "${server_payload}" "${admin_token}" 2>/dev/null)" && break
+  done
+  server_id="$(jq -er '.id // .server.id' <<<"${server_response}")" || {
+    echo 'ContextForge virtual-server creation failed' >&2; exit 1;
+  }
+fi
+
 access_token="$(curl --fail-with-body --silent --show-error --request POST \
   --cacert "${A2A_TUTORIAL_CA_CERT}" \
   --data-urlencode grant_type=client_credentials --data-urlencode client_id=mcp-agent \

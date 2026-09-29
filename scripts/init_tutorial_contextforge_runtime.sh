@@ -2,7 +2,15 @@
 set -euo pipefail
 runtime_dir="${A2A_TUTORIAL_RUNTIME_DIR:-/runtime}"
 tls_dir="${runtime_dir}/tls"
+secrets_file="${runtime_dir}/secrets.env"
 mkdir -p "${tls_dir}"
+
+if [[ -s "${secrets_file}" && -s "${tls_dir}/ca.crt" && -s "${tls_dir}/keycloak.crt" && -s "${tls_dir}/keycloak.key" ]]; then
+  echo 'Reusing existing tutorial runtime secrets and TLS material'
+  exit 0
+fi
+
+rm -f "${secrets_file}" "${tls_dir}/ca.crt" "${tls_dir}/keycloak.crt" "${tls_dir}/keycloak.key"
 
 random_secret() {
   openssl rand -hex 32
@@ -19,7 +27,7 @@ jwt_secret="$(random_secret)"
 auth_encryption_secret="$(random_encryption_key)"
 
 umask 077
-cat >"${runtime_dir}/secrets.env" <<EOF
+cat >"${secrets_file}" <<EOF
 export A2A_TUTORIAL_MCP_AGENT_SECRET=${mcp_agent_secret}
 export A2A_TUTORIAL_CONTEXTFORGE_OIDC_SECRET=${oidc_secret}
 export A2A_TUTORIAL_CONTEXTFORGE_ADMIN_PASSWORD=${admin_password}
@@ -39,5 +47,5 @@ openssl x509 -req -sha256 -days 1 -in "${tls_dir}/keycloak.csr" \
   -extfile "${tls_dir}/keycloak.ext" -out "${tls_dir}/keycloak.crt" >/dev/null 2>&1
 
 rm -f "${tls_dir}/keycloak.csr" "${tls_dir}/keycloak.ext" "${tls_dir}/ca.srl"
-chmod 0644 "${runtime_dir}/secrets.env" "${tls_dir}/ca.crt" "${tls_dir}/keycloak.crt" "${tls_dir}/keycloak.key"
+chmod 0644 "${secrets_file}" "${tls_dir}/ca.crt" "${tls_dir}/keycloak.crt" "${tls_dir}/keycloak.key"
 echo 'Tutorial runtime secrets and TLS material were generated'
