@@ -34,8 +34,6 @@ using SocketLength = socklen_t;
 constexpr int kSocketError = -1;
 #endif
 constexpr int kOk = 200;
-constexpr int kAccepted = 202;
-constexpr int kNoContent = 204;
 constexpr int kInternalServerError = 500;
 constexpr std::size_t kInvalidResourceValueCount = 4;
 constexpr double kNumericResourceUri = 1.0;
@@ -43,7 +41,6 @@ constexpr std::size_t kResponseCapacityOverhead = 128;
 constexpr std::size_t kReceiveBufferSize = 4096;
 constexpr int kReceiveBufferLength = static_cast<int>(kReceiveBufferSize);
 constexpr auto kTimeout = std::chrono::seconds(2);
-constexpr std::string_view kVersion = "2025-06-18";
 constexpr std::string_view kUri = "fixture://resource";
 constexpr std::string_view kText = "fixture text";
 constexpr std::string_view kResumeResourceField = "resume_resource";
@@ -88,14 +85,6 @@ std::string HttpResponse(int status, std::string_view body, std::string_view ext
   response.append("Content-Length: ").append(std::to_string(body.size())).append("\r\nConnection: close\r\n\r\n");
   response.append(body);
   return response;
-}
-
-std::string InitializeResult(std::string_view version = kVersion, bool resources = true) {
-  std::string body = R"({"jsonrpc":"2.0","id":0,"result":{"protocolVersion":")";
-  body.append(version).append(R"(","capabilities":)");
-  body.append(resources ? R"({"resources":{}})" : R"({})");
-  body.append("}}");
-  return body;
 }
 
 class ScriptedServer final {
@@ -204,156 +193,64 @@ class ScriptedServer final {
 #endif
 };
 
-std::vector<std::string> SuccessfulExchange(std::string_view read_body) {
-  return {HttpResponse(kOk, InitializeResult(), "mCp-SeSsIoN-iD: unit-session\r\n"), HttpResponse(kAccepted, {}),
-          HttpResponse(kOk, read_body), HttpResponse(kNoContent, {})};
+std::string SuccessfulBody(std::string_view uri = kUri, std::string_view text = kText) {
+  std::string body = R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":")";
+  body.append(uri).append(R"(","text":")").append(text).append(R"("}]}})");
+  return body;
 }
 
-std::vector<std::string> InitializationExchange(std::string_view body) {
-  return {HttpResponse(kOk, body, "Mcp-Session-Id: unit-session\r\n"), HttpResponse(kNoContent, {})};
+a2a::core::Result<std::string> ReadFromResponse(std::string body, std::string_view token = "unit-secret") {
+  ScriptedServer server({HttpResponse(kOk, body)});
+  return tutorial_mcp::Client(server.endpoint(), std::string(token), kTimeout).ReadResource(kUri);
 }
 
-TEST(McpClientTest, ReadsTextAndForwardsNegotiatedSession) {
-  ScriptedServer server(SuccessfulExchange(
-      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://resource","text":"fixture text"}]}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+TEST(McpClientTest, SendsStatelessAuthenticatedProtocolRequestAndReadsText) {
+  ScriptedServer server({HttpResponse(kOk, SuccessfulBody())});
+  const auto result = tutorial_mcp::Client(server.endpoint(), "unit-secret", kTimeout).ReadResource(kUri);
   ASSERT_TRUE(result.ok()) << result.error().message();
   EXPECT_EQ(result.value(), kText);
   const auto requests = server.requests();
-  ASSERT_EQ(requests.size(), 4U);
-  EXPECT_NE(requests[0].find(R"("protocolVersion":"2025-06-18")"), std::string::npos);
-  EXPECT_NE(requests[1].find("Mcp-Session-Id: unit-session"), std::string::npos);
-  EXPECT_NE(requests[2].find("Mcp-Session-Id: unit-session"), std::string::npos);
-  EXPECT_NE(requests[2].find(R"("uri":"fixture://resource")"), std::string::npos);
-  EXPECT_EQ(requests[3].find("DELETE /mcp HTTP/1.1"), 0U);
-  EXPECT_NE(requests[3].find("Mcp-Session-Id: unit-session"), std::string::npos);
+  ASSERT_EQ(requests.size(), 1U);
+  EXPECT_NE(requests[0].find("MCP-Protocol-Version: 2025-11-25"), std::string::npos);
+  EXPECT_NE(requests[0].find("Mcp-Method: resources/read"), std::string::npos);
+  EXPECT_NE(requests[0].find("Mcp-Name: fixture://resource"), std::string::npos);
+  EXPECT_NE(requests[0].find("Authorization: Bearer unit-secret"), std::string::npos);
+  EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/protocolVersion":"2025-11-25")"), std::string::npos);
+  EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/clientInfo")"), std::string::npos);
+  EXPECT_NE(requests[0].find(R"("io.modelcontextprotocol/clientCapabilities":{})"), std::string::npos);
 }
 
-TEST(McpClientTest, RejectsMalformedInitializationEnvelopeAndTerminatesSession) {
-  ScriptedServer server(InitializationExchange("not-json"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("invalid JSON"), std::string::npos);
-  const auto requests = server.requests();
-  ASSERT_EQ(requests.size(), 2U);
-  EXPECT_EQ(requests[1].find("DELETE /mcp HTTP/1.1"), 0U);
-}
-
-TEST(McpClientTest, RejectsInitializationResponseWithoutJsonRpcVersion) {
-  ScriptedServer server(
-      InitializationExchange(R"({"id":0,"result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("missing jsonrpc"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsUnsupportedJsonRpcVersion) {
-  ScriptedServer server(InitializationExchange(
-      R"({"jsonrpc":"1.0","id":0,"result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("unsupported JSON-RPC version"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsMismatchedInitializationResponseId) {
-  ScriptedServer server(InitializationExchange(
-      R"({"jsonrpc":"2.0","id":99,"result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("id does not match"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsInitializationResponseWithoutId) {
-  ScriptedServer server(InitializationExchange(
-      R"({"jsonrpc":"2.0","result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("missing id"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsInvalidInitializationResponseIdType) {
-  ScriptedServer server(InitializationExchange(
-      R"({"jsonrpc":"2.0","id":"0","result":{"protocolVersion":"2025-06-18","capabilities":{"resources":{}}}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("id must be a number"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsMismatchedResourceResponseId) {
-  ScriptedServer server(SuccessfulExchange(
-      R"({"jsonrpc":"2.0","id":99,"result":{"contents":[{"uri":"fixture://resource","text":"fixture text"}]}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("id does not match"), std::string::npos);
-}
-
-TEST(McpClientTest, TerminatesSessionReturnedWithInitializationHttpError) {
-  ScriptedServer server(
-      {HttpResponse(kInternalServerError, {}, "Mcp-Session-Id: unit-session\r\n"), HttpResponse(kNoContent, {})});
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("HTTP 500"), std::string::npos);
-  const auto requests = server.requests();
-  ASSERT_EQ(requests.size(), 2U);
-  EXPECT_EQ(requests[1].find("DELETE /mcp HTTP/1.1"), 0U);
-  EXPECT_NE(requests[1].find("Mcp-Session-Id: unit-session"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsUnsupportedVersion) {
-  ScriptedServer server(InitializationExchange(InitializeResult("unsupported")));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("unsupported protocol version"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsMissingResourcesCapability) {
-  ScriptedServer server(InitializationExchange(InitializeResult(kVersion, false)));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("resources capability"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsInitializationNotificationFailure) {
-  ScriptedServer server({HttpResponse(kOk, InitializeResult(), "Mcp-Session-Id: unit-session\r\n"),
-                         HttpResponse(kOk, "{}"), HttpResponse(kNoContent, {})});
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("notification was not accepted"), std::string::npos);
-}
-
-TEST(McpClientTest, RejectsInvalidResourceContentShapes) {
-  constexpr std::array<std::string_view, 3> invalid_results = {
-      R"({"jsonrpc":"2.0","id":1,"result":{}})", R"({"jsonrpc":"2.0","id":1,"result":{"contents":[]}})",
-      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"blob":"AA=="}]}})"};
-  for (const auto body : invalid_results) {
-    ScriptedServer server(SuccessfulExchange(body));
-    const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-    EXPECT_FALSE(result.ok());
+TEST(McpClientTest, RejectsInvalidResponses) {
+  constexpr std::array<std::string_view, 5> invalid_responses = {
+      "not-json", R"({"jsonrpc":"1.0","id":1,"result":{"contents":[]}})",
+      R"({"jsonrpc":"2.0","id":7,"result":{"contents":[]}})", R"({"jsonrpc":"2.0","id":1,"result":{}})",
+      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://resource","text":""}]}})"};
+  for (const auto response : invalid_responses) {
+    EXPECT_FALSE(ReadFromResponse(std::string(response)).ok());
   }
 }
 
-TEST(McpClientTest, RejectsResourceContentWithoutUri) {
-  ScriptedServer server(
-      SuccessfulExchange(R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"text":"fixture text"}]}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+TEST(McpClientTest, RejectsMismatchedResourceUri) {
+  const auto result = ReadFromResponse(SuccessfulBody("fixture://different"));
   ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("content URI is missing"), std::string::npos);
+  EXPECT_NE(result.error().message().find("URI does not match"), std::string::npos);
 }
 
-TEST(McpClientTest, RejectsNonStringResourceContentUri) {
-  ScriptedServer server(
-      SuccessfulExchange(R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":7,"text":"fixture text"}]}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
-  ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("content URI must be a string"), std::string::npos);
+TEST(McpClientTest, RequiresUrlAndTokenWithoutExposingToken) {
+  const auto missing_url = tutorial_mcp::Client("", "top-secret", kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(missing_url.ok());
+  EXPECT_EQ(missing_url.error().message().find("top-secret"), std::string::npos);
+  const auto missing_token = tutorial_mcp::Client("http://127.0.0.1/mcp", "", kTimeout).ReadResource(kUri);
+  ASSERT_FALSE(missing_token.ok());
+  EXPECT_NE(missing_token.error().message().find("token is required"), std::string::npos);
 }
 
-TEST(McpClientTest, RejectsMismatchedResourceContentUri) {
-  ScriptedServer server(SuccessfulExchange(
-      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://different","text":"fixture text"}]}})"));
-  const auto result = tutorial_mcp::Client(server.endpoint(), kTimeout).ReadResource(kUri);
+TEST(McpClientTest, ReportsHttpFailureWithoutExposingToken) {
+  ScriptedServer server({HttpResponse(kInternalServerError, "failure")});
+  const auto result = tutorial_mcp::Client(server.endpoint(), "top-secret", kTimeout).ReadResource(kUri);
   ASSERT_FALSE(result.ok());
-  EXPECT_NE(result.error().message().find("content URI does not match"), std::string::npos);
+  EXPECT_NE(result.error().message().find("HTTP 500"), std::string::npos);
+  EXPECT_EQ(result.error().message().find("top-secret"), std::string::npos);
 }
 
 TEST(ResourceValidationTest, AcceptsNonEmptyStringUri) {
