@@ -75,4 +75,15 @@ export A2A_TUTORIAL_MODEL_NAME=your-model
 export A2A_TUTORIAL_MODEL_API_KEY=your-api-key
 ```
 
+### Gemini free tier example
+
+Gemini exposes an OpenAI-compatible API. For the Gemini API free tier:
+
+```bash
+export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
+export A2A_TUTORIAL_MODEL_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+export A2A_TUTORIAL_MODEL_NAME=gemini-3.8-flash
+export A2A_TUTORIAL_MODEL_API_KEY=your-gemini-api-key
+```
+
 Use the equivalent environment-variable syntax for your shell on Windows. Do not commit API keys.
