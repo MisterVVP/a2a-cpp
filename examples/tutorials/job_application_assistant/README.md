@@ -8,49 +8,59 @@ application_client -> A2A coordinator -> A2A profile analyst
 
 The client sends a resume and job description to the coordinator, which delegates analysis to the specialist and returns structured analysis plus an application draft.
 
-## Run locally on Linux
-
-```bash
-./scripts/run_tutorials.sh
-```
-
-The script builds and installs the SDK, builds both tutorials as downstream CMake projects, runs their deterministic smoke flows, and cleans up the agent processes.
-
-## Run with Docker Compose
-
-Docker Compose runs the specialist, coordinator, and client entirely in Linux containers. Docker Desktop on Windows is supported without WSL.
+## Run individually with Docker Compose
 
 From the repository root:
 
 ```text
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml run --build --rm application-smoke
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml up --build application-smoke
+```
+
+Compose streams the profile analyst, coordinator, and smoke-client logs with service prefixes and colors. After the smoke client prints the application draft, press `Ctrl+C` and clean up:
+
+```text
 docker compose -f examples/tutorials/job_application_assistant/compose.yaml down --remove-orphans
 ```
 
-To run both production tutorials in Docker:
+For a one-shot automated run:
 
 ```text
-docker compose -f examples/tutorials/compose.yaml run --build --rm tutorials-smoke
-docker compose -f examples/tutorials/compose.yaml down --volumes --remove-orphans
+docker compose -f examples/tutorials/job_application_assistant/compose.yaml run --build --rm application-smoke
 ```
 
-## Optional model configuration
+## Run individually on Linux
 
-The deterministic backend is used unless these variables are set:
+First [install the SDK for an individual local run](../README.md#build-the-sdk-for-an-individual-local-run), then build this tutorial:
 
 ```bash
-export A2A_TUTORIAL_MODEL_PROVIDER=openai_compatible
-export A2A_TUTORIAL_MODEL_BASE_URL=https://provider.example/v1
-export A2A_TUTORIAL_MODEL_NAME=your-model
-export A2A_TUTORIAL_MODEL_API_KEY=your-api-key
+cmake -S examples/tutorials/job_application_assistant \
+  -B build-tutorials/job_application_assistant \
+  -DCMAKE_PREFIX_PATH="$A2A_INSTALL_DIR"
+cmake --build build-tutorials/job_application_assistant --parallel
 ```
 
-Use the equivalent environment-variable syntax for your shell on Windows. Do not commit API keys.
+Start the three processes in separate terminals from the repository root.
 
-## Troubleshooting
+Profile analyst:
 
-Agent readiness is `/.well-known/agent-card.json`. Inspect logs with:
-
-```text
-docker compose -f examples/tutorials/job_application_assistant/compose.yaml logs
+```bash
+./build-tutorials/job_application_assistant/profile_analyst 127.0.0.1:8081
 ```
+
+Coordinator:
+
+```bash
+A2A_TUTORIAL_SPECIALIST_URL=http://127.0.0.1:8081 \
+./build-tutorials/job_application_assistant/application_coordinator 127.0.0.1:8080
+```
+
+Client:
+
+```bash
+./build-tutorials/job_application_assistant/application_client \
+  --coordinator-url http://127.0.0.1:8080 \
+  --resume-file examples/tutorials/job_application_assistant/samples/resume.txt \
+  --job-file examples/tutorials/job_application_assistant/samples/job_description.txt
+```
+
+See the [production tutorials guide](../README.md#optional-model-configuration) for optional model configuration.

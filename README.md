@@ -129,23 +129,9 @@ See [`benchmarks/README.md`](benchmarks/README.md) for microbenchmarks and
 
 ## Production tutorials
 
-The standalone tutorials under `examples/tutorials/` use real processes, Agent Card discovery, and HTTP+JSON A2A delegation. They run without external credentials in deterministic mode and can optionally use an OpenAI-compatible model.
+The realistic multi-process tutorials under `examples/tutorials/` demonstrate Agent Card discovery and HTTP+JSON A2A delegation. They support native Linux runs and cross-platform Docker Compose, including Docker Desktop on Windows without WSL.
 
-From the repository root:
-
-```bash
-# Native Linux build/install and smoke run
-./scripts/run_tutorials.sh
-```
-
-The containerized smoke is host-independent and requires Docker Compose 2.20.3 or newer. It works with Docker Engine on Linux/macOS and Docker Desktop on Windows without WSL:
-
-```text
-docker compose -f examples/tutorials/compose.yaml run --build --rm tutorials-smoke
-docker compose -f examples/tutorials/compose.yaml down --volumes --remove-orphans
-```
-
-On Linux/macOS, `./scripts/run_tutorial_docker_smoke.sh` is a convenience wrapper around the same Compose flow. The Docker run also exercises the Customer Support Copilot MCP/OAuth path with ContextForge and Keycloak. See the [Job Application Assistant](examples/tutorials/job_application_assistant/README.md) and [Customer Support Copilot](examples/tutorials/customer_support_copilot/README.md) READMEs for individual commands.
+See the [production tutorials guide](examples/tutorials/README.md) to run both tutorials or choose an individual tutorial.
 
 ## License
 
