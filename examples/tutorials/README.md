@@ -32,7 +32,7 @@ docker compose -f examples/tutorials/compose.yaml down --volumes --remove-orphan
 
 On Linux/macOS, `./scripts/run_tutorial_docker_smoke.sh` is a convenience wrapper around the automated flow.
 
-## Run both locally on Linux
+## Native Linux smoke
 
 From the repository root:
 
@@ -40,11 +40,11 @@ From the repository root:
 ./scripts/run_tutorials.sh
 ```
 
-This builds and installs the SDK, builds both tutorials as downstream projects, runs their deterministic smoke flows, and cleans up the agent processes.
+This builds and installs the SDK, builds both tutorials as downstream projects, and runs the Job Application Assistant smoke flow. Customer Support Copilot is intentionally Docker-only because its Keycloak and ContextForge MCP infrastructure is part of the tutorial.
 
-## Build the SDK for an individual local run
+## Build the SDK for an individual Job Application run
 
-Individual native runs use the installed CMake package:
+The native Job Application Assistant uses the installed CMake package:
 
 ```bash
 export A2A_INSTALL_DIR="$PWD/build-tutorials/install"

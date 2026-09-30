@@ -5,7 +5,6 @@
 #include "tutorial.h"
 int main(int argc, char** argv) {
   std::string url = "http://127.0.0.1:8180";
-  std::string ticket;
   std::string ticket_resource;
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
@@ -15,8 +14,6 @@ int main(int argc, char** argv) {
     }
     if (arg == "--coordinator-url") {
       url = argv[++i];
-    } else if (arg == "--ticket-file") {
-      ticket = argv[++i];
     } else if (arg == "--ticket-resource") {
       ticket_resource = argv[++i];
     } else {
@@ -24,18 +21,11 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (ticket.empty() == ticket_resource.empty()) {
-    std::cerr << "exactly one of --ticket-file or --ticket-resource is required\n";
+  if (ticket_resource.empty()) {
+    std::cerr << "--ticket-resource is required\n";
     return 2;
   }
-  auto text = ticket.empty() ? a2a::core::Result<std::string>(std::string{}) : support_tutorial::ReadFile(ticket);
-  if (!text.ok()) {
-    std::cerr << text.error().message() << '\n';
-    return 1;
-  }
-  const auto request = ticket_resource.empty() ? support_tutorial::TicketRequest(text.value(), "")
-                                               : support_tutorial::TicketResourceRequest(ticket_resource);
-  auto response = support_tutorial::Send(url, request);
+  auto response = support_tutorial::Send(url, support_tutorial::TicketRequest(ticket_resource));
   if (!response.ok()) {
     std::cerr << response.error().message() << '\n';
     return 1;

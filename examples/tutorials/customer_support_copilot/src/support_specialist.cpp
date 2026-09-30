@@ -3,7 +3,7 @@
 
 #include "tutorial.h"
 int main(int argc, char** argv) {
-  const std::string endpoint = argc > 1 ? std::string(argv[1]) : std::string(support_tutorial::kAnalystDefault);
+  const std::string endpoint = argc > 1 ? std::string(argv[1]) : std::string(support_tutorial::kSpecialistDefault);
   const char* configured_public_url = std::getenv("A2A_TUTORIAL_PUBLIC_URL");
   const char* configured_mcp_url = std::getenv("A2A_TUTORIAL_MCP_URL");
   const char* configured_mcp_token = std::getenv("A2A_TUTORIAL_MCP_TOKEN");
