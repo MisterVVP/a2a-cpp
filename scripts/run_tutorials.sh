@@ -29,7 +29,9 @@ wait_ready() {
 }
 
 build_tutorial() {
-  local name="$1" source="${root}/examples/tutorials/${name}" build="${work}/${name}"
+  local name="$1"
+  local source="${root}/examples/tutorials/${name}"
+  local build="${work}/${name}"
   cmake -S "${source}" -B "${build}" -DCMAKE_PREFIX_PATH="${prefix}" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
   cmake --build "${build}" --parallel
 }
