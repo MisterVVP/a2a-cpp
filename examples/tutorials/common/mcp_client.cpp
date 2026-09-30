@@ -7,6 +7,7 @@
 #include "a2a/core/protojson.h"
 #include "a2a/http/http_client.h"
 #include "google/protobuf/struct.pb.h"
+#include "resource_validation.h"
 
 namespace tutorial_mcp {
 namespace {
@@ -16,6 +17,7 @@ constexpr int kMaximumSuccessStatus = 299;
 constexpr std::string_view kJsonRpcVersion = "2.0";
 constexpr std::string_view kProtocolVersion = "2025-11-25";
 constexpr std::string_view kMethod = "resources/read";
+constexpr std::string_view kResourceUriLabel = "MCP resource URI";
 
 std::string JsonString(std::string_view value) {
   google::protobuf::Value json_value;
@@ -97,6 +99,10 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
   }
   if (bearer_token_.empty()) {
     return a2a::core::Error::Validation("MCP token is required for resource mode");
+  }
+  auto uri_validation = ValidateResourceUri(uri, kResourceUriLabel);
+  if (!uri_validation.ok()) {
+    return uri_validation.error();
   }
   const a2a::http::Request request{.method = "POST",
                                    .url = endpoint_,

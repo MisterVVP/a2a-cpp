@@ -36,11 +36,13 @@ constexpr int kSocketError = -1;
 constexpr int kOk = 200;
 constexpr int kInternalServerError = 500;
 constexpr std::size_t kInvalidResourceValueCount = 4;
+constexpr std::size_t kInvalidResourceUriCount = 4;
 constexpr double kNumericResourceUri = 1.0;
 constexpr std::size_t kResponseCapacityOverhead = 128;
 constexpr std::size_t kReceiveBufferSize = 4096;
 constexpr int kReceiveBufferLength = static_cast<int>(kReceiveBufferSize);
 constexpr auto kTimeout = std::chrono::seconds(2);
+constexpr std::string_view kLoopbackEndpoint = "http://127.0.0.1/mcp";
 constexpr std::string_view kUri = "fixture://resource";
 constexpr std::string_view kText = "fixture text";
 constexpr std::string_view kResumeResourceField = "resume_resource";
@@ -245,6 +247,14 @@ TEST(McpClientTest, RequiresUrlAndTokenWithoutExposingToken) {
   EXPECT_NE(missing_token.error().message().find("token is required"), std::string::npos);
 }
 
+TEST(McpClientTest, RejectsResourceUriControlCharactersBeforeSendingRequest) {
+  constexpr std::string_view kInjectedUri = "fixture://resource\r\nX-Injected: value";
+  const auto result =
+      tutorial_mcp::Client(std::string(kLoopbackEndpoint), "unit-secret", kTimeout).ReadResource(kInjectedUri);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message().find("control characters"), std::string::npos);
+}
+
 TEST(McpClientTest, ReportsHttpFailureWithoutExposingToken) {
   ScriptedServer server({HttpResponse(kInternalServerError, "failure")});
   const auto result = tutorial_mcp::Client(server.endpoint(), "top-secret", kTimeout).ReadResource(kUri);
@@ -269,6 +279,19 @@ TEST(ResourceValidationTest, RejectsEmptyOrNonStringUri) {
     const auto result = tutorial_mcp::ValidateResourceUriField(value, kTicketResourceField);
     ASSERT_FALSE(result.ok());
     EXPECT_NE(result.error().message().find("ticket_resource must be a non-empty string"), std::string::npos);
+  }
+}
+
+TEST(ResourceValidationTest, RejectsUriControlCharacters) {
+  constexpr std::array<std::string_view, kInvalidResourceUriCount> invalid_uris = {
+      "fixture://resource\rheader", "fixture://resource\nheader", "fixture://resource\theader",
+      std::string_view{"fixture://resource\x7f", 19}};
+  for (const auto uri : invalid_uris) {
+    google::protobuf::Value value;
+    value.set_string_value(std::string(uri));
+    const auto result = tutorial_mcp::ValidateResourceUriField(value, kTicketResourceField);
+    ASSERT_FALSE(result.ok());
+    EXPECT_NE(result.error().message().find("control characters"), std::string::npos);
   }
 }
 }  // namespace
