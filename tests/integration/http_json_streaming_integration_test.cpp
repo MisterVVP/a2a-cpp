@@ -35,6 +35,7 @@ constexpr int kHttpBadGateway = 502;
 constexpr int kStreamLoopMaxIterations = 100;
 constexpr int kCancelDelayMs = 30;
 constexpr std::chrono::milliseconds kRequestCaptureTimeout{2000};
+constexpr std::chrono::milliseconds kStreamCompletionTimeout{2000};
 constexpr std::string_view kAcceptHeaderName = "Accept";
 constexpr std::string_view kUpstreamFailureCode = "UPSTREAM_FAILURE";
 constexpr std::string_view kUpstreamFailureBody = R"({"code":"UPSTREAM_FAILURE","message":"upstream failed"})";
@@ -132,7 +133,36 @@ class RecordingObserver final : public StreamObserver {
   std::condition_variable cv_;
 };
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+lf::a2a::v1::SendMessageRequest MakeStreamingMessageRequest() {
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  return request;
+}
+
+a2a::core::Result<HttpClientResponse> ValidateSendRequestAndEmitChunks(
+    const HttpRequest& request, const std::vector<std::string>& chunks,
+    const a2a::client::HttpStreamMetadataHandler& on_metadata, const a2a::client::HttpStreamChunkHandler& on_chunk) {
+  if (request.method != "POST") {
+    return a2a::core::Error::Internal("unexpected method");
+  }
+  if (request.url != kStreamingSendUrl) {
+    return a2a::core::Error::Internal("unexpected url");
+  }
+  if (request.headers.at("Accept") != "text/event-stream") {
+    return a2a::core::Error::Internal("unexpected accept header");
+  }
+  return EmitSseChunks(chunks, on_metadata, on_chunk);
+}
+
+void ExpectFragmentedEvents(const RecordingObserver& observer) {
+  EXPECT_TRUE(observer.errors.empty());
+  ASSERT_EQ(observer.events.size(), 3U);
+  EXPECT_EQ(observer.events[0].task().id(), "t-1");
+  EXPECT_EQ(observer.events[1].status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  EXPECT_EQ(observer.events[2].artifact_update().artifact().artifact_id(), "a-1");
+  EXPECT_TRUE(observer.completed);
+}
+
 TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEventsInOrder) {
   const std::vector<std::string> chunks = {
       "event: message\ndata: {\"task\":{\"id\":\"t-1\"}}\n\n",
@@ -144,38 +174,19 @@ TEST(HttpJsonStreamingIntegrationTest, SendStreamingMessageParsesFragmentedEvent
       [chunks](const HttpRequest& request, const a2a::client::HttpStreamMetadataHandler& on_metadata,
                const a2a::client::HttpStreamChunkHandler& on_chunk,
                const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        if (request.method != "POST") {
-          return a2a::core::Error::Internal("unexpected method");
-        }
-        if (request.url != kStreamingSendUrl) {
-          return a2a::core::Error::Internal("unexpected url");
-        }
-        if (request.headers.at("Accept") != "text/event-stream") {
-          return a2a::core::Error::Internal("unexpected accept header");
-        }
-        return EmitSseChunks(chunks, on_metadata, on_chunk);
+        return ValidateSendRequestAndEmitChunks(request, chunks, on_metadata, on_chunk);
       });
 
   A2AClient client(std::move(transport));
   RecordingObserver observer;
 
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-
-  auto stream = client.SendStreamingMessage(request, observer, CallOptions{});
+  auto stream = client.SendStreamingMessage(MakeStreamingMessageRequest(), observer, CallOptions{});
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  ASSERT_TRUE(observer.WaitForCompletion(kStreamCompletionTimeout));
   stream.value()->Cancel();
-
-  EXPECT_TRUE(observer.errors.empty());
-  ASSERT_EQ(observer.events.size(), 3U);
-  EXPECT_EQ(observer.events[0].task().id(), "t-1");
-  EXPECT_EQ(observer.events[1].status_update().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
-  EXPECT_EQ(observer.events[2].artifact_update().artifact().artifact_id(), "a-1");
-  EXPECT_TRUE(observer.completed);
+  ExpectFragmentedEvents(observer);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
@@ -186,51 +197,46 @@ TEST(HttpJsonStreamingIntegrationTest, MalformedFrameTriggersObserverError) {
 
   A2AClient client(std::move(transport));
   RecordingObserver observer;
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-
-  auto stream = client.SendStreamingMessage(request, observer);
+  auto stream = client.SendStreamingMessage(MakeStreamingMessageRequest(), observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  ASSERT_TRUE(observer.WaitForCompletion(kStreamCompletionTimeout));
   stream.value()->Cancel();
 
   EXPECT_FALSE(observer.errors.empty());
   EXPECT_FALSE(observer.completed);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+a2a::core::Result<HttpClientResponse> EmitUntilCancelled(const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                                         const a2a::client::HttpStreamChunkHandler& on_chunk,
+                                                         const a2a::client::StreamCancelled& is_cancelled) {
+  HttpClientResponse response{
+      .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}}, .body = ""};
+  const auto metadata = on_metadata(response);
+  if (!metadata.ok()) {
+    return metadata.error();
+  }
+  for (int i = 0; i < kStreamLoopMaxIterations && !is_cancelled(); ++i) {
+    const auto status = on_chunk("data: {\"task\":{\"id\":\"t-1\"}}\n\n");
+    if (!status.ok()) {
+      return status.error();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return response;
+}
+
 TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompletion) {
   auto transport = MakeStreamingTransport(
       [](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
          const a2a::client::HttpStreamChunkHandler& on_chunk,
          const a2a::client::StreamCancelled& is_cancelled) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpOk,
-                                    .headers = {{"A2A-Version", "1.0"}, {"Content-Type", "text/event-stream"}},
-                                    .body = ""};
-        const auto metadata = on_metadata(response);
-        if (!metadata.ok()) {
-          return metadata.error();
-        }
-        for (int i = 0; i < kStreamLoopMaxIterations; ++i) {
-          if (is_cancelled()) {
-            break;
-          }
-          const auto status = on_chunk("data: {\"task\":{\"id\":\"t-1\"}}\n\n");
-          if (!status.ok()) {
-            return status.error();
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-        return response;
+        return EmitUntilCancelled(on_metadata, on_chunk, is_cancelled);
       });
 
   A2AClient client(std::move(transport));
   RecordingObserver observer;
 
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-
-  auto stream = client.SendStreamingMessage(request, observer);
+  auto stream = client.SendStreamingMessage(MakeStreamingMessageRequest(), observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
   std::this_thread::sleep_for(std::chrono::milliseconds(kCancelDelayMs));
   EXPECT_TRUE(stream.value()->IsActive());
@@ -242,7 +248,6 @@ TEST(HttpJsonStreamingIntegrationTest, CancelDuringActiveStreamStopsWithoutCompl
   EXPECT_FALSE(observer.completed);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes) {
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
@@ -258,7 +263,7 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteCloseWithoutTerminalEventCompletes)
   request.set_id("t-1");
   auto stream = client.SubscribeTask(request, observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  ASSERT_TRUE(observer.WaitForCompletion(kStreamCompletionTimeout));
   stream.value()->Cancel();
 
   EXPECT_TRUE(observer.errors.empty());
@@ -299,7 +304,14 @@ TEST(HttpJsonStreamingIntegrationTest, SubscribeTaskBuildsBodylessGetRequest) {
   EXPECT_TRUE(is_bodyless_get_request);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+void ExpectRemoteProtocolError(const RecordingObserver& observer, std::string_view protocol_code) {
+  ASSERT_FALSE(observer.errors.empty());
+  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  ASSERT_TRUE(observer.errors.front().protocol_code().has_value());
+  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), protocol_code);
+  EXPECT_FALSE(observer.completed);
+}
+
 TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolError) {
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
@@ -312,60 +324,63 @@ TEST(HttpJsonStreamingIntegrationTest, RemoteErrorEventMapsToObserverProtocolErr
   A2AClient client(std::move(transport));
   RecordingObserver observer;
 
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-
-  auto stream = client.SendStreamingMessage(request, observer);
+  auto stream = client.SendStreamingMessage(MakeStreamingMessageRequest(), observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  ASSERT_TRUE(observer.WaitForCompletion(kStreamCompletionTimeout));
   stream.value()->Cancel();
+  ExpectRemoteProtocolError(observer, "TASK_FAILED");
+}
 
+a2a::core::Result<HttpClientResponse> EmitJsonErrorResponse(const a2a::client::HttpStreamMetadataHandler& on_metadata,
+                                                            const a2a::client::HttpStreamChunkHandler& on_chunk) {
+  HttpClientResponse response{.status_code = kHttpBadGateway,
+                              .headers = {{"A2A-Version", "1.0"},
+                                          {std::string(a2a::core::http::kContentTypeHeaderName),
+                                           std::string(a2a::core::http::kContentTypeApplicationJson)}},
+                              .body = ""};
+  const auto metadata = on_metadata(response);
+  if (!metadata.ok()) {
+    return metadata.error();
+  }
+  const auto body = on_chunk(kUpstreamFailureBody);
+  if (!body.ok()) {
+    return body.error();
+  }
+  return response;
+}
+
+void ExpectJsonHttpError(const RecordingObserver& observer) {
   ASSERT_FALSE(observer.errors.empty());
-  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
-  ASSERT_TRUE(observer.errors.front().protocol_code().has_value());
-  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), "TASK_FAILED");
+  const auto& error = observer.errors.front();
+  EXPECT_EQ(error.code(), a2a::core::ErrorCode::kRemoteProtocol);
+  ASSERT_TRUE(error.http_status().has_value());
+  EXPECT_EQ(error.http_status().value_or(0), kHttpBadGateway);
+}
+
+void ExpectJsonHttpErrorDetails(const RecordingObserver& observer) {
+  ASSERT_FALSE(observer.errors.empty());
+  const auto& error = observer.errors.front();
+  EXPECT_EQ(error.protocol_code().value_or(""), kUpstreamFailureCode);
+  EXPECT_NE(error.message().find(kUpstreamFailureBody), std::string::npos);
   EXPECT_FALSE(observer.completed);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(HttpJsonStreamingIntegrationTest, NonSuccessHttpStatusPreservesJsonErrorBody) {
   auto transport =
       MakeStreamingTransport([](const HttpRequest&, const a2a::client::HttpStreamMetadataHandler& on_metadata,
                                 const a2a::client::HttpStreamChunkHandler& on_chunk,
                                 const a2a::client::StreamCancelled&) -> a2a::core::Result<HttpClientResponse> {
-        HttpClientResponse response{.status_code = kHttpBadGateway,
-                                    .headers = {{"A2A-Version", "1.0"},
-                                                {std::string(a2a::core::http::kContentTypeHeaderName),
-                                                 std::string(a2a::core::http::kContentTypeApplicationJson)}},
-                                    .body = ""};
-        const auto metadata = on_metadata(response);
-        if (!metadata.ok()) {
-          return metadata.error();
-        }
-        const auto body = on_chunk(kUpstreamFailureBody);
-        if (!body.ok()) {
-          return body.error();
-        }
-        return response;
+        return EmitJsonErrorResponse(on_metadata, on_chunk);
       });
 
   A2AClient client(std::move(transport));
   RecordingObserver observer;
-  lf::a2a::v1::SendMessageRequest request;
-  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
-
-  auto stream = client.SendStreamingMessage(request, observer);
+  auto stream = client.SendStreamingMessage(MakeStreamingMessageRequest(), observer);
   ASSERT_TRUE(stream.ok()) << stream.error().message();
-  ASSERT_TRUE(observer.WaitForCompletion(std::chrono::milliseconds(2000)));
+  ASSERT_TRUE(observer.WaitForCompletion(kStreamCompletionTimeout));
   stream.value()->Cancel();
-
-  ASSERT_FALSE(observer.errors.empty());
-  EXPECT_EQ(observer.errors.front().code(), a2a::core::ErrorCode::kRemoteProtocol);
-  ASSERT_TRUE(observer.errors.front().http_status().has_value());
-  EXPECT_EQ(observer.errors.front().http_status().value_or(0), kHttpBadGateway);
-  EXPECT_EQ(observer.errors.front().protocol_code().value_or(""), kUpstreamFailureCode);
-  EXPECT_NE(observer.errors.front().message().find(kUpstreamFailureBody), std::string::npos);
-  EXPECT_FALSE(observer.completed);
+  ExpectJsonHttpError(observer);
+  ExpectJsonHttpErrorDetails(observer);
 }
 
 TEST(HttpJsonStreamingIntegrationTest, RejectsContentTypePrefixLookalike) {

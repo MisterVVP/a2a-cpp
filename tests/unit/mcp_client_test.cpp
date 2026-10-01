@@ -220,7 +220,7 @@ std::string SseBody(std::string_view data) {
   return body;
 }
 
-a2a::core::Result<std::string> ReadFromResponse(std::string body, std::string_view token = "unit-secret") {
+a2a::core::Result<std::string> ReadFromResponse(std::string_view body, std::string_view token = "unit-secret") {
   ScriptedServer server({HttpResponse(kOk, body)});
   return tutorial_mcp::Client(server.endpoint(), std::string(token), kTimeout).ReadResource(kUri);
 }
@@ -267,7 +267,7 @@ TEST(McpClientTest, PreservesJsonRpcErrorCodeAndMessage) {
   EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
   EXPECT_EQ(result.error().message(), kRemoteErrorMessage);
   ASSERT_TRUE(result.error().protocol_code().has_value());
-  EXPECT_EQ(*result.error().protocol_code(), kRemoteErrorProtocolCode);
+  EXPECT_EQ(result.error().protocol_code().value_or(std::string{}), kRemoteErrorProtocolCode);
 }
 
 TEST(McpClientTest, RejectsMismatchedResourceUri) {
