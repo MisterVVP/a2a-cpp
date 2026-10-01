@@ -30,7 +30,7 @@ docker compose -f examples/tutorials/job_application_assistant/compose.yaml run 
 
 ## Run individually on Linux
 
-First [install the SDK for an individual local run](../README.md#build-the-sdk-for-an-individual-local-run), then build this tutorial:
+First [install the SDK for an individual local run](../README.md#build-the-sdk-for-an-individual-job-application-run), then build this tutorial:
 
 ```bash
 cmake -S examples/tutorials/job_application_assistant \

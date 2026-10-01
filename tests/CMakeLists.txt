@@ -152,7 +152,7 @@ add_executable(mcp_client_test
 )
 
 target_include_directories(mcp_client_test PRIVATE ${PROJECT_SOURCE_DIR}/examples/tutorials/common)
-target_link_libraries(mcp_client_test PRIVATE a2a::http a2a::core GTest::gtest_main)
+target_link_libraries(mcp_client_test PRIVATE a2a::client a2a::http a2a::core GTest::gtest_main)
 if(WIN32)
   target_link_libraries(mcp_client_test PRIVATE ws2_32)
 endif()

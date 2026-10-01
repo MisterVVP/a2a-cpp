@@ -1,9 +1,14 @@
 #include "mcp_client.h"
 
+#include <cmath>
+#include <optional>
 #include <sstream>
 #include <utility>
 #include <vector>
 
+#include "a2a/client/sse_parser.h"
+#include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/protojson.h"
 #include "a2a/http/http_client.h"
 #include "google/protobuf/struct.pb.h"
@@ -28,9 +33,10 @@ std::string JsonString(std::string_view value) {
 
 std::string RequestBody(std::string_view uri) {
   std::ostringstream body;
-  body << R"({"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":)" << JsonString(uri)
-       << R"(,"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25",)"
-          R"("io.modelcontextprotocol/clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"},)"
+  body << R"({"jsonrpc":")" << kJsonRpcVersion << R"(","id":)" << kRequestId << R"(,"method":")" << kMethod
+       << R"(","params":{"uri":)" << JsonString(uri)
+       << R"(,"_meta":{"io.modelcontextprotocol/protocolVersion":")" << kProtocolVersion
+       << R"(","io.modelcontextprotocol/clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"},)"
           R"("io.modelcontextprotocol/clientCapabilities":{}}}})";
   return body.str();
 }
@@ -46,6 +52,79 @@ std::vector<a2a::http::Header> RequestHeaders(std::string_view uri, std::string_
           {.name = "Authorization", .value = std::move(authorization)}};
 }
 
+a2a::core::Result<google::protobuf::Struct> ParseJsonEnvelope(std::string_view body) {
+  google::protobuf::Struct envelope;
+  if (!a2a::core::JsonToMessage(body, &envelope).ok()) {
+    return a2a::core::Error::Validation("MCP service returned malformed JSON");
+  }
+  return envelope;
+}
+
+a2a::core::Result<google::protobuf::Struct> ParseSseEnvelope(std::string_view body) {
+  std::optional<google::protobuf::Struct> envelope;
+  a2a::client::SseParser parser;
+  const auto capture = [&envelope](const a2a::client::SseEvent& event) -> a2a::core::Result<void> {
+    if (event.data.empty()) {
+      return a2a::core::Error::Validation("MCP SSE response data is missing");
+    }
+    if (envelope.has_value()) {
+      return a2a::core::Error::Validation("MCP service returned multiple SSE messages");
+    }
+    auto parsed = ParseJsonEnvelope(event.data);
+    if (!parsed.ok()) {
+      return parsed.error();
+    }
+    envelope = std::move(parsed.value());
+    return {};
+  };
+  auto parsed = parser.Feed(body, capture);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  parsed = parser.Finish(capture);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  if (!envelope.has_value()) {
+    return a2a::core::Error::Validation("MCP service returned an empty SSE response");
+  }
+  return std::move(*envelope);
+}
+
+a2a::core::Result<google::protobuf::Struct> ParseResponseEnvelope(const a2a::http::Response& response) {
+  const auto content_type = a2a::core::http::FindHeaderValue(response.headers, a2a::core::http::kContentTypeHeaderName);
+  if (content_type.has_value() && a2a::core::http::IsSseContentType(*content_type)) {
+    return ParseSseEnvelope(response.body);
+  }
+  return ParseJsonEnvelope(response.body);
+}
+
+std::optional<a2a::core::Error> JsonRpcError(const google::protobuf::Struct& envelope) {
+  const auto error = envelope.fields().find("error");
+  if (error == envelope.fields().end()) {
+    return std::nullopt;
+  }
+  if (error->second.kind_case() != google::protobuf::Value::kStructValue) {
+    return a2a::core::Error::Validation("MCP JSON-RPC error object is malformed");
+  }
+  const auto& error_fields = error->second.struct_value().fields();
+  const auto code = error_fields.find("code");
+  if (code == error_fields.end() || code->second.kind_case() != google::protobuf::Value::kNumberValue) {
+    return a2a::core::Error::Validation("MCP JSON-RPC error object is malformed");
+  }
+  const double code_value = code->second.number_value();
+  if (!std::isfinite(code_value) || std::trunc(code_value) != code_value) {
+    return a2a::core::Error::Validation("MCP JSON-RPC error object is malformed");
+  }
+  const auto message = error_fields.find("message");
+  if (message == error_fields.end() || message->second.kind_case() != google::protobuf::Value::kStringValue) {
+    return a2a::core::Error::Validation("MCP JSON-RPC error object is malformed");
+  }
+  std::ostringstream protocol_code;
+  protocol_code << code_value;
+  return a2a::core::Error::RemoteProtocol(message->second.string_value()).WithProtocolCode(protocol_code.str());
+}
+
 a2a::core::Result<const google::protobuf::Struct*> ValidateEnvelope(const google::protobuf::Struct& envelope) {
   const auto version = envelope.fields().find("jsonrpc");
   if (version == envelope.fields().end() || version->second.kind_case() != google::protobuf::Value::kStringValue ||
@@ -56,6 +135,10 @@ a2a::core::Result<const google::protobuf::Struct*> ValidateEnvelope(const google
   if (id == envelope.fields().end() || id->second.kind_case() != google::protobuf::Value::kNumberValue ||
       id->second.number_value() != static_cast<double>(kRequestId)) {
     return a2a::core::Error::Validation("MCP response ID does not match the request");
+  }
+  auto response_error = JsonRpcError(envelope);
+  if (response_error.has_value()) {
+    return std::move(*response_error);
   }
   const auto result = envelope.fields().find("result");
   if (result == envelope.fields().end() || result->second.kind_case() != google::protobuf::Value::kStructValue) {
@@ -118,11 +201,11 @@ a2a::core::Result<std::string> Client::ReadResource(std::string_view uri) const 
     message.append(std::to_string(response.value().status_code));
     return a2a::core::Error::Internal(std::move(message));
   }
-  google::protobuf::Struct envelope;
-  if (!a2a::core::JsonToMessage(response.value().body, &envelope).ok()) {
-    return a2a::core::Error::Validation("MCP service returned malformed JSON");
+  auto envelope = ParseResponseEnvelope(response.value());
+  if (!envelope.ok()) {
+    return envelope.error();
   }
-  auto result = ValidateEnvelope(envelope);
+  auto result = ValidateEnvelope(envelope.value());
   if (!result.ok()) {
     return result.error();
   }

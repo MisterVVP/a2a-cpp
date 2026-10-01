@@ -47,6 +47,16 @@ constexpr std::string_view kUri = "fixture://resource";
 constexpr std::string_view kText = "fixture text";
 constexpr std::string_view kResumeResourceField = "resume_resource";
 constexpr std::string_view kTicketResourceField = "ticket_resource";
+constexpr std::string_view kJsonContentType = "application/json";
+constexpr std::string_view kSseContentType = "text/event-stream; charset=utf-8";
+constexpr std::string_view kSseEventPrefix = "event: message\ndata: ";
+constexpr std::string_view kSseEventTerminator = "\n\n";
+constexpr std::string_view kRemoteErrorMessage = "Resource not found";
+constexpr std::string_view kRemoteErrorProtocolCode = "-32002";
+constexpr std::string_view kMalformedErrorBody =
+    R"({"jsonrpc":"2.0","id":1,"error":{"code":"invalid","message":"bad code"}})";
+constexpr std::string_view kRemoteErrorBody =
+    R"({"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Resource not found"}})";
 
 void CloseSocket(Socket socket) {
 #ifdef _WIN32
@@ -79,10 +89,12 @@ bool StartSockets() {
 }
 #endif
 
-std::string HttpResponse(int status, std::string_view body, std::string_view extra_headers = {}) {
+std::string HttpResponse(int status, std::string_view body, std::string_view extra_headers = {},
+                         std::string_view content_type = kJsonContentType) {
   std::string response;
   response.reserve(kResponseCapacityOverhead + body.size() + extra_headers.size());
-  response.append("HTTP/1.1 ").append(std::to_string(status)).append(" Test\r\nContent-Type: application/json\r\n");
+  response.append("HTTP/1.1 ").append(std::to_string(status)).append(" Test\r\nContent-Type: ");
+  response.append(content_type).append("\r\n");
   response.append(extra_headers);
   response.append("Content-Length: ").append(std::to_string(body.size())).append("\r\nConnection: close\r\n\r\n");
   response.append(body);
@@ -201,6 +213,13 @@ std::string SuccessfulBody(std::string_view uri = kUri, std::string_view text = 
   return body;
 }
 
+std::string SseBody(std::string_view data) {
+  std::string body;
+  body.reserve(kSseEventPrefix.size() + data.size() + kSseEventTerminator.size());
+  body.append(kSseEventPrefix).append(data).append(kSseEventTerminator);
+  return body;
+}
+
 a2a::core::Result<std::string> ReadFromResponse(std::string body, std::string_view token = "unit-secret") {
   ScriptedServer server({HttpResponse(kOk, body)});
   return tutorial_mcp::Client(server.endpoint(), std::string(token), kTimeout).ReadResource(kUri);
@@ -223,13 +242,30 @@ TEST(McpClientTest, SendsStatelessAuthenticatedProtocolRequestAndReadsText) {
 }
 
 TEST(McpClientTest, RejectsInvalidResponses) {
-  constexpr std::array<std::string_view, 5> invalid_responses = {
+  constexpr std::array<std::string_view, 6> invalid_responses = {
       "not-json", R"({"jsonrpc":"1.0","id":1,"result":{"contents":[]}})",
       R"({"jsonrpc":"2.0","id":7,"result":{"contents":[]}})", R"({"jsonrpc":"2.0","id":1,"result":{}})",
-      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://resource","text":""}]}})"};
+      R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://resource","text":""}]}})",
+      kMalformedErrorBody};
   for (const auto response : invalid_responses) {
     EXPECT_FALSE(ReadFromResponse(std::string(response)).ok());
   }
+}
+
+TEST(McpClientTest, ReadsTextFromSseResponse) {
+  ScriptedServer server({HttpResponse(kOk, SseBody(SuccessfulBody()), {}, kSseContentType)});
+  const auto result = tutorial_mcp::Client(server.endpoint(), "unit-secret", kTimeout).ReadResource(kUri);
+  ASSERT_TRUE(result.ok()) << result.error().message();
+  EXPECT_EQ(result.value(), kText);
+}
+
+TEST(McpClientTest, PreservesJsonRpcErrorCodeAndMessage) {
+  const auto result = ReadFromResponse(std::string(kRemoteErrorBody));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kRemoteProtocol);
+  EXPECT_EQ(result.error().message(), kRemoteErrorMessage);
+  ASSERT_TRUE(result.error().protocol_code().has_value());
+  EXPECT_EQ(*result.error().protocol_code(), kRemoteErrorProtocolCode);
 }
 
 TEST(McpClientTest, RejectsMismatchedResourceUri) {
