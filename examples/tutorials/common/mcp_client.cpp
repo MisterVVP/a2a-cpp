@@ -34,8 +34,8 @@ std::string JsonString(std::string_view value) {
 std::string RequestBody(std::string_view uri) {
   std::ostringstream body;
   body << R"({"jsonrpc":")" << kJsonRpcVersion << R"(","id":)" << kRequestId << R"(,"method":")" << kMethod
-       << R"(","params":{"uri":)" << JsonString(uri)
-       << R"(,"_meta":{"io.modelcontextprotocol/protocolVersion":")" << kProtocolVersion
+       << R"(","params":{"uri":)" << JsonString(uri) << R"(,"_meta":{"io.modelcontextprotocol/protocolVersion":")"
+       << kProtocolVersion
        << R"(","io.modelcontextprotocol/clientInfo":{"name":"a2a-cpp-tutorial","version":"1.0.0"},)"
           R"("io.modelcontextprotocol/clientCapabilities":{}}}})";
   return body.str();

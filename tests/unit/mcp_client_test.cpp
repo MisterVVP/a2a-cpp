@@ -243,8 +243,10 @@ TEST(McpClientTest, SendsStatelessAuthenticatedProtocolRequestAndReadsText) {
 
 TEST(McpClientTest, RejectsInvalidResponses) {
   constexpr std::array<std::string_view, 6> invalid_responses = {
-      "not-json", R"({"jsonrpc":"1.0","id":1,"result":{"contents":[]}})",
-      R"({"jsonrpc":"2.0","id":7,"result":{"contents":[]}})", R"({"jsonrpc":"2.0","id":1,"result":{}})",
+      "not-json",
+      R"({"jsonrpc":"1.0","id":1,"result":{"contents":[]}})",
+      R"({"jsonrpc":"2.0","id":7,"result":{"contents":[]}})",
+      R"({"jsonrpc":"2.0","id":1,"result":{}})",
       R"({"jsonrpc":"2.0","id":1,"result":{"contents":[{"uri":"fixture://resource","text":""}]}})",
       kMalformedErrorBody};
   for (const auto response : invalid_responses) {
