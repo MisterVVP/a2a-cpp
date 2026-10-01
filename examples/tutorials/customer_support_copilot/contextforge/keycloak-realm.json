@@ -1,7 +1,6 @@
 {
   "realm": "a2a-tutorial",
   "enabled": true,
-  "accessTokenLifespan": 86400,
   "users": [
     {
       "username": "svc-mcp-agent@example.com",
@@ -28,6 +27,9 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
+      "attributes": {
+        "access.token.lifespan": "86400"
+      },
       "protocolMappers": [
         {
           "name": "mcp-gateway-audience",
