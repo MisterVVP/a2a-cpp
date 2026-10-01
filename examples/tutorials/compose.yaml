@@ -1,0 +1,13 @@
+include:
+  - job_application_assistant/compose.yaml
+  - path:
+      - customer_support_copilot/compose.yaml
+      - customer_support_copilot/compose.contextforge.yaml
+
+services:
+  tutorials-smoke:
+    image: alpine:3.22
+    command: ["echo", "Tutorial Docker smoke tests passed"]
+    depends_on:
+      application-smoke: {condition: service_completed_successfully}
+      support-smoke: {condition: service_completed_successfully}

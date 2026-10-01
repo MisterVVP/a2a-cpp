@@ -129,7 +129,9 @@ See [`benchmarks/README.md`](benchmarks/README.md) for microbenchmarks and
 
 ## Production tutorials
 
-After the focused examples in `examples/apps/`, try the realistic multi-process applications in `examples/tutorials/`. Both discover Agent Cards and delegate over HTTP+JSON, run offline in deterministic mode, and optionally use an OpenAI-compatible endpoint. Run `./scripts/run_tutorials.sh` for the downstream-install smoke flow. The suggested learning path is `hello_agent` → Job Application Assistant or Customer Support Copilot → a future streaming tutorial.
+The realistic multi-process tutorials under `examples/tutorials/` demonstrate Agent Card discovery and HTTP+JSON A2A delegation. They support native Linux runs and cross-platform Docker Compose, including Docker Desktop on Windows without WSL.
+
+See the [production tutorials guide](examples/tutorials/README.md) to run both tutorials or choose an individual tutorial.
 
 ## License
 

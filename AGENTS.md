@@ -34,6 +34,11 @@ AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assiste
   - Keep functions focused and small.
   - Prefer composition over inheritance.
   - Separate interface from implementation to reduce coupling.
+  - Prefer the simplest correct solution when it is equally efficient; do not add indirection, helper namespaces,
+    wrappers, or generic abstractions when direct code is just as clear and does not reduce performance.
+  - Introduce abstractions when they enforce an invariant, isolate a real dependency, improve testability, or remove
+    meaningful duplication. Small local duplication is preferable when abstraction would make tutorial/example code
+    harder to follow.
 - Readability and maintainability:
   - Choose descriptive names.
   - Avoid surprising side effects.

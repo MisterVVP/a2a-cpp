@@ -17,10 +17,25 @@ services:
   application-coordinator:
     build: {context: ../../.., dockerfile: examples/tutorials/job_application_assistant/Dockerfile}
     command: ["/opt/tutorial/application_coordinator", "0.0.0.0:8080"]
+    healthcheck: {test: ["CMD", "wget", "-q", "-T", "1", "-O", "/dev/null", "http://127.0.0.1:8080/.well-known/agent-card.json"], interval: 2s, timeout: 1s, retries: 20}
     environment:
       <<: *model-environment
       A2A_TUTORIAL_SPECIALIST_URL: "http://profile-analyst:8081"
       A2A_TUTORIAL_PUBLIC_URL: "http://application-coordinator:8080/a2a"
-    depends_on: [profile-analyst]
+    depends_on:
+      profile-analyst: {condition: service_healthy}
     ports: ["8080:8080"]
     extra_hosts: ["host.docker.internal:host-gateway"]
+  application-smoke:
+    build: {context: ../../.., dockerfile: examples/tutorials/job_application_assistant/Dockerfile}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        /opt/tutorial/application_client \
+          --coordinator-url http://application-coordinator:8080 \
+          --resume-file samples/resume.txt \
+          --job-file samples/job_description.txt > /tmp/application-smoke.out
+        cat /tmp/application-smoke.out
+        grep -Fq "Application draft" /tmp/application-smoke.out
+    depends_on:
+      application-coordinator: {condition: service_healthy}

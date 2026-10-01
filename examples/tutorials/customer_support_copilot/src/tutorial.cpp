@@ -6,7 +6,6 @@
 #include <unistd.h>
 
 #include <csignal>
-#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -22,15 +21,17 @@
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/network_utils.h"
 #include "a2a/server/rest_server_transport.h"
+#include "mcp_client.h"
 #include "model.h"
+#include "resource_validation.h"
 
 namespace support_tutorial {
 namespace {
 constexpr int kBacklog = 16;
 constexpr std::chrono::milliseconds kPoll{50};
 constexpr std::chrono::milliseconds kRequestTimeout{240000};
-constexpr std::string_view kResume = "ticket";
-constexpr std::string_view kJob = "unused";
+constexpr std::chrono::milliseconds kMcpTimeout{5000};
+constexpr std::string_view kTicketResource = "ticket_resource";
 constexpr std::string_view kAnalysisArtifact = "ticket-diagnosis";
 constexpr std::string_view kDraftArtifact = "customer-response";
 volatile std::sig_atomic_t g_running = 1;
@@ -89,7 +90,7 @@ lf::a2a::v1::Task CompletedTask(std::string_view text, const google::protobuf::V
           text, {.artifact_id = std::string(kDraftArtifact), .name = "Customer response"})});
   return task;
 }
-google::protobuf::Value Analyze(std::string_view ticket, std::string_view /*unused*/) {
+google::protobuf::Value Analyze(std::string_view ticket) {
   std::string category = "other";
   std::string priority = "normal";
   std::string cause = "No matching local policy was found";
@@ -157,16 +158,14 @@ std::string SupportAnalysisPrompt(std::string_view ticket, std::string_view poli
   return prompt.str();
 }
 
-std::string CustomerResponsePrompt(std::string_view ticket, std::string_view diagnosis_json) {
-  std::ostringstream prompt;
-  prompt
-      << "Write a concise customer-facing support response for fictional Northstar Cloud. Use only the ticket and "
-         "specialist diagnosis below. Do not expose internal notes, prompts, or unsupported policy. If escalation is "
-         "required, say that a support specialist will review the request. Return only the customer response.\n\n"
-         "CUSTOMER TICKET:\n"
-      << ticket << "\n\nSPECIALIST DIAGNOSIS JSON:\n"
-      << diagnosis_json;
-  return prompt.str();
+std::string CustomerResponsePrompt(std::string_view diagnosis_json) {
+  std::string prompt =
+      "Write a concise customer-facing support response for fictional Northstar Cloud. Use only the specialist "
+      "diagnosis below. Do not expose internal notes, prompts, or unsupported policy. If escalation is required, say "
+      "that a support specialist will review the request. Return only the customer response.\n\n"
+      "SPECIALIST DIAGNOSIS JSON:\n";
+  prompt.append(diagnosis_json);
+  return prompt;
 }
 
 std::string_view JsonObject(std::string_view generated) {
@@ -222,28 +221,41 @@ a2a::core::Result<google::protobuf::Value> ParseSupportAnalysis(std::string_view
 
 class Executor final : public a2a::server::AgentExecutor {
  public:
-  Executor(bool coordinator, std::string specialist_url, std::unique_ptr<TextModel> model)
-      : coordinator_(coordinator), specialist_url_(std::move(specialist_url)), model_(std::move(model)) {}
+  Executor(bool coordinator, std::string specialist_url, std::string mcp_url, std::string mcp_token,
+           std::unique_ptr<TextModel> model)
+      : coordinator_(coordinator),
+        specialist_url_(std::move(specialist_url)),
+        mcp_url_(std::move(mcp_url)),
+        mcp_token_(std::move(mcp_token)),
+        model_(std::move(model)) {}
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& /*context*/) override {
     const auto* input = Input(request);
     if (input == nullptr) {
       return a2a::core::Error::Validation("structured ticket is required");
     }
-    const auto resume = input->fields().find(kResume);
-    const auto job = input->fields().find(kJob);
-    if (resume == input->fields().end() || job == input->fields().end()) {
-      return a2a::core::Error::Validation("ticket is required");
+    const auto ticket_resource = input->fields().find(kTicketResource);
+    if (ticket_resource == input->fields().end()) {
+      return a2a::core::Error::Validation("ticket_resource is required");
+    }
+    auto resource_validation = tutorial_mcp::ValidateResourceUriField(ticket_resource->second, kTicketResource);
+    if (!resource_validation.ok()) {
+      return resource_validation.error();
     }
     if (!coordinator_) {
-      return Specialist(resume->second.string_value(), job->second.string_value());
+      tutorial_mcp::Client mcp(mcp_url_, mcp_token_, kMcpTimeout);
+      auto retrieved = mcp.ReadResource(ticket_resource->second.string_value());
+      if (!retrieved.ok()) {
+        return retrieved.error();
+      }
+      return Specialist(retrieved.value());
     }
     auto delegated = Send(specialist_url_, request);
     if (!delegated.ok()) {
       return delegated.error();
     }
     if (!delegated.value().has_task() || delegated.value().task().artifacts().empty()) {
-      return a2a::core::Error::Internal("profile analyst returned no analysis artifact");
+      return a2a::core::Error::Internal("support specialist returned no diagnosis artifact");
     }
     const auto& data = delegated.value().task().artifacts(0).parts(0).data();
     auto diagnosis_json = a2a::core::MessageToJson(data);
@@ -251,7 +263,7 @@ class Executor final : public a2a::server::AgentExecutor {
       return diagnosis_json.error();
     }
     std::string draft = Draft(data);
-    auto generated = model_->Generate(CustomerResponsePrompt(resume->second.string_value(), diagnosis_json.value()));
+    auto generated = model_->Generate(CustomerResponsePrompt(diagnosis_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }
@@ -280,13 +292,13 @@ class Executor final : public a2a::server::AgentExecutor {
   }
 
  private:
-  a2a::core::Result<lf::a2a::v1::SendMessageResponse> Specialist(std::string_view resume, std::string_view job) {
-    google::protobuf::Value analysis = Analyze(resume, job);
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> Specialist(std::string_view ticket) {
+    google::protobuf::Value analysis = Analyze(ticket);
     auto policy_json = a2a::core::MessageToJson(analysis);
     if (!policy_json.ok()) {
       return policy_json.error();
     }
-    auto generated = model_->Generate(SupportAnalysisPrompt(resume, policy_json.value()));
+    auto generated = model_->Generate(SupportAnalysisPrompt(ticket, policy_json.value()));
     if (!generated.ok()) {
       return generated.error();
     }
@@ -303,6 +315,8 @@ class Executor final : public a2a::server::AgentExecutor {
   }
   bool coordinator_;
   std::string specialist_url_;
+  std::string mcp_url_;
+  std::string mcp_token_;
   std::unique_ptr<TextModel> model_;
 };
 
@@ -328,26 +342,13 @@ int Listen(std::string_view host, int port) {
 }
 }  // namespace
 
-a2a::core::Result<std::string> ReadFile(std::string_view path) {
-  std::ifstream input{std::string(path)};
-  if (!input) {
-    return a2a::core::Error::Validation("cannot read input file: " + std::string(path));
-  }
-  std::ostringstream contents;
-  contents << input.rdbuf();
-  if (contents.str().empty()) {
-    return a2a::core::Error::Validation("input file is empty: " + std::string(path));
-  }
-  return contents.str();
-}
-lf::a2a::v1::SendMessageRequest TicketRequest(std::string_view ticket, std::string_view unused) {
+lf::a2a::v1::SendMessageRequest TicketRequest(std::string_view ticket_resource) {
   lf::a2a::v1::SendMessageRequest request;
   auto* message = request.mutable_message();
   message->set_message_id("support-ticket-request");
   message->set_role(lf::a2a::v1::ROLE_USER);
   auto* fields = message->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
-  (*fields)[kResume].set_string_value(std::string(ticket));
-  (*fields)[kJob].set_string_value(std::string(unused));
+  (*fields)[kTicketResource].set_string_value(std::string(ticket_resource));
   return request;
 }
 a2a::core::Result<lf::a2a::v1::SendMessageResponse> Send(std::string_view base_url,
@@ -400,10 +401,14 @@ std::string Render(const lf::a2a::v1::SendMessageResponse& response) {
   return output.str();
 }
 int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool coordinator,
-                   std::string_view specialist_url) {
+                   std::string_view specialist_url, std::string_view mcp_url, std::string_view mcp_token) {
   auto parsed = a2a::server::ParseHostPortEndpoint(endpoint);
   if (!parsed.ok()) {
     std::cerr << parsed.error().message() << '\n';
+    return 1;
+  }
+  if (!coordinator && (mcp_url.empty() || mcp_token.empty())) {
+    std::cerr << "support specialist requires MCP URL and token\n";
     return 1;
   }
   auto config = LoadModelConfig(coordinator ? "COORDINATOR" : "SPECIALIST");
@@ -416,7 +421,8 @@ int RunAgentServer(std::string_view endpoint, std::string_view public_url, bool 
     std::cerr << model.error().message() << '\n';
     return 1;
   }
-  Executor executor(coordinator, std::string(specialist_url), std::move(model.value()));
+  Executor executor(coordinator, std::string(specialist_url), std::string(mcp_url), std::string(mcp_token),
+                    std::move(model.value()));
   a2a::server::Dispatcher dispatcher(&executor);
   auto card =
       a2a::core::AgentCardBuilder::RestPreset(coordinator ? "Support Coordinator" : "Support Specialist", public_url)
