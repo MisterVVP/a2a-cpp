@@ -1,7 +1,7 @@
 {
   "realm": "a2a-tutorial",
   "enabled": true,
-  "accessTokenLifespan": 300,
+  "accessTokenLifespan": 86400,
   "users": [
     {
       "username": "svc-mcp-agent@example.com",
