@@ -15,7 +15,7 @@ namespace a2a::tests::sut {
 
 class TckHttpServer final {
  public:
-  TckHttpServer(std::string_view host, int port, const server::TransportMux& mux);
+  TckHttpServer(std::string_view host, int port, const server::TransportMux& mux, bool enable_diagnostics);
   ~TckHttpServer();
 
   TckHttpServer(const TckHttpServer&) = delete;

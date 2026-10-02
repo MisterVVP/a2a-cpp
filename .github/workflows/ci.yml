@@ -103,7 +103,7 @@ jobs:
         run: >-
           cmake --build build-subscription-diagnostics
           --target subscription_diagnostics_test a2a_performance_driver
-          a2a_wire_performance_driver tck_sut -j"$(nproc)"
+          a2a_wire_performance_driver performance_sut -j"$(nproc)"
       - name: Test subscription diagnostics aggregation
         run: ./build-subscription-diagnostics/tests/subscription_diagnostics_test
       - name: Run subscription diagnostics smoke
@@ -111,7 +111,7 @@ jobs:
           A2A_SUBSCRIPTION_DIAGNOSTICS: "1"
           A2A_PERF_DRIVER: ${{ github.workspace }}/build-subscription-diagnostics/tests/a2a_performance_driver
           A2A_PERF_WIRE_DRIVER: ${{ github.workspace }}/build-subscription-diagnostics/tests/a2a_wire_performance_driver
-          A2A_TCK_SUT: ${{ github.workspace }}/build-subscription-diagnostics/tests/tck_sut
+          A2A_PERF_SUT: ${{ github.workspace }}/build-subscription-diagnostics/tests/performance_sut
         run: >-
           ./scripts/run_performance_tests.sh
           --transports http_json

@@ -120,11 +120,12 @@ struct HttpDiagnostics final {
 #endif
 };
 
-[[nodiscard]] bool IsDiagnosticsResetRequest(const server::HttpServerRequest& request) {
+[[nodiscard]] bool IsDiagnosticsResetRequest(const server::HttpServerRequest& request, bool enable_diagnostics) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-  return request.method == core::http::kMethodPost && request.target == kDiagnosticsResetPath;
+  return enable_diagnostics && request.method == core::http::kMethodPost && request.target == kDiagnosticsResetPath;
 #else
   (void)request;
+  (void)enable_diagnostics;
   return false;
 #endif
 }
@@ -167,7 +168,7 @@ void RecordResponse(const server::HttpServerResponse& response, bool close_conne
 }
 
 void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectionRegistry& registry,
-                          HttpDiagnostics& diagnostics) {
+                          HttpDiagnostics& diagnostics, bool enable_diagnostics) {
   SocketTransport socket_transport(fd);
   const server::HttpAdapter adapter;
   server::HttpConnectionState connection_state;
@@ -183,7 +184,7 @@ void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectio
       break;
     }
     server::HttpServerRequest request = std::move(parsed.value());
-    const bool is_diagnostics_reset = IsDiagnosticsResetRequest(request);
+    const bool is_diagnostics_reset = IsDiagnosticsResetRequest(request, enable_diagnostics);
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     std::shared_lock measurement_lock(diagnostics.measurement_mutex, std::defer_lock);
     std::unique_lock reset_lock(diagnostics.measurement_mutex, std::defer_lock);
@@ -229,7 +230,8 @@ void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectio
 
 class TckHttpServer::Impl final {
  public:
-  Impl(std::string_view host, int port, const server::TransportMux& mux) : host_(host), port_(port), mux_(mux) {}
+  Impl(std::string_view host, int port, const server::TransportMux& mux, bool enable_diagnostics)
+      : host_(host), port_(port), mux_(mux), enable_diagnostics_(enable_diagnostics) {}
 
   ~Impl() {
     CloseListener();
@@ -255,6 +257,7 @@ class TckHttpServer::Impl final {
   int server_fd_ = -1;
   HttpConnectionRegistry registry_;
   HttpDiagnostics diagnostics_;
+  bool enable_diagnostics_;
   std::vector<std::thread> connection_threads_;
 #ifdef _WIN32
   bool winsock_started_ = false;
@@ -315,7 +318,7 @@ void TckHttpServer::Impl::AcceptConnections(const volatile std::sig_atomic_t& ke
     if (fd >= 0) {
       registry_.Add(fd);
       connection_threads_.emplace_back(HandleHttpConnection, fd, std::cref(mux_), std::ref(registry_),
-                                       std::ref(diagnostics_));
+                                       std::ref(diagnostics_), enable_diagnostics_);
       continue;
     }
 #ifdef _WIN32
@@ -351,6 +354,9 @@ void TckHttpServer::Impl::JoinConnections() {
 }
 
 void TckHttpServer::Impl::EmitDiagnostics() const {
+  if (!enable_diagnostics_) {
+    return;
+  }
   const std::uint64_t accepted = diagnostics_.accepted_unary_connections.load(std::memory_order_relaxed);
   const std::uint64_t unary = diagnostics_.completed_unary_operations.load(std::memory_order_relaxed);
   const std::uint64_t stream_connections = diagnostics_.finite_stream_connections.load(std::memory_order_relaxed);
@@ -367,8 +373,8 @@ void TckHttpServer::Impl::EmitDiagnostics() const {
             << std::flush;
 }
 
-TckHttpServer::TckHttpServer(std::string_view host, int port, const server::TransportMux& mux)
-    : impl_(std::make_unique<Impl>(host, port, mux)) {}
+TckHttpServer::TckHttpServer(std::string_view host, int port, const server::TransportMux& mux, bool enable_diagnostics)
+    : impl_(std::make_unique<Impl>(host, port, mux, enable_diagnostics)) {}
 TckHttpServer::~TckHttpServer() = default;
 bool TckHttpServer::Start() { return impl_->Start(); }
 void TckHttpServer::AcceptConnections(const volatile std::sig_atomic_t& keep_running) {

@@ -65,7 +65,7 @@ SUBSCRIPTION_DIAGNOSTICS_BUILD_SUFFIX = "-subscription-diagnostics"
 SUBSCRIPTION_DIAGNOSTICS_CMAKE_CACHE_PREFIX = "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS:BOOL="
 DRIVER_NAME = "a2a_performance_driver"
 WIRE_DRIVER_NAME = "a2a_wire_performance_driver"
-SUT_NAME = "tck_sut"
+SUT_NAME = "performance_sut"
 DEFAULT_WARMUP_SECONDS = 1.0
 DEFAULT_DURATION_SECONDS = 0.0
 DEFAULT_REPORT_DIR = "perf-artifacts"
@@ -403,26 +403,26 @@ def ensure_wire_driver(config: RunnerConfig) -> Path:
 
 
 def ensure_sut(config: RunnerConfig) -> Path:
-    return ensure_executable(config, "A2A_TCK_SUT", SUT_NAME, "TCK SUT")
+    return ensure_executable(config, "A2A_PERF_SUT", SUT_NAME, "performance SUT")
 
 def wait_for_port(host: str, port: int, process: subprocess.Popen[str], log_path: Path) -> None:
     deadline = time.monotonic() + SUT_READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise ValueError(f"tck_sut exited before port {port} became ready; logs:\n{read_tail(log_path)}")
+            raise ValueError(f"performance_sut exited before port {port} became ready; logs:\n{read_tail(log_path)}")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.settimeout(0.5)
             if probe.connect_ex((host, port)) == 0:
                 return
         time.sleep(0.1)
-    raise ValueError(f"timed out waiting for tck_sut port {port}; logs:\n{read_tail(log_path)}")
+    raise ValueError(f"timed out waiting for performance_sut port {port}; logs:\n{read_tail(log_path)}")
 
 
 def find_available_sut_port(host: str = "127.0.0.1") -> int:
     # Do not ask the kernel for an ephemeral port here: after the probes close,
-    # that port can immediately be reused before tck_sut binds its listeners.
+    # that port can immediately be reused before performance_sut binds its listeners.
     # Randomizing the first pair also prevents parallel runners from all probing
-    # the same free pair before any tck_sut process has had a chance to bind it.
+    # the same free pair before any performance_sut process has had a chance to bind it.
     start_pair = secrets.randbelow(SUT_PORT_PAIR_COUNT)
     for offset in range(SUT_PORT_PAIR_COUNT):
         pair = (start_pair + offset) % SUT_PORT_PAIR_COUNT
@@ -435,7 +435,7 @@ def find_available_sut_port(host: str = "127.0.0.1") -> int:
             except OSError:
                 continue
         return port
-    raise ValueError("could not find adjacent free ports for tck_sut")
+    raise ValueError("could not find adjacent free ports for performance_sut")
 
 def read_tail(path: Path) -> str:
     if not path.exists():
@@ -493,7 +493,7 @@ class SutProcess:
         self.host = "127.0.0.1"
         self.port = port
         self.grpc_port = port + 1
-        self.log_path = config.report_dir / f"tck_sut_{store_backend}_{port}.log"
+        self.log_path = config.report_dir / f"performance_sut_{store_backend}_{port}.log"
         self.process: subprocess.Popen[str] | None = None
         self.sut = ensure_sut(config)
         self.store_backend = store_backend
@@ -541,7 +541,7 @@ class SutProcess:
                 self.process.wait(timeout=SUT_FORCE_KILL_TIMEOUT_SECONDS)
                 coordinate = f"{self.transport}/{self.store_backend}/c{self.concurrency}"
                 raise ValueError(
-                    f"tck_sut failed to terminate gracefully for {coordinate}; logs:\n{read_tail(self.log_path)}"
+                    f"performance_sut failed to terminate gracefully for {coordinate}; logs:\n{read_tail(self.log_path)}"
                 ) from timeout_error
 
 
@@ -569,7 +569,7 @@ def run_command_json(command: list[str], timeout_seconds: float, error_context: 
         if stderr.strip():
             message += f"; stderr: {stderr.strip()}"
         if log_path is not None:
-            message += f"; tck_sut logs:\n{read_tail(log_path)}"
+            message += f"; performance_sut logs:\n{read_tail(log_path)}"
         raise ValueError(message) from exc
     if process.returncode != 0:
         raise ValueError(f"{error_context} failed: {stderr.strip()}")

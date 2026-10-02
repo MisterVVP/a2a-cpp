@@ -148,9 +148,9 @@ Reports contain two clearly separated measurement paths:
 - In-process rows come from `a2a_performance_driver`. They exercise SDK service,
   executor, store, streaming, and push-notification code without sockets and are
   reported as `driver_type=cpp_sdk_in_process` with `transport_path=in_process`.
-- Wire rows come from `a2a_wire_performance_driver`. The runner starts the shared
-  `tck_sut` fixture, waits for HTTP and gRPC ports, and then the wire driver sends
-  real client calls to the selected endpoint. These rows are reported as
+- Wire rows come from `a2a_wire_performance_driver`. The runner starts the
+  `performance_sut` fixture, waits for HTTP and gRPC ports, and then the wire
+  driver sends real client calls to the selected endpoint. These rows are reported as
   `driver_type=wire_tck_sut` with `transport_path=wire_http_json`,
   `wire_jsonrpc`, or `wire_grpc`.
 
@@ -311,13 +311,15 @@ A2A_PERF_REPORT_DIR=perf-artifacts \
 `results.json` contains host metadata and a `results` array. Each result includes
 scenario name, transport, store backend, driver type, transport path, concurrency, configured request and duration limits, measured duration, operation counts, success and error counts, throughput, latency percentiles, max latency, scenario-specific delivery/event/callback counters, SDK commit SHA in metadata, and host OS/CPU metadata.
 
-## Shared TCK SUT wire-level driver
+## Performance SUT wire-level driver
 
-The `tck_sut` binary is shared infrastructure for TCK conformance and
-wire-level performance coverage. It is built by the performance runner when
-needed, started on a local test port, checked for HTTP and gRPC readiness, and
-stopped cleanly after each wire-level matrix entry. Startup logs are captured in
-the report directory as `tck_sut_<store>_<port>.log` for CI diagnosis.
+The dedicated `performance_sut` binary and the conformance-only `tck_sut`
+binary are thin entry points over one shared runtime. This keeps their endpoint,
+transport, store, fixture, and shutdown behavior aligned while allowing only
+`performance_sut` to collect HTTP and subscription diagnostics. The performance
+runner builds `performance_sut` when needed, or accepts its path through
+`A2A_PERF_SUT`. Logs are captured as
+`performance_sut_<store>_<port>.log` for CI diagnosis.
 
 Endpoint layout is the same as the TCK flow:
 
@@ -333,8 +335,8 @@ starts the PostgreSQL-backed SUT with a pool size of `64`, while the SDK-facing
 default remains `4` for compatibility. Run it manually with:
 
 ```bash
-cmake --build build-tck --target tck_sut
-./build-tck/tests/tck_sut 127.0.0.1:50061
+cmake --build build/performance --target performance_sut
+./build/performance/tests/performance_sut 127.0.0.1:50061
 ```
 
 Performance reports distinguish the low-overhead SDK service/store layer from
