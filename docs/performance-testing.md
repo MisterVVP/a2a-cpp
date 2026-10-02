@@ -81,7 +81,7 @@ Markdown restructuring does not transform those measurements.
 The cross-backend signals, PostgreSQL diagnostics, and `postgres-tail` median
 tables are also collapsible because they can contain many rows.
 
-If `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_TCK_SUT` are not set, the runner configures and builds the needed binaries in `build/performance`. Set `A2A_PERF_BUILD_DIR` to reuse another CMake build tree.
+If `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_PERF_SUT` are not set, the runner configures and builds the needed binaries in `build/performance`. Set `A2A_PERF_BUILD_DIR` to reuse another CMake build tree.
 
 ## Configuration
 
@@ -99,7 +99,7 @@ matching environment variables.
 | Report directory | `A2A_PERF_REPORT_DIR` | `perf-artifacts` |
 | Existing in-process driver binary | `A2A_PERF_DRIVER` | unset |
 | Existing wire driver binary | `A2A_PERF_WIRE_DRIVER` | unset |
-| Existing TCK SUT binary | `A2A_TCK_SUT` | unset |
+| Existing performance SUT binary | `A2A_PERF_SUT` | unset |
 | In-process driver timeout seconds | `A2A_PERF_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Wire driver timeout seconds | `A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS` | `600` |
 | Auto-build directory | `A2A_PERF_BUILD_DIR` | `build/performance` |
@@ -148,9 +148,9 @@ Reports contain two clearly separated measurement paths:
 - In-process rows come from `a2a_performance_driver`. They exercise SDK service,
   executor, store, streaming, and push-notification code without sockets and are
   reported as `driver_type=cpp_sdk_in_process` with `transport_path=in_process`.
-- Wire rows come from `a2a_wire_performance_driver`. The runner starts the shared
-  `tck_sut` fixture, waits for HTTP and gRPC ports, and then the wire driver sends
-  real client calls to the selected endpoint. These rows are reported as
+- Wire rows come from `a2a_wire_performance_driver`. The runner starts the
+  `performance_sut` fixture, waits for HTTP and gRPC ports, and then the wire
+  driver sends real client calls to the selected endpoint. These rows are reported as
   `driver_type=wire_tck_sut` with `transport_path=wire_http_json`,
   `wire_jsonrpc`, or `wire_grpc`.
 
@@ -204,7 +204,7 @@ option when `postgres` is selected and it needs to auto-build the driver.
 PostgreSQL runs must provide the same local DSN style used by the repository
 store tests (`A2A_TEST_POSTGRES_DSN`); CI starts a local PostgreSQL service for
 the performance job. For wire-level PostgreSQL rows, the runner maps
-`A2A_TEST_POSTGRES_DSN` to `A2A_TCK_POSTGRES_DSN` for `tck_sut` and assigns a
+`A2A_TEST_POSTGRES_DSN` to `A2A_TCK_POSTGRES_DSN` for `performance_sut` and assigns a
 matrix-scoped schema named `a2a_perf_<transport>_<concurrency>_<port>` so rows
 do not share the default `public` schema or accumulate data across matrix
 entries.
@@ -290,7 +290,7 @@ prints a workload estimate at startup and flushes `[perf] start ...` /
 `[perf] done ...` progress lines for every in-process and wire matrix row so
 GitHub Actions logs show forward progress. Both driver subprocesses have
 explicit timeouts controlled by `A2A_PERF_DRIVER_TIMEOUT_SECONDS` and
-`A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS`; on a wire timeout, recent `tck_sut` logs
+`A2A_PERF_WIRE_DRIVER_TIMEOUT_SECONDS`; on a wire timeout, recent `performance_sut` logs
 are included in the failure message when available.
 
 ## Larger local benchmark
@@ -311,13 +311,15 @@ A2A_PERF_REPORT_DIR=perf-artifacts \
 `results.json` contains host metadata and a `results` array. Each result includes
 scenario name, transport, store backend, driver type, transport path, concurrency, configured request and duration limits, measured duration, operation counts, success and error counts, throughput, latency percentiles, max latency, scenario-specific delivery/event/callback counters, SDK commit SHA in metadata, and host OS/CPU metadata.
 
-## Shared TCK SUT wire-level driver
+## Performance SUT wire-level driver
 
-The `tck_sut` binary is shared infrastructure for TCK conformance and
-wire-level performance coverage. It is built by the performance runner when
-needed, started on a local test port, checked for HTTP and gRPC readiness, and
-stopped cleanly after each wire-level matrix entry. Startup logs are captured in
-the report directory as `tck_sut_<store>_<port>.log` for CI diagnosis.
+The dedicated `performance_sut` binary and the conformance-only `tck_sut`
+binary are thin entry points over one shared runtime. This keeps their endpoint,
+transport, store, fixture, and shutdown behavior aligned while allowing only
+`performance_sut` to collect HTTP and subscription diagnostics. The performance
+runner builds `performance_sut` when needed, or accepts its path through
+`A2A_PERF_SUT`. Logs are captured as
+`performance_sut_<store>_<port>.log` for CI diagnosis.
 
 Endpoint layout is the same as the TCK flow:
 
@@ -333,8 +335,8 @@ starts the PostgreSQL-backed SUT with a pool size of `64`, while the SDK-facing
 default remains `4` for compatibility. Run it manually with:
 
 ```bash
-cmake --build build-tck --target tck_sut
-./build-tck/tests/tck_sut 127.0.0.1:50061
+cmake --build build/performance --target performance_sut
+./build/performance/tests/performance_sut 127.0.0.1:50061
 ```
 
 Performance reports distinguish the low-overhead SDK service/store layer from

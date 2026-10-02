@@ -352,7 +352,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             self.assertIn("fanout_count", csv_header)
             self.assertIn("history_depth", csv_header)
             self.assertIn("stream_completion_p50_ms", csv_header)
-            self.assertTrue(any(report_dir.glob("tck_sut_inmemory_*.log")))
+            self.assertTrue(any(report_dir.glob("performance_sut_inmemory_*.log")))
             self.assertIn("[perf] estimated_rows=", completed.stdout)
             self.assertIn("[perf] start in-process transport=grpc store=inmemory concurrency=1 requests=3", completed.stdout)
             self.assertIn("[perf] done  wire transport=grpc store=inmemory concurrency=1", completed.stdout)
@@ -571,7 +571,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             sut = runner.SutProcess.__new__(runner.SutProcess)
             sut.process = mock.Mock()
             sut.process.poll.return_value = None
-            sut.process.wait.side_effect = [subprocess.TimeoutExpired("tck_sut", 10.0), 0]
+            sut.process.wait.side_effect = [subprocess.TimeoutExpired("performance_sut", 10.0), 0]
             sut.log_path = log_path
             sut.transport = "http_json"
             sut.store_backend = "inmemory"
