@@ -17,13 +17,13 @@
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
+#include "sut/performance_sut_constants.h"
 
 namespace a2a::tests::sut {
 namespace {
 
 constexpr std::string_view kHttpDiagnosticsPrefix = "A2A_HTTP_DIAGNOSTICS";
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-constexpr std::string_view kDiagnosticsResetPath = "/_a2a/performance/reset-subscription-diagnostics";
 constexpr std::string_view kSubscriptionDiagnosticsPrefix = "A2A_SUBSCRIPTION_SERVER_DIAGNOSTICS";
 #endif
 
