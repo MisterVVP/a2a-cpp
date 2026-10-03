@@ -13,9 +13,11 @@ class TransportMux;
 
 namespace a2a::tests::sut {
 
+class SutRuntimeObserver;
+
 class TckHttpServer final {
  public:
-  TckHttpServer(std::string_view host, int port, const server::TransportMux& mux);
+  TckHttpServer(std::string_view host, int port, const server::TransportMux& mux, SutRuntimeObserver* observer);
   ~TckHttpServer();
 
   TckHttpServer(const TckHttpServer&) = delete;
@@ -27,7 +29,6 @@ class TckHttpServer final {
   void AcceptConnections(const volatile std::sig_atomic_t& keep_running);
   void ShutdownActiveSockets();
   void JoinConnections();
-  void EmitDiagnostics() const;
 
  private:
   class Impl;

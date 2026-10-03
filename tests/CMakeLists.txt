@@ -54,7 +54,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_executable(subscription_diagnostics_test unit/subscription_diagnostics_test.cpp)
   target_include_directories(subscription_diagnostics_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(subscription_diagnostics_test PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
-  target_link_libraries(subscription_diagnostics_test PRIVATE a2a::core GTest::gtest_main)
+  target_link_libraries(subscription_diagnostics_test PRIVATE a2a_core_diagnostics GTest::gtest_main)
   gtest_discover_tests(subscription_diagnostics_test)
 endif()
 
@@ -867,28 +867,61 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::proto_generated
 )
 
-add_executable(tck_sut
-  sut/tck_sut.cpp
+add_library(sut_runtime STATIC
+  sut/sut_runtime.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
-target_include_directories(tck_sut PRIVATE ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/tests/support/example_support)
-target_link_libraries(tck_sut PRIVATE a2a::server a2a::core a2a::proto_generated)
+target_include_directories(sut_runtime
+  PUBLIC ${CMAKE_SOURCE_DIR}/tests
+  PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
+)
+target_link_libraries(sut_runtime PUBLIC a2a::server a2a::core a2a::proto_generated)
 
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-  target_include_directories(tck_sut PRIVATE ${PROJECT_SOURCE_DIR}/src)
-  target_compile_definitions(tck_sut PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+  add_library(sut_runtime_diagnostics STATIC
+    sut/sut_runtime.cpp
+    sut/tck_sut_http_server.cpp
+    sut/tck_sut_store.cpp
+  )
+  target_include_directories(sut_runtime_diagnostics
+    PUBLIC ${CMAKE_SOURCE_DIR}/tests
+    PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
+  )
+  target_link_libraries(sut_runtime_diagnostics
+    PUBLIC a2a_server_diagnostics a2a_core_diagnostics a2a::proto_generated
+  )
+endif()
+
+add_executable(tck_sut sut/tck_sut.cpp)
+target_link_libraries(tck_sut PRIVATE sut_runtime)
+
+add_executable(performance_sut
+  sut/performance_sut.cpp
+  sut/performance_sut_diagnostics.cpp
+)
+
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_link_libraries(performance_sut PRIVATE sut_runtime_diagnostics)
+  target_include_directories(performance_sut PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_compile_definitions(performance_sut PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+else()
+  target_link_libraries(performance_sut PRIVATE sut_runtime)
 endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
-  target_link_libraries(tck_sut
+  target_link_libraries(sut_runtime
     PRIVATE
       a2a::store_postgres
   )
-  target_compile_definitions(tck_sut
+  target_compile_definitions(sut_runtime
     PRIVATE
       A2A_ENABLE_POSTGRES_STORE=1
   )
+  if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    target_link_libraries(sut_runtime_diagnostics PRIVATE a2a::store_postgres)
+    target_compile_definitions(sut_runtime_diagnostics PRIVATE A2A_ENABLE_POSTGRES_STORE=1)
+  endif()
 endif()
 
 add_executable(store_conformance_test
@@ -982,18 +1015,35 @@ if(Python3_Interpreter_FOUND)
   endif()
   add_test(
     NAME http_persistence_test
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:tck_sut>
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:performance_sut>
   )
   if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     add_test(
       NAME http_diagnostics_reset_test
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_diagnostics_reset_test.py
-              $<TARGET_FILE:tck_sut>
+              $<TARGET_FILE:performance_sut>
     )
   endif()
   add_test(
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
+  )
+  set(SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT)
+  if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    set(SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT --expect-subscription-diagnostics)
+  endif()
+  set(SUT_ENTRYPOINTS_TEST_POSTGRES_ARGUMENT)
+  if(A2A_ENABLE_POSTGRES_STORE)
+    set(SUT_ENTRYPOINTS_TEST_POSTGRES_ARGUMENT --expect-postgres)
+  endif()
+  add_test(
+    NAME sut_entrypoints_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/sut_entrypoints_test.py
+            --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json
+            --tck-sut $<TARGET_FILE:tck_sut>
+            --performance-sut $<TARGET_FILE:performance_sut>
+            ${SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT}
+            ${SUT_ENTRYPOINTS_TEST_POSTGRES_ARGUMENT}
   )
   add_test(
     NAME run_examples_script_test
@@ -1031,16 +1081,16 @@ target_link_libraries(a2a_performance_driver
     a2a::proto_generated
 )
 
-target_link_libraries(a2a_wire_performance_driver
-  PRIVATE
-    a2a::client
-    a2a::core
-    a2a::proto_generated
-)
-
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_link_libraries(a2a_wire_performance_driver
+    PRIVATE a2a_client_diagnostics a2a_core_diagnostics a2a::proto_generated
+  )
   target_include_directories(a2a_wire_performance_driver PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(a2a_wire_performance_driver PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+else()
+  target_link_libraries(a2a_wire_performance_driver
+    PRIVATE a2a::client a2a::core a2a::proto_generated
+  )
 endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)

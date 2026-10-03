@@ -31,6 +31,7 @@
 #include "core/subscription_diagnostics.h"
 #endif
 #include "a2a_performance_driver.h"
+#include "sut/performance_sut_constants.h"
 #include "sut/tck_sut.h"
 
 namespace {

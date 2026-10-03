@@ -15,7 +15,7 @@ else()
   message(STATUS "StreamCancellationWatcher: interruptible std::thread fallback selected for native build")
 endif()
 
-add_library(a2a_core STATIC
+set(A2A_CORE_SOURCES
   core/agent_card/agent_card_builder.cpp
   core/agent_card/agent_card_provider.cpp
   core/core.cpp
@@ -28,6 +28,7 @@ add_library(a2a_core STATIC
   core/string_utils.cpp
   core/version.cpp
 )
+add_library(a2a_core STATIC ${A2A_CORE_SOURCES})
 add_library(a2a::core ALIAS a2a_core)
 set_target_properties(a2a_core PROPERTIES EXPORT_NAME core)
 
@@ -76,7 +77,7 @@ if(A2A_HAS_LIBCURL)
   )
 endif()
 
-add_library(a2a_client STATIC
+set(A2A_CLIENT_SOURCES
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
@@ -89,6 +90,7 @@ add_library(a2a_client STATIC
   client/transport/json_rpc_transport_internal.cpp
   client/transport/sse_parser.cpp
 )
+add_library(a2a_client STATIC ${A2A_CLIENT_SOURCES})
 add_library(a2a::client ALIAS a2a_client)
 set_target_properties(a2a_client PROPERTIES EXPORT_NAME client)
 
@@ -104,7 +106,7 @@ target_link_libraries(a2a_client
     a2a::http
 )
 
-add_library(a2a_server STATIC
+set(A2A_SERVER_SOURCES
   server/agent_card/agent_card_serializer.cpp
   server/transport/grpc_server_transport.cpp
   server/transport/stream_cancellation_watcher.cpp
@@ -132,6 +134,7 @@ add_library(a2a_server STATIC
   server/tasks/task_ordering.cpp
   server/stores/store_factory.cpp
 )
+add_library(a2a_server STATIC ${A2A_SERVER_SOURCES})
 add_library(a2a::server ALIAS a2a_server)
 set_target_properties(a2a_server PROPERTIES EXPORT_NAME server)
 
@@ -148,8 +151,19 @@ target_link_libraries(a2a_server
 )
 
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-  target_sources(a2a_core PRIVATE core/subscription_diagnostics.cpp)
-  foreach(diagnostics_target IN ITEMS a2a_core a2a_client a2a_server)
+  add_library(a2a_core_diagnostics STATIC ${A2A_CORE_SOURCES} core/subscription_diagnostics.cpp)
+  target_include_directories(a2a_core_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
+  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf)
+
+  add_library(a2a_client_diagnostics STATIC ${A2A_CLIENT_SOURCES})
+  target_include_directories(a2a_client_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
+  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a::http)
+
+  add_library(a2a_server_diagnostics STATIC ${A2A_SERVER_SOURCES})
+  target_include_directories(a2a_server_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
+  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a::http)
+
+  foreach(diagnostics_target IN ITEMS a2a_core_diagnostics a2a_client_diagnostics a2a_server_diagnostics)
     target_include_directories(${diagnostics_target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(${diagnostics_target} PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
   endforeach()
@@ -198,6 +212,9 @@ if(A2A_ENABLE_POSTGRES_STORE)
     PRIVATE
       A2A_ENABLE_POSTGRES_STORE=1
   )
+  if(TARGET a2a_server_diagnostics)
+    target_compile_definitions(a2a_server_diagnostics PRIVATE A2A_ENABLE_POSTGRES_STORE=1)
+  endif()
 endif()
 
 set(A2A_INSTALL_TARGETS a2a_core a2a_http a2a_client a2a_server)

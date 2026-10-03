@@ -67,12 +67,13 @@ Expected artifacts:
 - `tck-artifacts/reports/*`
 - `tck-artifacts/logs/tck-run.log`
 
-## Shared SUT binary
+## Conformance SUT binary
 
-The conformance scripts build and run the shared `tck_sut` binary. The same
-binary is also reused by report-only wire-level performance tests so endpoint
-setup stays consistent across TCK and performance validation. The exposed
-endpoints are REST at `/a2a`, JSON-RPC at `/rpc`, and gRPC on the configured
-port plus one. Store selection continues to use
+The conformance scripts build and run the conformance-only `tck_sut` binary.
+Wire-level performance tests use a separate `performance_sut` entry point with
+performance diagnostics; both binaries delegate protocol and lifecycle behavior
+to the same internal runtime. The exposed endpoints are REST at `/a2a`,
+JSON-RPC at `/rpc`, and gRPC on the configured port plus one. Store selection
+continues to use
 `A2A_TCK_STORE_BACKEND=inmemory|postgres`, `A2A_TCK_POSTGRES_DSN`, and
 `A2A_TCK_POSTGRES_SCHEMA`.

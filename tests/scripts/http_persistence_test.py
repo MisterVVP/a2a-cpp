@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic persistent-connection checks against the C++ TCK SUT."""
+"""Deterministic persistent-connection checks against the C++ performance SUT."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def available_port() -> int:
             except OSError:
                 continue
         return port
-    raise AssertionError("could not find adjacent free ports for TCK SUT")
+    raise AssertionError("could not find adjacent free ports for performance SUT")
 
 
 def request(connection: bytes = b"keep-alive") -> bytes:
@@ -95,13 +95,13 @@ def wait_until_ready(process: subprocess.Popen[bytes], port: int) -> None:
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise AssertionError("TCK SUT exited during startup")
+            raise AssertionError("performance SUT exited during startup")
         try:
             with connect(port):
                 return
         except OSError:
             time.sleep(0.05)
-    raise AssertionError("TCK SUT did not become ready")
+    raise AssertionError("performance SUT did not become ready")
 
 
 def check_sequential_and_pipelined(port: int) -> None:
@@ -192,7 +192,7 @@ def main() -> int:
         output = process.stdout.read()
         expected_connections = f"accepted_connections={EXPECTED_COUNTED_CONNECTIONS}".encode("ascii")
         assert expected_connections in output
-        join_marker = b"TCK SUT shutdown: HTTP connection threads joined"
+        join_marker = b"Performance SUT shutdown: HTTP connection threads joined"
         diagnostics_marker = b"A2A_HTTP_DIAGNOSTICS"
         assert output.index(join_marker) < output.index(diagnostics_marker)
     finally:
