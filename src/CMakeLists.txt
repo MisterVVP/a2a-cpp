@@ -212,6 +212,9 @@ if(A2A_ENABLE_POSTGRES_STORE)
     PRIVATE
       A2A_ENABLE_POSTGRES_STORE=1
   )
+  if(TARGET a2a_server_diagnostics)
+    target_compile_definitions(a2a_server_diagnostics PRIVATE A2A_ENABLE_POSTGRES_STORE=1)
+  endif()
 endif()
 
 set(A2A_INSTALL_TARGETS a2a_core a2a_http a2a_client a2a_server)

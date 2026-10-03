@@ -1032,6 +1032,10 @@ if(Python3_Interpreter_FOUND)
   if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     set(SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT --expect-subscription-diagnostics)
   endif()
+  set(SUT_ENTRYPOINTS_TEST_POSTGRES_ARGUMENT)
+  if(A2A_ENABLE_POSTGRES_STORE)
+    set(SUT_ENTRYPOINTS_TEST_POSTGRES_ARGUMENT --expect-postgres)
+  endif()
   add_test(
     NAME sut_entrypoints_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/sut_entrypoints_test.py
@@ -1039,6 +1043,7 @@ if(Python3_Interpreter_FOUND)
             --tck-sut $<TARGET_FILE:tck_sut>
             --performance-sut $<TARGET_FILE:performance_sut>
             ${SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT}
+            ${SUT_ENTRYPOINTS_TEST_POSTGRES_ARGUMENT}
   )
   add_test(
     NAME run_examples_script_test

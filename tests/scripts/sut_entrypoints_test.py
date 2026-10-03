@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tck-sut", type=Path)
     parser.add_argument("--performance-sut", type=Path)
     parser.add_argument("--expect-subscription-diagnostics", action="store_true")
+    parser.add_argument("--expect-postgres", action="store_true")
     return parser.parse_args()
 
 
@@ -61,6 +62,23 @@ class SutEntrypointsTest(unittest.TestCase):
             self.assertIn(diagnostic_definition, sut_commands["performance_sut_diagnostics.cpp"])
         else:
             self.assertNotIn(diagnostic_definition, sut_commands["performance_sut_diagnostics.cpp"])
+
+    def test_diagnostics_server_uses_real_postgres_factory(self) -> None:
+        if not self.args.expect_subscription_diagnostics or not self.args.expect_postgres:
+            self.skipTest("combined diagnostics and PostgreSQL build was not requested")
+        commands = json.loads(self.args.compile_commands.read_text(encoding="utf-8"))
+        store_factory_commands = [
+            entry.get("command", " ".join(entry.get("arguments", [])))
+            for entry in commands
+            if Path(entry["file"]).name == "store_factory.cpp"
+        ]
+        diagnostics_commands = [
+            command for command in store_factory_commands if "A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS" in command
+        ]
+        self.assertEqual(1, len(diagnostics_commands))
+        self.assertIn("A2A_ENABLE_POSTGRES_STORE=1", diagnostics_commands[0])
+        fallback_message = b"PostgreSQL store backend was not built"
+        self.assertNotIn(fallback_message, self.args.performance_sut.read_bytes())
 
 
 if __name__ == "__main__":
