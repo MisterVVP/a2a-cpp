@@ -54,7 +54,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_executable(subscription_diagnostics_test unit/subscription_diagnostics_test.cpp)
   target_include_directories(subscription_diagnostics_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(subscription_diagnostics_test PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
-  target_link_libraries(subscription_diagnostics_test PRIVATE a2a::core GTest::gtest_main)
+  target_link_libraries(subscription_diagnostics_test PRIVATE a2a_core_diagnostics GTest::gtest_main)
   gtest_discover_tests(subscription_diagnostics_test)
 endif()
 
@@ -878,6 +878,21 @@ target_include_directories(sut_runtime
 )
 target_link_libraries(sut_runtime PUBLIC a2a::server a2a::core a2a::proto_generated)
 
+if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  add_library(sut_runtime_diagnostics STATIC
+    sut/sut_runtime.cpp
+    sut/tck_sut_http_server.cpp
+    sut/tck_sut_store.cpp
+  )
+  target_include_directories(sut_runtime_diagnostics
+    PUBLIC ${CMAKE_SOURCE_DIR}/tests
+    PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
+  )
+  target_link_libraries(sut_runtime_diagnostics
+    PUBLIC a2a_server_diagnostics a2a_core_diagnostics a2a::proto_generated
+  )
+endif()
+
 add_executable(tck_sut sut/tck_sut.cpp)
 target_link_libraries(tck_sut PRIVATE sut_runtime)
 
@@ -885,11 +900,13 @@ add_executable(performance_sut
   sut/performance_sut.cpp
   sut/performance_sut_diagnostics.cpp
 )
-target_link_libraries(performance_sut PRIVATE sut_runtime)
 
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_link_libraries(performance_sut PRIVATE sut_runtime_diagnostics)
   target_include_directories(performance_sut PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(performance_sut PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+else()
+  target_link_libraries(performance_sut PRIVATE sut_runtime)
 endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
@@ -901,6 +918,10 @@ if(A2A_ENABLE_POSTGRES_STORE)
     PRIVATE
       A2A_ENABLE_POSTGRES_STORE=1
   )
+  if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    target_link_libraries(sut_runtime_diagnostics PRIVATE a2a::store_postgres)
+    target_compile_definitions(sut_runtime_diagnostics PRIVATE A2A_ENABLE_POSTGRES_STORE=1)
+  endif()
 endif()
 
 add_executable(store_conformance_test
@@ -1055,16 +1076,16 @@ target_link_libraries(a2a_performance_driver
     a2a::proto_generated
 )
 
-target_link_libraries(a2a_wire_performance_driver
-  PRIVATE
-    a2a::client
-    a2a::core
-    a2a::proto_generated
-)
-
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  target_link_libraries(a2a_wire_performance_driver
+    PRIVATE a2a_client_diagnostics a2a_core_diagnostics a2a::proto_generated
+  )
   target_include_directories(a2a_wire_performance_driver PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(a2a_wire_performance_driver PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
+else()
+  target_link_libraries(a2a_wire_performance_driver
+    PRIVATE a2a::client a2a::core a2a::proto_generated
+  )
 endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)

@@ -3,6 +3,7 @@
 
 #include <exception>
 #include <iostream>
+#include <string_view>
 
 #include "sut/sut_runtime.h"
 

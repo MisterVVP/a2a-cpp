@@ -12,6 +12,7 @@ DIAGNOSTIC_MARKERS = (
     b"A2A_HTTP_DIAGNOSTICS",
     b"A2A_SUBSCRIPTION_SERVER_DIAGNOSTICS",
     b"/_a2a/performance/reset-subscription-diagnostics",
+    b"subscription_diagnostics",
 )
 
 
