@@ -459,8 +459,10 @@ core::Result<Response> Client::StreamRequest(
           std::lock_guard lock(completion_mutex);
           response = std::move(result);
           completed = true;
+          // Notify before releasing the mutex so the waiter cannot destroy the
+          // condition variable while notify_one() is still using it.
+          completion_condition.notify_one();
         }
-        completion_condition.notify_one();
       });
   if (!started.ok()) {
     StopCancellationWatcher(stop_cancellation_watcher, cancellation_watcher);
