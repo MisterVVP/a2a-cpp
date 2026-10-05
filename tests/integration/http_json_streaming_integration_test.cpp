@@ -106,20 +106,19 @@ class RecordingObserver final : public StreamObserver {
   }
 
   void OnError(const a2a::core::Error& error) override {
-    {
-      std::lock_guard<std::mutex> lock(mu_);
-      errors.push_back(error);
-    }
+    std::lock_guard<std::mutex> lock(mu_);
+    errors.push_back(error);
     cv_.notify_all();
   }
 
   void OnCompleted() override {
+    std::lock_guard<std::mutex> lock(mu_);
     completed = true;
     cv_.notify_all();
   }
 
   bool WaitForCompletion(std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lock(wait_mu_);
+    std::unique_lock<std::mutex> lock(mu_);
     return cv_.wait_for(lock, timeout, [this] { return completed || !errors.empty(); });
   }
 
@@ -129,7 +128,6 @@ class RecordingObserver final : public StreamObserver {
 
  private:
   std::mutex mu_;
-  std::mutex wait_mu_;
   std::condition_variable cv_;
 };
 

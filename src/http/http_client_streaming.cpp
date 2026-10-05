@@ -70,6 +70,13 @@ void StopCancellationWatcher(std::atomic<bool>& stop_requested, std::thread& wat
   }
 }
 
+struct SynchronousStreamCompletion final {
+  std::mutex mutex;
+  std::condition_variable condition;
+  core::Result<Response> response{core::Error::Internal(std::string(kStreamCompletionPendingMessage))};
+  bool completed = false;
+};
+
 class StreamDispatchExecutor final {
  public:
   using Task = std::function<void()>;
@@ -409,10 +416,7 @@ core::Result<Response> Client::StreamRequest(
     return core::Error::Validation(std::string(kSynchronousStreamFromCallbackMessage))
         .WithTransport(kHttpTransportName);
   }
-  std::mutex completion_mutex;
-  std::condition_variable completion_condition;
-  core::Result<Response> response = core::Error::Internal(std::string(kStreamCompletionPendingMessage));
-  bool completed = false;
+  const auto completion = std::make_shared<SynchronousStreamCompletion>();
   std::mutex cancellation_mutex;
   std::function<void()> cancel_transfer;
   const bool needs_cancellation_watcher = !register_cancellation && static_cast<bool>(is_cancelled);
@@ -452,25 +456,25 @@ core::Result<Response> Client::StreamRequest(
       }
     });
   }
-  const auto started = StartStreamRequest(
-      request, on_metadata, on_chunk, effective_is_cancelled, effective_cancellation_registrar,
-      [&completion_mutex, &completion_condition, &response, &completed](core::Result<Response> result) {
-        {
-          std::lock_guard lock(completion_mutex);
-          response = std::move(result);
-          completed = true;
-        }
-        completion_condition.notify_one();
-      });
+  const auto started =
+      StartStreamRequest(request, on_metadata, on_chunk, effective_is_cancelled, effective_cancellation_registrar,
+                         [completion](core::Result<Response> result) {
+                           {
+                             std::lock_guard lock(completion->mutex);
+                             completion->response = std::move(result);
+                             completion->completed = true;
+                           }
+                           completion->condition.notify_one();
+                         });
   if (!started.ok()) {
     StopCancellationWatcher(stop_cancellation_watcher, cancellation_watcher);
     return started.error();
   }
-  std::unique_lock lock(completion_mutex);
-  completion_condition.wait(lock, [&completed] { return completed; });
+  std::unique_lock lock(completion->mutex);
+  completion->condition.wait(lock, [&completion] { return completion->completed; });
   lock.unlock();
   StopCancellationWatcher(stop_cancellation_watcher, cancellation_watcher);
-  return response;
+  return std::move(completion->response);
 }
 
 core::Result<void> Client::StartStreamRequest(

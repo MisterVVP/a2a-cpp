@@ -144,7 +144,7 @@ target_link_libraries(http_client_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(http_client_test)
+gtest_discover_tests(http_client_test PROPERTIES LABELS "tsan")
 
 add_executable(mcp_client_test
   unit/mcp_client_test.cpp
@@ -221,7 +221,7 @@ target_link_libraries(task_subscription_service_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(task_subscription_service_test)
+gtest_discover_tests(task_subscription_service_test PROPERTIES LABELS "tsan")
 
 add_executable(store_factory_test
   unit/store_factory_test.cpp
@@ -293,7 +293,7 @@ target_link_libraries(stream_handle_lifecycle_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(stream_handle_lifecycle_test)
+gtest_discover_tests(stream_handle_lifecycle_test PROPERTIES LABELS "tsan")
 
 
 add_executable(auth_test
@@ -337,7 +337,7 @@ target_link_libraries(http_json_transport_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(http_json_transport_test)
+gtest_discover_tests(http_json_transport_test PROPERTIES LABELS "tsan")
 
 add_executable(http_json_client_integration_test
   integration/http_json_client_integration_test.cpp
@@ -365,7 +365,7 @@ target_link_libraries(http_json_streaming_integration_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(http_json_streaming_integration_test)
+gtest_discover_tests(http_json_streaming_integration_test PROPERTIES LABELS "tsan")
 
 add_executable(json_rpc_transport_test
   unit/json_rpc_transport_test.cpp
@@ -379,7 +379,7 @@ target_link_libraries(json_rpc_transport_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(json_rpc_transport_test)
+gtest_discover_tests(json_rpc_transport_test PROPERTIES LABELS "tsan")
 
 add_executable(list_tasks_client_parsing_test
   unit/list_tasks_client_parsing_test.cpp
@@ -421,7 +421,7 @@ target_link_libraries(server_dispatcher_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(server_dispatcher_test)
+gtest_discover_tests(server_dispatcher_test PROPERTIES LABELS "tsan")
 
 add_executable(rest_transport_test
   unit/rest_transport_test.cpp
@@ -580,7 +580,7 @@ target_link_libraries(stream_cancellation_watcher_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(stream_cancellation_watcher_test)
+gtest_discover_tests(stream_cancellation_watcher_test PROPERTIES LABELS "tsan")
 
 add_executable(stream_cancellation_watcher_fallback_test
   unit/stream_cancellation_watcher_test.cpp
@@ -661,7 +661,7 @@ target_link_libraries(server_task_store_unit_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(server_task_store_unit_test)
+gtest_discover_tests(server_task_store_unit_test PROPERTIES LABELS "tsan")
 
 add_executable(json_rpc_client_functional_test
   functional/json_rpc_client_functional_test.cpp
@@ -795,7 +795,7 @@ target_link_libraries(server_dispatcher_task_store_integration_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(server_dispatcher_task_store_integration_test)
+gtest_discover_tests(server_dispatcher_task_store_integration_test PROPERTIES LABELS "tsan")
 
 add_executable(rest_server_transport_integration_test
   integration/rest_server_transport_integration_test.cpp
