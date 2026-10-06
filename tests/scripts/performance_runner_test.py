@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -171,24 +172,27 @@ class PerformanceRunnerTest(unittest.TestCase):
     def test_wire_scenarios_share_one_sut_without_subscription_diagnostics(self):
         runner = load_runner_module()
         scenarios = ("SendMessage_CreateTask", "GetTask_ExistingTask")
-        payload = [
-            {"scenario": scenario, "driver_type": "wire_tck_sut", "transport_path": "wire_grpc"}
-            for scenario in scenarios
-        ]
         sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
         context = mock.MagicMock()
         context.__enter__.return_value = sut
         config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
                                  duration_seconds=0, wire_driver_timeout_seconds=1,
                                  report_dir=Path("."))
+
+        def driver_result(command, *_args, **_kwargs):
+            scenario = command[command.index("--scenarios") + 1]
+            return [{"scenario": scenario, "driver_type": "wire_tck_sut", "transport_path": "wire_grpc"}]
+
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
              mock.patch.object(runner, "SutProcess", return_value=context) as sut_process, \
-             mock.patch.object(runner, "run_command_json", return_value=payload):
+             mock.patch.object(runner, "run_command_json", side_effect=driver_result) as run_command:
             results = runner.run_wire_driver(config, "grpc", "inmemory", 1, 1, 1234)
 
-        self.assertEqual(payload, results)
+        self.assertEqual(scenarios, tuple(result["scenario"] for result in results))
+        self.assertTrue(all(result["driver_type"] == "wire_tck_sut" for result in results))
         sut_process.assert_called_once()
+        self.assertEqual(len(scenarios), run_command.call_count)
 
     def test_main_skips_in_process_driver_for_wire_only_selection(self):
         runner = load_runner_module()
@@ -584,6 +588,45 @@ class PerformanceRunnerTest(unittest.TestCase):
 
             self.assertIn("stuck joining HTTP connection threads", str(raised.exception))
             sut.process.kill.assert_called_once_with()
+
+    def test_sut_unexpected_signal_reports_scenario_coordinate_and_log_tail(self):
+        runner = load_runner_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "sut.log"
+            log_path.write_text("fatal cancellation failure\n", encoding="utf-8")
+            sut = runner.SutProcess.__new__(runner.SutProcess)
+            sut.process = mock.Mock()
+            sut.process.poll.return_value = -signal.SIGABRT
+            sut.log_path = log_path
+            sut.transport = "grpc"
+            sut.store_backend = "inmemory"
+            sut.concurrency = 16
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "grpc/inmemory/c16 while running scenario=IdleStream_ClientCancellationLatency",
+            ) as raised:
+                sut.check_running("IdleStream_ClientCancellationLatency")
+
+            message = str(raised.exception)
+            self.assertIn("signal 6 (SIGABRT); exit code -6", message)
+            self.assertIn("fatal cancellation failure", message)
+
+    def test_run_command_stops_driver_when_health_check_fails(self):
+        runner = load_runner_module()
+        health_error = ValueError("performance_sut exited unexpectedly")
+        process = mock.Mock()
+        process.communicate.return_value = ("", "")
+
+        with mock.patch.object(runner.subprocess, "Popen", return_value=process), \
+             self.assertRaisesRegex(ValueError, "performance_sut exited unexpectedly"):
+            runner.run_command_json(
+                ["wire-driver"], 1.0, "wire driver",
+                health_check=mock.Mock(side_effect=health_error),
+            )
+
+        process.terminate.assert_called_once_with()
+        process.communicate.assert_called_once_with(timeout=5)
 
     def test_rejects_unknown_transport(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -124,6 +124,7 @@ IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario not 
 SUT_READY_TIMEOUT_SECONDS = 30.0
 SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 SUT_FORCE_KILL_TIMEOUT_SECONDS = 10.0
+SUT_HEALTH_CHECK_INTERVAL_SECONDS = 0.1
 SUT_PORT_RANGE_START = 20_000
 SUT_PORT_RANGE_END = 30_000
 SUT_PORT_PAIR_STEP = 2
@@ -543,11 +544,34 @@ class SutProcess:
                 raise ValueError(
                     f"performance_sut failed to terminate gracefully for {coordinate}; logs:\n{read_tail(self.log_path)}"
                 ) from timeout_error
+        elif exc_type is None:
+            self.check_running("between scenarios")
+
+    def check_running(self, scenario: str) -> None:
+        if self.process is None:
+            raise ValueError("performance_sut was not started")
+        return_code = self.process.poll()
+        if return_code is None:
+            return
+        coordinate = f"{self.transport}/{self.store_backend}/c{self.concurrency}"
+        termination = f"exit code {return_code}"
+        if return_code < 0:
+            signal_number = -return_code
+            try:
+                signal_name = signal.Signals(signal_number).name
+            except ValueError:
+                signal_name = "unknown"
+            termination = f"signal {signal_number} ({signal_name}); exit code {return_code}"
+        raise ValueError(
+            f"performance_sut exited unexpectedly for {coordinate} while running scenario={scenario}; "
+            f"{termination}; logs:\n{read_tail(self.log_path)}"
+        )
 
 
 def run_command_json(command: list[str], timeout_seconds: float, error_context: str,
                      log_path: Path | None = None,
-                     env: dict[str, str] | None = None) -> list[dict[str, object]]:
+                     env: dict[str, str] | None = None,
+                     health_check: Callable[[], None] | None = None) -> list[dict[str, object]]:
     process = subprocess.Popen(
         command,
         cwd=Path(__file__).resolve().parents[1],
@@ -556,15 +580,32 @@ def run_command_json(command: list[str], timeout_seconds: float, error_context: 
         stderr=subprocess.PIPE,
         env=env,
     )
+    deadline = time.monotonic() + timeout_seconds
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
+        while True:
+            if health_check is not None:
+                health_check()
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=min(remaining_seconds, SUT_HEALTH_CHECK_INTERVAL_SECONDS)
+                )
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if health_check is not None:
+            health_check()
+    except BaseException as exc:
         process.terminate()
         try:
             stdout, stderr = process.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate()
+        if not isinstance(exc, subprocess.TimeoutExpired):
+            raise
         message = f"{error_context} timed out after {timeout_seconds:.0f}s"
         if stderr.strip():
             message += f"; stderr: {stderr.strip()}"
@@ -611,22 +652,25 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
                        concurrency: int, postgres_pool_size: int, port: int,
                        scenarios: tuple[str, ...]) -> list[dict[str, object]]:
     with SutProcess(config, store_backend, port, transport, concurrency, postgres_pool_size) as sut:
-        command = [
-            str(wire_driver),
-            "--transport", transport,
-            "--store-backend", store_backend,
-            "--host", sut.host,
-            "--port", str(sut.port),
-            "--requests", str(config.requests),
-            "--concurrency", str(concurrency),
-            "--warmup-seconds", str(config.warmup_seconds),
-            "--duration-seconds", str(config.duration_seconds),
-            "--scenarios", ",".join(scenarios),
-        ]
-        payload = run_command_json(
-            command, config.wire_driver_timeout_seconds,
-            f"wire performance driver for {transport}/{store_backend}/c{concurrency}", sut.log_path,
-        )
+        payload = []
+        for scenario in scenarios:
+            command = [
+                str(wire_driver),
+                "--transport", transport,
+                "--store-backend", store_backend,
+                "--host", sut.host,
+                "--port", str(sut.port),
+                "--requests", str(config.requests),
+                "--concurrency", str(concurrency),
+                "--warmup-seconds", str(config.warmup_seconds),
+                "--duration-seconds", str(config.duration_seconds),
+                "--scenarios", scenario,
+            ]
+            payload.extend(run_command_json(
+                command, config.wire_driver_timeout_seconds,
+                f"wire performance driver for {transport}/{store_backend}/c{concurrency} scenario={scenario}",
+                sut.log_path, health_check=lambda scenario=scenario: sut.check_running(scenario),
+            ))
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
     server_subscription_diagnostics = read_subscription_diagnostics(sut.log_path)
     if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and not server_subscription_diagnostics:
