@@ -55,6 +55,9 @@ class StreamSession final : public a2a::server::ServerStreamSession {
 
 constexpr std::string_view kClientCancelledSubscribeTaskId = "grpc-client-cancel-subscribe";
 constexpr auto kClientCancellationTimeout = std::chrono::seconds(2);
+constexpr std::string_view kConcurrentCancellationTaskPrefix = "grpc-concurrent-cancel-";
+constexpr std::size_t kCancellationWorkerCount = 16;
+constexpr std::size_t kCancellationsPerWorker = 16;
 
 class ControlledSubscriptionRecorder final {
  public:
@@ -677,6 +680,55 @@ TEST(GrpcTransportIntegrationTest, ClientStreamCancellationCancelsServerSubscrip
   const auto cancellation = VerifyClientStreamCancellationCancelsServerSubscription(harness.get(), client.get());
   ASSERT_TRUE(cancellation.ok()) << cancellation.error().message();
 
+  harness->server->Shutdown();
+}
+
+void CancelIdleSubscriptionAndTask(a2a::client::A2AClient* client, std::size_t index) {
+  std::string task_id(kConcurrentCancellationTaskPrefix);
+  task_id.append(std::to_string(index));
+  lf::a2a::v1::SendMessageRequest send_request;
+  send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send_request.mutable_message()->set_task_id(task_id);
+  ASSERT_TRUE(client->SendMessage(send_request).ok());
+
+  lf::a2a::v1::GetTaskRequest subscribe_request;
+  subscribe_request.set_id(task_id);
+  RecordingObserver observer;
+  auto stream = client->SubscribeTask(subscribe_request, observer);
+  ASSERT_TRUE(stream.ok());
+  const bool received_initial = observer.WaitForEventCount(1U);
+  stream.value()->Cancel();
+  EXPECT_TRUE(received_initial);
+  EXPECT_FALSE(stream.value()->IsActive());
+
+  lf::a2a::v1::CancelTaskRequest cancel_request;
+  cancel_request.set_id(task_id);
+  ASSERT_TRUE(client->CancelTask(cancel_request).ok());
+}
+
+TEST(GrpcTransportIntegrationTest, ConcurrentIdleCancellationRacingTerminalPublicationKeepsServerAlive) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  auto client = BuildClient(harness->port);
+  std::atomic_bool start = false;
+  std::vector<std::thread> workers;
+  workers.reserve(kCancellationWorkerCount);
+  for (std::size_t worker = 0; worker < kCancellationWorkerCount; ++worker) {
+    workers.emplace_back([&, worker] {
+      start.wait(false);
+      for (std::size_t iteration = 0; iteration < kCancellationsPerWorker; ++iteration) {
+        CancelIdleSubscriptionAndTask(client.get(), worker * kCancellationsPerWorker + iteration);
+      }
+    });
+  }
+  start.store(true);
+  start.notify_all();
+  for (auto& worker : workers) {
+    worker.join();
+  }
+
+  const auto lifecycle = VerifyCoreLifecycle(client.get());
+  EXPECT_TRUE(lifecycle.ok()) << lifecycle.error().message();
   harness->server->Shutdown();
 }
 

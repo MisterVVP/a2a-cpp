@@ -46,6 +46,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     // active resume while holding the mutex, then always resumes without any
     // service, publication, or subscriber lock held. Session destruction
     // waits for that accounting to reach zero before destroying the frame.
+    // A resumer releases the frame's resume mutex before dropping its count.
     std::string task_id;
     lf::a2a::v1::Task current_task;
     std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
