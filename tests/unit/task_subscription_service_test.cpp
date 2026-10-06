@@ -168,6 +168,7 @@ TEST(TaskSubscriptionServiceTest, TimedWaitKeepsSubscriptionOpen) {
   auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
   ASSERT_TRUE(subscription.ok());
   auto* session = subscription.value().get();
+  EXPECT_TRUE(session->SupportsTimedNext());
   (void)NextRequired(session);
 
   const auto timeout = session->NextFor(kSubscriptionWaitTimeout);

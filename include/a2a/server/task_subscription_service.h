@@ -75,6 +75,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override;
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
         std::chrono::milliseconds timeout) override;
+    [[nodiscard]] bool SupportsTimedNext() const noexcept override { return true; }
     [[nodiscard]] bool IsLive() const noexcept override;
     void Cancel() noexcept override;
 
