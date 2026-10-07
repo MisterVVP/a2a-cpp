@@ -13,12 +13,14 @@
 #include <unistd.h>
 #endif
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -35,16 +37,44 @@ namespace {
 constexpr int kListenBacklog = 128;
 constexpr int kReuseAddress = 1;
 constexpr int kAcceptRetryDelayMillis = 1;
+#ifdef _WIN32
+constexpr long kReadPollTimeoutMicroseconds = 100'000;
+#endif
+constexpr std::string_view kSocketReceiveFailureMessage = "Socket recv failed";
 const std::string kHttpHostHeader = "localhost";
 
 class SocketTransport final : public server::HttpByteTransport {
  public:
-  explicit SocketTransport(int fd) : fd_(fd) { (void)server::SetSocketNoDelay(fd_); }
+  SocketTransport(int fd, const std::atomic_bool& shutdown_requested)
+      : fd_(fd), shutdown_requested_(shutdown_requested) {
+    (void)server::SetSocketNoDelay(fd_);
+  }
 
   core::Result<std::size_t> Read(char* buffer, std::size_t size) override {
+#ifdef _WIN32
+    // Winsock shutdown does not reliably interrupt an already-blocked recv.
+    // Poll before reading so idle connections observe cancellation without closing
+    // a handle concurrently with I/O or losing the worker's socket ownership.
+    while (!shutdown_requested_.load()) {
+      fd_set readable{};
+      FD_ZERO(&readable);
+      FD_SET(static_cast<SOCKET>(fd_), &readable);
+      timeval timeout{0, kReadPollTimeoutMicroseconds};
+      const int ready = ::select(0, &readable, nullptr, nullptr, &timeout);
+      if (ready == SOCKET_ERROR) {
+        return core::Error::Internal(std::string(kSocketReceiveFailureMessage));
+      }
+      if (ready > 0) {
+        break;
+      }
+    }
+#endif
+    if (shutdown_requested_.load()) {
+      return std::size_t{0};
+    }
     const auto bytes = ::recv(fd_, buffer, size, 0);
     if (bytes < 0) {
-      return core::Error::Internal("Socket recv failed");
+      return core::Error::Internal(std::string(kSocketReceiveFailureMessage));
     }
     return static_cast<std::size_t>(bytes);
   }
@@ -59,6 +89,7 @@ class SocketTransport final : public server::HttpByteTransport {
 
  private:
   int fd_;
+  const std::atomic_bool& shutdown_requested_;
 };
 
 class HttpConnectionRegistry final {
@@ -72,6 +103,7 @@ class HttpConnectionRegistry final {
     active_fds_.erase(fd);
   }
   void ShutdownActiveSockets() {
+    shutdown_requested_.store(true);
     std::lock_guard lock(mutex_);
     for (const int fd : active_fds_) {
 #ifdef _WIN32
@@ -81,8 +113,10 @@ class HttpConnectionRegistry final {
 #endif
     }
   }
+  [[nodiscard]] const std::atomic_bool& ShutdownRequested() const noexcept { return shutdown_requested_; }
 
  private:
+  std::atomic_bool shutdown_requested_{false};
   std::mutex mutex_;
   std::unordered_set<int> active_fds_;
 };
@@ -113,7 +147,7 @@ void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectio
     return;
   }
 #endif
-  SocketTransport socket_transport(fd);
+  SocketTransport socket_transport(fd, registry.ShutdownRequested());
   const server::HttpAdapter adapter;
   server::HttpConnectionState connection_state;
   while (true) {
