@@ -197,11 +197,17 @@ def main() -> int:
         assert CONNECTION_CLOSE not in idle_response
         assert not carry
         request_graceful_shutdown(process)
-        process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        try:
+            output, _ = process.communicate(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            output, _ = process.communicate(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+            raise AssertionError(
+                "performance SUT did not exit after graceful shutdown:\n"
+                + output.decode("utf-8", errors="replace")
+            ) from error
         assert_connection_closed(idle_client)
         assert process.returncode == 0
-        assert process.stdout is not None
-        output = process.stdout.read()
         expected_connections = f"accepted_connections={EXPECTED_COUNTED_CONNECTIONS}".encode("ascii")
         assert expected_connections in output, output.decode("utf-8", errors="replace")
         join_marker = b"Performance SUT shutdown: HTTP connection threads joined"
