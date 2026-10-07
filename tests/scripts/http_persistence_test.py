@@ -28,7 +28,7 @@ PORT_RANGE_START = 20_000
 PORT_RANGE_END = 30_000
 PORT_PAIR_STEP = 2
 PORT_PAIR_COUNT = (PORT_RANGE_END - PORT_RANGE_START) // PORT_PAIR_STEP
-EXPECTED_COUNTED_CONNECTIONS = CONCURRENT_CONNECTIONS + 2
+EXPECTED_COUNTED_CONNECTIONS = CONCURRENT_CONNECTIONS + 3
 UNEXPECTED_EOF_MESSAGE = "connection closed before a complete HTTP response was received"
 
 
@@ -87,7 +87,7 @@ def connect(port: int) -> socket.socket:
 def assert_connection_closed(client: socket.socket) -> None:
     try:
         assert client.recv(1) == b""
-    except ConnectionResetError:
+    except (ConnectionResetError, ConnectionAbortedError):
         pass
 
 
@@ -106,6 +106,12 @@ def wait_until_ready(process: subprocess.Popen[bytes], port: int) -> None:
 
 def check_sequential_and_pipelined(port: int) -> None:
     with connect(port) as client:
+        # Wait for a complete response before reusing an idle accepted socket.
+        client.sendall(request())
+        sequential, carry = read_response(client)
+        assert sequential.startswith(HTTP_OK)
+        assert CONNECTION_CLOSE not in sequential
+        assert not carry
         client.sendall(request() + request(b"close"))
         first, carry = read_response(client)
         second, carry = read_response(client, carry)
@@ -184,6 +190,12 @@ def main() -> int:
         check_malformed_request_closes_connection(port)
         check_concurrent_connections(port)
         idle_client = connect(port)
+        # A response proves acceptance before shutdown, avoiding a backlog race.
+        idle_client.sendall(request())
+        idle_response, carry = read_response(idle_client)
+        assert idle_response.startswith(HTTP_OK)
+        assert CONNECTION_CLOSE not in idle_response
+        assert not carry
         request_graceful_shutdown(process)
         process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
         assert_connection_closed(idle_client)
@@ -191,7 +203,7 @@ def main() -> int:
         assert process.stdout is not None
         output = process.stdout.read()
         expected_connections = f"accepted_connections={EXPECTED_COUNTED_CONNECTIONS}".encode("ascii")
-        assert expected_connections in output
+        assert expected_connections in output, output.decode("utf-8", errors="replace")
         join_marker = b"Performance SUT shutdown: HTTP connection threads joined"
         diagnostics_marker = b"A2A_HTTP_DIAGNOSTICS"
         assert output.index(join_marker) < output.index(diagnostics_marker)

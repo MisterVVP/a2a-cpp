@@ -3,8 +3,9 @@
 
 #include "a2a/server/grpc_server_transport.h"
 
-#include "a2a/core/agent_card/agent_card_provider.h"
+#include <grpcpp/create_channel.h>
 
+#include "a2a/core/agent_card/agent_card_provider.h"
 #if __has_include(<grpcpp/test/server_context_test_spouse.h>)
 #include <grpcpp/test/server_context_test_spouse.h>
 #define A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE 1
@@ -39,6 +40,16 @@ constexpr std::string_view kTaskIdTwo = "task-2";
 constexpr std::string_view kSubscribeTaskId = "sub-task";
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 constexpr std::string_view kGrpcExtensionsMetadataKey = "a2a-extensions";
+constexpr std::string_view kUnusedChannelTarget = "127.0.0.1:1";
+
+class GrpcServerTransportTest : public ::testing::Test {
+ private:
+  // A public channel factory initializes gRPC before standalone ServerContexts.
+  // Older static gRPC builds otherwise dereference an unset core codegen interface.
+  // No RPC is sent; the channel keeps the runtime alive for each test body.
+  std::shared_ptr<grpc::Channel> runtime_channel_ =
+      grpc::CreateChannel(std::string(kUnusedChannelTarget), grpc::InsecureChannelCredentials());
+};
 
 class FakeStreamSession final : public a2a::server::ServerStreamSession {
  public:
@@ -121,7 +132,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
   a2a::server::ListTasksRequest observed_list_request;
 };
 
-TEST(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
+TEST_F(GrpcServerTransportTest, ValidatesNullArgumentsAcrossRpcs) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -165,7 +176,7 @@ void AddRequiredExtensionHeader(grpc::testing::ServerContextTestSpouse& spouse) 
   spouse.AddClientMetadata(std::string(kGrpcExtensionsMetadataKey), std::string(kRequiredExtension));
 }
 
-TEST(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
+TEST_F(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -182,7 +193,7 @@ TEST(GrpcServerTransportTest, SendMessageSuccessWithVersionHeader) {
   EXPECT_EQ(response.task().id(), std::string(kTaskIdOne));
 }
 
-TEST(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
+TEST_F(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
@@ -213,7 +224,7 @@ TEST(GrpcServerTransportTest, EnforcesRequiredExtensionsWhenConfigured) {
   EXPECT_EQ(activated_trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
 }
 
-TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) {
+TEST_F(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) {
   FakeExecutor executor;
   executor.fail_send = true;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -235,7 +246,7 @@ TEST(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata) 
   EXPECT_TRUE(trailing.contains("grpc-status-details-bin"));
 }
 
-TEST(GrpcServerTransportTest, DispatchErrorIncludesActivatedExtensionTrailingMetadata) {
+TEST_F(GrpcServerTransportTest, DispatchErrorIncludesActivatedExtensionTrailingMetadata) {
   FakeExecutor executor;
   executor.fail_get_task = true;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -257,7 +268,7 @@ TEST(GrpcServerTransportTest, DispatchErrorIncludesActivatedExtensionTrailingMet
   EXPECT_EQ(trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
 }
 
-TEST(GrpcServerTransportTest, PostValidationInputErrorIncludesActivatedExtensionTrailingMetadata) {
+TEST_F(GrpcServerTransportTest, PostValidationInputErrorIncludesActivatedExtensionTrailingMetadata) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher, {.required_extensions = {std::string(kRequiredExtension)}});
@@ -278,7 +289,7 @@ TEST(GrpcServerTransportTest, PostValidationInputErrorIncludesActivatedExtension
   EXPECT_EQ(trailing.find(std::string(kGrpcExtensionsMetadataKey))->second, std::string(kRequiredExtension));
 }
 
-TEST(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {
+TEST_F(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {
   FakeExecutor executor;
   executor.fail_get_task = true;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -295,7 +306,7 @@ TEST(GrpcServerTransportTest, GetTaskNotFoundMapsToGrpcNotFound) {
   EXPECT_EQ(status.error_code(), grpc::StatusCode::NOT_FOUND);
 }
 
-TEST(GrpcServerTransportTest, CancelTaskProtocolErrorMapsToFailedPrecondition) {
+TEST_F(GrpcServerTransportTest, CancelTaskProtocolErrorMapsToFailedPrecondition) {
   FakeExecutor executor;
   executor.fail_cancel_task = true;
   a2a::server::Dispatcher dispatcher(&executor);
@@ -312,7 +323,7 @@ TEST(GrpcServerTransportTest, CancelTaskProtocolErrorMapsToFailedPrecondition) {
   EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
 
-TEST(GrpcServerTransportTest, ListTasksValidatesPageSizeAndHistoryLength) {
+TEST_F(GrpcServerTransportTest, ListTasksValidatesPageSizeAndHistoryLength) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -332,7 +343,7 @@ TEST(GrpcServerTransportTest, ListTasksValidatesPageSizeAndHistoryLength) {
             grpc::StatusCode::INVALID_ARGUMENT);
 }
 
-TEST(GrpcServerTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted) {
+TEST_F(GrpcServerTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -348,7 +359,7 @@ TEST(GrpcServerTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted)
   EXPECT_EQ(executor.observed_list_request.page_size, a2a::server::kDefaultListTasksPageSize);
 }
 
-TEST(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
+TEST_F(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -376,7 +387,7 @@ TEST(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
 
 #endif  // A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 
-TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnaryOperations) {
+TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnaryOperations) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -403,7 +414,7 @@ TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnaryOp
   EXPECT_EQ(transport.ListTasks(&context, &list, &list_response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForStreamingOperations) {
+TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForStreamingOperations) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -418,7 +429,7 @@ TEST(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForStreami
   EXPECT_EQ(transport.SubscribeToTask(&context, &subscribe, nullptr).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
-TEST(GrpcServerTransportTest, ListTasksInputValidationRequiresProtocolVersionHeader) {
+TEST_F(GrpcServerTransportTest, ListTasksInputValidationRequiresProtocolVersionHeader) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -439,7 +450,7 @@ TEST(GrpcServerTransportTest, ListTasksInputValidationRequiresProtocolVersionHea
   EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
+TEST_F(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -467,7 +478,7 @@ TEST(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
             grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigured) {
+TEST_F(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigured) {
   FakeExecutor executor;
   lf::a2a::v1::AgentCard extended_card;
   extended_card.set_name("Extended Unit Agent");
@@ -490,7 +501,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigured)
 }
 
 #if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
-TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredWhenMissingProvider) {
+TEST_F(GrpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredWhenMissingProvider) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -508,7 +519,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardReturnsNotConfiguredWhenMissin
 }
 #endif  // A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 
-TEST(GrpcServerTransportTest, GetExtendedAgentCardValidatesRequiredExtensions) {
+TEST_F(GrpcServerTransportTest, GetExtendedAgentCardValidatesRequiredExtensions) {
   FakeExecutor executor;
   lf::a2a::v1::AgentCard extended_card;
   extended_card.set_name("Extended Unit Agent");
@@ -528,7 +539,7 @@ TEST(GrpcServerTransportTest, GetExtendedAgentCardValidatesRequiredExtensions) {
   EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
 }
 
-TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
+TEST_F(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
   a2a::server::GrpcServerTransport transport(nullptr);
   grpc::ServerContext context;
 
@@ -557,7 +568,7 @@ TEST(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
   EXPECT_EQ(list_status.error_code(), grpc::StatusCode::INTERNAL);
 }
 
-TEST(GrpcServerTransportTest, PushNotificationMethodsReturnProtocolMessage) {
+TEST_F(GrpcServerTransportTest, PushNotificationMethodsReturnProtocolMessage) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -577,7 +588,7 @@ TEST(GrpcServerTransportTest, PushNotificationMethodsReturnProtocolMessage) {
   EXPECT_FALSE(get_status.error_message().empty());
 }
 
-TEST(GrpcServerTransportTest, StreamingRpcsValidateNullRequestPointers) {
+TEST_F(GrpcServerTransportTest, StreamingRpcsValidateNullRequestPointers) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -588,7 +599,7 @@ TEST(GrpcServerTransportTest, StreamingRpcsValidateNullRequestPointers) {
   EXPECT_EQ(transport.SubscribeToTask(&context, nullptr, nullptr).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 }
 
-TEST(GrpcServerTransportTest, MissingVersionHeaderIncludesHelpfulMessage) {
+TEST_F(GrpcServerTransportTest, MissingVersionHeaderIncludesHelpfulMessage) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -603,7 +614,7 @@ TEST(GrpcServerTransportTest, MissingVersionHeaderIncludesHelpfulMessage) {
   EXPECT_NE(status.error_message().find("Missing required A2A-Version header"), std::string::npos);
 }
 
-TEST(GrpcServerTransportTest, InvalidArgumentMessagesAreStableForRpcShapes) {
+TEST_F(GrpcServerTransportTest, InvalidArgumentMessagesAreStableForRpcShapes) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -628,7 +639,7 @@ TEST(GrpcServerTransportTest, InvalidArgumentMessagesAreStableForRpcShapes) {
   EXPECT_EQ(subscribe_status.error_message(), "Request and writer are required");
 }
 
-TEST(GrpcServerTransportTest, MissingVersionHeaderMappingIsConsistentAcrossRpcs) {
+TEST_F(GrpcServerTransportTest, MissingVersionHeaderMappingIsConsistentAcrossRpcs) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);

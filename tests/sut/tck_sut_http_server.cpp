@@ -104,6 +104,15 @@ class HttpConnectionRegistry final {
 
 void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectionRegistry& registry,
                           std::unique_ptr<SutHttpConnectionObserver> observer) {
+#ifdef _WIN32
+  // Winsock inherits the listener's non-blocking mode; the adapter uses blocking I/O.
+  u_long mode = 0UL;
+  if (ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &mode) != 0) {
+    registry.Remove(fd);
+    server::CloseSocketCrossPlatform(fd);
+    return;
+  }
+#endif
   SocketTransport socket_transport(fd);
   const server::HttpAdapter adapter;
   server::HttpConnectionState connection_state;
