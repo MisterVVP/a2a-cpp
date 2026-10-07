@@ -21,6 +21,9 @@ class ServerStreamSession {
     (void)timeout;
     return Next();
   }
+  // Timed reads let transports observe client cancellation without calling
+  // Cancel() concurrently with a blocking Next().
+  [[nodiscard]] virtual bool SupportsTimedNext() const noexcept { return false; }
   // Sessions are finite unless they explicitly support waiting for future events.
   [[nodiscard]] virtual bool IsLive() const noexcept { return false; }
   virtual void Cancel() noexcept {}

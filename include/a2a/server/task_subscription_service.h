@@ -46,6 +46,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     // active resume while holding the mutex, then always resumes without any
     // service, publication, or subscriber lock held. Session destruction
     // waits for that accounting to reach zero before destroying the frame.
+    // A resumer releases the frame's resume mutex before dropping its count.
     std::string task_id;
     lf::a2a::v1::Task current_task;
     std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
@@ -75,6 +76,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override;
     [[nodiscard]] core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
         std::chrono::milliseconds timeout) override;
+    [[nodiscard]] bool SupportsTimedNext() const noexcept override { return true; }
     [[nodiscard]] bool IsLive() const noexcept override;
     void Cancel() noexcept override;
 

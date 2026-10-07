@@ -37,6 +37,7 @@ constexpr std::size_t kOrderingSubscriberCount = 8;
 constexpr std::ptrdiff_t kConcurrentParticipantCount = 3;
 constexpr std::size_t kMaximumRacingUpdateCount = 1;
 constexpr std::size_t kExpectedConcurrentSignalEventCount = 3;
+constexpr std::size_t kDestructionRaceIterations = 128;
 
 lf::a2a::v1::Task MakeTask(lf::a2a::v1::TaskState state) {
   lf::a2a::v1::Task task;
@@ -168,6 +169,7 @@ TEST(TaskSubscriptionServiceTest, TimedWaitKeepsSubscriptionOpen) {
   auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
   ASSERT_TRUE(subscription.ok());
   auto* session = subscription.value().get();
+  EXPECT_TRUE(session->SupportsTimedNext());
   (void)NextRequired(session);
 
   const auto timeout = session->NextFor(kSubscriptionWaitTimeout);
@@ -410,6 +412,22 @@ TEST(TaskSubscriptionServiceTest, DestroyingSuspendedSubscriptionPreventsLaterRe
   ASSERT_TRUE(replacement.ok());
   const auto current = NextRequired(replacement.value().get());
   EXPECT_TRUE(current.has_task());
+}
+
+TEST(TaskSubscriptionServiceTest, DestructionRacingTerminalPublicationWaitsForResumeCleanup) {
+  for (std::size_t iteration = 0; iteration < kDestructionRaceIterations; ++iteration) {
+    a2a::server::TaskSubscriptionService service;
+    auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+    ASSERT_TRUE(subscription.ok());
+    (void)NextRequired(subscription.value().get());
+    const auto idle = subscription.value()->NextFor(kImmediateTimeout);
+    ASSERT_TRUE(idle.ok());
+    ASSERT_FALSE(idle.value().has_value());
+
+    RunConcurrently([&] { service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_CANCELED)); },
+                    [&] { subscription.value().reset(); });
+    EXPECT_EQ(subscription.value(), nullptr);
+  }
 }
 
 TEST(TaskSubscriptionServiceTest, ConcurrentSignalsResumeOnceAndPreserveBothEvents) {

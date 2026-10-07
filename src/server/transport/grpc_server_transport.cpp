@@ -332,20 +332,31 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
-  StreamCancellationWatcher cancellation_watcher(context, stream->get());
+  const bool supports_timed_next = (*stream)->SupportsTimedNext();
+  std::optional<StreamCancellationWatcher> cancellation_watcher;
+  if (!supports_timed_next) {
+    cancellation_watcher.emplace(context, stream->get());
+  }
   while (!context->IsCancelled()) {
-    const auto next = (*stream)->Next();
+    const auto next = supports_timed_next ? (*stream)->NextFor(kStreamCancellationPollInterval) : (*stream)->Next();
     if (!next.ok()) {
       return ToGrpcStatus(next.error(), context, request_context.value().activated_extensions);
     }
     const auto& event = next.value();
+    if (!event.has_value() && (*stream)->IsLive()) {
+      continue;
+    }
     if (!event.has_value()) {
       break;
     }
     if (!writer->Write(*event)) {
       (*stream)->Cancel();
-      break;
+      return ::grpc::Status::OK;
     }
+  }
+
+  if (supports_timed_next && context->IsCancelled()) {
+    (*stream)->Cancel();
   }
 
   return ::grpc::Status::OK;
@@ -492,13 +503,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
-  StreamCancellationWatcher cancellation_watcher(context, stream->get());
+  const bool supports_timed_next = (*stream)->SupportsTimedNext();
+  std::optional<StreamCancellationWatcher> cancellation_watcher;
+  if (!supports_timed_next) {
+    cancellation_watcher.emplace(context, stream->get());
+  }
   while (!context->IsCancelled()) {
-    const auto next = (*stream)->Next();
+    const auto next = supports_timed_next ? (*stream)->NextFor(kStreamCancellationPollInterval) : (*stream)->Next();
     if (!next.ok()) {
       return ToGrpcStatus(next.error(), context, request_context.value().activated_extensions);
     }
     const auto& maybe_event = next.value();
+    if (!maybe_event.has_value() && (*stream)->IsLive()) {
+      continue;
+    }
     if (!maybe_event.has_value()) {
       break;
     }
@@ -506,6 +524,10 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       (*stream)->Cancel();
       return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
     }
+  }
+
+  if (supports_timed_next && context->IsCancelled()) {
+    (*stream)->Cancel();
   }
 
   return ::grpc::Status::OK;
