@@ -671,6 +671,11 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
                 f"wire performance driver for {transport}/{store_backend}/c{concurrency} scenario={scenario}",
                 sut.log_path, health_check=lambda scenario=scenario: sut.check_running(scenario),
             )
+            if len(scenario_payload) != 1:
+                raise ValueError(
+                    f"wire performance driver for scenario={scenario} must return exactly one result; "
+                    f"received {len(scenario_payload)}"
+                )
             if any(result.get("scenario") != scenario for result in scenario_payload):
                 raise ValueError("wire performance driver returned an unrequested scenario")
             payload.extend(scenario_payload)
