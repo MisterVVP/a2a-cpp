@@ -17,6 +17,7 @@
 namespace {
 
 constexpr std::chrono::milliseconds kCallbackWaitDeadline{1000};
+constexpr auto kTaskId = "task-1";
 
 class FakeClientTransport final : public a2a::client::ClientTransport {
  public:
@@ -105,11 +106,11 @@ class FakeClientTransport final : public a2a::client::ClientTransport {
   }
 
   a2a::core::Result<void> Shutdown() override {
-    shutdown_called = true;
+    *shutdown_called = true;
     return {};
   }
 
-  bool shutdown_called = false;
+  std::shared_ptr<bool> shutdown_called = std::make_shared<bool>(false);
   std::optional<a2a::core::Error> list_tasks_error = std::nullopt;
   a2a::client::ListTasksResponse list_tasks_response;
 };
@@ -226,15 +227,15 @@ TEST(A2AClientTest, ListTasksPropagatesErrorAndInterceptorResult) {
 
 TEST(A2AClientTest, DestroyShutsDownTransportAndClearsClient) {
   auto transport = std::make_unique<FakeClientTransport>();
-  auto* transport_ptr = transport.get();
+  const auto shutdown_called = transport->shutdown_called;
   a2a::client::A2AClient client(std::move(transport));
 
   const auto destroy_result = client.Destroy();
   ASSERT_TRUE(destroy_result.ok());
-  EXPECT_TRUE(transport_ptr->shutdown_called);
+  EXPECT_TRUE(*shutdown_called);
 
   lf::a2a::v1::GetTaskRequest request;
-  request.set_id("task-1");
+  request.set_id(kTaskId);
   const auto get_task = client.GetTask(request);
   ASSERT_FALSE(get_task.ok());
   EXPECT_EQ(get_task.error().code(), a2a::core::ErrorCode::kInternal);
