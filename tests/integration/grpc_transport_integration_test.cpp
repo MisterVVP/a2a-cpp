@@ -86,21 +86,32 @@ class ControlledSubscriptionRecorder final {
 
 class ControlledSubscriptionSession final : public a2a::server::ServerStreamSession {
  public:
-  ControlledSubscriptionSession(lf::a2a::v1::Task task, std::shared_ptr<ControlledSubscriptionRecorder> recorder)
-      : recorder_(std::move(recorder)) {
+  ControlledSubscriptionSession(lf::a2a::v1::Task task, std::shared_ptr<ControlledSubscriptionRecorder> recorder,
+                                bool supports_timed_next)
+      : recorder_(std::move(recorder)), supports_timed_next_(supports_timed_next) {
     *initial_event_.mutable_task() = std::move(task);
   }
 
   a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    return NextFor(kClientCancellationTimeout);
+  }
+
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(std::chrono::milliseconds timeout) override {
     if (!delivered_initial_) {
       delivered_initial_ = true;
       return std::optional<lf::a2a::v1::StreamResponse>(initial_event_);
     }
 
     std::unique_lock lock(mutex_);
-    changed_.wait(lock, [this] { return cancelled_.load(); });
+    if (supports_timed_next_) {
+      changed_.wait_for(lock, timeout, [this] { return cancelled_.load(); });
+    } else {
+      changed_.wait(lock, [this] { return cancelled_.load(); });
+    }
     return std::optional<lf::a2a::v1::StreamResponse>{};
   }
+
+  [[nodiscard]] bool SupportsTimedNext() const noexcept override { return supports_timed_next_; }
 
   [[nodiscard]] bool IsLive() const noexcept override { return !cancelled_.load(); }
 
@@ -114,6 +125,7 @@ class ControlledSubscriptionSession final : public a2a::server::ServerStreamSess
  private:
   std::shared_ptr<ControlledSubscriptionRecorder> recorder_;
   lf::a2a::v1::StreamResponse initial_event_;
+  bool supports_timed_next_;
   bool delivered_initial_ = false;
   std::atomic_bool cancelled_ = false;
   std::mutex mutex_;
@@ -124,7 +136,9 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
  public:
   explicit StreamingStoreExecutor(a2a::server::TaskStore* store) : store_(store) {}
 
-  void RecordSubscribeCancellationFor(std::string task_id, std::shared_ptr<ControlledSubscriptionRecorder> recorder) {
+  void RecordSubscribeCancellationFor(std::string task_id, std::shared_ptr<ControlledSubscriptionRecorder> recorder,
+                                      bool supports_timed_next = false) {
+    controlled_supports_timed_next_ = supports_timed_next;
     controlled_subscription_task_id_ = std::move(task_id);
     controlled_subscription_recorder_ = std::move(recorder);
   }
@@ -148,6 +162,14 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
   a2a::core::Result<std::unique_ptr<a2a::server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, a2a::server::RequestContext& context) override {
     (void)context;
+    if (controlled_subscription_recorder_ != nullptr &&
+        request.message().task_id() == controlled_subscription_task_id_) {
+      lf::a2a::v1::Task task;
+      task.set_id(request.message().task_id());
+      task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+      return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<ControlledSubscriptionSession>(
+          std::move(task), controlled_subscription_recorder_, controlled_supports_timed_next_));
+    }
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(request.message().task_id());
     event.mutable_task()->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
@@ -167,8 +189,8 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
       return task.error();
     }
     if (controlled_subscription_recorder_ != nullptr && request.id() == controlled_subscription_task_id_) {
-      return std::unique_ptr<a2a::server::ServerStreamSession>(
-          std::make_unique<ControlledSubscriptionSession>(task.value(), controlled_subscription_recorder_));
+      return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<ControlledSubscriptionSession>(
+          task.value(), controlled_subscription_recorder_, controlled_supports_timed_next_));
     }
     return subscriptions_.Subscribe(task.value());
   }
@@ -192,6 +214,7 @@ class StreamingStoreExecutor final : public a2a::server::AgentExecutor {
  private:
   a2a::server::TaskStore* store_;
   a2a::server::TaskSubscriptionService subscriptions_;
+  bool controlled_supports_timed_next_ = false;
   std::string controlled_subscription_task_id_;
   std::shared_ptr<ControlledSubscriptionRecorder> controlled_subscription_recorder_;
 };
@@ -583,13 +606,15 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
 }
 
 [[nodiscard]] a2a::core::Result<void> VerifyClientStreamCancellationCancelsServerSubscription(
-    GrpcServerHarness* harness, a2a::client::A2AClient* client) {
+    GrpcServerHarness* harness, a2a::client::A2AClient* client, bool supports_timed_next = false,
+    bool send_streaming_message = false) {
   if (harness == nullptr || client == nullptr) {
     return a2a::core::Error::Internal("Harness and client must not be null");
   }
 
   auto recorder = std::make_shared<ControlledSubscriptionRecorder>();
-  harness->executor.RecordSubscribeCancellationFor(std::string(kClientCancelledSubscribeTaskId), recorder);
+  harness->executor.RecordSubscribeCancellationFor(std::string(kClientCancelledSubscribeTaskId), recorder,
+                                                   supports_timed_next);
 
   lf::a2a::v1::SendMessageRequest send_request;
   send_request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
@@ -602,7 +627,8 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
   lf::a2a::v1::GetTaskRequest subscribe_request;
   subscribe_request.set_id(std::string(kClientCancelledSubscribeTaskId));
   RecordingObserver observer;
-  auto stream = client->SubscribeTask(subscribe_request, observer);
+  auto stream = send_streaming_message ? client->SendStreamingMessage(send_request, observer)
+                                       : client->SubscribeTask(subscribe_request, observer);
   if (!stream.ok()) {
     return stream.error();
   }
@@ -683,6 +709,19 @@ TEST(GrpcTransportIntegrationTest, ClientStreamCancellationCancelsServerSubscrip
   harness->server->Shutdown();
 }
 
+TEST(GrpcTransportIntegrationTest, TimedClientStreamCancellationCancelsBothServerSessions) {
+  for (const bool send_streaming_message : {false, true}) {
+    SCOPED_TRACE(send_streaming_message);
+    auto harness = StartHarness();
+    ASSERT_NE(harness->server, nullptr);
+    auto client = BuildClient(harness->port);
+    const auto cancellation = VerifyClientStreamCancellationCancelsServerSubscription(harness.get(), client.get(), true,
+                                                                                      send_streaming_message);
+    EXPECT_TRUE(cancellation.ok()) << cancellation.error().message();
+    harness->server->Shutdown();
+  }
+}
+
 void CancelIdleSubscriptionAndTask(a2a::client::A2AClient* client, std::size_t index) {
   std::string task_id(kConcurrentCancellationTaskPrefix);
   task_id.append(std::to_string(index));
@@ -717,7 +756,7 @@ TEST(GrpcTransportIntegrationTest, ConcurrentIdleCancellationRacingTerminalPubli
     workers.emplace_back([&, worker] {
       start.wait(false);
       for (std::size_t iteration = 0; iteration < kCancellationsPerWorker; ++iteration) {
-        CancelIdleSubscriptionAndTask(client.get(), worker * kCancellationsPerWorker + iteration);
+        CancelIdleSubscriptionAndTask(client.get(), (worker * kCancellationsPerWorker) + iteration);
       }
     });
   }

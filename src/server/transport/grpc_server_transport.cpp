@@ -351,8 +351,12 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     }
     if (!writer->Write(*event)) {
       (*stream)->Cancel();
-      break;
+      return ::grpc::Status::OK;
     }
+  }
+
+  if (supports_timed_next && context->IsCancelled()) {
+    (*stream)->Cancel();
   }
 
   return ::grpc::Status::OK;
@@ -520,6 +524,10 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
       (*stream)->Cancel();
       return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
     }
+  }
+
+  if (supports_timed_next && context->IsCancelled()) {
+    (*stream)->Cancel();
   }
 
   return ::grpc::Status::OK;

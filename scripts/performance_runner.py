@@ -666,11 +666,14 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
                 "--duration-seconds", str(config.duration_seconds),
                 "--scenarios", scenario,
             ]
-            payload.extend(run_command_json(
+            scenario_payload = run_command_json(
                 command, config.wire_driver_timeout_seconds,
                 f"wire performance driver for {transport}/{store_backend}/c{concurrency} scenario={scenario}",
                 sut.log_path, health_check=lambda scenario=scenario: sut.check_running(scenario),
-            ))
+            )
+            if any(result.get("scenario") != scenario for result in scenario_payload):
+                raise ValueError("wire performance driver returned an unrequested scenario")
+            payload.extend(scenario_payload)
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
     server_subscription_diagnostics = read_subscription_diagnostics(sut.log_path)
     if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and not server_subscription_diagnostics:

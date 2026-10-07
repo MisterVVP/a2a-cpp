@@ -194,6 +194,27 @@ class PerformanceRunnerTest(unittest.TestCase):
         sut_process.assert_called_once()
         self.assertEqual(len(scenarios), run_command.call_count)
 
+    def test_wire_scenarios_reject_rows_for_another_selected_scenario(self):
+        runner = load_runner_module()
+        scenarios = ("SendMessage_CreateTask", "GetTask_ExistingTask")
+        sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
+        context = mock.MagicMock()
+        context.__enter__.return_value = sut
+        config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
+                                 duration_seconds=0, wire_driver_timeout_seconds=1,
+                                 report_dir=Path("."))
+        for returned_scenario in (scenarios[1], "unknown", None):
+            with self.subTest(returned_scenario=returned_scenario), \
+                 mock.patch.dict(os.environ, {}, clear=True), \
+                 mock.patch.object(runner, "SutProcess", return_value=context), \
+                 mock.patch.object(runner, "run_command_json", return_value=[{
+                     "scenario": returned_scenario, "driver_type": "wire_tck_sut",
+                     "transport_path": "wire_grpc",
+                 }]) as run_command, \
+                 self.assertRaisesRegex(ValueError, "unrequested scenario"):
+                runner.run_wire_scenarios(config, Path("wire-driver"), "grpc", "inmemory", 1, 1, 1234, scenarios)
+            run_command.assert_called_once()
+
     def test_main_skips_in_process_driver_for_wire_only_selection(self):
         runner = load_runner_module()
         scenario = "IdleStream_ClientCancellationLatency"
@@ -609,7 +630,7 @@ class PerformanceRunnerTest(unittest.TestCase):
                 sut.check_running("IdleStream_ClientCancellationLatency")
 
             message = str(raised.exception)
-            self.assertIn("signal 6 (SIGABRT); exit code -6", message)
+            self.assertIn(f"signal {signal.SIGABRT} (SIGABRT); exit code {-signal.SIGABRT}", message)
             self.assertIn("fatal cancellation failure", message)
 
     def test_run_command_stops_driver_when_health_check_fails(self):
