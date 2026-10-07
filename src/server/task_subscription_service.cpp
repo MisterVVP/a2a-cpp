@@ -279,8 +279,12 @@ void TaskSubscriptionService::SignalSubscriber(const std::shared_ptr<SubscriberS
     const core::subscription_diagnostics::ScopedTimer timer(
         core::subscription_diagnostics::Phase::kSubscriberResumeCallback);
 #endif
-    std::lock_guard resume_lock(continuation.promise().resume_mutex_);
-    continuation.resume();
+    {
+      std::lock_guard resume_lock(continuation.promise().resume_mutex_);
+      continuation.resume();
+    }
+    // Release every reference to the coroutine frame before allowing Cancel()
+    // to finish waiting and destroy it, including the frame-owned resume mutex.
     {
       std::lock_guard lock(state->mutex);
       --state->active_resumes;
