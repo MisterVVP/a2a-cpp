@@ -79,6 +79,8 @@ constexpr std::chrono::milliseconds kCancellationDeadline{1000};
 constexpr std::chrono::milliseconds kCancellationPredicateWork{20};
 constexpr int kCancellationPredicateEvaluationsBeforeCancel = 3;
 constexpr std::string_view kHttpVersion11 = "HTTP/1.1";
+constexpr std::string_view kUnsupportedHttpVersion = "HTTP/0.9";
+constexpr std::string_view kUnusedLoopbackUrl = "http://127.0.0.1:1/";
 constexpr std::string_view kTaskId = "task-1";
 constexpr std::string_view kResponseHeaderName = "X-Test-Header";
 constexpr std::string_view kResponseHeaderValue = "captured";
@@ -1739,7 +1741,7 @@ TEST(SharedHttpClientTest, ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle
   first_worker.join();
 }
 
-#else
+#elif !defined(A2A_HAS_LIBCURL)
 TEST(SharedHttpClientTest, SendRequestReportsDisabledLibcurlSupport) {
   a2a::http::Client client;
   a2a::http::Request request;
@@ -1751,5 +1753,20 @@ TEST(SharedHttpClientTest, SendRequestReportsDisabledLibcurlSupport) {
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kInternal);
   EXPECT_EQ(response.error().transport().value_or(""), "http");
+}
+#endif
+
+#if defined(A2A_HAS_LIBCURL)
+TEST(SharedHttpClientTest, SendRequestRejectsUnsupportedHttpVersionBeforeConnecting) {
+  a2a::http::Client client;
+  a2a::http::Request request;
+  request.method = std::string(a2a::core::http::kMethodGet);
+  request.url = std::string(kUnusedLoopbackUrl);
+  request.http_version = std::string(kUnsupportedHttpVersion);
+
+  const auto response = client.SendRequest(request);
+
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kValidation);
 }
 #endif

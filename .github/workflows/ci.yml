@@ -541,8 +541,18 @@ jobs:
           $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
           $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
           $hostTriplet = $env:VCPKG_HOST_TRIPLET
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON
           cmake --build build --config RelWithDebInfo --parallel
+
+      - name: Test
+        shell: pwsh
+        # sut_entrypoints_test requires compile_commands.json, unavailable with Visual Studio.
+        # performance_runner_script_test directly executes POSIX shell/Python scripts.
+        # run_examples_script_test uses POSIX paths and executable shell-script fixtures.
+        # All registered C++ tests and the remaining Python tests run; PostgreSQL is off by default.
+        run: >-
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
+          -E "^(sut_entrypoints_test|performance_runner_script_test|run_examples_script_test)$"
 
       - name: Publish Windows stage timings
         shell: pwsh
