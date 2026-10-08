@@ -136,7 +136,7 @@ set(A2A_ENABLE_POSTGRES_STORE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   a2a_cpp
   GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
-  GIT_TAG v0.5.0
+  GIT_TAG v0.5.1
 )
 FetchContent_MakeAvailable(a2a_cpp)
 
@@ -179,5 +179,5 @@ rm -rf build-example-hello_agent
 ## Platform notes
 
 - Linux CI configures with CMake and validates build, tests, examples, clang-format, clang-tidy, coverage, and selected sanitizer/interop flows.
-- macOS CI builds with Homebrew-provided dependencies and Ninja.
-- Windows CI and local Windows builds use vcpkg manifest dependencies and the Visual Studio 2022 generator. See [vcpkg](vcpkg.md) for the helper script, manifest, triplet, and overlay details.
+- macOS CI builds with Homebrew-provided dependencies and Ninja, then runs all registered CTest tests, including available Python-backed checks.
+- Windows CI and local Windows builds use vcpkg manifest dependencies and the Visual Studio 2022 generator. CI runs all registered C++ tests and the applicable Python-backed checks; three POSIX/compilation-database-dependent script tests are excluded with reasons documented in the workflow. See [vcpkg](vcpkg.md) for the helper script, manifest, triplet, and overlay details.

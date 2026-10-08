@@ -4,7 +4,85 @@ This documentation is intended to stay version-aware without embedding a release
 
 ## Current documented release
 
-The current documented release is **v0.5.0** and is recommended for new consumers.
+The current documented release is **v0.5.1** and is recommended for new consumers.
+
+### Highlights since `v0.5.0`
+
+#### Multi-agent tutorials and MCP resources
+
+Two standalone C++20 tutorials demonstrate Agent Card discovery, A2A delegation
+from a coordinator to a specialist, and structured artifacts: Job Application
+Assistant and Customer Support Copilot. They default to deterministic model responses and
+also support an optional OpenAI-compatible model endpoint.
+
+The tutorial-local MCP client supports initialization, session handling, and
+textual `resources/read` validation. Job Application Assistant accepts local
+inputs or MCP resources; Customer Support Copilot retrieves tickets through
+OAuth-protected ContextForge with Keycloak. Docker Compose smoke flows cover
+both tutorials, while the native runner covers Job Application Assistant. See
+the [production tutorials guide](https://github.com/MisterVVP/a2a-cpp/blob/main/examples/tutorials/README.md)
+for setup and model configuration. This MCP integration is tutorial-local, not
+a new general-purpose public SDK client.
+
+#### Streaming and subscription reliability
+
+Synchronous HTTP stream completion now retains shared completion state through
+callback notification, avoiding lifetime races. Subscription cancellation waits
+until coroutine resumers have released the frame-owned resume mutex before
+destroying the frame. gRPC transports use timed reads for sessions that support
+them, observing cancellation without invoking `Cancel()` concurrently with a
+blocking `Next()`; other sessions retain the cancellation-watcher fallback.
+
+A focused [ThreadSanitizer profile](https://github.com/MisterVVP/a2a-cpp/blob/main/docs/thread-sanitizer.md)
+and CI job exercise SDK-owned streaming, subscription, reactor, and in-memory
+store concurrency without a suppression file.
+
+#### Performance harness reliability
+
+Wire benchmarks now use a dedicated `performance_sut` entrypoint, keeping
+performance diagnostic endpoints and counters out of the conformance-focused
+`tck_sut`. Both share the transport lifecycle runtime. Each wire scenario runs
+as a separate driver invocation against the shared SUT; periodic health checks
+report unexpected SUT exits with the active workload, exit code or POSIX signal,
+and log tail, then stop the driver promptly.
+
+This release improves diagnostic isolation and failure reporting. It does not
+introduce a separate non-blocking performance HTTP server or claim a new
+measured throughput improvement.
+
+#### Cross-platform test execution and portability
+
+Windows and macOS CI now explicitly enable testing and run CTest after the
+build, with failure output and an error for an empty suite. macOS selects all
+registered tests; Windows selects all C++ tests and applicable Python checks,
+excluding only three documented script tests that depend on POSIX execution or
+a compilation database unavailable with Visual Studio.
+
+The expanded execution caught and fixed libcurl test selection, a client-test
+lifetime error, gRPC unit-test runtime initialization, accepted HTTP socket mode
+and idle shutdown differences, and protobuf-version-dependent duplicate field
+alias handling in flat JSON-RPC requests. HTTP persistence regressions cover
+sequential reuse, pipelining, fragmented requests, concurrency, and idle shutdown.
+
+### Compatibility notes
+
+No public APIs are intentionally removed. `ServerStreamSession` gains a virtual
+`SupportsTimedNext() const noexcept` method whose default is `false`, so existing
+derived classes remain source-compatible. Sessions opting in must implement the
+timed-read contract through `NextFor()`. The public HTTP header lookup helper
+also gains an overload for ordered header containers. Rebuild the SDK and
+downstream binaries together; the added virtual method changes the class vtable
+and this release does not promise binary compatibility with `v0.5.0`.
+
+Custom performance tooling should use `performance_sut` and `A2A_PERF_SUT`;
+conformance tooling continues to use `tck_sut`. The historical wire result value
+`driver_type=wire_tck_sut` remains unchanged for report compatibility. Pagination
+and PostgreSQL schema/privilege requirements from `v0.5.0` remain in effect.
+
+## Previous release: `v0.5.0`
+
+The following notes describe `v0.5.0`; its benchmark comparisons are historical
+evidence for that release, not measurements of `v0.5.1`.
 
 ### Highlights since `v0.4.1`
 
@@ -107,7 +185,7 @@ transactions are rejected because a stale snapshot cannot safely perform the
 required cleanup. These are operational schema requirements rather than public
 C++ API removals.
 
-## Previous release: `v0.4.1`
+## Earlier release: `v0.4.1`
 
 `v0.4.1` optimized PostgreSQL push-configuration and task persistence paths,
 added HTTP/1.1 reuse for unary HTTP transports, hardened typed `ListTasks`
@@ -127,7 +205,7 @@ server response construction.
 
 ## Versioning guidance
 
-- Pin CMake `FetchContent` integrations to a release tag such as `v0.5.0` or to
+- Pin CMake `FetchContent` integrations to a release tag such as `v0.5.1` or to
   a reviewed commit.
 - Prefer `find_package(a2a_cpp CONFIG REQUIRED)` for installed SDK packages.
 - Keep generated protobuf headers and linked SDK libraries from the same
