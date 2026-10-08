@@ -47,6 +47,32 @@ Here are some additional things to keep in mind during the process:
 - **Please follow guideline defined in [AGENTS.md](AGENTS.md).**.
 - **Be patient.** It may take some time for your pull request to be reviewed and merged.
 
+## Go benchmark-runner validation
+
+For changes whose non-documentation files are all under `tools/bench_runner/**`, run:
+
+```bash
+cd tools/bench_runner
+test -z "$(gofmt -l .)"
+go vet ./...
+go test -race ./...
+go build ./cmd/a2a-bench-runner
+```
+
+The Go tests cover parsing, thresholds, reports, and CLI smoke scenarios without building C++ benchmarks. This scope does not require `./scripts/verify_changes.sh`, C++ formatting/linting, a full SDK build/test, or the A2A TCK suite. Performance smoke is unnecessary unless benchmark execution or performance-driver behavior changes. Applicable dependency/security and documentation checks still apply. Mixed Go and C++/protocol/build/workflow changes require both these checks and the full [AGENTS.md](AGENTS.md) validation. Threshold, CMake, benchmark-production, and execution-script changes are outside this exception.
+
+## CI path filtering and required checks
+
+The **Go benchmark runner** workflow runs for PRs and pushes to `main` changing `tools/bench_runner/**`, the root `go.work`, `benchmarks/thresholds.json`, or its workflow definition. It checks formatting, vet, race-enabled tests, compilation, and CLI smoke tests; it also supports manual dispatch.
+
+On PRs, **CI**, **TCK Conformance**, and **CodeQL** ignore changes limited to `tools/bench_runner/**`. CI retains its existing documentation exclusions. A mixed Go and C++/protocol/transport/store/build/interoperability change runs both Go checks and the existing workflows. The full C++ benchmark job remains in CI for benchmark-production, implementation, CMake, execution-script, and workflow changes. Existing `main` push, scheduled, and manual triggers remain unchanged.
+
+### Required-check migration for maintainers
+
+GitHub leaves required checks pending when an entire workflow is skipped by a path filter. Before enabling these filters on a protected branch, inspect both branch protection and repository/organization rulesets for required CI, TCK, CodeQL, and Go check names. Do not require a path-filtered workflow's individual jobs unconditionally, including **Go benchmark runner checks**: each can legitimately be absent. The already filtered CI workflow has the same constraint for documentation-only PRs.
+
+If conditional checks are required for merge protection, first configure an always-triggered validation gate that selects and waits for all applicable workflows and fails if any selected workflow is missing or fails; require that gate rather than optional individual jobs. Keep an always-triggered check such as **Conventional Commits** required independently. Verify a Go-only PR and a mixed Go/C++ PR can merge only after their applicable checks pass. Do not remove C++ or security enforcement without an equivalent conditional gate. Branch protection and rulesets are GitHub administrative settings and cannot be changed by workflow YAML; maintainers must review this migration in repository settings.
+
 ## AI-assisted contributions
 
 The use of generative AI tools is permitted. Contributors remain fully responsible for every change they submit, regardless of how it was produced.
