@@ -7,7 +7,9 @@
 #include <string_view>
 
 #include "../support/rest_server_test_utils.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/version.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
@@ -18,6 +20,12 @@ constexpr int kHttpOk = 200;
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 constexpr std::string_view kJsonRpcIdNullCompact = R"("id":null)";
 constexpr std::string_view kJsonRpcIdNullSpaced = R"("id": null)";
+constexpr std::string_view kRpcPath = "/rpc";
+constexpr std::string_view kJsonRpcParseErrorCode = "-32700";
+constexpr std::string_view kDuplicateGetTaskIdJson = R"("id":"alias-functional")";
+constexpr std::string_view kDuplicateGetTaskBody =
+    R"({"jsonrpc":"2.0","id":"alias-functional","method":"a2a.getTask",)"
+    R"("params":{"id":"task-duplicate-history","historyLength":7,"history_length":8}})";
 
 bool BodyContains(std::string_view body, std::string_view expected) {
   return body.find(expected) != std::string_view::npos;
@@ -59,6 +67,24 @@ TEST(JsonRpcServerTransportFunctionalTest, SupportsTaskLifecycleMethodsOverJsonR
   EXPECT_EQ(list_response.value().status_code, kHttpOk);
   EXPECT_NE(list_response.value().body.find("task-jsonrpc-functional-1"), std::string::npos);
   EXPECT_NE(list_response.value().body.find("\"id\":101"), std::string::npos);
+}
+
+TEST(JsonRpcServerTransportFunctionalTest, RejectsDuplicateGetTaskAliasesBeforeStoreLookup) {
+  a2a::server::InMemoryTaskStore store;
+  a2a::tests::support::StoreExecutor executor(&store);
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::JsonRpcServerTransport server(&dispatcher,
+                                             {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
+
+  const auto response = server.Handle(a2a::tests::support::MakeHttpRequest(
+      std::string(a2a::core::http::kMethodPost), std::string(kRpcPath),
+      {{std::string(a2a::core::Version::kHeaderName), a2a::core::Version::HeaderValue()}},
+      std::string(kDuplicateGetTaskBody)));
+
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, kHttpOk);
+  EXPECT_TRUE(BodyContains(response.value().body, kJsonRpcParseErrorCode)) << response.value().body;
+  EXPECT_TRUE(BodyContains(response.value().body, kDuplicateGetTaskIdJson)) << response.value().body;
 }
 
 TEST(JsonRpcServerTransportFunctionalTest, RejectsMissingVersionHeaderWhenRequired) {

@@ -36,6 +36,11 @@ constexpr std::string_view kFiniteProducerFailureMessage = "finite producer fail
 constexpr std::string_view kFiniteStreamErrorRequestId = "req-stream-error";
 constexpr std::string_view kStreamingTaskId = "task-stream";
 constexpr std::string_view kJsonRpcErrorMemberJson = R"("error")";
+constexpr std::string_view kFlatPayloadSerializationErrorCode = "-32700";
+constexpr std::array<std::string_view, 3> kDuplicateFlatGetTaskBodies = {
+    R"({"jsonrpc":"2.0","id":"req-flat-alias","method":"a2a.getTask","params":{"id":"task-flat-alias","historyLength":7,"history_length":8}})",
+    R"({"jsonrpc":"2.0","id":"req-flat-alias","method":"a2a.getTask","params":{"id":"task-flat-alias","history_length":8,"historyLength":7}})",
+    R"({"jsonrpc":"2.0","id":"req-flat-alias","method":"a2a.getTask","params":{"id":"task-flat-alias","historyLength":"7","history_length":8}})"};
 constexpr std::string_view kFiniteStreamErrorRequestBody =
     R"({"jsonrpc":"2.0","id":"req-stream-error","method":"a2a.sendStreamingMessage",)"
     R"("params":{"message":{"role":"ROLE_USER","taskId":"task-stream"}}})";
@@ -334,20 +339,19 @@ TEST(JsonRpcServerTransportTest, AcceptsQuotedFlatGetTaskIntegerField) {
 }
 
 TEST(JsonRpcServerTransportTest, RejectsDuplicateFlatGetTaskFieldAliases) {
-  constexpr std::string_view kSerializationErrorCode = "-32700";
-  constexpr std::string_view kRequestBody =
-      R"({"jsonrpc":"2.0","id":"req-flat-alias","method":"a2a.getTask",)"
-      R"("params":{"id":"task-flat-alias","historyLength":7,"history_length":8}})";
   JsonRpcEchoExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::JsonRpcServerTransport server(&dispatcher,
                                              {.rpc_path = std::string(kRpcPath), .required_extensions = {}});
 
-  const auto response = server.Handle(BuildJsonRpcRequest(std::string(kRequestBody)));
-
-  ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_NE(response.value().body.find(kSerializationErrorCode), std::string::npos) << response.value().body;
+  for (const auto body : kDuplicateFlatGetTaskBodies) {
+    const auto response = server.Handle(BuildJsonRpcRequest(std::string(body)));
+    ASSERT_TRUE(response.ok());
+    EXPECT_EQ(response.value().status_code, kHttpOk);
+    EXPECT_NE(response.value().body.find(kFlatPayloadSerializationErrorCode), std::string::npos)
+        << response.value().body;
+    EXPECT_TRUE(executor.last_get_task_id.empty());
+  }
 }
 
 TEST(JsonRpcServerTransportTest, RejectsInvalidFlatGetTaskFieldType) {

@@ -322,7 +322,11 @@ core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
     return params_json.error();
   }
   T payload;
-  const auto parse_payload = core::JsonToMessage(params_json.value(), &payload, {.ignore_unknown_fields = true});
+  // Protobuf versions differ in whether they reject proto/JSON field aliases.
+  // Keep the flat-payload fallback's rejection independent of that parser.
+  const auto parse_payload =
+      core::JsonToMessage(params_json.value(), &payload,
+                          {.ignore_unknown_fields = true, .reject_duplicate_top_level_fields = is_flat_payload});
   if (!parse_payload.ok()) {
     return parse_payload.error();
   }

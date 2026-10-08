@@ -8,6 +8,7 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -136,17 +137,25 @@ class HttpConnectionRegistry final {
   return mux.RouteRequest(request);
 }
 
+[[nodiscard]] bool SetAcceptedSocketBlocking(int fd) {
+#ifdef _WIN32
+  u_long mode = 0UL;
+  return ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &mode) == 0;
+#else
+  const int flags = fcntl(fd, F_GETFL, 0);
+  return flags >= 0 && fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) == 0;
+#endif
+}
+
 void HandleHttpConnection(int fd, const server::TransportMux& mux, HttpConnectionRegistry& registry,
                           std::unique_ptr<SutHttpConnectionObserver> observer) {
-#ifdef _WIN32
-  // Winsock inherits the listener's non-blocking mode; the adapter uses blocking I/O.
-  u_long mode = 0UL;
-  if (ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &mode) != 0) {
+  // BSD sockets and Winsock inherit the listener's non-blocking mode.
+  // The adapter uses blocking I/O, including while a persistent connection is idle.
+  if (!SetAcceptedSocketBlocking(fd)) {
     registry.Remove(fd);
     server::CloseSocketCrossPlatform(fd);
     return;
   }
-#endif
   SocketTransport socket_transport(fd, registry.ShutdownRequested());
   const server::HttpAdapter adapter;
   server::HttpConnectionState connection_state;
