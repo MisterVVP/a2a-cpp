@@ -132,6 +132,18 @@ case "$1 $2" in
     [[ " $* " == *' --status success '* ]]
     [[ "$TEST_SCENARIO" != api-error ]] || exit 1
     [[ "$TEST_SCENARIO" != first-run ]] || exit 0
+    if [[ "$TEST_SCENARIO" == older-rerun ]]; then
+      # Model server-side filtering before the fetch limit: 101 newer runs
+      # otherwise hide the preceding successful run, whose artifact exists.
+      if [[ " $* " == *' --created <2026-01-03T00:00:00Z '* ]]; then
+        printf '42\t2026-01-02T00:00:00Z\n'
+      else
+        for ((run = 200; run > 100; run--)); do
+          printf '%s\t2026-01-04T00:00:00Z\n' "$run"
+        done
+      fi
+      exit 0
+    fi
     if [[ "$TEST_SCENARIO" == metadata-error || "$TEST_SCENARIO" == metadata-auth-error || "$TEST_SCENARIO" == empty-metadata ]]; then
       printf '42\t2026-01-04T00:00:00Z\n'
       exit 0
@@ -166,6 +178,7 @@ printf '2026-01-05T00:00:00Z\n'
 		exit           int
 	}{
 		{"success", "actions/runs/42", 0},
+		{"older-rerun", "actions/runs/42", 0},
 		{"first-run", "No previous successful main", 0},
 		{"api-error", "No previous successful main", 0},
 		{"metadata-error", "No previous successful main", 0},

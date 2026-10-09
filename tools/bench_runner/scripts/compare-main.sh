@@ -19,7 +19,7 @@ if [[ -n "$current_run" ]]; then
 fi
 
 if [[ -n "$cutoff" ]] && runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-  --branch main --event push --status success --limit 100 \
+  --branch main --event push --status success --created "<$cutoff" --limit 100 \
   --json databaseId,createdAt --jq '.[] | [.databaseId, .createdAt] | @tsv')"; then
   while IFS=$'\t' read -r run_id created_at; do
     if [[ -z "$run_id" || "$run_id" == "$current_run" || ! "$created_at" < "$cutoff" ]]; then

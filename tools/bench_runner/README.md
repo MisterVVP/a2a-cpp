@@ -30,8 +30,10 @@ rows are excluded.
 `bash tools/bench_runner/scripts/compare-main.sh` accepts the same command flags
 and finds the previous successful **push** run of `ci.yml` on `main`, created
 before the current CI run. It requires `GITHUB_REPOSITORY`, the `gh` CLI, and an
-Actions-read token in `GH_TOKEN`. It excludes the current run on reruns and never
-uses PR artifacts as baselines. It downloads the raw JSON, so runs predating the
+Actions-read token in `GH_TOKEN`. The creation-time filter is applied by GitHub
+before the fetch limit, so newer runs cannot hide an older rerun's baseline.
+It excludes the current run on reruns and never uses PR artifacts as baselines.
+It downloads the raw JSON, so runs predating the
 trend schema also work. If no baseline exists, the artifact has expired, or the
 API is unavailable (including limited fork permissions), it records the current
 snapshot and reports the absent baseline. Invalid downloaded JSON fails clearly.
