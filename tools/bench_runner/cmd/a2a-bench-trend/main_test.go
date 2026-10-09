@@ -119,15 +119,23 @@ set -euo pipefail
 case "$1 $2" in
   'run view')
     [[ "$3" == 99 ]]
+    [[ "$TEST_SCENARIO" != metadata-error ]] || exit 1
+    [[ "$TEST_SCENARIO" != metadata-auth-error ]] || exit 4
+    [[ "$TEST_SCENARIO" != empty-metadata ]] || exit 0
     printf '2026-01-03T00:00:00Z\n'
     ;;
   'run list')
+    touch "$TEST_LOOKUP_MARKER"
     [[ " $* " == *' --workflow ci.yml '* ]]
     [[ " $* " == *' --branch main '* ]]
     [[ " $* " == *' --event push '* ]]
     [[ " $* " == *' --status success '* ]]
     [[ "$TEST_SCENARIO" != api-error ]] || exit 1
     [[ "$TEST_SCENARIO" != first-run ]] || exit 0
+    if [[ "$TEST_SCENARIO" == metadata-error || "$TEST_SCENARIO" == metadata-auth-error || "$TEST_SCENARIO" == empty-metadata ]]; then
+      printf '42\t2026-01-04T00:00:00Z\n'
+      exit 0
+    fi
     printf '99\t2026-01-01T00:00:00Z\n100\t2026-01-04T00:00:00Z\n42\t2026-01-02T00:00:00Z\n41\t2026-01-01T00:00:00Z\n'
     ;;
   'run download')
@@ -150,6 +158,9 @@ set -euo pipefail
 shift 2
 exec "$TEST_BINARY" "$@"
 `
+	const fakeDate = `#!/usr/bin/env bash
+printf '2026-01-05T00:00:00Z\n'
+`
 	cases := []struct {
 		scenario, want string
 		exit           int
@@ -157,6 +168,9 @@ exec "$TEST_BINARY" "$@"
 		{"success", "actions/runs/42", 0},
 		{"first-run", "No previous successful main", 0},
 		{"api-error", "No previous successful main", 0},
+		{"metadata-error", "No previous successful main", 0},
+		{"metadata-auth-error", "No previous successful main", 0},
+		{"empty-metadata", "No previous successful main", 0},
 		{"expired", "No previous successful main", 0},
 		{"missing-results", "No previous successful main", 0},
 		{"malformed", "baseline results:", exitInvalidInput},
@@ -164,7 +178,8 @@ exec "$TEST_BINARY" "$@"
 	for _, tc := range cases {
 		t.Run(tc.scenario, func(t *testing.T) {
 			dir := t.TempDir()
-			for name, content := range map[string]string{"gh": fakeGH, "go": fakeGo} {
+			lookupMarker := filepath.Join(dir, "baseline-lookup")
+			for name, content := range map[string]string{"gh": fakeGH, "go": fakeGo, "date": fakeDate} {
 				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -175,7 +190,8 @@ exec "$TEST_BINARY" "$@"
 			cmd.Dir = root
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "RUNNER_TEMP="+dir,
 				"GITHUB_REPOSITORY=example/repo", "GITHUB_RUN_ID=99", "GITHUB_SERVER_URL=https://github.com",
-				"TEST_BINARY="+binary, "TEST_FIXTURE="+fixture, "TEST_SCENARIO="+tc.scenario)
+				"TEST_BINARY="+binary, "TEST_FIXTURE="+fixture, "TEST_SCENARIO="+tc.scenario,
+				"TEST_LOOKUP_MARKER="+lookupMarker)
 			output, err := cmd.CombinedOutput()
 			exit := 0
 			if err != nil {
@@ -187,6 +203,11 @@ exec "$TEST_BINARY" "$@"
 			}
 			if exit != tc.exit || !strings.Contains(string(output), tc.want) {
 				t.Fatalf("exit %d, output %s", exit, output)
+			}
+			if tc.scenario == "metadata-error" || tc.scenario == "metadata-auth-error" || tc.scenario == "empty-metadata" {
+				if _, err := os.Stat(lookupMarker); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("baseline lookup continued without current run metadata: %v", err)
+				}
 			}
 			if paths, err := filepath.Glob(filepath.Join(dir, "benchmark-baseline.*")); err != nil || len(paths) != 0 {
 				t.Fatalf("temporary baseline was not cleaned up: %v %v", paths, err)

@@ -35,6 +35,8 @@ uses PR artifacts as baselines. It downloads the raw JSON, so runs predating the
 trend schema also work. If no baseline exists, the artifact has expired, or the
 API is unavailable (including limited fork permissions), it records the current
 snapshot and reports the absent baseline. Invalid downloaded JSON fails clearly.
+If the current run's creation time cannot be retrieved, baseline lookup is skipped
+so a rerun cannot accidentally compare against a newer run.
 
 PR benchmark job summaries show signed mean and median percentage changes for
 all benchmarks, including the key benchmarks covered by thresholds. Positive

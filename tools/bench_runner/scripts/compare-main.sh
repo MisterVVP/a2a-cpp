@@ -11,12 +11,14 @@ baseline_args=()
 current_run="${GITHUB_RUN_ID:-}"
 cutoff="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [[ -n "$current_run" ]]; then
+  # A rerun must use its original creation time, never the wall-clock fallback.
+  cutoff=""
   if started="$(gh run view "$current_run" --repo "$GITHUB_REPOSITORY" --json createdAt --jq .createdAt)"; then
     cutoff="$started"
   fi
 fi
 
-if runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+if [[ -n "$cutoff" ]] && runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
   --branch main --event push --status success --limit 100 \
   --json databaseId,createdAt --jq '.[] | [.databaseId, .createdAt] | @tsv')"; then
   while IFS=$'\t' read -r run_id created_at; do
@@ -36,7 +38,7 @@ if runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
     break
   done <<< "$runs"
 else
-  echo "Could not query previous successful main runs; recording without a baseline." >&2
+  echo "Could not determine previous successful main baseline; recording without a baseline." >&2
 fi
 
 go run ./tools/bench_runner/cmd/a2a-bench-trend "${baseline_args[@]}" "$@"
