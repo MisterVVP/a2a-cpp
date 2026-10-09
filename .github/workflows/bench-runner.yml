@@ -44,7 +44,9 @@ jobs:
       - name: Run tests with race detection
         run: go test -race ./...
       - name: Build command
-        run: go build ./cmd/a2a-bench-runner
+        run: |
+          go build ./cmd/a2a-bench-runner
+          go build ./cmd/a2a-bench-trend
       - name: Run CLI smoke test
         run: |
           ./a2a-bench-runner \
