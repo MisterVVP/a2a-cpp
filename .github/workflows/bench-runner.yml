@@ -1,0 +1,55 @@
+name: Go benchmark runner
+
+on:
+  pull_request:
+    paths:
+      - 'tools/bench_runner/**'
+      - 'go.work'
+      - 'benchmarks/thresholds.json'
+      - '.github/workflows/bench-runner.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/bench_runner/**'
+      - 'go.work'
+      - 'benchmarks/thresholds.json'
+      - '.github/workflows/bench-runner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Go benchmark runner checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/bench_runner
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/bench_runner/go.mod
+          # The module uses only the standard library and has no go.sum.
+          cache: false
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Run static analysis
+        run: go vet ./...
+      - name: Run tests with race detection
+        run: go test -race ./...
+      - name: Build command
+        run: go build ./cmd/a2a-bench-runner
+      - name: Run CLI smoke test
+        run: |
+          ./a2a-bench-runner \
+            --results cmd/a2a-bench-runner/testdata/results.json \
+            --thresholds cmd/a2a-bench-runner/testdata/thresholds.json \
+            --summary "$RUNNER_TEMP/bench-runner-summary.md"
+          grep -F '| BM_Smoke | 120 | 100 | 110 | 0.91 | PASS |' "$RUNNER_TEMP/bench-runner-summary.md"
+          cat "$RUNNER_TEMP/bench-runner-summary.md" >> "$GITHUB_STEP_SUMMARY"

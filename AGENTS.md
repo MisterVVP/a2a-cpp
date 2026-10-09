@@ -118,6 +118,21 @@ For these documentation-only/README-only changes, AI agents must validate only:
 - 7. Documentation is updated when behavior or interfaces change.
 - 8. Documentation changes that affect mdBook content or structure verify `mdbook build book` succeeds locally.
 
+### Go-only benchmark-runner validation
+When every changed non-documentation file is under `tools/bench_runner/**`, use this scoped validation path before committing or pushing:
+
+```bash
+cd tools/bench_runner
+test -z "$(gofmt -l .)"
+go vet ./...
+go test -race ./...
+go build ./cmd/a2a-bench-runner
+```
+
+The tests include CLI smoke coverage with representative Google Benchmark results and thresholds, including Markdown output and failure exit codes. For this scope, these Go checks replace checklist items **1 through 5**, the mandatory contributor validation command, the TCK gate, and C++ pre-commit hygiene below. Do not require `./scripts/verify_changes.sh`, C++ clang-format/clang-tidy, a complete SDK build/test, or the A2A TCK suite. Retain applicable dependency/security and documentation checks.
+
+The performance smoke suite is also unnecessary unless benchmark execution or performance-driver behavior changes. Mixed Go and C++/protocol/build/workflow changes require the full existing validation in addition to these Go checks. Changes to benchmark execution scripts, CMake, C++ benchmarks, or `benchmarks/thresholds.json` are outside this exception. See [contributor CI guidance](CONTRIBUTING.md#ci-path-filtering-and-required-checks) for workflow selection and required-check configuration.
+
 ## Mandatory performance smoke validation
 Run a smoke-sized performance check before opening or updating a PR that touches performance drivers, runner scripts, CI performance workflows, transport clients, streaming/subscription code, or push-notification paths:
 
@@ -140,15 +155,17 @@ PY
 ```
 
 ## Mandatory contributor validation command
-Run this command before opening or updating a PR:
+Run this command before opening or updating a PR unless a scoped exception above applies:
 
 ```bash
 ./scripts/verify_changes.sh
-
-Exception: for documentation-only/README-only changes covered by the rule above, AI agents are not required to run `./scripts/verify_changes.sh` and should run only the scoped documentation validation steps.
 ```
 
+For documentation-only/README-only and Go-only benchmark-runner changes covered above, run the corresponding scoped validation instead.
+
 ## Mandatory TCK conformance gate
+The Go-only benchmark-runner exception above is exempt from this gate.
+
 - Contributors and AI agents must run the same TCK flow used in CI locally before committing:
   1. Start SUT: `./scripts/run_tck_sut.sh`
   2. Run TCK mandatory suite via `.github/workflows/tck.yml` equivalent entrypoint (for example the detected script in checked out TCK repo, such as `scripts/run_tck.sh` / `scripts/run_mandatory.sh`).
@@ -157,7 +174,7 @@ Exception: for documentation-only/README-only changes covered by the rule above,
 - If TCK tooling or fixtures are unavailable locally, treat that as a blocking issue and resolve environment parity before committing.
 
 ## AI agent pre-commit hygiene
-AI agents must proactively tidy up touched code before every commit:
+Except for the scoped documentation-only and Go-only exceptions above, AI agents must proactively tidy up touched code before every commit:
 - Run clang-format using the repository's required CI-compatible command.
 - Run `./scripts/run_clang_tidy.sh build` and fix all reported issues in touched code.
 - Re-run `./scripts/verify_changes.sh` after fixes and only commit when it exits with code `0`.

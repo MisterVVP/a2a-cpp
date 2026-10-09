@@ -2,6 +2,8 @@ name: TCK Conformance
 
 on:
   pull_request:
+    paths-ignore:
+      - 'tools/bench_runner/**'
   push:
     branches:
       - main
