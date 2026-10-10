@@ -1,0 +1,37 @@
+{
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "cpu_model": "AMD EPYC 7763 64-Core Processor",
+  "cpu_quota": "max 100000",
+  "memory_limit_bytes": "max",
+  "run_id": "1791655147850148531",
+  "cpu_count": 3,
+  "cpu_affinity_count": 3,
+  "duration_seconds": 2.0,
+  "warmup_seconds": 0.5,
+  "repetitions": 3,
+  "concurrency": [
+    1,
+    64
+  ],
+  "postgres_pool_size": 64,
+  "tolerances": {
+    "throughput_relative": 0.1,
+    "tail_latency_relative": 0.2,
+    "tail_latency_absolute_ms": 0.1
+  },
+  "parent_cpu_quota": "200000 100000",
+  "parent_memory_limit_bytes": 8589934592,
+  "baseline_commit": "fe72da4109cd8182a0cccd4c3c84beaae52e8945",
+  "branch_base_commit": "9958907acf4b0613abde731b8f0d2ef74260c804",
+  "compiler": "GCC 13.3.0",
+  "build_type": "Release (-O3 -DNDEBUG)",
+  "subscription_diagnostics": false,
+  "postgres_version": "16.15",
+  "asio_version": "1.28.1",
+  "protobuf_version": "3.21.12",
+  "grpc_version": "1.51.1",
+  "before_binary_sha256": "55d3fd232b5a8e02564438615d376194226e2dad45f36649a51f8ef068b8f7b6",
+  "short_run_after_binary_sha256": "5d1d4acd361a71b24cdb1008173c61aa8e8dbc6eeb8e2d81ebab5d0678026d7e",
+  "followup_after_binary_sha256": "3b472dce0c6d5c9555cd102d66a248867f0a418089bd32f69c3590251c7a3d6d",
+  "wire_client_sha256": "7f52ec9f2df713c1f1574a0cb8b3d58883f8a00910a36538965fb94d23f1bc22"
+}

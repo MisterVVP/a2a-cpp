@@ -404,7 +404,7 @@ jobs:
         run: |
           cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
           cmake --build build-asan --parallel
-          ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
+          ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*|performance_http_io_test'
 
   thread-sanitizer:
     name: ThreadSanitizer focused concurrency tests
@@ -490,7 +490,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: |
-          brew install cmake ninja protobuf grpc re2 abseil curl
+          brew install cmake ninja protobuf grpc re2 abseil curl asio
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DA2A_ENABLE_TESTING=ON \

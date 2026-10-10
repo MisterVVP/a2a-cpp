@@ -27,6 +27,11 @@ constexpr std::size_t kResponsePayloadReserveSlackLineCount = 3;
 constexpr std::size_t kChunkSizeBufferBytes = (sizeof(std::size_t) * 2U) + 1U;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 
+constexpr std::string_view kHeaderCountLimitExceeded = "HTTP header count limit exceeded";
+constexpr std::string_view kRequestEof = "Unexpected end of stream while reading HTTP request";
+constexpr std::string_view kInputLimitExceeded = "HTTP input buffer exceeds max_request_size";
+constexpr std::string_view kHeaderSizeLimitExceeded = "HTTP header size limit exceeded";
+
 struct RequestLine final {
   std::string method;
   std::string target;
@@ -88,24 +93,6 @@ core::Result<std::size_t> ParseContentLength(std::string_view value) {
     return core::Error::Validation("Content-Length value overflows platform size_t");
   }
   return static_cast<std::size_t>(parsed);
-}
-
-core::Result<void> ReadUntilHeadersComplete(HttpByteTransport& transport, std::size_t max_request_size,
-                                            std::vector<char>& buffer, std::string& raw) {
-  while (raw.find(core::http::kHeaderDelimiter) == std::string::npos) {
-    const auto read = transport.Read(buffer.data(), buffer.size());
-    if (!read.ok()) {
-      return read.error();
-    }
-    if (read.value() == 0) {
-      return core::Error::Internal("Unexpected end of stream while reading HTTP headers");
-    }
-    raw.append(buffer.data(), read.value());
-    if (raw.find(core::http::kHeaderDelimiter) == std::string::npos && raw.size() > max_request_size) {
-      return core::Error::Validation("HTTP request exceeds max_request_size before headers complete");
-    }
-  }
-  return {};
 }
 
 core::Result<RequestLine> ParseRequestLine(std::string_view header_block) {
@@ -172,16 +159,21 @@ core::Result<void> ParseHeaderLine(std::string_view line, std::unordered_map<std
 }
 
 core::Result<std::optional<std::size_t>> ParseHeaders(std::string_view header_block,
-                                                      std::unordered_map<std::string, std::string>* headers) {
+                                                      std::unordered_map<std::string, std::string>* headers,
+                                                      std::size_t max_header_count) {
   const std::size_t first_line_end = header_block.find(core::http::kLineTerminator);
   std::size_t offset = first_line_end + core::http::kLineTerminator.size();
   std::optional<std::size_t> content_length;
+  std::size_t header_count = 0;
 
   while (offset < header_block.size()) {
     const std::size_t line_end = header_block.find(core::http::kLineTerminator, offset);
     const std::size_t next = (line_end == std::string::npos) ? header_block.size() : line_end;
     const std::string_view line = header_block.substr(offset, next - offset);
     if (!line.empty()) {
+      if (++header_count > max_header_count) {
+        return core::Error::Validation(std::string(kHeaderCountLimitExceeded));
+      }
       const auto parsed = ParseHeaderLine(line, headers, &content_length);
       if (!parsed.ok()) {
         return parsed.error();
@@ -195,12 +187,6 @@ core::Result<std::optional<std::size_t>> ParseHeaders(std::string_view header_bl
 
   return content_length;
 }
-
-struct BodyReadLimits final {
-  std::size_t expected_body_size;
-  std::size_t body_start;
-  std::size_t max_request_size;
-};
 
 core::Result<void> WriteAll(HttpByteTransport& transport, std::string_view payload) {
   std::size_t sent = 0;
@@ -254,24 +240,6 @@ class ChunkedByteTransport final : public HttpByteTransport {
   HttpByteTransport& transport_;
   std::string scratch_;
 };
-
-core::Result<void> ReadRemainingBody(HttpByteTransport& transport, const BodyReadLimits& limits,
-                                     std::vector<char>& buffer, std::string& raw) {
-  while (raw.size() - limits.body_start < limits.expected_body_size) {
-    const auto read = transport.Read(buffer.data(), buffer.size());
-    if (!read.ok()) {
-      return read.error();
-    }
-    if (read.value() == 0) {
-      return core::Error::Internal("Unexpected end of stream while reading HTTP body");
-    }
-    raw.append(buffer.data(), read.value());
-    if (limits.body_start + limits.expected_body_size > limits.max_request_size) {
-      return core::Error::Validation("HTTP request exceeds max_request_size while reading body");
-    }
-  }
-  return {};
-}
 
 bool HeaderContainsToken(const std::unordered_map<std::string, std::string>& headers, std::string_view header_name,
                          std::string_view expected_token) {
@@ -344,66 +312,103 @@ HttpAdapter::HttpAdapter() = default;
 HttpAdapter::HttpAdapter(Options options) : options_(options) {}
 
 core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& transport,
-                                                         std::string remote_address) const {
+                                                         const std::string& remote_address) const {
   HttpConnectionState state;
-  return ReadRequest(transport, state, std::move(remote_address));
+  return ReadRequest(transport, state, remote_address);
 }
 
 core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& transport, HttpConnectionState& state,
-                                                         std::string remote_address) const {
+                                                         const std::string& remote_address) const {
   if (options_.read_buffer_size == 0) {
     return core::Error::Internal("HTTP adapter read_buffer_size must be greater than zero");
   }
 
-  std::string& raw = state.buffered_bytes_;
-  if (raw.capacity() < options_.read_buffer_size * 2U) {
-    raw.reserve(options_.read_buffer_size * 2U);
-  }
   std::vector<char> buffer(options_.read_buffer_size);
-
-  const auto headers_read = ReadUntilHeadersComplete(transport, options_.max_request_size, buffer, raw);
-  if (!headers_read.ok()) {
-    return headers_read.error();
+  while (true) {
+    auto parsed = TryReadRequest(state, remote_address);
+    if (!parsed.ok()) {
+      return parsed.error();
+    }
+    auto& request = parsed.value();
+    if (request.has_value()) {
+      return std::move(request.value());
+    }
+    const auto read = transport.Read(buffer.data(), buffer.size());
+    if (!read.ok()) {
+      return read.error();
+    }
+    if (read.value() == 0) {
+      return core::Error::Internal(std::string(kRequestEof));
+    }
+    // Blocking callers can over-read one buffer beyond a full request.
+    state.buffered_bytes_.append(buffer.data(), read.value());
   }
+}
 
+core::Result<void> HttpAdapter::AppendInput(HttpConnectionState& state, std::string_view bytes) const {
+  if (bytes.size() > options_.max_request_size ||
+      state.buffered_bytes_.size() > options_.max_request_size - bytes.size()) {
+    return core::Error::Validation(std::string(kInputLimitExceeded));
+  }
+  state.buffered_bytes_.append(bytes);
+  return {};
+}
+
+core::Result<std::optional<HttpServerRequest>> HttpAdapter::TryReadRequest(HttpConnectionState& state,
+                                                                           std::string remote_address) const {
+  auto& raw = state.buffered_bytes_;
+  if (!state.pending_request_.has_value()) {
+    auto ready = ParseRequestHeaders(state, std::move(remote_address));
+    if (!ready.ok()) {
+      return ready.error();
+    }
+    if (!ready.value()) {
+      return std::optional<HttpServerRequest>{};
+    }
+  }
+  if (!state.pending_request_.has_value() || raw.size() - state.body_start_ < state.body_size_) {
+    return std::optional<HttpServerRequest>{};
+  }
+  auto request = std::move(state.pending_request_.value());
+  state.pending_request_.reset();
+  request.body.assign(raw, state.body_start_, state.body_size_);
+  raw.erase(0, state.body_start_ + state.body_size_);
+  return std::optional<HttpServerRequest>(std::move(request));
+}
+
+core::Result<bool> HttpAdapter::ParseRequestHeaders(HttpConnectionState& state, std::string remote_address) const {
+  const auto& raw = state.buffered_bytes_;
   const std::size_t header_end = raw.find(core::http::kHeaderDelimiter);
+  if (header_end == std::string::npos) {
+    if (raw.size() > std::min(options_.max_request_size, options_.max_header_size)) {
+      return core::Error::Validation("HTTP request exceeds max_request_size before headers complete");
+    }
+    return false;
+  }
+  if (header_end > options_.max_header_size) {
+    return core::Error::Validation(std::string(kHeaderSizeLimitExceeded));
+  }
   const std::string_view header_block(raw.data(), header_end);
-
-  const auto request_line = ParseRequestLine(header_block);
+  auto request_line = ParseRequestLine(header_block);
   if (!request_line.ok()) {
     return request_line.error();
   }
-
-  std::unordered_map<std::string, std::string> headers;
-  const auto content_length = ParseHeaders(header_block, &headers);
+  HttpServerRequest request;
+  auto content_length = ParseHeaders(header_block, &request.headers, options_.max_header_count);
   if (!content_length.ok()) {
     return content_length.error();
   }
-
-  const std::size_t body_start = header_end + core::http::kHeaderDelimiter.size();
-  const std::size_t expected_body_size = content_length.value().value_or(0);
-  if (body_start > options_.max_request_size || expected_body_size > options_.max_request_size - body_start) {
+  state.body_start_ = header_end + core::http::kHeaderDelimiter.size();
+  state.body_size_ = content_length.value().value_or(0);
+  if (state.body_start_ > options_.max_request_size ||
+      state.body_size_ > options_.max_request_size - state.body_start_) {
     return core::Error::Validation("Content-Length exceeds max_request_size");
   }
-
-  const BodyReadLimits limits{
-      .expected_body_size = expected_body_size,
-      .body_start = body_start,
-      .max_request_size = options_.max_request_size,
-  };
-  const auto body_read = ReadRemainingBody(transport, limits, buffer, raw);
-  if (!body_read.ok()) {
-    return body_read.error();
-  }
-
-  HttpServerRequest request;
-  request.method = request_line.value().method;
-  request.target = request_line.value().target;
-  request.headers = std::move(headers);
-  request.body = raw.substr(body_start, expected_body_size);
+  request.method = std::move(request_line.value().method);
+  request.target = std::move(request_line.value().target);
   request.remote_address = std::move(remote_address);
-  raw.erase(0, body_start + expected_body_size);
-  return request;
+  state.pending_request_ = std::move(request);
+  return true;
 }
 
 bool HttpAdapter::IsConnectionReusable(const HttpServerRequest& request) {
@@ -464,6 +469,42 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
 
 core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response,
                                               bool close_connection) {
+  auto encoded = EncodeResponse(response, close_connection);
+  if (!encoded.ok()) {
+    return encoded.error();
+  }
+  const auto& payload = encoded.value();
+  const bool is_streaming = static_cast<bool>(response.stream_writer);
+  const bool must_close_connection =
+      close_connection ||
+      HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
+  if (is_streaming) {
+    if (must_close_connection) {
+      const auto headers_written = WriteAll(transport, payload);
+      if (!headers_written.ok()) {
+        return headers_written.error();
+      }
+      return response.stream_writer(transport);
+    }
+    const auto headers_written = WriteAll(transport, payload);
+    if (!headers_written.ok()) {
+      return headers_written.error();
+    }
+    ChunkedByteTransport chunked_transport(transport);
+    const auto streamed = response.stream_writer(chunked_transport);
+    if (!streamed.ok()) {
+      return streamed.error();
+    }
+    return chunked_transport.Finish();
+  }
+  const auto response_written = WriteAll(transport, payload);
+  if (!response_written.ok()) {
+    return response_written.error();
+  }
+  return {};
+}
+
+core::Result<std::string> HttpAdapter::EncodeResponse(const HttpServerResponse& response, bool close_connection) {
   const std::string reason_phrase = ReasonPhrase(response.status_code);
   std::string payload;
   payload.reserve(ResponsePayloadReserveSize(response, reason_phrase));
@@ -506,30 +547,7 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
     payload += response.body;
   }
 
-  if (is_streaming) {
-    if (must_close_connection) {
-      const auto headers_written = WriteAll(transport, payload);
-      if (!headers_written.ok()) {
-        return headers_written.error();
-      }
-      return response.stream_writer(transport);
-    }
-    const auto headers_written = WriteAll(transport, payload);
-    if (!headers_written.ok()) {
-      return headers_written.error();
-    }
-    ChunkedByteTransport chunked_transport(transport);
-    const auto streamed = response.stream_writer(chunked_transport);
-    if (!streamed.ok()) {
-      return streamed.error();
-    }
-    return chunked_transport.Finish();
-  }
-  const auto response_written = WriteAll(transport, payload);
-  if (!response_written.ok()) {
-    return response_written.error();
-  }
-  return {};
+  return payload;
 }
 
 }  // namespace a2a::server

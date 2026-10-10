@@ -6,6 +6,7 @@ CXX_COMPILER="${A2A_TSAN_CXX_COMPILER:-clang++}"
 SANITIZER_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
 TARGETS=(
   http_client_test
+  performance_http_io_sut
   http_json_streaming_integration_test
   http_json_transport_test
   json_rpc_transport_test

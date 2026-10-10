@@ -27,6 +27,7 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
+#include "a2a/server/http_stream_source.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
@@ -900,9 +901,9 @@ core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view 
 }
 
 core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
-                                          const std::shared_ptr<std::unique_ptr<ServerStreamSession>>& session,
+                                          const std::shared_ptr<ServerStreamSession>& session,
                                           HttpByteTransport& transport) {
-  if (*session == nullptr) {
+  if (session == nullptr) {
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
 
@@ -912,16 +913,16 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
   }
 
   std::string chunk;
-  auto next = (*session)->NextFor(core::http::kSseHeartbeatInterval);
-  for (; next.ok(); next = (*session)->NextFor(core::http::kSseHeartbeatInterval)) {
+  auto next = session->NextFor(core::http::kSseHeartbeatInterval);
+  for (; next.ok(); next = session->NextFor(core::http::kSseHeartbeatInterval)) {
     const auto& event = next.value();
     if (!event.has_value()) {
-      if (!(*session)->IsLive()) {
+      if (!session->IsLive()) {
         return {};
       }
       const auto heartbeat = WriteSseChunk(transport, core::http::kSseHeartbeat);
       if (!heartbeat.ok()) {
-        (*session)->Cancel();
+        session->Cancel();
         return heartbeat.error();
       }
       continue;
@@ -938,7 +939,7 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
 #endif
     const auto written = WriteSseChunk(transport, chunk);
     if (!written.ok()) {
-      (*session)->Cancel();
+      session->Cancel();
       return written.error();
     }
   }
@@ -946,9 +947,9 @@ core::Result<void> StreamJsonRpcSseEvents(const google::protobuf::Value& id,
 }
 
 core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& id,
-                                                const std::shared_ptr<std::unique_ptr<ServerStreamSession>>& session,
+                                                const std::shared_ptr<ServerStreamSession>& session,
                                                 HttpByteTransport& transport) {
-  if (*session == nullptr) {
+  if (session == nullptr) {
     return core::Error::Internal("JSON-RPC streaming session is missing");
   }
   const auto prefix = BuildSseJsonRpcPrefix(id);
@@ -956,8 +957,8 @@ core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& i
     return prefix.error();
   }
   std::string chunk;
-  auto next = (*session)->Next();
-  for (; next.ok(); next = (*session)->Next()) {
+  auto next = session->Next();
+  for (; next.ok(); next = session->Next()) {
     const auto& event = next.value();
     if (!event.has_value()) {
       return {};
@@ -968,7 +969,7 @@ core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& i
     }
     const auto written = WriteSseChunk(transport, chunk);
     if (!written.ok()) {
-      (*session)->Cancel();
+      session->Cancel();
       return written.error();
     }
   }
@@ -978,7 +979,7 @@ core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& i
   }
   const auto written = WriteSseChunk(transport, chunk);
   if (!written.ok()) {
-    (*session)->Cancel();
+    session->Cancel();
     return written.error();
   }
   return {};
@@ -997,18 +998,39 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
                       .WithA2aVersion()
                       .Build();
 
-  if (session->IsLive()) {
+  const auto prefix = BuildSseJsonRpcPrefix(id);
+  if (!prefix.ok()) {
+    return prefix.error();
+  }
+  auto source_session = std::shared_ptr<ServerStreamSession>(std::move(session));
+  response.stream_source = std::make_shared<HttpStreamSource>(
+      source_session,
+      [prefix = prefix.value()](const lf::a2a::v1::StreamResponse& event) -> core::Result<std::string> {
+        std::string chunk;
+        auto encoded = BuildSseJsonRpcEvent(chunk, prefix, event);
+        if (!encoded.ok()) {
+          return encoded.error();
+        }
+        return chunk;
+      },
+      [id](const core::Error& error) -> core::Result<std::string> {
+        std::string chunk;
+        auto encoded = BuildSseJsonRpcErrorEvent(chunk, id, error);
+        if (!encoded.ok()) {
+          return encoded.error();
+        }
+        return chunk;
+      });
+  if (source_session->IsLive()) {
     response.stream_kind = HttpStreamKind::kLive;
-    auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
-    response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
+    response.stream_writer = [id, session_holder = source_session](HttpByteTransport& transport) -> core::Result<void> {
       return StreamJsonRpcSseEvents(id, session_holder, transport);
     };
     return response;
   }
 
-  auto session_holder = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session));
   response.stream_kind = HttpStreamKind::kFinite;
-  response.stream_writer = [id, session_holder](HttpByteTransport& transport) -> core::Result<void> {
+  response.stream_writer = [id, session_holder = source_session](HttpByteTransport& transport) -> core::Result<void> {
     return StreamFiniteJsonRpcSseEvents(id, session_holder, transport);
   };
   return response;

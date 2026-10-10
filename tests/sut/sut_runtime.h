@@ -37,15 +37,24 @@ class SutRuntimeObserver {
   SutRuntimeObserver& operator=(const SutRuntimeObserver&) = delete;
 
   [[nodiscard]] virtual std::unique_ptr<SutHttpConnectionObserver> ObserveHttpConnection() = 0;
+  [[nodiscard]] virtual bool IsHttpMeasurementReset(const server::HttpServerRequest& request) const {
+    (void)request;
+    return false;
+  }
   virtual void OnShutdown() = 0;
 
  protected:
   SutRuntimeObserver() = default;
 };
 
+enum class SutHttpImplementation { kBlocking, kAsynchronous };
+
 struct SutRuntimeOptions final {
   std::string_view display_name;
   SutRuntimeObserver* observer = nullptr;
+  SutHttpImplementation http_implementation = SutHttpImplementation::kBlocking;
+  // HTTP-only test drivers isolate socket scheduling from uninstrumented gRPC.
+  bool enable_grpc = true;
 };
 
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options);

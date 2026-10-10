@@ -450,4 +450,35 @@ TEST(TaskSubscriptionServiceTest, ConcurrentSignalsResumeOnceAndPreserveBothEven
   EXPECT_EQ(contexts.back(), kContextId);
 }
 
+TEST(TaskSubscriptionServiceTest, ReadyCallbackObservesPublicationAndCanBeDetached) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto& session = *subscription.value();
+  std::atomic_size_t notifications = 0;
+  ASSERT_TRUE(session.SetReadyCallback([&] { ++notifications; }));
+  (void)NextRequired(&session);
+  ASSERT_TRUE(session.NextFor(kImmediateTimeout).ok());
+  const auto initial = notifications.load();
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED));
+  EXPECT_GT(notifications.load(), initial);
+  ASSERT_TRUE(session.NextFor(kImmediateTimeout).value().has_value());
+  ASSERT_TRUE(session.SetReadyCallback({}));
+  const auto detached = notifications.load();
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_CANCELED));
+  EXPECT_EQ(notifications.load(), detached);
+}
+
+TEST(TaskSubscriptionServiceTest, AsyncProducerBudgetFailsInsteadOfGrowing) {
+  a2a::server::TaskSubscriptionService service;
+  auto subscription = service.Subscribe(MakeTask(lf::a2a::v1::TASK_STATE_WORKING));
+  ASSERT_TRUE(subscription.ok());
+  auto& session = *subscription.value();
+  (void)NextRequired(&session);
+  session.SetPendingEventByteLimit(kMaximumRacingUpdateCount);
+  service.PublishTaskUpdated(MakeTask(lf::a2a::v1::TASK_STATE_INPUT_REQUIRED));
+  EXPECT_FALSE(session.NextFor(kImmediateTimeout).ok());
+  session.Cancel();
+}
+
 }  // namespace

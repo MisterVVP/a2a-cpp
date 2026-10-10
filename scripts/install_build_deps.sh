@@ -50,6 +50,7 @@ install_debian_dependencies() {
     protobuf-compiler
     libprotobuf-dev
     protobuf-compiler-grpc
+    libasio-dev
     libgrpc++-dev
     libcurl4-openssl-dev
     libpq-dev

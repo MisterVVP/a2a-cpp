@@ -111,6 +111,7 @@ set(A2A_SERVER_SOURCES
   server/transport/grpc_server_transport.cpp
   server/transport/stream_cancellation_watcher.cpp
   server/transport/http_adapter.cpp
+  server/transport/http_stream_source.cpp
   server/transport/http_server_response_builder.cpp
   server/transport/rest_server_transport.cpp
   server/required_extensions_validator.cpp

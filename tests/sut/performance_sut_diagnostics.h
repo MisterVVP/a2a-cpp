@@ -20,6 +20,7 @@ class PerformanceSutDiagnostics final : public SutRuntimeObserver {
   PerformanceSutDiagnostics& operator=(PerformanceSutDiagnostics&&) = delete;
 
   [[nodiscard]] std::unique_ptr<SutHttpConnectionObserver> ObserveHttpConnection() override;
+  [[nodiscard]] bool IsHttpMeasurementReset(const server::HttpServerRequest& request) const override;
   void OnShutdown() override;
 
  private:

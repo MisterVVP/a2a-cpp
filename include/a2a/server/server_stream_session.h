@@ -4,6 +4,8 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
+#include <functional>
 #include <optional>
 
 #include "a2a/core/result.h"
@@ -26,6 +28,17 @@ class ServerStreamSession {
   [[nodiscard]] virtual bool SupportsTimedNext() const noexcept { return false; }
   // Sessions are finite unless they explicitly support waiting for future events.
   [[nodiscard]] virtual bool IsLive() const noexcept { return false; }
+  // Opt-in readiness for non-blocking NextFor(0). Notifications may be
+  // coalesced and run on a publisher thread. The callback only schedules work.
+  // Installing it must notify already-ready events; clearing it prevents new
+  // invocations after return. Live sessions without this capability retain
+  // their existing blocking transport behavior.
+  [[nodiscard]] virtual bool SetReadyCallback(std::function<void()> callback) {
+    (void)callback;
+    return false;
+  }
+  // Optional producer queue budget for asynchronous callers.
+  virtual void SetPendingEventByteLimit(std::size_t limit) { (void)limit; }
   virtual void Cancel() noexcept {}
 };
 
