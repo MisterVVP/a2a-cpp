@@ -4,6 +4,8 @@
 #include "a2a/server/task_subscription_service.h"
 
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
@@ -11,6 +13,9 @@
 #endif
 
 namespace a2a::server {
+namespace {
+constexpr std::string_view kEventBufferLimitExceeded = "Subscription event buffer limit exceeded";
+}  // namespace
 
 std::optional<lf::a2a::v1::StreamResponse> StreamResponseCoroutine::Next() { return WaitForNext(std::nullopt); }
 
@@ -82,6 +87,7 @@ class TaskSubscriptionService::SubscriberEventAwaitable final {
     }
     auto event = std::move(state_->events.front());
     state_->events.pop_front();
+    state_->queued_bytes -= event->ByteSizeLong();
     return *event;
   }
 
@@ -99,6 +105,9 @@ TaskSubscriptionService::SubscriptionSession::~SubscriptionSession() { Cancel();
 
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::Next() {
   try {
+    if (state_->overflowed.load()) {
+      return core::Error::Internal(std::string(kEventBufferLimitExceeded));
+    }
     auto event = coroutine_.Next();
     RecordDeliveredEvent(event);
     return event;
@@ -110,6 +119,9 @@ core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService
 core::Result<std::optional<lf::a2a::v1::StreamResponse>> TaskSubscriptionService::SubscriptionSession::NextFor(
     std::chrono::milliseconds timeout) {
   try {
+    if (state_->overflowed.load()) {
+      return core::Error::Internal(std::string(kEventBufferLimitExceeded));
+    }
     auto event = coroutine_.NextFor(timeout);
     RecordDeliveredEvent(event);
     return event;
@@ -204,9 +216,16 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
     {
       std::lock_guard lock(subscriber->mutex);
       if (!subscriber->closed.load()) {
-        subscriber->events.push_back(event);
-        subscriber->pending_delivery_count.fetch_add(1);
-        subscriber->closed.store(close_after_event);
+        const auto bytes = event->ByteSizeLong();
+        if (bytes > subscriber->max_queued_bytes || subscriber->queued_bytes > subscriber->max_queued_bytes - bytes) {
+          subscriber->overflowed.store(true);
+          subscriber->closed.store(true);
+        } else {
+          subscriber->events.push_back(event);
+          subscriber->queued_bytes += bytes;
+          subscriber->pending_delivery_count.fetch_add(1);
+          subscriber->closed.store(close_after_event);
+        }
       }
     }
     SignalSubscriber(subscriber);

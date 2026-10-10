@@ -4,12 +4,12 @@
 #include "sut/performance_sut_diagnostics.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <string_view>
 
 #include "a2a/core/http_constants.h"
@@ -34,6 +34,7 @@ class PerformanceSutDiagnostics::Impl final {
   class ConnectionObserver final : public SutHttpConnectionObserver {
    public:
     explicit ConnectionObserver(Impl& diagnostics) : diagnostics_(diagnostics) {}
+    ~ConnectionObserver() override { ReleaseMeasurement(); }
 
     [[nodiscard]] bool BeginRequest(const server::HttpServerRequest& request,
                                     server::HttpServerResponse& response) override;
@@ -42,6 +43,7 @@ class PerformanceSutDiagnostics::Impl final {
 
    private:
     void SynchronizeGeneration();
+    void ReleaseMeasurement();
 
     Impl& diagnostics_;
     bool completed_unary_ = false;
@@ -49,8 +51,8 @@ class PerformanceSutDiagnostics::Impl final {
     bool awaiting_request_after_finite_stream_ = false;
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     std::uint64_t generation_ = 0;
-    std::optional<std::shared_lock<std::shared_mutex>> measurement_lock_;
-    std::optional<std::unique_lock<std::shared_mutex>> reset_lock_;
+    bool measurement_active_ = false;
+    bool reset_active_ = false;
 #endif
   };
 
@@ -58,7 +60,10 @@ class PerformanceSutDiagnostics::Impl final {
   void ResetCounters() noexcept;
 
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-  std::shared_mutex measurement_mutex;
+  std::mutex measurement_mutex;
+  std::condition_variable measurement_ready;
+  std::size_t active_measurements = 0;
+  bool resetting = false;
   std::uint64_t generation = 0;
 #endif
   std::atomic<std::uint64_t> accepted_unary_connections{0};
@@ -72,12 +77,19 @@ bool PerformanceSutDiagnostics::Impl::ConnectionObserver::BeginRequest(const ser
                                                                        server::HttpServerResponse& response) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   const bool is_reset = request.method == core::http::kMethodPost && request.target == kDiagnosticsResetPath;
-  if (is_reset) {
-    reset_lock_.emplace(diagnostics_.measurement_mutex);
-    diagnostics_.ResetCounters();
-    (void)core::subscription_diagnostics::TakeSnapshot();
-  } else {
-    measurement_lock_.emplace(diagnostics_.measurement_mutex);
+  {
+    std::unique_lock lock(diagnostics_.measurement_mutex);
+    diagnostics_.measurement_ready.wait(lock, [this] { return !diagnostics_.resetting; });
+    if (is_reset) {
+      diagnostics_.resetting = true;
+      reset_active_ = true;
+      diagnostics_.measurement_ready.wait(lock, [this] { return diagnostics_.active_measurements == 0; });
+      diagnostics_.ResetCounters();
+      (void)core::subscription_diagnostics::TakeSnapshot();
+    } else {
+      ++diagnostics_.active_measurements;
+      measurement_active_ = true;
+    }
   }
   SynchronizeGeneration();
   if (is_reset) {
@@ -116,8 +128,24 @@ void PerformanceSutDiagnostics::Impl::ConnectionObserver::FinishRequest(const se
     }
   }
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-  measurement_lock_.reset();
-  reset_lock_.reset();
+  ReleaseMeasurement();
+#endif
+}
+
+void PerformanceSutDiagnostics::Impl::ConnectionObserver::ReleaseMeasurement() {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  {
+    std::lock_guard lock(diagnostics_.measurement_mutex);
+    if (measurement_active_) {
+      --diagnostics_.active_measurements;
+      measurement_active_ = false;
+    }
+    if (reset_active_) {
+      diagnostics_.resetting = false;
+      reset_active_ = false;
+    }
+  }
+  diagnostics_.measurement_ready.notify_all();
 #endif
 }
 
@@ -180,6 +208,15 @@ PerformanceSutDiagnostics::~PerformanceSutDiagnostics() = default;
 
 std::unique_ptr<SutHttpConnectionObserver> PerformanceSutDiagnostics::ObserveHttpConnection() {
   return std::make_unique<Impl::ConnectionObserver>(*impl_);
+}
+
+bool PerformanceSutDiagnostics::IsHttpMeasurementReset(const server::HttpServerRequest& request) const {
+#if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  return request.method == core::http::kMethodPost && request.target == kDiagnosticsResetPath;
+#else
+  (void)request;
+  return false;
+#endif
 }
 
 void PerformanceSutDiagnostics::OnShutdown() { impl_->Emit(); }

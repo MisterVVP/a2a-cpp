@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <coroutine>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -51,6 +52,9 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     lf::a2a::v1::Task current_task;
     std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
     std::atomic_bool closed = false;
+    std::size_t queued_bytes = 0;
+    std::size_t max_queued_bytes = (std::numeric_limits<std::size_t>::max)();
+    std::atomic_bool overflowed = false;
     // Counts published events until Next()/NextFor() hands them to the caller,
     // including an event already staged at a coroutine yield point.
     std::atomic_size_t pending_delivery_count = 0;
@@ -78,6 +82,17 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
         std::chrono::milliseconds timeout) override;
     [[nodiscard]] bool SupportsTimedNext() const noexcept override { return true; }
     [[nodiscard]] bool IsLive() const noexcept override;
+    [[nodiscard]] bool SetReadyCallback(std::function<void()> callback) override {
+      coroutine_.SetReadyCallback(std::move(callback));
+      return true;
+    }
+    void SetPendingEventByteLimit(std::size_t limit) override {
+      std::lock_guard lock(state_->mutex);
+      state_->max_queued_bytes = limit;
+      if (state_->queued_bytes > limit) {
+        state_->overflowed.store(true);
+      }
+    }
     void Cancel() noexcept override;
 
    private:

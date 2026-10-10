@@ -26,6 +26,7 @@
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/transport_mux.h"
 #include "example_support.h"
+#include "sut/performance_http_server.h"
 #include "sut/tck_sut.h"
 #include "sut/tck_sut_http_server.h"
 #include "sut/tck_sut_store.h"
@@ -129,33 +130,57 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   mux.RegisterJsonRpcRoute(jsonrpc);
   mux.RegisterRestRoute(rest);
 
-  TckHttpServer http_server(host, port, mux, options.observer);
-  if (!http_server.Start()) {
+  const bool asynchronous = options.http_implementation == SutHttpImplementation::kAsynchronous;
+  std::unique_ptr<TckHttpServer> blocking_http;
+  std::unique_ptr<PerformanceHttpServer> async_http;
+  if (asynchronous) {
+    async_http = std::make_unique<PerformanceHttpServer>(host, port, mux, options.observer,
+                                                         PerformanceHttpServer::OptionsFromEnvironment());
+  } else {
+    blocking_http = std::make_unique<TckHttpServer>(host, port, mux, options.observer);
+  }
+  if (!(asynchronous ? async_http->Start() : blocking_http->Start())) {
     return 1;
   }
 
-  grpc::ServerBuilder grpc_builder;
-  grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port), grpc::InsecureServerCredentials());
-  grpc_builder.RegisterService(&grpc);
-  std::unique_ptr<grpc::Server> grpc_server = grpc_builder.BuildAndStart();
-  if (!grpc_server) {
-    std::cerr << "Failed to start " << options.display_name << " gRPC server on " << host << ':' << grpc_port << '\n';
-    return 1;
+  std::unique_ptr<grpc::Server> grpc_server;
+  if (options.enable_grpc) {
+    grpc::ServerBuilder grpc_builder;
+    grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port), grpc::InsecureServerCredentials());
+    grpc_builder.RegisterService(&grpc);
+    grpc_server = grpc_builder.BuildAndStart();
+    if (!grpc_server) {
+      std::cerr << "Failed to start " << options.display_name << " gRPC server on " << host << ':' << grpc_port << '\n';
+      return 1;
+    }
   }
 
-  http_server.AcceptConnections(kKeepRunning);
+  if (asynchronous) {
+    async_http->Run();
+  } else {
+    blocking_http->AcceptConnections(kKeepRunning);
+  }
   std::cerr << options.display_name << " shutdown: stopping subscriptions\n";
   executor.ShutdownSubscriptions();
   std::cerr << options.display_name << " shutdown: shutting down active HTTP sockets\n";
-  http_server.ShutdownActiveSockets();
+  if (blocking_http) {
+    blocking_http->ShutdownActiveSockets();
+  }
   std::cerr << options.display_name << " shutdown: joining HTTP connection threads\n";
-  http_server.JoinConnections();
+  if (blocking_http) {
+    blocking_http->JoinConnections();
+  }
+  if (async_http) {
+    async_http->Join();
+  }
   std::cerr << options.display_name << " shutdown: HTTP connection threads joined\n";
   if (options.observer != nullptr) {
     options.observer->OnShutdown();
   }
   std::cerr << options.display_name << " shutdown: stopping gRPC\n";
-  grpc_server->Shutdown();
+  if (grpc_server) {
+    grpc_server->Shutdown();
+  }
   return 0;
 }
 

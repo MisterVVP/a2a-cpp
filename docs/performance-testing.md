@@ -483,3 +483,7 @@ latency claims must come from controlled current-run artifacts for
 `PushConfig_Create`, `PushConfig_CreateMany`, and
 `PushNotify_EndToEndManyConfigs`; this documentation intentionally does not
 carry forward performance numbers from earlier implementations.
+
+The performance SUT uses [bounded asynchronous HTTP I/O](performance-http-io.md).
+See its [before/after evidence](performance-http-io-results.md) for connection
+scalability, resource use, and reproducible comparison commands.

@@ -28,6 +28,7 @@
 #endif
 #include "a2a/core/task_states.h"
 #include "a2a/server/http_adapter.h"
+#include "a2a/server/http_stream_source.h"
 
 namespace a2a::server {
 namespace {
@@ -358,6 +359,24 @@ core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view 
   return {};
 }
 
+core::Result<std::string> EncodeRestSseEvent(const lf::a2a::v1::StreamResponse& event) {
+  std::string chunk;
+  auto encoded = BuildSseEvent(chunk, event);
+  if (!encoded.ok()) {
+    return encoded.error();
+  }
+  return chunk;
+}
+
+core::Result<std::string> EncodeRestSseError(const core::Error& error) {
+  std::string chunk;
+  auto encoded = BuildSseErrorEvent(chunk, error);
+  if (!encoded.ok()) {
+    return encoded.error();
+  }
+  return chunk;
+}
+
 core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
     return core::Error::Internal("Streaming response session is missing");
@@ -370,14 +389,15 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
   response.stream_kind = HttpStreamKind::kFinite;
 
-  response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
-                               HttpByteTransport& transport) -> core::Result<void> {
-    if (*session == nullptr) {
+  auto session_holder = std::shared_ptr<ServerStreamSession>(std::move(session));
+  response.stream_source = std::make_shared<HttpStreamSource>(session_holder, EncodeRestSseEvent, EncodeRestSseError);
+  response.stream_writer = [session = session_holder](HttpByteTransport& transport) -> core::Result<void> {
+    if (session == nullptr) {
       return core::Error::Internal("Streaming response session is missing");
     }
     std::string chunk;
-    auto next = (*session)->Next();
-    for (; next.ok(); next = (*session)->Next()) {
+    auto next = session->Next();
+    for (; next.ok(); next = session->Next()) {
       if (!next.value().has_value()) {
         return {};
       }
@@ -387,7 +407,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
       }
       const auto written = WriteSseChunk(transport, chunk);
       if (!written.ok()) {
-        (*session)->Cancel();
+        session->Cancel();
         return written.error();
       }
     }
@@ -397,7 +417,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
     }
     const auto written = WriteSseChunk(transport, chunk);
     if (!written.ok()) {
-      (*session)->Cancel();
+      session->Cancel();
       return written.error();
     }
     return {};
@@ -416,23 +436,24 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
       std::string(core::http::kContentTypeTextEventStream);
   response.headers[std::string(core::http::kCacheControlHeaderName)] = std::string(core::http::kCacheControlNoCache);
   response.stream_kind = HttpStreamKind::kLive;
-  response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
-                               HttpByteTransport& transport) -> core::Result<void> {
-    if (*session == nullptr) {
+  auto session_holder = std::shared_ptr<ServerStreamSession>(std::move(session));
+  response.stream_source = std::make_shared<HttpStreamSource>(session_holder, EncodeRestSseEvent, EncodeRestSseError);
+  response.stream_writer = [session = session_holder](HttpByteTransport& transport) -> core::Result<void> {
+    if (session == nullptr) {
       return core::Error::Internal("Subscription response session is missing");
     }
 
     std::string chunk;
-    auto next = (*session)->NextFor(core::http::kSseHeartbeatInterval);
-    for (; next.ok(); next = (*session)->NextFor(core::http::kSseHeartbeatInterval)) {
+    auto next = session->NextFor(core::http::kSseHeartbeatInterval);
+    for (; next.ok(); next = session->NextFor(core::http::kSseHeartbeatInterval)) {
       const auto& event = next.value();
       if (!event.has_value()) {
-        if (!(*session)->IsLive()) {
+        if (!session->IsLive()) {
           return {};
         }
         const auto heartbeat = WriteSseChunk(transport, core::http::kSseHeartbeat);
         if (!heartbeat.ok()) {
-          (*session)->Cancel();
+          session->Cancel();
           return heartbeat.error();
         }
         continue;
@@ -449,7 +470,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
 #endif
       const auto written = WriteSseChunk(transport, chunk);
       if (!written.ok()) {
-        (*session)->Cancel();
+        session->Cancel();
         return written.error();
       }
     }

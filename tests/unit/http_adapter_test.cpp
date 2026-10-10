@@ -84,6 +84,8 @@ constexpr std::string_view kAbsoluteUrlWithoutPath = "http://localhost";
 constexpr std::string_view kDebugRpcTarget = "/rpc?debug=1";
 constexpr std::string_view kEmptyContentLength = "   ";
 constexpr std::string_view kDifferentContentLength = "4";
+constexpr std::string_view kMissingIncrementalRequest = "Expected a complete incremental HTTP request";
+constexpr std::size_t kSingleHeaderLimit = 1;
 constexpr std::size_t kTinyReadBufferSize = 4U;
 constexpr std::size_t kTinyMaxRequestSize = 8U;
 constexpr std::size_t kPartialWriteLimit = 3;
@@ -609,6 +611,76 @@ TEST(HttpAdapterTest, WriteResponseRejectsZeroByteWrites) {
   const auto write = a2a::server::HttpAdapter::WriteResponse(transport, response);
   ASSERT_FALSE(write.ok());
   EXPECT_EQ(write.error().code(), a2a::core::ErrorCode::kInternal);
+}
+
+void ExpectIncompleteFragment(a2a::server::HttpAdapter& adapter, a2a::server::HttpConnectionState& state,
+                              std::string_view byte) {
+  ASSERT_TRUE(adapter.AppendInput(state, byte).ok());
+  auto parsed = adapter.TryReadRequest(state, std::string(kLocalhost));
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_FALSE(parsed.value().has_value());
+}
+
+void ExpectIncrementalBody(a2a::server::HttpAdapter& adapter, a2a::server::HttpConnectionState& state) {
+  auto parsed = adapter.TryReadRequest(state, std::string(kLocalhost));
+  ASSERT_TRUE(parsed.ok());
+  const auto& request = parsed.value();
+  if (!request.has_value()) {
+    ADD_FAILURE() << kMissingIncrementalRequest;
+    return;
+  }
+  EXPECT_EQ(request->body, kBody);
+}
+
+TEST(HttpAdapterTest, IncrementalParserRetainsFragmentedBodyAndPipeline) {
+  const auto payload =
+      BuildRequest(kPostMethod, kRpcPath,
+                   {{kHostHeaderName, kLocalhost}, {kLowerContentLengthHeaderName, kContentLengthFive}}, kBody);
+  a2a::server::HttpAdapter adapter;
+  a2a::server::HttpConnectionState state;
+  for (std::size_t offset = 0; offset + 1 < payload.size(); ++offset) {
+    ExpectIncompleteFragment(adapter, state, std::string_view(payload).substr(offset, 1));
+  }
+  std::string tail(1, payload.back());
+  tail.append(payload);
+  ASSERT_TRUE(adapter.AppendInput(state, tail).ok());
+  for (std::size_t index = 0; index < kReusableStreamWriteCount - 1; ++index) {
+    ExpectIncrementalBody(adapter, state);
+  }
+  EXPECT_FALSE(adapter.TryReadRequest(state, std::string(kLocalhost)).value().has_value());
+}
+
+TEST(HttpAdapterTest, IncrementalInputBudgetRejectsGrowth) {
+  a2a::server::HttpAdapter adapter({.max_request_size = kTinyMaxRequestSize});
+  a2a::server::HttpConnectionState state;
+  ASSERT_TRUE(adapter.AppendInput(state, std::string(kTinyMaxRequestSize, 'x')).ok());
+  EXPECT_FALSE(adapter.AppendInput(state, kBody).ok());
+}
+
+TEST(HttpAdapterTest, ResponseEncodingMatchesBlockingPartialWriter) {
+  a2a::server::HttpServerResponse response;
+  response.status_code = kHttpOk;
+  response.body = kBody;
+  auto encoded = a2a::server::HttpAdapter::EncodeResponse(response, false);
+  ASSERT_TRUE(encoded.ok());
+  BufferTransport transport({});
+  transport.set_partial_write_limit(kPartialWriteLimit);
+  ASSERT_TRUE(a2a::server::HttpAdapter::WriteResponse(transport, response, false).ok());
+  EXPECT_EQ(encoded.value(), transport.output());
+}
+
+TEST(HttpAdapterTest, IncrementalHeaderBudgetsRejectOversizedHeaders) {
+  const auto payload =
+      BuildRequest(kPostMethod, kRpcPath,
+                   {{kHostHeaderName, kLocalhost}, {kLowerContentLengthHeaderName, kContentLengthFive}}, kBody);
+  a2a::server::HttpConnectionState size_state;
+  a2a::server::HttpAdapter size_adapter({.max_header_size = kTinyMaxRequestSize});
+  ASSERT_TRUE(size_adapter.AppendInput(size_state, payload).ok());
+  EXPECT_FALSE(size_adapter.TryReadRequest(size_state, std::string(kLocalhost)).ok());
+  a2a::server::HttpConnectionState count_state;
+  a2a::server::HttpAdapter count_adapter({.max_header_count = kSingleHeaderLimit});
+  ASSERT_TRUE(count_adapter.AppendInput(count_state, payload).ok());
+  EXPECT_FALSE(count_adapter.TryReadRequest(count_state, std::string(kLocalhost)).ok());
 }
 
 }  // namespace

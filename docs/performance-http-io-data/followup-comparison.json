@@ -1,0 +1,230 @@
+[
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "GetTask_ExistingTask",
+    "before": {
+      "throughput_ops_per_sec": 2504.953627208798,
+      "latency_ms": {
+        "p50": 0.382071,
+        "p95": 0.516732,
+        "p99": 0.600909
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 36.84981021161276,
+        "peak_server_rss_kib": 29256,
+        "peak_server_virtual_kib": 783968,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2553.290048530588,
+      "latency_ms": {
+        "p50": 0.379407,
+        "p95": 0.47254,
+        "p99": 0.620175
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 37.75438666204241,
+        "peak_server_rss_kib": 29108,
+        "peak_server_virtual_kib": 857892,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 1.929633379107698,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "SendStreamingMessage_FiniteStream",
+    "before": {
+      "throughput_ops_per_sec": 2904.128208083342,
+      "latency_ms": {
+        "p50": 0.33349,
+        "p95": 0.45122,
+        "p99": 0.552598
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 42.27503718555906,
+        "peak_server_rss_kib": 25788,
+        "peak_server_virtual_kib": 718640,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2467.8389196030225,
+      "latency_ms": {
+        "p50": 0.382953,
+        "p95": 0.515058,
+        "p99": 0.592593
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 38.87916697254008,
+        "peak_server_rss_kib": 25876,
+        "peak_server_virtual_kib": 858100,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -15.023072578750252,
+    "within_tolerance": false
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 4240.99848813069,
+      "latency_ms": {
+        "p50": 9.499174,
+        "p95": 43.078505,
+        "p99": 51.440196
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 50.848233991855984,
+        "peak_server_rss_kib": 40956,
+        "peak_server_virtual_kib": 2202064,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 4218.184176070078,
+      "latency_ms": {
+        "p50": 10.691334,
+        "p95": 38.021804,
+        "p99": 43.915352
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 48.01045241324686,
+        "peak_server_rss_kib": 38388,
+        "peak_server_virtual_kib": 924032,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -0.5379467152478945,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "idle",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 654.4996203892384,
+      "latency_ms": {
+        "p50": 1.508157,
+        "p95": 1.7949,
+        "p99": 2.022234
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 22.012545416300394,
+        "peak_server_rss_kib": 38828,
+        "peak_server_virtual_kib": 2692152,
+        "peak_server_threads": 138
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 635.3541715625471,
+      "latency_ms": {
+        "p50": 1.545342,
+        "p95": 1.854021,
+        "p99": 2.093007
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 22.401164640639692,
+        "peak_server_rss_kib": 33612,
+        "peak_server_virtual_kib": 930960,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -2.9252039619679704,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 653.4893634075124,
+      "latency_ms": {
+        "p50": 1.501574,
+        "p95": 1.825277,
+        "p99": 2.136378
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 22.425656552521968,
+        "peak_server_rss_kib": 32296,
+        "peak_server_virtual_kib": 725296,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 643.5683846639744,
+      "latency_ms": {
+        "p50": 1.530008,
+        "p95": 1.82652,
+        "p99": 2.009189
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 21.532241768234144,
+        "peak_server_rss_kib": 32620,
+        "peak_server_virtual_kib": 864756,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -1.5181545866036372,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "SendStreamingMessage_FiniteStream",
+    "before": {
+      "throughput_ops_per_sec": 1768.4087544841962,
+      "latency_ms": {
+        "p50": 28.444001,
+        "p95": 66.152242,
+        "p99": 81.481465
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 34.31950616488105,
+        "peak_server_rss_kib": 34652,
+        "peak_server_virtual_kib": 2183872,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1790.3981334827317,
+      "latency_ms": {
+        "p50": 32.266826,
+        "p95": 47.798665,
+        "p99": 51.847479
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 32.7944872420815,
+        "peak_server_rss_kib": 32000,
+        "peak_server_virtual_kib": 930708,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 1.243455674078553,
+    "within_tolerance": true
+  }
+]

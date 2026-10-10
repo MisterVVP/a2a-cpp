@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -31,6 +32,9 @@ class StreamResponseCoroutine final : private core::NonCopyable {
         {
           std::lock_guard lock(promise.mutex_);
           promise.done_.store(true);
+          if (promise.on_ready_) {
+            promise.on_ready_();
+          }
         }
         promise.ready_.notify_all();
       }
@@ -44,6 +48,9 @@ class StreamResponseCoroutine final : private core::NonCopyable {
       {
         std::lock_guard lock(mutex_);
         current_value_ = std::move(value);
+        if (on_ready_) {
+          on_ready_();
+        }
       }
       ready_.notify_one();
       return {};
@@ -51,6 +58,7 @@ class StreamResponseCoroutine final : private core::NonCopyable {
 
     std::optional<lf::a2a::v1::StreamResponse> current_value_;
     std::exception_ptr exception_;
+    std::function<void()> on_ready_;
     std::mutex mutex_;
     // Serializes external resume calls. Coroutine execution never acquires
     // this mutex, so a resumer may hold it until resume() returns.
@@ -78,6 +86,18 @@ class StreamResponseCoroutine final : private core::NonCopyable {
 
   [[nodiscard]] std::optional<lf::a2a::v1::StreamResponse> Next();
   [[nodiscard]] std::optional<lf::a2a::v1::StreamResponse> NextFor(std::chrono::milliseconds timeout);
+
+  void SetReadyCallback(std::function<void()> callback) {
+    if (!handle_) {
+      return;
+    }
+    auto& promise = handle_.promise();
+    std::lock_guard lock(promise.mutex_);
+    promise.on_ready_ = std::move(callback);
+    if (promise.on_ready_ && (promise.current_value_.has_value() || promise.done_.load())) {
+      promise.on_ready_();
+    }
+  }
 
   [[nodiscard]] bool IsDone() const noexcept { return !handle_ || handle_.promise().done_.load(); }
 

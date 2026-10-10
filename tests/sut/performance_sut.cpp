@@ -17,7 +17,11 @@ constexpr std::string_view kPerformanceSutName = "Performance SUT";
 int main(int argc, char** argv) noexcept {
   try {
     a2a::tests::sut::PerformanceSutDiagnostics diagnostics;
-    return a2a::tests::sut::RunSutRuntime(argc, argv, {.display_name = kPerformanceSutName, .observer = &diagnostics});
+    return a2a::tests::sut::RunSutRuntime(
+        argc, argv,
+        {.display_name = kPerformanceSutName,
+         .observer = &diagnostics,
+         .http_implementation = a2a::tests::sut::SutHttpImplementation::kAsynchronous});
   } catch (const std::exception& ex) {
     std::cerr << "Unhandled performance SUT exception: " << ex.what() << '\n';
     return 1;

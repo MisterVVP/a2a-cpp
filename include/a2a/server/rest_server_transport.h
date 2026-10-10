@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 namespace a2a::server {
 
 class HttpByteTransport;
+class HttpStreamSource;
 
 struct HttpServerRequest final {
   std::string method;
@@ -36,6 +38,7 @@ struct HttpServerResponse final {
   std::unordered_map<std::string, std::string> headers;
   std::string body;
   std::function<core::Result<void>(HttpByteTransport&)> stream_writer;
+  std::shared_ptr<HttpStreamSource> stream_source;
   HttpStreamKind stream_kind = HttpStreamKind::kNone;
 };
 

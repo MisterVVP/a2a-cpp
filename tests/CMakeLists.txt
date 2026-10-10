@@ -867,8 +867,18 @@ target_link_libraries(cpp_grpc_interop_server
     a2a::proto_generated
 )
 
+find_path(A2A_ASIO_INCLUDE_DIR asio.hpp REQUIRED)
+add_library(sut_asio INTERFACE)
+target_include_directories(sut_asio SYSTEM INTERFACE ${A2A_ASIO_INCLUDE_DIR})
+target_compile_definitions(sut_asio INTERFACE ASIO_STANDALONE ASIO_NO_DEPRECATED)
+if(WIN32)
+  target_link_libraries(sut_asio INTERFACE ws2_32 mswsock)
+  target_compile_definitions(sut_asio INTERFACE _WIN32_WINNT=0x0601)
+endif()
+
 add_library(sut_runtime STATIC
   sut/sut_runtime.cpp
+  sut/performance_http_server.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
@@ -876,11 +886,12 @@ target_include_directories(sut_runtime
   PUBLIC ${CMAKE_SOURCE_DIR}/tests
   PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
 )
-target_link_libraries(sut_runtime PUBLIC a2a::server a2a::core a2a::proto_generated)
+target_link_libraries(sut_runtime PRIVATE sut_asio PUBLIC a2a::server a2a::core a2a::proto_generated)
 
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
+    sut/performance_http_server.cpp
     sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
@@ -889,6 +900,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
   )
   target_link_libraries(sut_runtime_diagnostics
+    PRIVATE sut_asio
     PUBLIC a2a_server_diagnostics a2a_core_diagnostics a2a::proto_generated
   )
 endif()
@@ -908,6 +920,9 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 else()
   target_link_libraries(performance_sut PRIVATE sut_runtime)
 endif()
+
+add_executable(performance_http_io_sut sut/performance_http_io_sut.cpp)
+target_link_libraries(performance_http_io_sut PRIVATE sut_runtime)
 
 if(A2A_ENABLE_POSTGRES_STORE)
   target_link_libraries(sut_runtime
@@ -1013,6 +1028,15 @@ if(Python3_Interpreter_FOUND)
               $<TARGET_FILE:a2a_core> $<TARGET_FILE:a2a_client> $<TARGET_FILE:a2a_server>
     )
   endif()
+  add_test(
+    NAME performance_http_io_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_http_io_test.py $<TARGET_FILE:performance_sut>
+  )
+  add_test(
+    NAME performance_http_io_tsan_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_http_io_test.py $<TARGET_FILE:performance_http_io_sut>
+  )
+  set_tests_properties(performance_http_io_tsan_test PROPERTIES LABELS "tsan")
   add_test(
     NAME http_persistence_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/http_persistence_test.py $<TARGET_FILE:performance_sut>

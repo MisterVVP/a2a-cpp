@@ -4,6 +4,7 @@
   "description": "C++ SDK for the Agent2Agent (A2A) Protocol",
   "license": "Apache-2.0",
   "dependencies": [
+    "asio",
     "protobuf",
     "grpc",
     "curl"

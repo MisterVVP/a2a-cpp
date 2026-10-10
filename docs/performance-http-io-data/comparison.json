@@ -1,0 +1,762 @@
+[
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "churn",
+    "scenario": "ConnectionChurn_SendMessage",
+    "before": {
+      "throughput_ops_per_sec": 872.1483728881905,
+      "latency_ms": {
+        "p50": 1.1328689997753827,
+        "p95": 1.265294999939215,
+        "p99": 1.4282980000643875
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 16.990378323271155,
+        "peak_server_rss_kib": 67320,
+        "peak_server_virtual_kib": 14914828,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2559.079504851435,
+      "latency_ms": {
+        "p50": 0.3682349997689016,
+        "p95": 0.4967539998688153,
+        "p99": 0.5797789999633096
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 71.45915051952349,
+        "peak_server_rss_kib": 47340,
+        "peak_server_virtual_kib": 924052,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 193.4224937411549,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "idle",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 2034.9575218591729,
+      "latency_ms": {
+        "p50": 0.471407,
+        "p95": 0.593084,
+        "p99": 0.718267
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 40.895756430580064,
+        "peak_server_rss_kib": 39840,
+        "peak_server_virtual_kib": 2685496,
+        "peak_server_threads": 138
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1917.8833135051368,
+      "latency_ms": {
+        "p50": 0.494692,
+        "p95": 0.612,
+        "p99": 0.738575
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 40.09680307673594,
+        "peak_server_rss_kib": 34240,
+        "peak_server_virtual_kib": 924220,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -5.753152441583886,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "GetTask_ExistingTask",
+    "before": {
+      "throughput_ops_per_sec": 2741.5593193808127,
+      "latency_ms": {
+        "p50": 0.353107,
+        "p95": 0.4297,
+        "p99": 0.521241
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 41.062685717040125,
+        "peak_server_rss_kib": 37000,
+        "peak_server_virtual_kib": 817376,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2413.51938288607,
+      "latency_ms": {
+        "p50": 0.399103,
+        "p95": 0.475946,
+        "p99": 0.551055
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 39.92070859038547,
+        "peak_server_rss_kib": 36560,
+        "peak_server_virtual_kib": 924052,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -11.965450981700121,
+    "within_tolerance": false
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 2118.0459755894817,
+      "latency_ms": {
+        "p50": 0.455148,
+        "p95": 0.577365,
+        "p99": 0.694222
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 41.062685717040125,
+        "peak_server_rss_kib": 37000,
+        "peak_server_virtual_kib": 817376,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2033.5635970609158,
+      "latency_ms": {
+        "p50": 0.47804,
+        "p95": 0.58595,
+        "p99": 0.695605
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 39.92070859038547,
+        "peak_server_rss_kib": 36560,
+        "peak_server_virtual_kib": 924052,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -3.9886942730340547,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "SendStreamingMessage_FiniteStream",
+    "before": {
+      "throughput_ops_per_sec": 2727.0320964396574,
+      "latency_ms": {
+        "p50": 0.349962,
+        "p95": 0.461489,
+        "p99": 0.571494
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 41.062685717040125,
+        "peak_server_rss_kib": 37000,
+        "peak_server_virtual_kib": 817376,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2435.2547169160925,
+      "latency_ms": {
+        "p50": 0.385508,
+        "p95": 0.544674,
+        "p99": 0.676348
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 39.92070859038547,
+        "peak_server_rss_kib": 36560,
+        "peak_server_virtual_kib": 924052,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -10.699447942123664,
+    "within_tolerance": false
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 64,
+    "workload": "churn",
+    "scenario": "ConnectionChurn_SendMessage",
+    "before": {
+      "throughput_ops_per_sec": 2696.5941595760455,
+      "latency_ms": {
+        "p50": 19.431058999543893,
+        "p95": 50.419924999914656,
+        "p99": 67.12244999926043
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 71.90265574494322,
+        "peak_server_rss_kib": 161268,
+        "peak_server_virtual_kib": 46193224,
+        "peak_server_threads": 39
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 2999.3987864599108,
+      "latency_ms": {
+        "p50": 18.008291999649373,
+        "p95": 44.65574300047592,
+        "p99": 58.34126300032949
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 86.87385456483274,
+        "peak_server_rss_kib": 51648,
+        "peak_server_virtual_kib": 924252,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 11.229150883107742,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 64,
+    "workload": "idle",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 4685.682979996914,
+      "latency_ms": {
+        "p50": 9.379451,
+        "p95": 41.727979,
+        "p99": 52.579049
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 59.47048112295614,
+        "peak_server_rss_kib": 42128,
+        "peak_server_virtual_kib": 3243088,
+        "peak_server_threads": 201
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 4440.53971012361,
+      "latency_ms": {
+        "p50": 10.063865,
+        "p95": 39.865337,
+        "p99": 42.938768
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 54.136061261715085,
+        "peak_server_rss_kib": 35100,
+        "peak_server_virtual_kib": 924616,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -5.231751079187708,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "GetTask_ExistingTask",
+    "before": {
+      "throughput_ops_per_sec": 6124.160632495472,
+      "latency_ms": {
+        "p50": 7.101288,
+        "p95": 36.653732,
+        "p99": 43.185594
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 54.70729122118405,
+        "peak_server_rss_kib": 44096,
+        "peak_server_virtual_kib": 3620388,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 7047.0545007003675,
+      "latency_ms": {
+        "p50": 7.108171,
+        "p95": 25.999173,
+        "p99": 29.468892
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 50.17910706638243,
+        "peak_server_rss_kib": 37412,
+        "peak_server_virtual_kib": 924452,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 15.069720139408481,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 5105.420995746709,
+      "latency_ms": {
+        "p50": 9.486628,
+        "p95": 38.991226,
+        "p99": 46.699764
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 54.70729122118405,
+        "peak_server_rss_kib": 44096,
+        "peak_server_virtual_kib": 3620388,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 4526.646637311514,
+      "latency_ms": {
+        "p50": 9.969451,
+        "p95": 39.481366,
+        "p99": 43.701424
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 50.17910706638243,
+        "peak_server_rss_kib": 37412,
+        "peak_server_virtual_kib": 924452,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -11.336466844112724,
+    "within_tolerance": false
+  },
+  {
+    "store_backend": "inmemory",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "SendStreamingMessage_FiniteStream",
+    "before": {
+      "throughput_ops_per_sec": 5468.975326056071,
+      "latency_ms": {
+        "p50": 8.323116,
+        "p95": 36.557677,
+        "p99": 44.584894
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 54.70729122118405,
+        "peak_server_rss_kib": 44096,
+        "peak_server_virtual_kib": 3620388,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 7112.259845389286,
+      "latency_ms": {
+        "p50": 6.959197,
+        "p95": 23.363427,
+        "p99": 32.967771
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 50.17910706638243,
+        "peak_server_rss_kib": 37412,
+        "peak_server_virtual_kib": 924452,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 30.04739318358314,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "churn",
+    "scenario": "ConnectionChurn_SendMessage",
+    "before": {
+      "throughput_ops_per_sec": 423.92415848431256,
+      "latency_ms": {
+        "p50": 2.238998999928299,
+        "p95": 2.6163510001424584,
+        "p99": 3.0557410000255913
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 16.492877674474627,
+        "peak_server_rss_kib": 52472,
+        "peak_server_virtual_kib": 7684064,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 732.2233089203924,
+      "latency_ms": {
+        "p50": 1.3353249996725935,
+        "p95": 1.6306959996654768,
+        "p99": 2.026353000474046
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 28.981767685875553,
+        "peak_server_rss_kib": 32664,
+        "peak_server_virtual_kib": 930292,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 72.72507222479715,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "idle",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 608.2651983905514,
+      "latency_ms": {
+        "p50": 1.571495,
+        "p95": 1.942566,
+        "p99": 2.160091
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 22.733519721339757,
+        "peak_server_rss_kib": 38740,
+        "peak_server_virtual_kib": 2692152,
+        "peak_server_threads": 138
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 616.9897036573157,
+      "latency_ms": {
+        "p50": 1.556567,
+        "p95": 2.009942,
+        "p99": 2.828744
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 21.970118865446807,
+        "peak_server_rss_kib": 33380,
+        "peak_server_virtual_kib": 930960,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 1.4343258976263984,
+    "within_tolerance": false
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "GetTask_ExistingTask",
+    "before": {
+      "throughput_ops_per_sec": 1649.413675910616,
+      "latency_ms": {
+        "p50": 0.593926,
+        "p95": 0.729628,
+        "p99": 0.828102
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 24.377048705067466,
+        "peak_server_rss_kib": 32320,
+        "peak_server_virtual_kib": 823616,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1682.3180170065327,
+      "latency_ms": {
+        "p50": 0.578858,
+        "p95": 0.705293,
+        "p99": 0.780543
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 23.580530466393757,
+        "peak_server_rss_kib": 32580,
+        "peak_server_virtual_kib": 930292,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 1.994911378296349,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 665.9103807048537,
+      "latency_ms": {
+        "p50": 1.463224,
+        "p95": 1.797466,
+        "p99": 2.058813
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 24.377048705067466,
+        "peak_server_rss_kib": 32320,
+        "peak_server_virtual_kib": 823616,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 641.1526114364497,
+      "latency_ms": {
+        "p50": 1.515752,
+        "p95": 1.814467,
+        "p99": 3.381915
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 23.580530466393757,
+        "peak_server_rss_kib": 32580,
+        "peak_server_virtual_kib": 930292,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -3.7178830644145178,
+    "within_tolerance": false
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 1,
+    "workload": "wire",
+    "scenario": "SendStreamingMessage_FiniteStream",
+    "before": {
+      "throughput_ops_per_sec": 705.6020149363062,
+      "latency_ms": {
+        "p50": 1.373758,
+        "p95": 1.696398,
+        "p99": 2.151575
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 24.377048705067466,
+        "peak_server_rss_kib": 32320,
+        "peak_server_virtual_kib": 823616,
+        "peak_server_threads": 10
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 666.4137333326627,
+      "latency_ms": {
+        "p50": 1.441985,
+        "p95": 1.726404,
+        "p99": 1.902001
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 23.580530466393757,
+        "peak_server_rss_kib": 32580,
+        "peak_server_virtual_kib": 930292,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -5.55387892524386,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 64,
+    "workload": "churn",
+    "scenario": "ConnectionChurn_SendMessage",
+    "before": {
+      "throughput_ops_per_sec": 1398.8708226675758,
+      "latency_ms": {
+        "p50": 36.375767000208725,
+        "p95": 93.67912800007616,
+        "p99": 121.28906300040398
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 57.20795166120347,
+        "peak_server_rss_kib": 104716,
+        "peak_server_virtual_kib": 24961956,
+        "peak_server_threads": 63
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1840.3477114944872,
+      "latency_ms": {
+        "p50": 32.21311800007243,
+        "p95": 69.83712400051445,
+        "p99": 77.08374400044704
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 70.52482131077078,
+        "peak_server_rss_kib": 34976,
+        "peak_server_virtual_kib": 931032,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 31.559517982156304,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 64,
+    "workload": "idle",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 1600.0744636253582,
+      "latency_ms": {
+        "p50": 30.550239,
+        "p95": 77.527847,
+        "p99": 92.783227
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 44.05147861316885,
+        "peak_server_rss_kib": 42136,
+        "peak_server_virtual_kib": 3208632,
+        "peak_server_threads": 201
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1612.4254225427735,
+      "latency_ms": {
+        "p50": 36.755537,
+        "p95": 48.822194,
+        "p99": 52.492457
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 41.5788418734225,
+        "peak_server_rss_kib": 34016,
+        "peak_server_virtual_kib": 931432,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": 0.7718990083393384,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "GetTask_ExistingTask",
+    "before": {
+      "throughput_ops_per_sec": 3766.0034858806143,
+      "latency_ms": {
+        "p50": 11.434924,
+        "p95": 45.159889,
+        "p99": 53.37428
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 42.887009090901365,
+        "peak_server_rss_kib": 39440,
+        "peak_server_virtual_kib": 3233088,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 3438.169044058561,
+      "latency_ms": {
+        "p50": 14.099393,
+        "p95": 43.32905,
+        "p99": 47.008368
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 40.27459090218091,
+        "peak_server_rss_kib": 32932,
+        "peak_server_virtual_kib": 930688,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -8.705101921736402,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "SendMessage_CreateTask",
+    "before": {
+      "throughput_ops_per_sec": 1663.4243836227106,
+      "latency_ms": {
+        "p50": 29.239049,
+        "p95": 79.177224,
+        "p99": 96.60935
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 42.887009090901365,
+        "peak_server_rss_kib": 39440,
+        "peak_server_virtual_kib": 3233088,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1648.8182095483062,
+      "latency_ms": {
+        "p50": 36.912376,
+        "p95": 50.022633,
+        "p99": 53.940338
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 40.27459090218091,
+        "peak_server_rss_kib": 32932,
+        "peak_server_virtual_kib": 930688,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -0.878078632140411,
+    "within_tolerance": true
+  },
+  {
+    "store_backend": "postgres",
+    "concurrency": 64,
+    "workload": "wire",
+    "scenario": "SendStreamingMessage_FiniteStream",
+    "before": {
+      "throughput_ops_per_sec": 1799.274770636459,
+      "latency_ms": {
+        "p50": 28.120643,
+        "p95": 62.762401,
+        "p99": 69.170416
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 42.887009090901365,
+        "peak_server_rss_kib": 39440,
+        "peak_server_virtual_kib": 3233088,
+        "peak_server_threads": 73
+      }
+    },
+    "after": {
+      "throughput_ops_per_sec": 1607.6051478301204,
+      "latency_ms": {
+        "p50": 36.835411,
+        "p95": 53.107652,
+        "p99": 55.280455
+      },
+      "errors": 0,
+      "resources": {
+        "server_cpu_percent": 40.27459090218091,
+        "peak_server_rss_kib": 32932,
+        "peak_server_virtual_kib": 930688,
+        "peak_server_threads": 13
+      }
+    },
+    "throughput_change_percent": -10.652604367844221,
+    "within_tolerance": false
+  }
+]
