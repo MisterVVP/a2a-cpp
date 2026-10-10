@@ -303,6 +303,9 @@ jobs:
   benchmarks:
     name: benchmarks
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     env:
       A2A_BENCHMARK_THREADS: 4
     steps:
@@ -338,6 +341,18 @@ jobs:
             --thresholds benchmarks/thresholds.json \
             --summary benchmark-summary.md
           cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Compare benchmarks with previous successful main run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash tools/bench_runner/scripts/compare-main.sh \
+            --results benchmark-results.json \
+            --output benchmark-trend.json \
+            --summary benchmark-trend-summary.md \
+            --commit "$GITHUB_SHA" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --environment 'ubuntu-24.04; Release -O3; threads=4; repetitions=5'
+          cat benchmark-trend-summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v6
@@ -347,6 +362,9 @@ jobs:
             benchmark-results.json
             benchmark-summary.md
             benchmark-output.log
+            benchmark-trend.json
+            benchmark-trend-summary.md
+          retention-days: 90
           if-no-files-found: warn
 
   examples-smoke:
