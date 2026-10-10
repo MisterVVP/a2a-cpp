@@ -126,12 +126,22 @@ Connection work guards keep the I/O context alive through cancellation and
 application completions. It then drains canceled I/O and joins the fixed workers
 before diagnostic snapshots and gRPC shutdown. The TCK shutdown flow is retained.
 
+Normal response closure first shuts down the socket's send side, delivering FIN
+after the completed response. The receive side drains without parsing or retaining
+additional bytes until peer EOF, with a two-second deadline. This prevents
+Winsock from resetting a connection when closing cancels a pending receive.
+The connection retains its admission slot while draining, so peers that keep
+their send side open cannot accumulate unbounded cleanup work. Server shutdown
+and errors cancel draining immediately.
+
 ## Validation and measurements
 
 The socket suite covers fragmented and oversized input, full-buffer pipelining,
 partial writes, finite streams and reuse, idle subscriptions, cancellation,
 EOF, concurrent connections, slow readers, output limits, accept resumption,
-and shutdown with pending reads/writes/streams. Shared-parser and subscription
+graceful FIN after complete unary/finite responses, draining excess pipeline
+input, bounded close deadlines, and shutdown with pending reads/writes/streams.
+Shared-parser and subscription
 unit tests cover incremental parsing, encoder parity, readiness detach, and
 producer queue overflow.
 

@@ -34,6 +34,8 @@ SMALL_INPUT_BYTES = 512
 WRITE_SLICE_BYTES = 17
 HEARTBEAT_TIMEOUT_SECONDS = 20
 SSE_COMMENT_PREFIX = b":"
+SSE_COMPLETED_STATE = b"COMPLETED"
+CHUNKED_HEADER = b"Transfer-Encoding: chunked"
 PIPELINE_REQUESTS = 8
 LINE_END = b"\r\n"
 RESOURCE_PREFIX = "A2A_HTTP_IO_RESOURCES"
@@ -52,8 +54,8 @@ def wire_request(path: str, body: dict, close: bool = False) -> bytes:
     return LINE_END.join(line.encode() for line in lines) + HEADER_END + payload
 
 
-def rpc_request(method: str, params: dict) -> bytes:
-    return wire_request(RPC_PATH, {"jsonrpc": "2.0", "id": MESSAGE_ID, "method": method, "params": params})
+def rpc_request(method: str, params: dict, close: bool = False) -> bytes:
+    return wire_request(RPC_PATH, {"jsonrpc": "2.0", "id": MESSAGE_ID, "method": method, "params": params}, close)
 
 
 class Reader:
@@ -83,6 +85,12 @@ class Reader:
         headers = self.until(HEADER_END)
         assert headers.startswith(HTTP_OK), headers
         return headers
+
+    def until_eof(self) -> bytes:
+        payload, self.buffer = self.buffer, b""
+        while received := self.client.recv(4096):
+            payload += received
+        return payload
 
     def chunk(self) -> bytes:
         size = int(self.until(LINE_END), 16)
@@ -145,7 +153,7 @@ class PerformanceHttpIoTest(unittest.TestCase):
                     response, carry = read_response(client, reader.buffer)
                     self.assertTrue(response.startswith(HTTP_OK), response)
                     self.assertFalse(carry)
-                    assert_connection_closed(client)
+                    self.assertEqual(client.recv(1), b"")
 
     def test_subscription_cancellation_and_disconnect(self):
         with running_sut() as (port, _):
@@ -171,6 +179,7 @@ class PerformanceHttpIoTest(unittest.TestCase):
                     stream.sendall(request(b"close"))
                     reused, _ = read_response(stream, reader.buffer)
                     self.assertTrue(reused.startswith(HTTP_OK))
+                    self.assertEqual(stream.recv(1), b"")
                 # A reset/disconnect while a subscription is idle is covered below
                 # by shutting down with its initial event already delivered.
 
@@ -194,7 +203,54 @@ class PerformanceHttpIoTest(unittest.TestCase):
                 stream.sendall(request(b"close"))
                 reused, _ = read_response(stream, reader.buffer)
                 self.assertTrue(reused.startswith(HTTP_OK))
-                assert_connection_closed(stream)
+                self.assertEqual(stream.recv(1), b"")
+
+    def test_graceful_close_drains_unread_pipeline(self):
+        with running_sut(MAX_INPUT_BYTES=SMALL_INPUT_BYTES, WRITE_SLICE_BYTES=WRITE_SLICE_BYTES) as (port, _):
+            with connect(port) as client:
+                client.sendall(request(b"close") + request() * PIPELINE_REQUESTS)
+                response, carry = read_response(client)
+                self.assertTrue(response.startswith(HTTP_OK))
+                self.assertFalse(carry)
+                # Require FIN: resets are acceptable only for rejected input.
+                self.assertEqual(client.recv(1), b"")
+                # After FIN, the server must still drain this direction without
+                # parsing another request or exceeding the input budget.
+                client.sendall(request() * PIPELINE_REQUESTS)
+                client.shutdown(socket.SHUT_WR)
+
+    def test_finite_stream_connection_close_delivers_final_event(self):
+        with running_sut(WRITE_SLICE_BYTES=WRITE_SLICE_BYTES) as (port, _):
+            payloads = (wire_request(REST_STREAM, send_body(), close=True),
+                        rpc_request("SendStreamingMessage", send_body(), close=True))
+            for payload in payloads:
+                with connect(port) as client:
+                    client.sendall(payload)
+                    reader = Reader(client)
+                    self.assertNotIn(CHUNKED_HEADER, reader.headers())
+                    self.assertIn(SSE_COMPLETED_STATE, reader.until_eof())
+
+    def test_graceful_close_deadline_and_shutdown(self):
+        with contextlib.ExitStack() as clients, running_sut(MAX_CONNECTIONS=APPLICATION_WORKERS) as (port, _):
+            for _ in range(APPLICATION_WORKERS):
+                closing = clients.enter_context(connect(port))
+                closing.sendall(request(b"close"))
+                response, _ = read_response(closing)
+                self.assertTrue(response.startswith(HTTP_OK))
+                self.assertEqual(closing.recv(1), b"")
+            # Peers intentionally leave their send sides open. The bounded
+            # close deadline must release admission for this next connection.
+            with connect(port) as fast:
+                fast.sendall(request(b"close"))
+                response, _ = read_response(fast)
+                self.assertTrue(response.startswith(HTTP_OK))
+                self.assertEqual(fast.recv(1), b"")
+            pending = clients.enter_context(connect(port))
+            pending.sendall(request(b"close"))
+            response, _ = read_response(pending)
+            self.assertTrue(response.startswith(HTTP_OK))
+            self.assertEqual(pending.recv(1), b"")
+            # Fixture shutdown must cancel the pending drain and its deadline.
 
     def test_idle_and_slow_readers_do_not_hold_workers(self):
         with contextlib.ExitStack() as clients, running_sut(WRITE_SLICE_BYTES=WRITE_SLICE_BYTES) as (port, _):
@@ -246,7 +302,7 @@ class PerformanceHttpIoTest(unittest.TestCase):
                 for _ in range(PIPELINE_REQUESTS + 1):
                     response, carry = read_response(client, carry)
                     self.assertTrue(response.startswith(HTTP_OK))
-                assert_connection_closed(client)
+                self.assertEqual(client.recv(1), b"")
 
     def test_input_budget_eof_and_accept_resumption(self):
         with running_sut(MAX_INPUT_BYTES=SMALL_INPUT_BYTES, MAX_CONNECTIONS=APPLICATION_WORKERS) as (port, _):
@@ -258,12 +314,13 @@ class PerformanceHttpIoTest(unittest.TestCase):
                     client.sendall(request(b"close"))
                     response, _ = read_response(client)
                     self.assertTrue(response.startswith(HTTP_OK))
+                    self.assertEqual(client.recv(1), b"")
             with connect(port) as client:
                 client.sendall(request())
                 client.shutdown(socket.SHUT_WR)
                 response, _ = read_response(client)
                 self.assertTrue(response.startswith(HTTP_OK))
-                assert_connection_closed(client)
+                self.assertEqual(client.recv(1), b"")
 
 
 if __name__ == "__main__":

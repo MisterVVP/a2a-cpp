@@ -19,6 +19,10 @@ admitted connections. Stores and protocol endpoints match. Binary hashes are in
 [metadata.json](performance-http-io-data/metadata.json). The follow-up binary also
 includes the final stale-heartbeat guard; none of these finite/unary scenarios
 enters the live heartbeat path.
+These measurements precede the follow-up Windows graceful-close repair; the
+published hashes identify the measured binaries. That repair was validated with
+the required performance smoke and socket regressions rather than a new capacity
+comparison.
 
 Host: AMD EPYC 7763 virtual machine, Linux x86-64, three visible CPUs, a parent
 cgroup two-CPU quota and 8 GiB memory limit (the nested Docker cgroup reports
@@ -177,7 +181,7 @@ starting those uninstrumented system-library threads.
 
 All 671 native tests, exact CI formatting, `./scripts/verify_changes.sh`,
 and the separate required `./scripts/run_clang_tidy.sh build` pass (exit 0).
-Each socket driver runs eight integration cases, including a real heartbeat
+Each socket driver now runs eleven integration cases, including a real heartbeat
 followed by cancellation and persistent reuse. Local lint
 uses the real clang-tidy 19 executable in parallel, with successful checks cached
 only for identical compiler commands, configuration, source, and dependency

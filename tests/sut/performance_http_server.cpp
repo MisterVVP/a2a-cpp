@@ -18,6 +18,7 @@
 #include <asio/thread_pool.hpp>
 #include <asio/version.hpp>
 #include <charconv>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <deque>
@@ -46,6 +47,7 @@ constexpr std::size_t kMaximumHeaderBytes = std::size_t{64} * 1024U;
 constexpr std::size_t kMaximumHeaderCount = 128;
 constexpr std::size_t kBatchEventLimit = 16;
 constexpr std::size_t kBatchByteTarget = std::size_t{64} * 1024U;
+constexpr auto kGracefulCloseTimeout = std::chrono::seconds(2);
 constexpr std::string_view kUnsupportedReadiness = "Live stream lacks readiness support";
 constexpr std::string_view kOutputLimitExceeded = "HTTP output buffer limit exceeded";
 constexpr std::string_view kInvalidLimits = "Invalid performance HTTP limits";
@@ -237,6 +239,7 @@ class PerformanceHttpServer::Impl::Connection final : public std::enable_shared_
   void OnReady();
   void WaitForEvent();
   void FinishResponse();
+  void CloseGracefully();
   void Dispose();
 
   Impl& owner_;
@@ -259,6 +262,7 @@ class PerformanceHttpServer::Impl::Connection final : public std::enable_shared_
   bool job_busy_ = false;
   bool response_active_ = false;
   bool closed_ = false;
+  bool closing_ = false;
   bool close_after_response_ = false;
   bool handled_ = false;
   bool stream_ready_ = false;
@@ -284,7 +288,9 @@ void PerformanceHttpServer::Impl::Connection::Read() {
   if (closed_ || read_pending_ || input_eof_) {
     return;
   }
-  const auto available = owner_.options_.max_input_bytes - input_.size() - parked_bytes_ - inflight_input_bytes_;
+  const auto available = closing_
+                             ? read_buffer_.size()
+                             : owner_.options_.max_input_bytes - input_.size() - parked_bytes_ - inflight_input_bytes_;
   if (available == 0) {
     return;
   }
@@ -293,6 +299,14 @@ void PerformanceHttpServer::Impl::Connection::Read() {
                           [self = shared_from_this()](asio::error_code error, std::size_t bytes) {
                             self->read_pending_ = false;
                             if (self->closed_) {
+                              return;
+                            }
+                            if (self->closing_) {
+                              if (error || bytes == 0) {
+                                self->Close();
+                              } else {
+                                self->Read();
+                              }
                               return;
                             }
                             if (error == asio::error::eof) {
@@ -320,12 +334,12 @@ void PerformanceHttpServer::Impl::Connection::Read() {
 }
 
 void PerformanceHttpServer::Impl::Connection::ProcessRequest() {
-  if (closed_ || response_active_ || job_busy_) {
+  if (closed_ || closing_ || response_active_ || job_busy_) {
     return;
   }
   if (input_.empty() && parked_bytes_ == 0) {
     if (input_eof_) {
-      Close();
+      CloseGracefully();
     }
     return;
   }
@@ -659,10 +673,33 @@ void PerformanceHttpServer::Impl::Connection::CompleteResponse() {
     return;
   }
   if (close_after_response_) {
-    Close();
+    CloseGracefully();
     return;
   }
   ProcessRequest();
+  Read();
+}
+
+void PerformanceHttpServer::Impl::Connection::CloseGracefully() {
+  if (closed_ || closing_) {
+    return;
+  }
+  closing_ = true;
+  // Winsock can reset the connection and discard the response when close
+  // cancels a pending receive. Send FIN first, then drain without parsing or
+  // buffering until peer EOF. Retained admission and a deadline bound cleanup.
+  asio::error_code error;
+  socket_.shutdown(asio::ip::tcp::socket::shutdown_send, error);
+  if (error || input_eof_) {
+    Close();
+    return;
+  }
+  heartbeat_.expires_after(kGracefulCloseTimeout);
+  heartbeat_.async_wait([self = shared_from_this()](asio::error_code timer_error) {
+    if (!timer_error) {
+      self->Close();
+    }
+  });
   Read();
 }
 
