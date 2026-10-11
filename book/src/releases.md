@@ -4,7 +4,11 @@ This documentation is intended to stay version-aware without embedding a release
 
 ## Current documented release
 
-The current documented release is **v0.5.1** and is recommended for new consumers.
+The current documented release is **v0.5.2** and is recommended for new consumers.
+
+## Previous release: `v0.5.1`
+
+The following notes describe `v0.5.1`.
 
 ### Highlights since `v0.5.0`
 
@@ -79,7 +83,7 @@ conformance tooling continues to use `tck_sut`. The historical wire result value
 `driver_type=wire_tck_sut` remains unchanged for report compatibility. Pagination
 and PostgreSQL schema/privilege requirements from `v0.5.0` remain in effect.
 
-## Previous release: `v0.5.0`
+## Earlier release: `v0.5.0`
 
 The following notes describe `v0.5.0`; its benchmark comparisons are historical
 evidence for that release, not measurements of `v0.5.1`.
@@ -205,7 +209,7 @@ server response construction.
 
 ## Versioning guidance
 
-- Pin CMake `FetchContent` integrations to a release tag such as `v0.5.1` or to
+- Pin CMake `FetchContent` integrations to a release tag such as `v0.5.2` or to
   a reviewed commit.
 - Prefer `find_package(a2a_cpp CONFIG REQUIRED)` for installed SDK packages.
 - Keep generated protobuf headers and linked SDK libraries from the same
