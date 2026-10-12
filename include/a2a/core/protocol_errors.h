@@ -7,9 +7,18 @@
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_codes.h"
 
 namespace a2a::core::protocol_errors {
+
+[[nodiscard]] inline Error Unauthenticated(std::string message = "authentication is required") {
+  return Error::RemoteProtocol(std::move(message)).WithHttpStatus(http::kStatusUnauthorized);
+}
+
+[[nodiscard]] inline Error PermissionDenied(std::string message = "access is denied") {
+  return Error::RemoteProtocol(std::move(message)).WithHttpStatus(http::kStatusForbidden);
+}
 
 [[nodiscard]] inline Error TaskNotFound(std::string message = "task not found") {
   return Error::RemoteProtocol(std::move(message))

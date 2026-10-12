@@ -696,7 +696,10 @@ core::Result<HttpServerResponse> BuildListTasksSuccessResponse(const DispatchRes
 }
 
 int HttpStatusFromError(const core::Error& error) {
-  (void)error;
+  const int status = error.http_status().value_or(core::http::kStatusOk);
+  if (status == core::http::kStatusUnauthorized || status == core::http::kStatusForbidden) {
+    return status;
+  }
   return core::http::kStatusOk;
 }
 

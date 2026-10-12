@@ -12,6 +12,7 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
@@ -46,6 +47,12 @@ template <std::size_t MessageSize>
 }
 
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
+  if (error.http_status() == core::http::kStatusUnauthorized) {
+    return ::grpc::StatusCode::UNAUTHENTICATED;
+  }
+  if (error.http_status() == core::http::kStatusForbidden) {
+    return ::grpc::StatusCode::PERMISSION_DENIED;
+  }
   const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;

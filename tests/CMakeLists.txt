@@ -869,6 +869,7 @@ target_link_libraries(cpp_grpc_interop_server
 
 add_library(sut_runtime STATIC
   sut/sut_runtime.cpp
+  sut/sut_agent.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
@@ -881,6 +882,7 @@ target_link_libraries(sut_runtime PUBLIC a2a::server a2a::core a2a::proto_genera
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
+    sut/sut_agent.cpp
     sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
@@ -1103,3 +1105,25 @@ if(A2A_ENABLE_POSTGRES_STORE)
       A2A_ENABLE_POSTGRES_STORE=1
   )
 endif()
+
+# Real SUT scenarios use public SDK clients for every ordered binding pair.
+add_executable(shared_binding_test integration/shared_binding_test.cpp)
+target_include_directories(shared_binding_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(shared_binding_test PRIVATE a2a::client a2a::server GTest::gtest_main)
+if(Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL)
+  foreach(binding_backend IN ITEMS inmemory postgres)
+    if(binding_backend STREQUAL "postgres" AND NOT A2A_ENABLE_POSTGRES_STORE)
+      continue()
+    endif()
+    add_test(NAME shared_binding_${binding_backend}
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_binding_scenarios.py
+        --sut $<TARGET_FILE:tck_sut> --scenarios $<TARGET_FILE:shared_binding_test>
+        --backend ${binding_backend})
+    set_tests_properties(shared_binding_${binding_backend}
+      PROPERTIES LABELS "binding_equivalence" TIMEOUT 180 SKIP_RETURN_CODE 77)
+  endforeach()
+endif()
+
+add_executable(sut_agent_test unit/sut_agent_test.cpp)
+target_link_libraries(sut_agent_test PRIVATE sut_runtime GTest::gtest_main)
+gtest_discover_tests(sut_agent_test)

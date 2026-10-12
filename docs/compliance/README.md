@@ -77,3 +77,7 @@ JSON-RPC at `/rpc`, and gRPC on the configured port plus one. Store selection
 continues to use
 `A2A_TCK_STORE_BACKEND=inmemory|postgres`, `A2A_TCK_POSTGRES_DSN`, and
 `A2A_TCK_POSTGRES_SCHEMA`.
+
+## Shared-binding SUT evidence
+
+- [Shared-binding SUT scenarios](binding-equivalence.md)
