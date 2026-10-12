@@ -217,6 +217,18 @@ class SharedBindingTest : public testing::TestWithParam<BindingPair> {
     ExpectAuthFailure(wrong.error(), binding, kGrpcPermissionDenied, a2a::core::http::kStatusForbidden);
   }
 
+  void CheckRejectedVersions(const lf::a2a::v1::GetTaskRequest& get, std::string_view unsupported) {
+    for (const auto version : {unsupported, std::string_view{}}) {
+      SCOPED_TRACE(version);
+      auto options = options_;
+      options.protocol_version = version;
+      const auto rejected = target_->GetTask(get, options);
+      ASSERT_FALSE(rejected.ok());
+      ExpectProtocolFailure(rejected.error(), std::get<1>(GetParam()), a2a::core::protocol_codes::kVersionNotSupported,
+                            kGrpcUnimplemented, a2a::core::http::kStatusBadRequest);
+    }
+  }
+
   a2a::client::CallOptions options_;
   std::unique_ptr<a2a::client::A2AClient> source_;
   std::unique_ptr<a2a::client::A2AClient> target_;
@@ -440,6 +452,22 @@ TEST_P(SharedBindingTest, AuthenticationRulesSurviveCrossBindingTaskAccess) {
   const auto allowed = target_->GetTask(get, options_);
   ASSERT_TRUE(allowed.ok()) << allowed.error().message();
   ExpectTaskEqual(sent.value().task(), allowed.value());
+}
+
+// VER-SERVER-001..003 against the real SUT with each storage backend.
+TEST_P(SharedBindingTest, RequestedVersionsUseSdkNegotiation) {
+  constexpr std::string_view kPatchVersion = "1.0.42";
+  constexpr std::string_view kUnsupportedVersion = "1.1";
+  const auto sent = source_->SendMessage(Message(), options_);
+  ASSERT_TRUE(sent.ok()) << sent.error().message();
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(sent.value().task().id());
+  auto options = options_;
+  options.protocol_version = kPatchVersion;
+  const auto patched = target_->GetTask(get, options);
+  ASSERT_TRUE(patched.ok()) << patched.error().message();
+  ExpectTaskEqual(sent.value().task(), patched.value());
+  CheckRejectedVersions(get, kUnsupportedVersion);
 }
 
 INSTANTIATE_TEST_SUITE_P(

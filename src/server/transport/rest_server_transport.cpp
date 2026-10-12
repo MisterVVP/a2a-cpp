@@ -454,6 +454,7 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
                                             ? std::optional<std::string>{}
                                             : std::optional<std::string>(request.remote_address);
   rest_request.context.client_headers = request.headers;
+  rest_request.context.protocol_version = core::Version::kProtocolVersion;
   rest_request.context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   if (query_start != std::string::npos) {
@@ -517,6 +518,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
   context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
                                                           : std::optional<std::string>(request.remote_address);
   context.client_headers = request.headers;
+  context.protocol_version = core::Version::kProtocolVersion;
   context.auth_metadata = ExtractAuthMetadata(request.headers);
   lf::a2a::v1::GetExtendedAgentCardRequest card_request;
   if (!tenant.empty()) {

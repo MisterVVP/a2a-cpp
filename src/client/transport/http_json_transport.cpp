@@ -17,6 +17,7 @@
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
 #include "http_json_transport_internal.h"
+#include "request_headers.h"
 
 namespace a2a::client {
 namespace {
@@ -162,7 +163,6 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
   request.timeout = options.timeout.value_or(default_timeout_);
 
   request.headers = options.headers;
-  request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   request.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
   request.headers[std::string(core::http::kAcceptHeaderName)] = std::string(core::http::kContentTypeApplicationJson);
@@ -180,6 +180,11 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
     if (!applied.ok()) {
       return applied.error();
     }
+  }
+
+  const auto version = internal::ApplyProtocolVersion(options, request.headers);
+  if (!version.ok()) {
+    return version.error();
   }
 
   const auto response = requester_(request);

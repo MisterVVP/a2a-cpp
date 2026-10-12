@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "a2a/client/auth.h"
+#include "a2a/core/version.h"
 
 namespace a2a::client {
 
@@ -21,6 +22,9 @@ struct CallOptions final {
   std::shared_ptr<const CredentialProvider> credential_provider;
   AuthContext auth_context;
   std::optional<MtlsConfig> mtls = std::nullopt;
+  // Requested A2A protocol version, independent of the SDK release. Clients
+  // emit Major.Minor, ignoring numeric patches. Empty requests the 0.3 fallback.
+  std::string protocol_version = std::string(core::Version::kProtocolVersion);
 };
 
 }  // namespace a2a::client

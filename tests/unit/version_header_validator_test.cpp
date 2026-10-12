@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 #include "a2a/core/error.h"
+#include "a2a/core/protocol_codes.h"
 #include "a2a/core/version.h"
 
 namespace {
@@ -32,12 +33,13 @@ TEST(VersionHeaderValidatorTest, RejectsMissingVersionWhenRequired) {
   EXPECT_EQ(result.error().message(), a2a::server::VersionHeaderValidator::kMissingRequiredVersionMessage);
 }
 
-TEST(VersionHeaderValidatorTest, AcceptsMissingVersionWhenOptional) {
+TEST(VersionHeaderValidatorTest, EmptyVersionFallbackIsUnsupportedEvenWhenHeaderIsOptional) {
   const a2a::server::VersionHeaderValidator validator(/*require_version_header=*/false);
 
   const auto result = validator.Validate(HeaderMap{});
 
-  EXPECT_TRUE(result.ok());
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(a2a::core::Version::MajorMinor({}), a2a::core::Version::kEmptyVersionFallback);
 }
 
 TEST(VersionHeaderValidatorTest, RejectsUnsupportedVersion) {
@@ -56,6 +58,20 @@ TEST(VersionHeaderValidatorTest, AcceptsSupportedVersion) {
   const auto result = validator.Validate(MakeVersionHeaders(a2a::core::Version::HeaderValue()));
 
   EXPECT_TRUE(result.ok());
+}
+
+TEST(VersionHeaderValidatorTest, AcceptsPatchAndCaseInsensitiveHeader) {
+  constexpr std::string_view kPatchVersion = "1.0.42";
+  constexpr std::string_view kLowercaseHeader = "a2a-version";
+  const a2a::server::VersionHeaderValidator validator;
+  EXPECT_TRUE(validator.Validate({{std::string(kLowercaseHeader), std::string(kPatchVersion)}}).ok());
+}
+
+TEST(VersionHeaderValidatorTest, RejectsExplicitEmptyVersionFallback) {
+  const a2a::server::VersionHeaderValidator validator;
+  const auto result = validator.Validate(MakeVersionHeaders({}));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kVersionNotSupported);
 }
 
 }  // namespace

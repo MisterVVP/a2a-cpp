@@ -3,6 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <string_view>
+
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/protojson.h"
@@ -17,6 +20,30 @@ TEST(CoreVersionTest, EmitsAndValidatesA2AVersion10) {
   EXPECT_EQ(a2a::core::Version::HeaderValue(), "1.0");
   EXPECT_TRUE(a2a::core::Version::IsSupported("1.0"));
   EXPECT_FALSE(a2a::core::Version::IsSupported("2.0"));
+}
+
+// VER-SERVER-001/002/003: negotiation is Major.Minor, with a numeric
+// patch ignored and the prescribed 0.3 fallback for an empty value.
+TEST(CoreVersionTest, MatchesMajorMinorAndIgnoresNumericPatches) {
+  constexpr std::string_view kSupportedPatch = "1.0.42";
+  constexpr std::string_view kLargePatch = "1.0.999999999999999999999999";
+  constexpr std::string_view kUnsupportedMinor = "1.1.0";
+  EXPECT_TRUE(a2a::core::Version::IsSupported(kSupportedPatch));
+  EXPECT_TRUE(a2a::core::Version::IsSupported(kLargePatch));
+  EXPECT_FALSE(a2a::core::Version::IsSupported(kUnsupportedMinor));
+  EXPECT_EQ(a2a::core::Version::MajorMinor(kSupportedPatch), a2a::core::Version::kProtocolVersion);
+  EXPECT_EQ(a2a::core::Version::MajorMinor({}), a2a::core::Version::kEmptyVersionFallback);
+  EXPECT_FALSE(a2a::core::Version::IsSupported({}));
+}
+
+TEST(CoreVersionTest, RejectsMalformedVersionComponents) {
+  constexpr auto kMalformedVersions = std::to_array<std::string_view>(
+      {"1", "1.", ".0", "1..0", "1.0.", "1.0.x", "1.0.0.0", "+1.0", "01.0", "1.00", "1.0.01", "1.0-beta", " 1.0"});
+  for (const auto version : kMalformedVersions) {
+    SCOPED_TRACE(version);
+    EXPECT_FALSE(a2a::core::Version::MajorMinor(version).has_value());
+    EXPECT_FALSE(a2a::core::Version::IsSupported(version));
+  }
 }
 
 TEST(CoreExtensionsTest, FormatSortsAndDeduplicatesExtensionsDeterministically) {

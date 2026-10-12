@@ -22,6 +22,7 @@
 #endif
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
+#include "request_headers.h"
 
 namespace a2a::client {
 namespace {
@@ -253,7 +254,6 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
   request.body = std::move(body);
   request.timeout = options.timeout.value_or(default_timeout);
   request.headers = options.headers;
-  request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   if (!request.body.empty()) {
     request.headers[std::string(core::http::kContentTypeHeaderName)] =
         std::string(core::http::kContentTypeApplicationJson);
@@ -273,6 +273,11 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
       return applied.error();
     }
   }
+  const auto version = internal::ApplyProtocolVersion(options, request.headers);
+  if (!version.ok()) {
+    return version.error();
+  }
+
   return request;
 }
 

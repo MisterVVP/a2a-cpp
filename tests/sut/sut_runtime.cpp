@@ -92,7 +92,7 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
 
   a2a::server::JsonRpcServerTransportOptions jsonrpc_options;
   jsonrpc_options.rpc_path = std::string(kJsonRpcPath);
-  jsonrpc_options.require_version_header = false;
+  jsonrpc_options.require_version_header = true;
   jsonrpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, std::move(jsonrpc_options));
 

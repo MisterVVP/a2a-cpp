@@ -1124,6 +1124,11 @@ if(Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL)
   endforeach()
 endif()
 
+add_executable(protocol_version_integration_test integration/protocol_version_integration_test.cpp)
+target_include_directories(protocol_version_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
+target_link_libraries(protocol_version_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
+gtest_discover_tests(protocol_version_integration_test PROPERTIES LABELS "protocol_version")
+
 add_executable(sut_agent_test unit/sut_agent_test.cpp)
 target_link_libraries(sut_agent_test PRIVATE sut_runtime GTest::gtest_main)
 gtest_discover_tests(sut_agent_test)

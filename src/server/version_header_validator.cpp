@@ -20,7 +20,7 @@ core::Result<void> VersionHeaderValidator::Validate(const std::unordered_map<std
     if (require_version_header_) {
       return core::protocol_errors::VersionNotSupported(std::string(kMissingRequiredVersionMessage));
     }
-    return {};
+    return core::protocol_errors::VersionNotSupported(std::string(kUnsupportedVersionMessage));
   }
 
   if (!core::Version::IsSupported(*version_header)) {
