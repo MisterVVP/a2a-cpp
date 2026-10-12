@@ -59,41 +59,37 @@ trap - EXIT
 Expected artifacts:
 - `build-tck/tck-sut.log`
 - `tck-artifacts/reports/{inmemory,postgres}/compatibility.{json,html}`
-- `tck-artifacts/reports/{inmemory,postgres}/sdk-scenarios/**`
 - `tck-artifacts/logs/{inmemory,postgres}/tck-run.log`
 
-The mandatory runner adds executable C++ SDK coverage for requirements that
-upstream registers without implementing dedicated tests. It leaves upstream
-assertions intact and reports supplemental results through the upstream
-collector. The runner fails unless `BIND-EQUIV-001..004`, `VER-CLIENT-001/002`,
-and `VER-SERVER-001..003` pass on **all three bindings**, with SDK scenario
-evidence for each. A custom `TCK_RUN_CMD` must execute the staged supplemental
-module and produce the same evidence; it cannot bypass this check.
-
-GTest XML and SUT/scenario logs are included under each backend report's
-`sdk-scenarios` directory. Conditional upstream skips and other untested registry
-requirements remain visible; none of the nine required binding/version checks
-may be skipped or untested. Use `scripts/check_tck_sdk_requirements.py` to check
-a saved report and `scripts/summarize_tck_report.py` to inspect remaining gaps.
+The mandatory runner executes the upstream TCK entrypoint and preserves its
+reports. It adds no repository-specific test module or requirement report gate.
+Use `scripts/summarize_tck_report.py` to inspect failed, skipped, and untested
+requirements. Independent C++ SDK tests run through CTest and are reported
+separately from upstream TCK compliance.
 
 ## Verified requirement coverage
 
 Local validation on 2026-10-12 used upstream TCK commit
 [`263b9cfaf16a554bdfb166a7ba5b67716e946349`](https://github.com/a2aproject/a2a-tck/commit/263b9cfaf16a554bdfb166a7ba5b67716e946349)
-with this repository's executable SDK requirement module:
+with upstream compatibility tests:
 
 | Evidence | In-memory | PostgreSQL |
 |---|---|---|
-| Nine binding/version requirements on all three bindings | PASS; no skips or untested coverage | PASS; no skips or untested coverage |
-| Supplemental C++ scenarios | 252 passed, 0 skipped | 252 passed, 0 skipped |
-| Full pytest suite, including SDK module | 282 passed, 16 conditional upstream skips | 282 passed, 16 conditional upstream skips |
-| Mandatory requirement compliance | 87.5% | 87.5% |
-| Overall requirement compliance | 85.8% | 85.8% |
+| Upstream pytest suite | 249 passed, 16 conditional skips | 249 passed, 16 conditional skips |
+| `VER-SERVER-002/003` | PASS | PASS |
+| `BIND-EQUIV-001..004`, `VER-CLIENT-001/002`, `VER-SERVER-001` | NOT TESTED upstream | NOT TESTED upstream |
+| Mandatory requirement compliance | 80.9% | 80.9% |
+| Overall requirement compliance | 80.0% | 80.0% |
 
-The earlier upstream-only mandatory baseline was 80.9%. Additional executed
-requirements improve that result; other registered requirements still lack
-coverage. This evidence does not claim full TCK compliance. CI uploads the
-backend reports, scenario XML, and logs through
+The seven `NOT TESTED` binding/version requirements are registered in this TCK
+revision without executable upstream coverage. The SDK's independent C++ tests
+verify their behavior, along with the two covered version requirements, on all
+three bindings. The live shared-binding scenarios run with both storage backends
+and all nine ordered binding pairs. Their results do not change the upstream TCK
+percentage.
+
+Other registered requirements and conditional skips remain visible; this evidence
+does not claim full TCK compliance. CI uploads the backend reports and logs through
 [the TCK workflow](../../.github/workflows/tck.yml).
 
 ## Conformance SUT binary

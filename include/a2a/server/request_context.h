@@ -14,7 +14,6 @@ struct RequestContext final {
   std::optional<std::string> remote_address;
   std::unordered_map<std::string, std::string> auth_metadata;
   std::unordered_map<std::string, std::string> client_headers;
-  // Validated Major.Minor selected by the SDK transport before dispatch.
   std::string protocol_version = {};
 };
 

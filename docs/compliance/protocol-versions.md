@@ -17,7 +17,7 @@ key. The default is `1.0`. Request a version explicitly using `CallOptions`:
 
 ```cpp
 a2a::client::CallOptions options;
-options.protocol_version = "1.0.42";  // SDK emits A2A-Version: 1.0.
+options.protocol_version = "1.0.42";
 auto result = client.GetTask(request, options);
 ```
 
@@ -62,10 +62,13 @@ our live SUT. SDK validation rejects unsupported versions before dispatch using
 the prescribed errors above. Empty/missing headers select 0.3; a 1.0-only server
 must reject that unsupported version rather than silently accept it as 1.0.
 
-The [mandatory TCK flow](README.md) executes the independent SDK checks and live
-SUT scenarios through the supplemental C++ SDK test module, alongside upstream
-tests. All five `VER-*` requirements must be **PASS on every binding**, with
-executable SDK evidence and no skipped scenarios. XML and logs are retained in
-the TCK report's `sdk-scenarios` directory. Missing coverage fails the report gate
-even if pytest otherwise exits successfully. This gate verifies the five version
-and four binding requirements; it does not imply full TCK compliance.
+The [mandatory TCK flow](README.md) runs upstream compatibility tests separately
+from these SDK checks. At the tested TCK revision, `VER-SERVER-002/003` have
+executable upstream tests and pass. `VER-CLIENT-001/002` and `VER-SERVER-001` are
+registered without executable tests and remain `NOT TESTED` in its report.
+
+The independent SDK tests above verify all five version requirements on each
+binding. Their results are SDK validation evidence and do not change the upstream
+TCK percentage. Adding coverage to the upstream report requires tests maintained
+by a2aproject/a2a-tck; the repository runner adds no local test modules or report
+gate.

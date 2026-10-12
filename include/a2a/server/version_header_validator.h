@@ -17,8 +17,6 @@ class VersionHeaderValidator final {
   static constexpr std::string_view kUnsupportedVersionMessage = "Unsupported A2A-Version header value";
 
   VersionHeaderValidator() = default;
-  // The optional-header mode still negotiates the prescribed 0.3 fallback;
-  // it never bypasses version support checks.
   explicit VersionHeaderValidator(bool require_version_header) noexcept;
 
   [[nodiscard]] core::Result<void> Validate(const std::unordered_map<std::string, std::string>& headers) const;

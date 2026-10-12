@@ -54,34 +54,24 @@ A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
   ctest --test-dir build -L binding_equivalence --output-on-failure
 ```
 
-The standalone CTest scenarios require Python and libcurl. PostgreSQL developers
-must supply the DSN above to run that backend. The mandatory TCK entrypoint uses
-strict mode: missing binaries, missing PostgreSQL credentials, empty scenario
-selection, disabled tests, skipped tests, and failed assertions are failures.
-Each live scenario group uses an isolated SUT process and PostgreSQL schema.
+The CTest scenarios require Python and libcurl and are registered when both are
+available. The PostgreSQL scenario requires `A2A_TEST_POSTGRES_DSN`; CTest reports
+an explicit skip if it is absent. Supply the DSN above to validate both backends.
+Each backend run uses isolated SUT processes and its own PostgreSQL schema.
 
-## TCK integration and required evidence
+## SDK evidence and upstream TCK coverage
 
-`scripts/run_tck_mandatory.sh` builds the SDK scenario binaries and temporarily
-adds `tests/tck/test_cpp_sdk_requirements.py` to the upstream compatibility test
-directory. Upstream tests and assertions stay intact. The supplemental module
-executes the C++ assertions and records their actual outcomes through the
-upstream `CompatibilityCollector`. It is removed from the TCK checkout on exit.
+The C++ scenarios above validate the four binding requirements as SDK integration
+tests. They run separately from upstream TCK and do not contribute to its
+compatibility percentage. The capability-negative and authenticated profiles
+exercise the same SDK adapters and dispatcher as the default conformance SUT.
 
-`compatibility.json` and `compatibility.html` include all four `BIND-EQUIV`
-requirements with per-binding results and executable test IDs. GTest XML and
-process logs are retained under `sdk-scenarios/<requirement>/<binding>/` in the
-backend's report directory. The final report gate requires **PASS on all three
-bindings**, including SDK scenario evidence for each binding; `SKIPPED`,
-`NOT TESTED`, missing evidence and failures cannot satisfy the gate. The same
-entrypoint runs in CI for both in-memory and PostgreSQL stores.
+At the [tested TCK revision](README.md#verified-requirement-coverage), upstream
+registers `BIND-EQUIV-001..004` but has no executable tests for them. Its report
+therefore lists these requirements as `NOT TESTED`. The mandatory runner executes
+upstream tests without adding local test modules or altering report outcomes.
+Coverage in the upstream report requires tests maintained by a2aproject/a2a-tck.
 
-The capability-negative profile also executes `CORE-CAP-001/002` assertions on
-all bindings. Conditional upstream tests may skip when their precondition is
-absent in the default profile; those skips are retained in the report rather
-than hidden. The nine binding/version requirements themselves must have complete
-passing coverage. See [reproduction and evidence](README.md).
-
-These tests validate this SDK's bindings. Cross-SDK interoperability remains
-scoped to #111, and full TCK compliance requires the other registered requirements
-to pass as well.
+Cross-SDK interoperability remains scoped to #111. See
+[reproduction and evidence](README.md) for the upstream TCK results and separate
+SDK validation.
