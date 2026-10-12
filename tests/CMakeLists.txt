@@ -992,6 +992,8 @@ gtest_discover_tests(a2a_performance_driver_test)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+  add_test(NAME tck_sdk_requirement_gate_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/tck_sdk_requirement_gate_test.py)
   add_test(
     NAME subscription_diagnostics_symbol_command_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test_test.py

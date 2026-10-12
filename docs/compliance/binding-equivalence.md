@@ -54,15 +54,34 @@ A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
   ctest --test-dir build -L binding_equivalence --output-on-failure
 ```
 
-Live client scenarios require the SDK's libcurl-backed default HTTP support;
-they are registered when that support and Python are available. The PostgreSQL
-scenario is explicitly skipped if its DSN is absent. To validate
-both backends, enable PostgreSQL at build time and provide the DSN. Each run
-uses its own PostgreSQL schema. The normal CI PostgreSQL test job supplies the
-DSN, so these scenarios run through its existing CTest entrypoint.
+The standalone CTest scenarios require Python and libcurl. PostgreSQL developers
+must supply the DSN above to run that backend. The mandatory TCK entrypoint uses
+strict mode: missing binaries, missing PostgreSQL credentials, empty scenario
+selection, disabled tests, skipped tests, and failed assertions are failures.
+Each live scenario group uses an isolated SUT process and PostgreSQL schema.
 
-These are requirement-mapped SDK/SUT checks, separate from the generic upstream
-TCK. The TCK currently lacks generic cross-binding/client-header assertions;
-its existing operation assertions remain useful, and the local scenarios cover
-those gaps without modifying or overriding the upstream assertions. Cross-SDK
-interoperability remains scoped to #111.
+## TCK integration and required evidence
+
+`scripts/run_tck_mandatory.sh` builds the SDK scenario binaries and temporarily
+adds `tests/tck/test_cpp_sdk_requirements.py` to the upstream compatibility test
+directory. Upstream tests and assertions stay intact. The supplemental module
+executes the C++ assertions and records their actual outcomes through the
+upstream `CompatibilityCollector`. It is removed from the TCK checkout on exit.
+
+`compatibility.json` and `compatibility.html` include all four `BIND-EQUIV`
+requirements with per-binding results and executable test IDs. GTest XML and
+process logs are retained under `sdk-scenarios/<requirement>/<binding>/` in the
+backend's report directory. The final report gate requires **PASS on all three
+bindings**, including SDK scenario evidence for each binding; `SKIPPED`,
+`NOT TESTED`, missing evidence and failures cannot satisfy the gate. The same
+entrypoint runs in CI for both in-memory and PostgreSQL stores.
+
+The capability-negative profile also executes `CORE-CAP-001/002` assertions on
+all bindings. Conditional upstream tests may skip when their precondition is
+absent in the default profile; those skips are retained in the report rather
+than hidden. The nine binding/version requirements themselves must have complete
+passing coverage. See [reproduction and evidence](README.md).
+
+These tests validate this SDK's bindings. Cross-SDK interoperability remains
+scoped to #111, and full TCK compliance requires the other registered requirements
+to pass as well.

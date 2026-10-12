@@ -66,6 +66,7 @@ jobs:
         id: tck_inmemory
         continue-on-error: true
         env:
+          A2A_TCK_STORE_BACKEND: inmemory
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
@@ -99,6 +100,7 @@ jobs:
         id: tck_postgres
         continue-on-error: true
         env:
+          A2A_TCK_STORE_BACKEND: postgres
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}

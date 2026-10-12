@@ -5,8 +5,8 @@ versions. This SDK release implements A2A **1.0**; an agent's release/version
 field is also separate from each interface's `protocolVersion`.
 
 Negotiation matches **Major.Minor**. Numeric patch numbers are ignored by clients
-and servers (`1.0.42` selects `1.0`). Malformed versions and unsupported major or
-minor versions produce `VersionNotSupportedError`. As required by specification
+and servers (`1.0.42` selects `1.0`). Servers reject malformed versions and
+unsupported major or minor versions with `VersionNotSupportedError`. As required by specification
 §3.6, an empty or omitted version denotes **0.3**. Since this SDK does not
 implement 0.3 semantics, it rejects that fallback, including in the SUT. It never
 silently treats an empty version as 1.0.
@@ -36,10 +36,10 @@ fallback. Wire headers/metadata remain available unchanged in `client_headers`.
 
 | Requirement | Independent SDK coverage |
 |---|---|
-| `VER-CLIENT-001` | All eight unary/push methods emit default/requested Major.Minor on every binding |
-| `VER-CLIENT-002` | Streaming send and subscription emit the same parameter; header aliases/hooks cannot create conflicting versions |
+| `VER-CLIENT-001` | All eight unary/push methods, streaming send and subscription emit the version parameter on every binding |
+| `VER-CLIENT-002` | Requested `1.0.42` emits `1.0`; raw wire patch versions select the same 1.0 semantics; conflicting header aliases/hooks are removed |
 | `VER-SERVER-001` | Accepted requests dispatch with 1.0 semantics in `RequestContext`, independently of SUT handlers |
-| `VER-SERVER-002` | Raw wire patch versions select 1.0; unsupported minor versions never dispatch and use prescribed binding error codes |
+| `VER-SERVER-002` | Unsupported versions never dispatch and return JSON-RPC `-32009`, HTTP 400, or gRPC `UNIMPLEMENTED` with protocol-code metadata |
 | `VER-SERVER-003` | Empty 0.3 fallback is rejected before dispatch on every operation and binding |
 
 Core/version-validator unit tests cover malformed components, patch handling,
@@ -53,5 +53,19 @@ ctest --test-dir build -L protocol_version --output-on-failure
 ctest --test-dir build -R 'CoreVersionTest|VersionHeaderValidatorTest' --output-on-failure
 ```
 
-These assertions cover the SDK client/header gaps in the upstream generic TCK;
-they do not claim that the entire TCK is passing.
+## TCK evidence and the Python SDK regression
+
+[a2a-python issue #856](https://github.com/a2aproject/a2a-python/issues/856)
+reported that unsupported `A2A-Version: 99.0` was accepted on JSON-RPC and
+HTTP+JSON. The upstream `TestVersionErrors` reproduces this regression against
+our live SUT. SDK validation rejects unsupported versions before dispatch using
+the prescribed errors above. Empty/missing headers select 0.3; a 1.0-only server
+must reject that unsupported version rather than silently accept it as 1.0.
+
+The [mandatory TCK flow](README.md) executes the independent SDK checks and live
+SUT scenarios through the supplemental C++ SDK test module, alongside upstream
+tests. All five `VER-*` requirements must be **PASS on every binding**, with
+executable SDK evidence and no skipped scenarios. XML and logs are retained in
+the TCK report's `sdk-scenarios` directory. Missing coverage fails the report gate
+even if pytest otherwise exits successfully. This gate verifies the five version
+and four binding requirements; it does not imply full TCK compliance.

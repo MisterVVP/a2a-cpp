@@ -11,6 +11,7 @@ SUT_PORT=${SUT_PORT:-50061}
 TCK_SUT_ENDPOINT=${TCK_SUT_ENDPOINT:-"${SUT_HOST}:${SUT_PORT}"}
 TCK_SUT_URL=${TCK_SUT_URL:-"http://${SUT_HOST}:${SUT_PORT}"}
 TCK_RUN_CMD=${TCK_RUN_CMD:-}
+BUILD_DIR=${BUILD_DIR:-"${ROOT_DIR}/build-tck"}
 TCK_TRANSPORTS=${TCK_TRANSPORTS:-grpc,jsonrpc,http_json}
 TCK_SOURCE_REPORT_DIR=${TCK_SOURCE_REPORT_DIR:-"${TCK_WORKDIR}/reports"}
 TCK_REQUIRED_EXTENSIONS=${TCK_REQUIRED_EXTENSIONS:-${A2A_TCK_REQUIRED_EXTENSIONS:-}}
@@ -22,6 +23,37 @@ TCK_LOG_FILE_ABS="${TCK_LOG_DIR_ABS}/$(basename "${TCK_LOG_FILE}")"
 TCK_PYTHONPATH_DIR="${TCK_LOG_DIR_ABS}/pythonpath"
 
 mkdir -p "${TCK_REPORT_DIR_ABS}" "${TCK_LOG_DIR_ABS}"
+
+# Add executable SDK coverage where upstream only registers requirements.
+# No upstream tests or assertions are replaced. Older/custom entrypoints must
+# still produce the required scenario evidence or the report gate fails.
+SDK_TEST_MODULE="${TCK_WORKDIR_ABS}/tests/compatibility/test_cpp_sdk_requirements.py"
+if [[ ! -d "$(dirname "${SDK_TEST_MODULE}")" ]]; then
+  echo "The selected TCK must expose tests/compatibility for SDK requirement coverage." >&2
+  exit 1
+fi
+if [[ -e "${SDK_TEST_MODULE}" ]]; then
+  echo "Refusing to overwrite existing TCK module: ${SDK_TEST_MODULE}" >&2
+  exit 1
+fi
+cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_LIBCURL=ON
+cmake --build "${BUILD_DIR}" --parallel --target shared_binding_test protocol_version_integration_test
+cp "${ROOT_DIR}/tests/tck/test_cpp_sdk_requirements.py" "${SDK_TEST_MODULE}"
+trap 'rm -f "${SDK_TEST_MODULE}"' EXIT
+export A2A_CPP_SDK_ROOT="${ROOT_DIR}"
+export A2A_CPP_SDK_BUILD
+A2A_CPP_SDK_BUILD=$(realpath "${BUILD_DIR}")
+export A2A_CPP_SDK_ARTIFACTS="${TCK_REPORT_DIR_ABS}/sdk-scenarios"
+export A2A_TCK_STORE_BACKEND=${A2A_TCK_STORE_BACKEND:-inmemory}
+
+# A custom command must not accidentally pass using a report from an older run.
+for report in compatibility.json compatibility.html tck_report.html junitreport.xml; do
+  rm -f "${TCK_SOURCE_REPORT_DIR_ABS}/${report}" "${TCK_REPORT_DIR_ABS}/${report}"
+done
+
+check_sdk_requirements() {
+  python3 "${ROOT_DIR}/scripts/check_tck_sdk_requirements.py" "${TCK_REPORT_DIR_ABS}/compatibility.json"
+}
 
 install_tck_python_overrides() {
   if [[ -z "${TCK_REQUIRED_EXTENSIONS}" ]]; then
@@ -64,6 +96,9 @@ run_and_collect_reports() {
   set -e
   copy_tck_reports "${TCK_SOURCE_REPORT_DIR_ABS}"
   copy_tck_reports "${TCK_REPORT_DIR_ABS}"
+  if ! check_sdk_requirements; then
+    return 1
+  fi
   return "${status}"
 }
 
@@ -75,6 +110,7 @@ if [[ -n "${TCK_RUN_CMD}" ]]; then
   set -e
   popd >/dev/null
   copy_tck_reports "${TCK_SOURCE_REPORT_DIR_ABS}"
+  check_sdk_requirements
   exit "${status}"
 fi
 

@@ -384,8 +384,8 @@ def main() -> int:
 
     print(f"TCK compatibility gap summary: {args.compatibility_json}")
     print(
-        "Note: TCK compatibility percentage excludes skipped tests and NOT TESTED registry requirements; "
-        "the sections below list those gaps separately from failed assertions."
+        "Note: TCK compatibility percentage excludes SKIPPED requirements; "
+        "NOT TESTED requirements count against compliance. The sections below list gaps separately from failed assertions."
     )
     print_section("Failed requirement assertions", failed)
     print_section("Skipped requirement IDs", skipped)

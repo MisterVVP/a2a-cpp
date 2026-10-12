@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 
 PROFILES = {
@@ -64,8 +65,20 @@ def run_profile(args, profile, base_environment):
         process = subprocess.Popen([str(args.sut), f"127.0.0.1:{port}"], env=environment, stdout=log, stderr=log)
         try:
             wait_until_ready(process, port)
-            result = subprocess.run([str(args.scenarios), f"--gtest_filter={PROFILES[profile]}"],
+            command = [str(args.scenarios), f"--gtest_filter={args.gtest_filter or PROFILES[profile]}"]
+            if args.report_dir:
+                args.report_dir.mkdir(parents=True, exist_ok=True)
+                report = args.report_dir / f"{profile}.xml"
+                report.unlink(missing_ok=True)
+                command.append(f"--gtest_output=xml:{report}")
+            result = subprocess.run(command,
                                     env=environment, timeout=SCENARIO_TIMEOUT, check=False)
+            if result.returncode == 0 and args.report_dir:
+                cases = list(ET.parse(report).getroot().iter("testcase"))
+                if not cases or any(case.find("skipped") is not None or
+                                    case.get("status") != "run" or case.get("result") != "completed"
+                                    for case in cases):
+                    raise RuntimeError("SDK scenarios were empty, disabled, or skipped")
             return result.returncode
         finally:
             process.terminate()
@@ -83,20 +96,28 @@ def main():
     parser.add_argument("--sut", type=Path, required=True)
     parser.add_argument("--scenarios", type=Path, required=True)
     parser.add_argument("--backend", choices=("inmemory", "postgres"), required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES))
+    parser.add_argument("--gtest-filter")
+    parser.add_argument("--report-dir", type=Path)
+    parser.add_argument("--require-postgres", action="store_true")
     args = parser.parse_args()
+    if args.gtest_filter and not args.profile:
+        parser.error("--gtest-filter requires an explicit --profile")
     environment = dict(os.environ)
     environment["A2A_TCK_STORE_BACKEND"] = args.backend
     # These scenarios do not need extensions; never inherit a TCK client shim.
     environment.pop("A2A_TCK_CLIENT_REQUIRED_EXTENSIONS", None)
     if args.backend == "postgres":
-        dsn = environment.get("A2A_TEST_POSTGRES_DSN")
+        dsn = environment.get("A2A_TEST_POSTGRES_DSN") or environment.get("A2A_TCK_POSTGRES_DSN")
         if not dsn:
+            if args.require_postgres:
+                raise RuntimeError("A PostgreSQL DSN is required for TCK requirement validation")
             print("SKIP: A2A_TEST_POSTGRES_DSN is required for PostgreSQL scenarios")
             return 77
         environment["A2A_TCK_POSTGRES_DSN"] = dsn
         environment["A2A_TCK_POSTGRES_SCHEMA"] = f"binding_{uuid.uuid4().hex}"
     try:
-        for profile in PROFILES:
+        for profile in (args.profile,) if args.profile else PROFILES:
             result = run_profile(args, profile, environment)
             if result:
                 return result
