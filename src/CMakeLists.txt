@@ -126,6 +126,7 @@ set(A2A_SERVER_SOURCES
   server/task_subscription_service.cpp
   server/transport/transport_mux.cpp
   server/dispatcher.cpp
+  server/security_policy.cpp
   server/request_context.cpp
   server/tasks/in_memory_task_store.cpp
   server/tasks/list_tasks.cpp

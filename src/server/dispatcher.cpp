@@ -263,6 +263,13 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   }
 
   std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
+  const auto security = security_;
+  if (security != nullptr) {
+    auto authorized = security->Authorize(request, context);
+    if (!authorized.ok()) {
+      return authorized.error();
+    }
+  }
   for (const auto& interceptor : interceptors_) {
     if (interceptor == nullptr) {
       continue;
@@ -277,9 +284,20 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   }
   read_lock.unlock();
 
-  auto dispatch_result = DispatchToExecutor(*executor_, request, context, agent_card_provider_);
+  const auto* list = std::get_if<ListTasksRequest>(&request.payload);
+  auto dispatch_result = security != nullptr && request.operation == DispatcherOperation::kListTasks && list != nullptr
+                             ? security->ListTasks(*list, context)
+                             : DispatchToExecutor(*executor_, request, context, agent_card_provider_);
+  if (security != nullptr && dispatch_result.ok()) {
+    security->ProtectStream(request, context, dispatch_result.value());
+  }
   RunAfterInterceptors(request, context, dispatch_result);
   return dispatch_result;
+}
+
+void Dispatcher::SetSecurityPolicy(std::shared_ptr<const SecurityPolicy> policy, TaskStore* task_store) {
+  std::unique_lock lock(interceptor_mutex_);
+  security_ = std::make_shared<DispatchSecurity>(std::move(policy), task_store);
 }
 
 void Dispatcher::AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor) {

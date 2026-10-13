@@ -1132,3 +1132,13 @@ gtest_discover_tests(protocol_version_integration_test PROPERTIES LABELS "protoc
 add_executable(sut_agent_test unit/sut_agent_test.cpp)
 target_link_libraries(sut_agent_test PRIVATE sut_runtime GTest::gtest_main)
 gtest_discover_tests(sut_agent_test)
+
+add_executable(sdk_security_test unit/sdk_security_test.cpp)
+target_include_directories(sdk_security_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
+target_link_libraries(sdk_security_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(sdk_security_test PROPERTIES LABELS "security")
+
+add_executable(security_transport_integration_test integration/security_transport_integration_test.cpp)
+target_include_directories(security_transport_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
+target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
+gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
