@@ -15,6 +15,8 @@
 namespace a2a::http::detail {
 namespace {
 
+constexpr long kVerifyCertificatePeer = 1L;
+constexpr long kVerifyCertificateHostname = 2L;
 constexpr const char* kHttpTransportName = "http";
 constexpr std::string_view kCurlHeaderFailureMessage = "failed to build HTTP request headers";
 constexpr std::string_view kCurlInitFailureMessage = "failed to initialize HTTP client";
@@ -310,12 +312,20 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
   const auto set_header = curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, WriteResponseHeader);
   const auto set_header_data = curl_easy_setopt(handle, CURLOPT_HEADERDATA, response_headers);
   const auto set_http_version = curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, http_version.value());
-  const auto set_tls_minimum = curl_easy_setopt(handle, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+  const long minimum_tls =
+      request.tls.has_value() && request.tls->require_tls13 ? CURL_SSLVERSION_TLSv1_3 : CURL_SSLVERSION_TLSv1_2;
+  const auto set_tls_minimum = curl_easy_setopt(handle, CURLOPT_SSLVERSION, minimum_tls);
+  const auto set_verify_peer = curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, kVerifyCertificatePeer);
+  const auto set_verify_host = curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, kVerifyCertificateHostname);
+  const char* ca_bundle =
+      request.tls.has_value() && !request.tls->ca_bundle_path.empty() ? request.tls->ca_bundle_path.c_str() : nullptr;
+  const auto set_ca = curl_easy_setopt(handle, CURLOPT_CAINFO, ca_bundle);
   const auto set_suppress_connect_headers = curl_easy_setopt(handle, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L);
   if (set_url != CURLE_OK || set_headers != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
       set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK || set_header != CURLE_OK ||
       set_header_data != CURLE_OK || set_http_version != CURLE_OK || set_tls_minimum != CURLE_OK ||
-      set_suppress_connect_headers != CURLE_OK) {
+      set_suppress_connect_headers != CURLE_OK || set_verify_peer != CURLE_OK || set_verify_host != CURLE_OK ||
+      set_ca != CURLE_OK) {
     return core::Error::Internal(std::string(kConfigureRequestFailureMessage));
   }
   return {};

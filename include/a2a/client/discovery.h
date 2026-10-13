@@ -6,12 +6,14 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "a2a/core/result.h"
+#include "a2a/http/http_client.h"
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::client {
@@ -31,7 +33,7 @@ struct HttpResponse final {
 
 using HttpFetcher = std::function<core::Result<HttpResponse>(std::string_view url)>;
 
-[[nodiscard]] HttpFetcher MakeDefaultHttpFetcher();
+[[nodiscard]] HttpFetcher MakeDefaultHttpFetcher(std::optional<http::TlsOptions> tls = std::nullopt);
 
 struct ResolvedInterface final {
   PreferredTransport transport = PreferredTransport::kRest;

@@ -182,6 +182,7 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::strin
       std::string(core::http::kContentTypeApplicationJson);
   http_request.headers[std::string(core::http::kAcceptHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
+  http_request.tls = options.tls;
   http_request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {

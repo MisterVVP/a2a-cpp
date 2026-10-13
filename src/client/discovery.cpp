@@ -95,9 +95,10 @@ std::optional<std::string_view> ToWireTransport(PreferredTransport transport) {
 
 }  // namespace
 
-HttpFetcher MakeDefaultHttpFetcher() {
-  return [client = a2a::http::Client{}](std::string_view url) -> core::Result<HttpResponse> {
+HttpFetcher MakeDefaultHttpFetcher(std::optional<http::TlsOptions> tls) {
+  return [client = a2a::http::Client{}, tls = std::move(tls)](std::string_view url) -> core::Result<HttpResponse> {
     a2a::http::Request request;
+    request.tls = tls;
     request.method = std::string(core::http::kMethodGet);
     request.url = std::string(url);
     request.headers.push_back({std::string(core::Version::kHeaderName), core::Version::HeaderValue()});

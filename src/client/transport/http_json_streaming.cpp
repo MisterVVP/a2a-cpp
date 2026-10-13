@@ -259,6 +259,7 @@ core::Result<HttpRequest> BuildStreamingRequest(const ResolvedInterface& resolve
         std::string(core::http::kContentTypeApplicationJson);
   }
   request.headers[std::string(core::http::kAcceptHeaderName)] = std::string(core::http::kContentTypeTextEventStream);
+  request.tls = options.tls;
   request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {
