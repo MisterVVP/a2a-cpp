@@ -23,49 +23,74 @@ Run tasks in the listed order. Task 1 establishes protocol conformance gating, T
 Use the same deterministic workflow as `.github/workflows/tck.yml`:
 
 ```bash
-# 1) Start the C++ SUT used by TCK.
-./scripts/run_tck_sut.sh
-
-# 2) Clone the pinned TCK ref (override TCK_REF as needed).
+# 1) Check out the TCK and prepare Python dependencies.
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
 TCK_REF=${TCK_REF:-main}
 git clone --depth 1 --branch "${TCK_REF}" "https://github.com/${TCK_REPO}.git" tck-repo
 python3 -m venv tck-repo/.venv
 source tck-repo/.venv/bin/activate
 python3 -m pip install --upgrade pip
-if [[ -f tck-repo/requirements.txt ]]; then
-  python3 -m pip install -r tck-repo/requirements.txt
-fi
-python3 -m pip install python-dotenv pyopenssl
+python3 -m pip install -e ./tck-repo python-dotenv pyopenssl
 
-# 3) Run mandatory category against the local SUT.
-mkdir -p tck-artifacts/reports tck-artifacts/logs
-cd tck-repo
-if [[ -x ./scripts/run_tck.sh ]]; then
-    ./scripts/run_tck.sh \
-    --category mandatory \
-    --sut-endpoint "127.0.0.1:50061" \
-    --output-dir ../tck-artifacts/reports \
-    | tee ../tck-artifacts/logs/tck-run.log
-elif [[ -f ./run_tck.py ]]; then
-  python3 ./run_tck.py \
-    --sut-host "http://127.0.0.1:50061" \
-    --category mandatory \
-    --transports grpc \
-    --transport-strategy prefer_grpc \
-    | tee ../tck-artifacts/logs/tck-run.log
-else
-  echo "Adjust this command to the pinned TCK entrypoint for your selected ref."
-fi
-
-# 4) Stop the SUT and preserve logs.
+# 2) Run the repository entrypoint from the repository root.
+export TCK_WORKDIR=tck-repo
+export TCK_TRANSPORTS=grpc,jsonrpc,http_json
+export A2A_TCK_REQUIRED_EXTENSIONS=urn:a2a:tck:required-extension
+export A2A_TCK_STORE_BACKEND=inmemory
+export TCK_REPORT_DIR=tck-artifacts/reports/inmemory
+export TCK_LOG_DIR=tck-artifacts/logs/inmemory
+./scripts/run_tck_sut.sh
+trap './scripts/stop_tck_sut.sh' EXIT
+./scripts/run_tck_mandatory.sh
 ./scripts/stop_tck_sut.sh
+
+# 3) Repeat using a running PostgreSQL instance.
+export A2A_TCK_STORE_BACKEND=postgres
+export A2A_TCK_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a
+export A2A_TCK_POSTGRES_SCHEMA=tck_postgres
+export TCK_REPORT_DIR=tck-artifacts/reports/postgres
+export TCK_LOG_DIR=tck-artifacts/logs/postgres
+./scripts/run_tck_sut.sh
+./scripts/run_tck_mandatory.sh
+./scripts/stop_tck_sut.sh
+trap - EXIT
 ```
 
 Expected artifacts:
 - `build-tck/tck-sut.log`
-- `tck-artifacts/reports/*`
-- `tck-artifacts/logs/tck-run.log`
+- `tck-artifacts/reports/{inmemory,postgres}/compatibility.{json,html}`
+- `tck-artifacts/logs/{inmemory,postgres}/tck-run.log`
+
+The mandatory runner executes the upstream TCK entrypoint and preserves its
+reports. It adds no repository-specific test module or requirement report gate.
+Use `scripts/summarize_tck_report.py` to inspect failed, skipped, and untested
+requirements. Independent C++ SDK tests run through CTest and are reported
+separately from upstream TCK compliance.
+
+## Verified requirement coverage
+
+Local validation on 2026-10-12 used upstream TCK commit
+[`263b9cfaf16a554bdfb166a7ba5b67716e946349`](https://github.com/a2aproject/a2a-tck/commit/263b9cfaf16a554bdfb166a7ba5b67716e946349)
+with upstream compatibility tests:
+
+| Evidence | In-memory | PostgreSQL |
+|---|---|---|
+| Upstream pytest suite | 249 passed, 16 conditional skips | 249 passed, 16 conditional skips |
+| `VER-SERVER-002/003` | PASS | PASS |
+| `BIND-EQUIV-001..004`, `VER-CLIENT-001/002`, `VER-SERVER-001` | NOT TESTED upstream | NOT TESTED upstream |
+| Mandatory requirement compliance | 80.9% | 80.9% |
+| Overall requirement compliance | 80.0% | 80.0% |
+
+The seven `NOT TESTED` binding/version requirements are registered in this TCK
+revision without executable upstream coverage. The SDK's independent C++ tests
+verify their behavior, along with the two covered version requirements, on all
+three bindings. The live shared-binding scenarios run with both storage backends
+and all nine ordered binding pairs. Their results do not change the upstream TCK
+percentage.
+
+Other registered requirements and conditional skips remain visible; this evidence
+does not claim full TCK compliance. CI uploads the backend reports and logs through
+[the TCK workflow](../../.github/workflows/tck.yml).
 
 ## Conformance SUT binary
 
@@ -77,3 +102,8 @@ JSON-RPC at `/rpc`, and gRPC on the configured port plus one. Store selection
 continues to use
 `A2A_TCK_STORE_BACKEND=inmemory|postgres`, `A2A_TCK_POSTGRES_DSN`, and
 `A2A_TCK_POSTGRES_SCHEMA`.
+
+## Shared-binding and protocol-version evidence
+
+- [Shared-binding SUT scenarios](binding-equivalence.md)
+- [Protocol versions and SDK client/server checks](protocol-versions.md)

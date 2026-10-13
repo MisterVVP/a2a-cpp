@@ -9,23 +9,19 @@
 
 #include <chrono>
 #include <csignal>
-#include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "a2a/core/agent_card/agent_card_builder.h"
-#include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/server/dispatcher.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/network_utils.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/transport_mux.h"
-#include "example_support.h"
+#include "sut/sut_agent.h"
 #include "sut/tck_sut.h"
 #include "sut/tck_sut_http_server.h"
 #include "sut/tck_sut_store.h"
@@ -66,29 +62,10 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   std::signal(SIGBREAK, SignalHandler);
 #endif
 
-  const char* extended_card_mode_value = std::getenv(kExtendedCardModeEnv);
-  const std::string_view extended_card_mode =
-      extended_card_mode_value == nullptr ? kExtendedCardModeConfigured : std::string_view(extended_card_mode_value);
-  if (extended_card_mode != kExtendedCardModeConfigured && extended_card_mode != kExtendedCardModeDeclaredOnly &&
-      extended_card_mode != kExtendedCardModeDisabled) {
-    std::cerr << "Unsupported A2A_TCK_EXTENDED_AGENT_CARD_MODE: " << extended_card_mode << '\n';
+  const auto agent_options = ReadSutAgentOptions();
+  if (!agent_options.ok()) {
+    std::cerr << agent_options.error().message() << '\n';
     return 1;
-  }
-  const bool declares_extended_card = extended_card_mode != kExtendedCardModeDisabled;
-  const bool configures_extended_card = extended_card_mode == kExtendedCardModeConfigured;
-
-  auto agent_card =
-      a2a::core::AgentCardBuilder::ConformancePreset(
-          {.rest_url = endpoints.rest_url, .json_rpc_url = endpoints.json_rpc_url, .grpc_url = endpoints.grpc_url},
-          "TCK SUT", "0.1.0", "Conformance-focused local SUT for A2A")
-          .WithPushNotifications(true)
-          .WithExtendedAgentCard(declares_extended_card)
-          .Build();
-
-  std::optional<lf::a2a::v1::AgentCard> extended_agent_card;
-  if (configures_extended_card) {
-    extended_agent_card = agent_card;
-    extended_agent_card->set_description("Extended conformance-focused local SUT card for A2A");
   }
 
   auto store_bundle = CreateStoreBundleFromEnvironment();
@@ -98,12 +75,8 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
     return 1;
   }
 
-  a2a::examples::ExampleExecutorOptions executor_options;
-  executor_options.task_store = store_bundle.value().task_store.get();
-  executor_options.push_store = store_bundle.value().push_store.get();
-  a2a::examples::ExampleExecutor executor(std::move(executor_options));
-  auto agent_card_provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_agent_card);
-  a2a::server::Dispatcher dispatcher(&executor, agent_card_provider);
+  SutAgent agent(std::move(store_bundle.value()), endpoints, agent_options.value());
+  auto& dispatcher = agent.dispatcher();
   a2a::server::GrpcServerTransportOptions grpc_options;
   grpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::GrpcServerTransport grpc(&dispatcher, std::move(grpc_options));
@@ -115,11 +88,11 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   rest_options.agent_card_cache_settings = a2a::server::RestServerTransportOptions::AgentCardCacheSettings{
       .cache_control = "public, max-age=300",
       .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)};
-  a2a::server::RestServerTransport rest(&dispatcher, agent_card, std::move(rest_options));
+  a2a::server::RestServerTransport rest(&dispatcher, agent.agent_card(), std::move(rest_options));
 
   a2a::server::JsonRpcServerTransportOptions jsonrpc_options;
   jsonrpc_options.rpc_path = std::string(kJsonRpcPath);
-  jsonrpc_options.require_version_header = false;
+  jsonrpc_options.require_version_header = true;
   jsonrpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
   a2a::server::JsonRpcServerTransport jsonrpc(&dispatcher, std::move(jsonrpc_options));
 
@@ -145,7 +118,7 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
 
   http_server.AcceptConnections(kKeepRunning);
   std::cerr << options.display_name << " shutdown: stopping subscriptions\n";
-  executor.ShutdownSubscriptions();
+  agent.ShutdownSubscriptions();
   std::cerr << options.display_name << " shutdown: shutting down active HTTP sockets\n";
   http_server.ShutdownActiveSockets();
   std::cerr << options.display_name << " shutdown: joining HTTP connection threads\n";

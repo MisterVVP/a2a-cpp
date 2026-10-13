@@ -22,6 +22,7 @@
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
 #include "json_rpc_transport_internal.h"
+#include "request_headers.h"
 
 namespace a2a::client {
 namespace {
@@ -177,7 +178,6 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::strin
   http_request.body = std::move(request_body);
   http_request.timeout = options.timeout.value_or(default_timeout_);
   http_request.headers = options.headers;
-  http_request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   http_request.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
   http_request.headers[std::string(core::http::kAcceptHeaderName)] =
@@ -196,6 +196,11 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::strin
     if (!applied.ok()) {
       return applied.error();
     }
+  }
+
+  const auto version = internal::ApplyProtocolVersion(options, http_request.headers);
+  if (!version.ok()) {
+    return version.error();
   }
 
   const auto response = requester_(http_request);

@@ -12,11 +12,13 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/task_states.h"
 #include "a2a/core/version.h"
+#include "a2a/server/version_header_validator.h"
 #include "stream_cancellation_watcher.h"
 
 namespace a2a::server {
@@ -46,6 +48,12 @@ template <std::size_t MessageSize>
 }
 
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
+  if (error.http_status() == core::http::kStatusUnauthorized) {
+    return ::grpc::StatusCode::UNAUTHENTICATED;
+  }
+  if (error.http_status() == core::http::kStatusForbidden) {
+    return ::grpc::StatusCode::PERMISSION_DENIED;
+  }
   const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
@@ -246,15 +254,11 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     request_context.client_headers[key] = value;
   }
   request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
-  const auto version_it = request_context.client_headers.find(std::string(GrpcServerTransport::kVersionMetadataKey));
-  if (version_it == request_context.client_headers.end()) {
-    return core::Error::UnsupportedVersion("Missing required A2A-Version header")
-        .WithTransport(std::string(GrpcServerTransport::kTransportName));
+  const auto version = VersionHeaderValidator{}.Validate(request_context.client_headers);
+  if (!version.ok()) {
+    return version.error().WithTransport(std::string(GrpcServerTransport::kTransportName));
   }
-  if (version_it->second != core::Version::HeaderValue()) {
-    return core::Error::UnsupportedVersion("Unsupported A2A-Version header value")
-        .WithTransport(std::string(GrpcServerTransport::kTransportName));
-  }
+  request_context.protocol_version = core::Version::kProtocolVersion;
 
   const auto extensions = required_extensions_validator_.Validate(request_context.client_headers);
   if (!extensions.ok()) {

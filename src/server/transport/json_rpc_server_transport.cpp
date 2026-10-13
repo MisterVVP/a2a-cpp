@@ -696,7 +696,10 @@ core::Result<HttpServerResponse> BuildListTasksSuccessResponse(const DispatchRes
 }
 
 int HttpStatusFromError(const core::Error& error) {
-  (void)error;
+  const int status = error.http_status().value_or(core::http::kStatusOk);
+  if (status == core::http::kStatusUnauthorized || status == core::http::kStatusForbidden) {
+    return status;
+  }
   return core::http::kStatusOk;
 }
 
@@ -1082,6 +1085,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
   context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
                                                           : std::optional<std::string>(request.remote_address);
   context.client_headers = request.headers;
+  context.protocol_version = core::Version::kProtocolVersion;
   context.auth_metadata = ExtractAuthMetadata(request.headers);
 
   auto dispatch = dispatcher_->Dispatch(parsed.value().dispatch, context);

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "a2a/client/auth.h"
+#include "a2a/core/version.h"
 
 namespace a2a::client {
 
@@ -21,6 +22,7 @@ struct CallOptions final {
   std::shared_ptr<const CredentialProvider> credential_provider;
   AuthContext auth_context;
   std::optional<MtlsConfig> mtls = std::nullopt;
+  std::string protocol_version = std::string(core::Version::kProtocolVersion);
 };
 
 }  // namespace a2a::client

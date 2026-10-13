@@ -16,6 +16,7 @@
 #include "a2a/core/extensions.h"
 #include "a2a/core/version.h"
 #include "a2a/v1/a2a.grpc.pb.h"
+#include "request_headers.h"
 
 namespace a2a::client {
 namespace {
@@ -126,7 +127,6 @@ core::Result<std::unique_ptr<::grpc::ClientContext>> GrpcTransport::BuildContext
   context->set_deadline(std::chrono::system_clock::now() + timeout);
 
   HeaderMap headers = options.headers;
-  headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
 
   if (!options.extensions.empty()) {
     headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
@@ -139,6 +139,11 @@ core::Result<std::unique_ptr<::grpc::ClientContext>> GrpcTransport::BuildContext
     if (!apply.ok()) {
       return apply.error();
     }
+  }
+
+  const auto version = internal::ApplyProtocolVersion(options, headers);
+  if (!version.ok()) {
+    return version.error();
   }
 
   for (const auto& [name, value] : headers) {

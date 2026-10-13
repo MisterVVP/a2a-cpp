@@ -14,6 +14,7 @@ struct RequestContext final {
   std::optional<std::string> remote_address;
   std::unordered_map<std::string, std::string> auth_metadata;
   std::unordered_map<std::string, std::string> client_headers;
+  std::string protocol_version = {};
 };
 
 [[nodiscard]] std::unordered_map<std::string, std::string> ExtractAuthMetadata(

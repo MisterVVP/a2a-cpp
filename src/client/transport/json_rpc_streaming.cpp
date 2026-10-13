@@ -24,6 +24,7 @@
 #endif
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
+#include "request_headers.h"
 
 namespace a2a::client {
 namespace {
@@ -388,7 +389,6 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
   http_request.body = envelope_json.value();
   http_request.timeout = options.timeout.value_or(default_timeout_);
   http_request.headers = options.headers;
-  http_request.headers[std::string(core::Version::kHeaderName)] = core::Version::HeaderValue();
   http_request.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
   http_request.headers[std::string(core::http::kAcceptHeaderName)] =
@@ -408,6 +408,11 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
     }
   }
   auto state = std::make_shared<StreamHandle::State>();
+  const auto version = internal::ApplyProtocolVersion(options, http_request.headers);
+  if (!version.ok()) {
+    return version.error();
+  }
+
   std::shared_ptr<a2a::http::Client> async_client;
   {
     std::lock_guard lock(*async_client_mutex_);
