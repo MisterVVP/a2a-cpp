@@ -1147,3 +1147,8 @@ add_executable(task_authorization_service_test unit/task_authorization_service_t
 target_include_directories(task_authorization_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(task_authorization_service_test PRIVATE a2a::server GTest::gtest_main)
 gtest_discover_tests(task_authorization_service_test PROPERTIES LABELS "security")
+
+add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
+target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(agent_card_signing_test PRIVATE a2a::client GTest::gtest_main)
+gtest_discover_tests(agent_card_signing_test PROPERTIES LABELS "security;card_signing")

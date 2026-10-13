@@ -48,12 +48,15 @@ class DiscoveryClient final {
 
   [[nodiscard]] static DiscoveryClient CreateDefault(std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
+  void SetAgentCardVerifier(std::function<core::Result<void>(std::string_view)> verifier);
+
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(std::string_view base_url);
 
  private:
   struct CacheEntry final {
     lf::a2a::v1::AgentCard card;
+    std::string json;
     std::chrono::steady_clock::time_point expires_at;
   };
 
@@ -61,6 +64,7 @@ class DiscoveryClient final {
   [[nodiscard]] static core::Result<std::string> BuildExtendedDiscoveryUrl(std::string_view base_url);
   [[nodiscard]] static core::Result<void> ValidateAgentCard(const lf::a2a::v1::AgentCard& card);
 
+  std::function<core::Result<void>(std::string_view)> verifier_;
   HttpFetcher fetcher_;
   std::chrono::seconds cache_ttl_;
   std::unordered_map<std::string, CacheEntry> cache_;

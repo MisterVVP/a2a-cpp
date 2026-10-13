@@ -29,6 +29,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 find_package(gRPC CONFIG REQUIRED)
+find_package(OpenSSL 3.0 REQUIRED)
+find_package(nlohmann_json 3.11 REQUIRED)
 
 if(A2A_ENABLE_LIBCURL)
   find_package(CURL QUIET)

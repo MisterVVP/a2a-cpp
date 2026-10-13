@@ -17,6 +17,8 @@ endif()
 
 set(A2A_CORE_SOURCES
   core/agent_card/agent_card_builder.cpp
+  core/agent_card/agent_card_signing.cpp
+  core/agent_card/json_canonicalization.cpp
   core/agent_card/agent_card_provider.cpp
   core/core.cpp
   core/error.cpp
@@ -44,6 +46,9 @@ target_link_libraries(a2a_core
   PUBLIC
     a2a::proto_generated
     protobuf::libprotobuf
+    OpenSSL::Crypto
+  PRIVATE
+    nlohmann_json::nlohmann_json
 )
 
 add_library(a2a_http STATIC

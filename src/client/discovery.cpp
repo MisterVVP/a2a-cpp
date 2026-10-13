@@ -117,6 +117,11 @@ DiscoveryClient DiscoveryClient::CreateDefault(std::chrono::seconds cache_ttl) {
   return DiscoveryClient(MakeDefaultHttpFetcher(), cache_ttl);
 }
 
+void DiscoveryClient::SetAgentCardVerifier(std::function<core::Result<void>(std::string_view)> verifier) {
+  verifier_ = std::move(verifier);
+  cache_.clear();
+}
+
 core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view base_url) {
   const auto discovery_url = BuildDiscoveryUrl(base_url);
   if (!discovery_url.ok()) {
@@ -126,6 +131,12 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
   const auto now = std::chrono::steady_clock::now();
   const auto cached = cache_.find(discovery_url.value());
   if (cached != cache_.end() && cached->second.expires_at >= now) {
+    if (verifier_) {
+      auto verified = verifier_(cached->second.json);
+      if (!verified.ok()) {
+        return verified.error();
+      }
+    }
     return cached->second.card;
   }
 
@@ -144,6 +155,12 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
         .WithHttpStatus(response.value().status_code);
   }
 
+  if (verifier_) {
+    auto verified = verifier_(response.value().body);
+    if (!verified.ok()) {
+      return verified.error();
+    }
+  }
   lf::a2a::v1::AgentCard card;
   const auto parse = core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
@@ -155,7 +172,8 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
     return validation.error();
   }
 
-  cache_[discovery_url.value()] = CacheEntry{.card = card, .expires_at = now + cache_ttl_};
+  cache_[discovery_url.value()] =
+      CacheEntry{.card = card, .json = response.value().body, .expires_at = now + cache_ttl_};
   return card;
 }
 
@@ -180,6 +198,12 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(std
         .WithHttpStatus(response.value().status_code);
   }
 
+  if (verifier_) {
+    auto verified = verifier_(response.value().body);
+    if (!verified.ok()) {
+      return verified.error();
+    }
+  }
   lf::a2a::v1::AgentCard card;
   const auto parse = core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
