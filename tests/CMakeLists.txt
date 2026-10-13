@@ -1142,3 +1142,8 @@ add_executable(security_transport_integration_test integration/security_transpor
 target_include_directories(security_transport_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
 target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
 gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
+
+add_executable(task_authorization_service_test unit/task_authorization_service_test.cpp)
+target_include_directories(task_authorization_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(task_authorization_service_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(task_authorization_service_test PROPERTIES LABELS "security")

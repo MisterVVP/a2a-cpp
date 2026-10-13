@@ -132,6 +132,7 @@ set(A2A_SERVER_SOURCES
   server/tasks/list_tasks.cpp
   server/tasks/task_history.cpp
   server/tasks/task_lifecycle_service.cpp
+  server/tasks/task_authorization_service.cpp
   server/tasks/task_ordering.cpp
   server/stores/store_factory.cpp
 )
