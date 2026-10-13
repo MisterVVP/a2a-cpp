@@ -53,6 +53,8 @@ install_debian_dependencies() {
     libgrpc++-dev
     libssl-dev
     nlohmann-json3-dev
+    nginx
+    openssl
     libcurl4-openssl-dev
     libpq-dev
     postgresql-client

@@ -9,7 +9,10 @@
 
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -49,9 +52,14 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   const std::string& host = parsed_endpoint.value().host;
   const int port = parsed_endpoint.value().port;
   const int grpc_port = port + kGrpcPortOffset;
-  const SutEndpoints endpoints{.rest_url = a2a::server::BuildHttpUrl(host, port, kRestApiBasePath),
-                               .json_rpc_url = a2a::server::BuildHttpUrl(host, port, kJsonRpcPath),
-                               .grpc_url = host + ":" + std::to_string(grpc_port)};
+  SutEndpoints endpoints{.rest_url = a2a::server::BuildHttpUrl(host, port, kRestApiBasePath),
+                         .json_rpc_url = a2a::server::BuildHttpUrl(host, port, kJsonRpcPath),
+                         .grpc_url = host + ":" + std::to_string(grpc_port)};
+
+  if (const char* public_base = std::getenv(kPublicHttpsBaseEnv)) {
+    endpoints.rest_url = std::string(public_base).append(kRestApiBasePath);
+    endpoints.json_rpc_url = std::string(public_base).append(kJsonRpcPath);
+  }
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
@@ -108,7 +116,21 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   }
 
   grpc::ServerBuilder grpc_builder;
-  grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port), grpc::InsecureServerCredentials());
+  std::shared_ptr<grpc::ServerCredentials> credentials = grpc::InsecureServerCredentials();
+  const char* certificate_path = std::getenv(kTlsCertificateFileEnv);
+  const char* key_path = std::getenv(kTlsKeyFileEnv);
+  if (certificate_path != nullptr || key_path != nullptr) {
+    if (certificate_path == nullptr || key_path == nullptr) {
+      return 1;
+    }
+    std::ifstream certificate_file(certificate_path);
+    std::ifstream key_file(key_path);
+    grpc::SslServerCredentialsOptions ssl;
+    ssl.pem_key_cert_pairs.push_back({std::string(std::istreambuf_iterator<char>(key_file), {}),
+                                      std::string(std::istreambuf_iterator<char>(certificate_file), {})});
+    credentials = grpc::SslServerCredentials(ssl);
+  }
+  grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port), credentials);
   grpc_builder.RegisterService(&grpc);
   std::unique_ptr<grpc::Server> grpc_server = grpc_builder.BuildAndStart();
   if (!grpc_server) {

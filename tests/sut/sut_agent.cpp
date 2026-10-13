@@ -4,19 +4,28 @@
 #include "sut/sut_agent.h"
 
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
 #include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/agent_card/agent_card_signing.h"
 #include "a2a/core/protocol_errors.h"
+#include "a2a/server/security_policy.h"
 #include "a2a/server/server_interceptor.h"
 #include "example_support.h"
+#include "sut/security_executor.h"
 
 namespace a2a::tests::sut {
 namespace {
 
+constexpr std::string_view kUnreadableSigningKey = "cannot read configured card signing key";
+constexpr std::string_view kInvalidSigningConfiguration = "card signing requires a key and key ID";
+constexpr std::string_view kInvalidCallerTokens = "security profile requires two distinct caller tokens";
 constexpr std::string_view kAgentName = "TCK SUT";
 constexpr std::string_view kAgentRelease = "0.1.0";
 constexpr std::string_view kAgentDescription = "Conformance-focused local SUT for A2A";
@@ -32,22 +41,57 @@ std::string_view EnvironmentValue(const char* name) {
   return value == nullptr ? std::string_view{} : std::string_view(value);
 }
 
+class SutSecurityPolicy final : public server::SecurityPolicy {
+ public:
+  SutSecurityPolicy(std::string alice_token, std::string bob_token)
+      : alice_token_(std::move(alice_token)), bob_token_(std::move(bob_token)) {}
+  [[nodiscard]] core::Result<std::string> Authenticate(const server::RequestContext& context) const override {
+    const auto token = context.auth_metadata.find(std::string(kBearerTokenKey));
+    if (token == context.auth_metadata.end()) {
+      return core::protocol_errors::Unauthenticated();
+    }
+    if (token->second == alice_token_) {
+      return std::string(kAliceIdentity);
+    }
+    if (token->second == bob_token_) {
+      return std::string(kBobIdentity);
+    }
+    return core::protocol_errors::Unauthenticated();
+  }
+  [[nodiscard]] bool AuthorizeOperation(const server::DispatchRequest& request,
+                                        const server::RequestContext& context) const override {
+    const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
+    return send == nullptr || !send->message().task_id().empty() || send->message().context_id() == context.principal;
+  }
+  [[nodiscard]] bool CanAccessTask(const lf::a2a::v1::Task& task,
+                                   const server::RequestContext& context) const override {
+    return task.context_id() == context.principal;
+  }
+
+ private:
+  std::string alice_token_;
+  std::string bob_token_;
+};
+
 class SutPolicy final : public server::ServerInterceptor {
  public:
-  explicit SutPolicy(SutAgentOptions options) : options_(std::move(options)) {}
+  explicit SutPolicy(const SutAgentOptions& options)
+      : streaming_(options.streaming),
+        push_notifications_(options.push_notifications),
+        auth_token_(options.auth_token) {}
 
   core::Result<void> BeforeDispatch(const server::DispatchRequest& request, server::RequestContext& context) override {
-    if (!options_.auth_token.empty()) {
+    if (!auth_token_.empty()) {
       const auto token = context.auth_metadata.find(std::string(kBearerTokenKey));
       if (token == context.auth_metadata.end()) {
         return core::protocol_errors::Unauthenticated();
       }
-      if (token->second != options_.auth_token) {
+      if (token->second != auth_token_) {
         return core::protocol_errors::PermissionDenied();
       }
     }
     const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
-    if (!options_.push_notifications && send != nullptr && send->has_configuration() &&
+    if (!push_notifications_ && send != nullptr && send->has_configuration() &&
         send->configuration().has_task_push_notification_config()) {
       return core::protocol_errors::PushNotificationNotSupported();
     }
@@ -55,7 +99,7 @@ class SutPolicy final : public server::ServerInterceptor {
     switch (request.operation) {
       case Operation::kSendStreamingMessage:
       case Operation::kSubscribeTask:
-        if (!options_.streaming) {
+        if (!streaming_) {
           return core::protocol_errors::UnsupportedOperation();
         }
         break;
@@ -63,7 +107,7 @@ class SutPolicy final : public server::ServerInterceptor {
       case Operation::kGetTaskPushNotificationConfig:
       case Operation::kListTaskPushNotificationConfigs:
       case Operation::kDeleteTaskPushNotificationConfig:
-        if (!options_.push_notifications) {
+        if (!push_notifications_) {
           return core::protocol_errors::PushNotificationNotSupported();
         }
         break;
@@ -74,7 +118,9 @@ class SutPolicy final : public server::ServerInterceptor {
   }
 
  private:
-  SutAgentOptions options_;
+  bool streaming_;
+  bool push_notifications_;
+  std::string auth_token_;
 };
 
 lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOptions& options) {
@@ -86,10 +132,17 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
           .WithExtendedAgentCard(options.extended_card_mode != kExtendedCardModeDisabled)
           .Build();
   card.mutable_capabilities()->set_streaming(options.streaming);
-  if (!options.auth_token.empty()) {
+  if (!options.auth_token.empty() || options.security) {
     auto& scheme = (*card.mutable_security_schemes())[std::string(kSecuritySchemeName)];
     scheme.mutable_http_auth_security_scheme()->set_scheme(std::string(kBearerScheme));
     (*card.add_security_requirements()->mutable_schemes())[std::string(kSecuritySchemeName)];
+  }
+  if (!options.signing_private_key.empty()) {
+    auto signed_card = core::SignAgentCard(card, options.signing_key_id, options.signing_private_key);
+    if (!signed_card.ok()) {
+      throw std::invalid_argument(std::string(signed_card.error().message()));
+    }
+    return signed_card.value();
   }
   return card;
 }
@@ -100,6 +153,14 @@ std::optional<lf::a2a::v1::AgentCard> ExtendedCard(const lf::a2a::v1::AgentCard&
   }
   auto extended = card;
   extended.set_description(std::string(kExtendedDescription));
+  if (!options.signing_private_key.empty()) {
+    extended.clear_signatures();
+    auto signed_card = core::SignAgentCard(extended, options.signing_key_id, options.signing_private_key);
+    if (!signed_card.ok()) {
+      throw std::invalid_argument(std::string(signed_card.error().message()));
+    }
+    return signed_card.value();
+  }
   return extended;
 }
 
@@ -108,12 +169,37 @@ std::optional<lf::a2a::v1::AgentCard> ExtendedCard(const lf::a2a::v1::AgentCard&
 core::Result<SutAgentOptions> ReadSutAgentOptions() {
   SutAgentOptions options;
   const auto profile = EnvironmentValue(kProfileEnv);
-  if (!profile.empty() && profile != kDefaultProfile && profile != kCapabilityNegativeProfile) {
+  if (!profile.empty() && profile != kDefaultProfile && profile != kCapabilityNegativeProfile &&
+      profile != kSecurityProfile) {
     return core::Error::Validation(std::string(kInvalidProfileMessage));
   }
   options.streaming = profile != kCapabilityNegativeProfile;
   options.push_notifications = options.streaming;
   options.auth_token = EnvironmentValue(kAuthTokenEnv);
+  options.security = profile == kSecurityProfile;
+  options.alice_token = EnvironmentValue(kAliceTokenEnv);
+  options.bob_token = EnvironmentValue(kBobTokenEnv);
+  options.credential_directory = EnvironmentValue(kCredentialDirectoryEnv);
+  options.task_credential = EnvironmentValue(kTaskCredentialEnv);
+  const auto signing_key_path = EnvironmentValue(kSigningKeyFileEnv);
+  options.signing_key_id = EnvironmentValue(kSigningKeyIdEnv);
+  if (signing_key_path.empty() && !options.signing_key_id.empty()) {
+    return core::Error::Validation(std::string(kInvalidSigningConfiguration));
+  }
+  if (!signing_key_path.empty()) {
+    std::ifstream key_file{std::string(signing_key_path)};
+    if (!key_file) {
+      return core::Error::Validation(std::string(kUnreadableSigningKey));
+    }
+    options.signing_private_key.assign(std::istreambuf_iterator<char>(key_file), {});
+    if (options.signing_private_key.empty() || options.signing_key_id.empty()) {
+      return core::Error::Validation(std::string(kInvalidSigningConfiguration));
+    }
+  }
+  if (options.security &&
+      (options.alice_token.empty() || options.bob_token.empty() || options.alice_token == options.bob_token)) {
+    return core::Error::Validation(std::string(kInvalidCallerTokens));
+  }
   const auto card_mode = EnvironmentValue(kExtendedCardModeEnv);
   if (!card_mode.empty()) {
     options.extended_card_mode = card_mode;
@@ -131,17 +217,19 @@ class SutAgent::Impl final {
   Impl(server::stores::StoreBundle stores, const SutEndpoints& endpoints, const SutAgentOptions& options)
       : stores_(std::move(stores)),
         card_(BuildCard(endpoints, options)),
-        executor_({.task_store = stores_.task_store.get(),
-                   .push_store = stores_.push_store.get(),
-                   .push_delivery = nullptr,
-                   .task_id_generator = {}}),
+        executor_(stores_.task_store.get(), stores_.push_store.get(), options.credential_directory,
+                  options.task_credential),
         dispatcher_(&executor_, std::make_shared<core::StaticAgentCardProvider>(ExtendedCard(card_, options))) {
     dispatcher_.AddInterceptor(std::make_shared<SutPolicy>(options));
+    if (options.security) {
+      dispatcher_.SetSecurityPolicy(std::make_shared<SutSecurityPolicy>(options.alice_token, options.bob_token),
+                                    stores_.task_store.get());
+    }
   }
 
   server::stores::StoreBundle stores_;
   lf::a2a::v1::AgentCard card_;
-  examples::ExampleExecutor executor_;
+  SecurityExecutor executor_;
   server::Dispatcher dispatcher_;
 };
 

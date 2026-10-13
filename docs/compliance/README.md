@@ -107,3 +107,9 @@ continues to use
 
 - [Shared-binding SUT scenarios](binding-equivalence.md)
 - [Protocol versions and SDK client/server checks](protocol-versions.md)
+
+## SDK security scenarios
+
+[Security scenarios](security-scenarios.md) cover caller permissions,
+additional task authorization, TLS and signed Agent Cards. Independent SDK
+validation and live SUT fixtures run separately from upstream TCK reports.

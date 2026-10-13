@@ -870,6 +870,7 @@ target_link_libraries(cpp_grpc_interop_server
 add_library(sut_runtime STATIC
   sut/sut_runtime.cpp
   sut/sut_agent.cpp
+  sut/security_executor.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
@@ -883,6 +884,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
     sut/sut_agent.cpp
+  sut/security_executor.cpp
     sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
@@ -1138,17 +1140,37 @@ target_include_directories(sdk_security_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(sdk_security_test PRIVATE a2a::server GTest::gtest_main)
 gtest_discover_tests(sdk_security_test PROPERTIES LABELS "security")
 
-add_executable(security_transport_integration_test integration/security_transport_integration_test.cpp)
-target_include_directories(security_transport_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
-target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
-gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
+add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
+target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(agent_card_signing_test PRIVATE a2a::client GTest::gtest_main)
+gtest_discover_tests(agent_card_signing_test PROPERTIES LABELS "security;card_signing")
+
+add_executable(security_scenarios_test integration/security_scenarios_test.cpp)
+target_include_directories(security_scenarios_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
+target_link_libraries(security_scenarios_test PRIVATE a2a::client a2a::server GTest::gtest_main)
+find_program(A2A_SECURITY_NGINX_EXECUTABLE nginx)
+find_program(A2A_SECURITY_OPENSSL_EXECUTABLE openssl)
+if(UNIX AND Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL AND A2A_SECURITY_NGINX_EXECUTABLE AND A2A_SECURITY_OPENSSL_EXECUTABLE)
+  foreach(security_backend IN ITEMS inmemory postgres)
+    if(security_backend STREQUAL "postgres" AND NOT A2A_ENABLE_POSTGRES_STORE)
+      continue()
+    endif()
+    add_test(NAME security_scenarios_${security_backend}
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_security_scenarios.py
+        --sut $<TARGET_FILE:tck_sut> --scenarios $<TARGET_FILE:security_scenarios_test>
+        --independent-sdk $<TARGET_FILE:security_transport_integration_test>
+        --backend ${security_backend})
+    set_tests_properties(security_scenarios_${security_backend}
+      PROPERTIES LABELS "security" TIMEOUT 240 SKIP_RETURN_CODE 77)
+  endforeach()
+endif()
 
 add_executable(task_authorization_service_test unit/task_authorization_service_test.cpp)
 target_include_directories(task_authorization_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(task_authorization_service_test PRIVATE a2a::server GTest::gtest_main)
 gtest_discover_tests(task_authorization_service_test PROPERTIES LABELS "security")
 
-add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
-target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(agent_card_signing_test PRIVATE a2a::client GTest::gtest_main)
-gtest_discover_tests(agent_card_signing_test PROPERTIES LABELS "security;card_signing")
+add_executable(security_transport_integration_test integration/security_transport_integration_test.cpp)
+target_include_directories(security_transport_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
+target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
+gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
