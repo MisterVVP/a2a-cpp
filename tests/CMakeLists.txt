@@ -1150,7 +1150,9 @@ add_executable(json_canonicalization_test unit/json_canonicalization_test.cpp)
 target_link_libraries(json_canonicalization_test PRIVATE a2a::core GTest::gtest_main)
 target_compile_definitions(json_canonicalization_test PRIVATE
   A2A_JCS_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jcs_vectors.json")
-gtest_discover_tests(json_canonicalization_test PROPERTIES LABELS "security;card_signing")
+# Discover through CTest to avoid Windows command-line escaping of multiple labels.
+gtest_discover_tests(json_canonicalization_test DISCOVERY_MODE PRE_TEST
+  PROPERTIES LABELS "security\;card_signing")
 
 if(A2A_ENABLE_SIGNING)
 add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
@@ -1159,7 +1161,8 @@ target_link_libraries(agent_card_signing_test PRIVATE a2a::client a2a::signing G
 target_compile_definitions(agent_card_signing_test PRIVATE
   A2A_SIGNING_INTEROP_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/sdk_signing_vector.json"
   A2A_JWS_HEADER_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jws_header_vectors.json")
-gtest_discover_tests(agent_card_signing_test PROPERTIES LABELS "security;card_signing")
+gtest_discover_tests(agent_card_signing_test DISCOVERY_MODE PRE_TEST
+  PROPERTIES LABELS "security\;card_signing")
 
 add_executable(security_scenarios_test integration/security_scenarios_test.cpp)
 target_include_directories(security_scenarios_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
