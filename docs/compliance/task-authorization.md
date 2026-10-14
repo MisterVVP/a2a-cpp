@@ -27,8 +27,21 @@ The service owns a subscription service and publishes state changes. Active send
 streams and subscriptions remain live during `auth_required`, then receive the
 working and completed events after authorization. Applications should route all
 mutations and subscriptions for these tasks through this service and keep the
-store alive until streams finish. Its mutex serializes its own mutations; it does
-not coordinate independent writers in other executors or processes.
+store alive until streams finish. Its mutex serializes its own mutations and
+registers send streams before
+out-of-band continuation can run. Use `SendStreamingMessage` to combine creation
+or pending-message receipt with stream registration; calling the separate
+creation and subscription methods can miss completion between those calls.
+
+Authorization mutations require the store's conditional-write APIs (supported
+by the in-memory and PostgreSQL backends). Each state transition clears the previous
+status explanation and commits the complete task in one revision-checked write.
+Only successful writes publish events. A write failure leaves the prior state
+available for retry; a revision conflict reports an error instead of overwriting
+another writer's cancellation or history update. This service does not retry
+credential validation automatically, so validators should be safe to call again.
+All task writers must respect revisions; unconditional writes can still replace
+a successfully committed state afterward.
 
 The SUT's security executor uses this public SDK service. A background fixture
 reader obtains credentials from a local directory configured with

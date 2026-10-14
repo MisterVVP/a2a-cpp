@@ -75,11 +75,11 @@ core::Result<std::unique_ptr<server::ServerStreamSession>> SecurityExecutor::Sen
   if (!RequestsAuthorization(request) && !IsAuthorizationTask(request.message().task_id())) {
     return executor_.SendStreamingMessage(request, context);
   }
-  auto response = SendMessage(request, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return authorization_.Subscribe(response.value().task().id());
+  lf::a2a::v1::Message explanation;
+  explanation.set_role(lf::a2a::v1::ROLE_AGENT);
+  explanation.set_message_id(std::string(kAuthorizationStatusId));
+  explanation.add_parts()->set_text(std::string(kAuthorizationExplanation));
+  return authorization_.SendStreamingMessage(request, context, explanation);
 }
 
 core::Result<lf::a2a::v1::Task> SecurityExecutor::GetTask(const lf::a2a::v1::GetTaskRequest& request,

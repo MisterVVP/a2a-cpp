@@ -6,6 +6,8 @@
 #include <utility>
 
 #include "a2a/core/protocol_errors.h"
+#include "a2a/core/task_states.h"
+#include "a2a/server/tasks/task_history.h"
 
 namespace a2a::server {
 namespace {
@@ -13,6 +15,7 @@ constexpr std::string_view kMissingTaskStore = "authorization task store is requ
 constexpr std::string_view kAuthorizationTaskMarker = "a2a.authorization";
 constexpr std::string_view kInvalidAuthorizationExplanation = "authorization requires an agent status message";
 constexpr std::string_view kAuthorizationNotPending = "task is not awaiting authorization";
+constexpr std::string_view kTaskChanged = "task changed while updating authorization; retry the operation";
 constexpr std::string_view kAuthorizationNotGranted = "task authorization has not been granted";
 }  // namespace
 
@@ -23,6 +26,12 @@ core::Result<lf::a2a::v1::Task> TaskAuthorizationService::RequestAuthorization(
     const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context,
     const lf::a2a::v1::Message& explanation) {
   std::lock_guard lock(mutex_);
+  return RequestAuthorizationLocked(request, context, explanation);
+}
+
+core::Result<lf::a2a::v1::Task> TaskAuthorizationService::RequestAuthorizationLocked(
+    const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context,
+    const lf::a2a::v1::Message& explanation) {
   if (store_ == nullptr) {
     return core::Error::Internal(std::string(kMissingTaskStore));
   }
@@ -34,17 +43,18 @@ core::Result<lf::a2a::v1::Task> TaskAuthorizationService::RequestAuthorization(
   if (!id.ok()) {
     return id.error();
   }
-  lf::a2a::v1::Task task;
+  TaskStore::TaskSnapshot snapshot;
+  auto& task = snapshot.task;
   if (!request.message().task_id().empty()) {
-    auto existing = store_->Get(id.value());
+    auto existing = Snapshot(id.value());
     if (!existing.ok()) {
       return existing.error();
     }
-    auto valid = TaskLifecycleService::ValidateTaskForSendRequest(request, existing.value());
+    auto valid = TaskLifecycleService::ValidateTaskForSendRequest(request, existing.value().task);
     if (!valid.ok()) {
       return valid.error();
     }
-    task = std::move(existing.value());
+    snapshot = std::move(existing.value());
   } else {
     task.set_id(id.value());
     task.set_context_id(request.message().context_id().empty() ? id.value() : request.message().context_id());
@@ -55,38 +65,53 @@ core::Result<lf::a2a::v1::Task> TaskAuthorizationService::RequestAuthorization(
   task.mutable_status()->mutable_message()->set_task_id(task.id());
   task.mutable_status()->mutable_message()->set_context_id(task.context_id());
   *task.add_history() = request.message();
-  auto stored = lifecycle_.CreateOrUpdateTask(task);
-  if (!stored.ok()) {
-    return stored.error();
-  }
-  subscriptions_.PublishTaskUpdated(stored.value());
-  return stored;
+  return Persist(std::move(snapshot));
 }
 
 core::Result<lf::a2a::v1::Task> TaskAuthorizationService::ReceiveMessage(
     const lf::a2a::v1::SendMessageRequest& request) {
   std::lock_guard lock(mutex_);
-  if (store_ == nullptr) {
-    return core::Error::Internal(std::string(kMissingTaskStore));
+  return ReceiveMessageLocked(request);
+}
+
+core::Result<lf::a2a::v1::Task> TaskAuthorizationService::ReceiveMessageLocked(
+    const lf::a2a::v1::SendMessageRequest& request) {
+  auto snapshot = Snapshot(request.message().task_id());
+  if (!snapshot.ok()) {
+    return snapshot.error();
   }
-  auto task = store_->Get(request.message().task_id());
-  if (!task.ok()) {
-    return task.error();
-  }
-  auto valid = TaskLifecycleService::ValidateTaskForSendRequest(request, task.value());
+  auto& task = snapshot.value().task;
+  auto valid = TaskLifecycleService::ValidateTaskForSendRequest(request, task);
   if (!valid.ok()) {
     return valid.error();
   }
-  if (task.value().status().state() != lf::a2a::v1::TASK_STATE_AUTH_REQUIRED) {
+  if (!IsAuthorizationTask(task) || task.status().state() != lf::a2a::v1::TASK_STATE_AUTH_REQUIRED) {
     return core::protocol_errors::UnsupportedOperation(std::string(kAuthorizationNotPending));
   }
-  auto appended =
-      lifecycle_.AppendHistory(task.value().id(), request.message(), TaskStore::HistoryAppendPolicy::kDedupByMessageId);
-  if (!appended.ok()) {
-    return appended.error();
+  if (FindHistoryDedupeReason(task.history(), request.message(), TaskStore::HistoryAppendPolicy::kDedupByMessageId)) {
+    return task;
   }
-  subscriptions_.PublishTaskUpdated(appended.value());
-  return appended;
+  *task.add_history() = request.message();
+  return Persist(std::move(snapshot.value()));
+}
+
+core::Result<TaskStore::TaskSnapshot> TaskAuthorizationService::Snapshot(std::string_view task_id) const {
+  if (store_ == nullptr) {
+    return core::Error::Internal(std::string(kMissingTaskStore));
+  }
+  return store_->GetSnapshot(task_id);
+}
+
+core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Persist(TaskStore::TaskSnapshot snapshot) {
+  auto stored = store_->CreateOrUpdateIfRevision(snapshot.task, snapshot.revision);
+  if (!stored.ok()) {
+    return stored.error();
+  }
+  if (stored.value() == TaskStore::ConditionalWriteResult::kConflict) {
+    return core::protocol_errors::UnsupportedOperation(std::string(kTaskChanged));
+  }
+  subscriptions_.PublishTaskUpdated(snapshot.task);
+  return std::move(snapshot.task);
 }
 
 core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Authorize(std::string_view task_id,
@@ -95,52 +120,51 @@ core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Authorize(std::string_
   if (store_ == nullptr) {
     return core::Error::Internal(std::string(kMissingTaskStore));
   }
-  auto task = store_->Get(task_id);
-  if (!task.ok()) {
-    return task.error();
+  auto snapshot = Snapshot(task_id);
+  if (!snapshot.ok()) {
+    return snapshot.error();
   }
-  if (task.value().status().state() != lf::a2a::v1::TASK_STATE_AUTH_REQUIRED) {
+  const auto& task = snapshot.value().task;
+  if (!IsAuthorizationTask(task) || task.status().state() != lf::a2a::v1::TASK_STATE_AUTH_REQUIRED) {
     return core::protocol_errors::UnsupportedOperation(std::string(kAuthorizationNotPending));
   }
-  if (!validator_ || !validator_(task.value(), credential)) {
+  if (!validator_ || !validator_(task, credential)) {
     return core::protocol_errors::PermissionDenied();
   }
-  return Transition(task_id, lf::a2a::v1::TASK_STATE_WORKING);
+  return Transition(std::move(snapshot.value()), lf::a2a::v1::TASK_STATE_WORKING);
 }
 
-core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Transition(std::string_view task_id,
+core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Transition(TaskStore::TaskSnapshot snapshot,
                                                                      lf::a2a::v1::TaskState state) {
-  auto task = lifecycle_.TransitionTaskStatus(task_id, state);
-  if (!task.ok()) {
-    return task.error();
+  if (core::IsTerminalTaskState(snapshot.task.status().state())) {
+    return state == lf::a2a::v1::TASK_STATE_CANCELED ? core::protocol_errors::TaskNotCancelable()
+                                                     : core::protocol_errors::UnsupportedOperation();
   }
-  task.value().mutable_status()->clear_message();
-  auto stored = lifecycle_.CreateOrUpdateTask(task.value());
-  if (!stored.ok()) {
-    return stored.error();
-  }
-  subscriptions_.PublishTaskUpdated(stored.value());
-  return stored;
+  snapshot.task.mutable_status()->set_state(state);
+  snapshot.task.mutable_status()->clear_message();
+  return Persist(std::move(snapshot));
 }
 
 core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Complete(std::string_view task_id) {
   std::lock_guard lock(mutex_);
-  if (store_ == nullptr) {
-    return core::Error::Internal(std::string(kMissingTaskStore));
+  auto snapshot = Snapshot(task_id);
+  if (!snapshot.ok()) {
+    return snapshot.error();
   }
-  auto task = store_->Get(task_id);
-  if (!task.ok()) {
-    return task.error();
-  }
-  if (task.value().status().state() != lf::a2a::v1::TASK_STATE_WORKING) {
+  if (!IsAuthorizationTask(snapshot.value().task) ||
+      snapshot.value().task.status().state() != lf::a2a::v1::TASK_STATE_WORKING) {
     return core::protocol_errors::UnsupportedOperation(std::string(kAuthorizationNotGranted));
   }
-  return Transition(task_id, lf::a2a::v1::TASK_STATE_COMPLETED);
+  return Transition(std::move(snapshot.value()), lf::a2a::v1::TASK_STATE_COMPLETED);
 }
 
 core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Cancel(std::string_view task_id) {
   std::lock_guard lock(mutex_);
-  return Transition(task_id, lf::a2a::v1::TASK_STATE_CANCELED);
+  auto snapshot = Snapshot(task_id);
+  if (!snapshot.ok()) {
+    return snapshot.error();
+  }
+  return Transition(std::move(snapshot.value()), lf::a2a::v1::TASK_STATE_CANCELED);
 }
 
 core::Result<std::unique_ptr<ServerStreamSession>> TaskAuthorizationService::Subscribe(std::string_view task_id) {
@@ -154,6 +178,19 @@ core::Result<std::unique_ptr<ServerStreamSession>> TaskAuthorizationService::Sub
   }
   return subscriptions_.Subscribe(task.value());
 }
+core::Result<std::unique_ptr<ServerStreamSession>> TaskAuthorizationService::SendStreamingMessage(
+    const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context,
+    const lf::a2a::v1::Message& explanation) {
+  std::lock_guard lock(mutex_);
+  auto task = request.message().task_id().empty() ? RequestAuthorizationLocked(request, context, explanation)
+                                                  : ReceiveMessageLocked(request);
+  if (!task.ok()) {
+    return task.error();
+  }
+  // Register before Authorize/Complete can acquire this service's mutex.
+  return subscriptions_.Subscribe(task.value());
+}
+
 bool TaskAuthorizationService::IsAuthorizationTask(const lf::a2a::v1::Task& task) {
   const auto marker = task.metadata().fields().find(std::string(kAuthorizationTaskMarker));
   return marker != task.metadata().fields().end() && marker->second.bool_value();

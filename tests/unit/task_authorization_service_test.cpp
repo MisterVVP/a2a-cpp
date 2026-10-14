@@ -5,11 +5,14 @@
 
 #include <gtest/gtest.h>
 
+#include <future>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "support/security/fixtures.h"
+#include "support/security/observed_task_store.h"
 
 namespace {
 using namespace a2a::server;
@@ -65,7 +68,7 @@ class TaskAuthorizationServiceTest : public testing::Test {
     ASSERT_TRUE(service_.Authorize(id_, kTaskCredential).ok());
     ASSERT_TRUE(service_.Complete(id_).ok());
   }
-  InMemoryTaskStore store_;
+  ObservedTaskStore store_;
   TaskAuthorizationService service_{
       &store_, [](const auto&, std::string_view credential) { return credential == kTaskCredential; }};
   lf::a2a::v1::Message explanation_;
@@ -127,4 +130,94 @@ TEST_F(TaskAuthorizationServiceTest, RejectsMissingExplanationsAndUnconfiguredSt
   EXPECT_FALSE(unconfigured.RequestAuthorization(Message(), RequestContext{}, explanation_).ok());
   EXPECT_FALSE(unconfigured.Subscribe(id_).ok());
 }
+
+constexpr auto kReadTimeout = std::chrono::milliseconds(1);
+constexpr std::size_t kOneWrite = 1;
+
+TEST_F(TaskAuthorizationServiceTest, FailedPersistenceLeavesPendingTaskAndStreamUnchanged) {
+  auto stream = service_.Subscribe(id_);
+  ASSERT_TRUE(stream.ok());
+  ASSERT_TRUE(stream.value()->Next().ok());
+  const auto writes = store_.conditional_writes;
+  store_.fail_next_write = true;
+  EXPECT_FALSE(service_.Authorize(id_, kTaskCredential).ok());
+  auto pending = store_.Get(id_);
+  ASSERT_TRUE(pending.ok());
+  EXPECT_EQ(pending.value().status().state(), lf::a2a::v1::TASK_STATE_AUTH_REQUIRED);
+  EXPECT_TRUE(pending.value().status().has_message());
+  auto event = stream.value()->NextFor(kReadTimeout);
+  ASSERT_TRUE(event.ok());
+  EXPECT_FALSE(event.value().has_value());
+  EXPECT_EQ(store_.conditional_writes, writes + kOneWrite);
+  EXPECT_TRUE(service_.Authorize(id_, kTaskCredential).ok());
+  auto working = store_.Get(id_);
+  ASSERT_TRUE(working.ok());
+  EXPECT_FALSE(working.value().status().has_message());
+  EXPECT_TRUE(service_.Complete(id_).ok());
+}
+
+TEST_F(TaskAuthorizationServiceTest, ConcurrentCancellationCannotBeOverwrittenByAuthorization) {
+  store_.before_write = [&] { EXPECT_TRUE(store_.backing.Cancel(id_).ok()); };
+  EXPECT_FALSE(service_.Authorize(id_, kTaskCredential).ok());
+  auto task = store_.Get(id_);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
+  EXPECT_FALSE(service_.Authorize(id_, kTaskCredential).ok());
+}
+
+TEST_F(TaskAuthorizationServiceTest, FailedCompletionCanBeRetriedWithoutLosingWorkingState) {
+  ASSERT_TRUE(service_.Authorize(id_, kTaskCredential).ok());
+  store_.fail_next_write = true;
+  EXPECT_FALSE(service_.Complete(id_).ok());
+  auto task = store_.Get(id_);
+  ASSERT_TRUE(task.ok());
+  EXPECT_EQ(task.value().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  EXPECT_TRUE(service_.Complete(id_).ok());
+}
+
+std::thread StartCredentials(TaskAuthorizationService& service, std::string id, std::promise<void>& ready) {
+  return std::thread([&service, &ready, id = std::move(id)] {
+    ready.set_value();
+    EXPECT_TRUE(service.Authorize(id, kTaskCredential).ok());
+    EXPECT_TRUE(service.Complete(id).ok());
+  });
+}
+
+void RegisterImmediateCredentials(ObservedTaskStore& store, TaskAuthorizationService& service, std::thread& credentials,
+                                  std::promise<void>& ready) {
+  auto ready_future = ready.get_future().share();
+  store.after_write = [&, ready_future, started = false](const lf::a2a::v1::Task& task) mutable {
+    if (started) {
+      return;
+    }
+    started = true;
+    credentials = StartCredentials(service, task.id(), ready);
+    ready_future.wait();
+  };
+}
+
+void CheckInitialAuthorization(ServerStreamSession& stream) {
+  auto initial = stream.Next();
+  ASSERT_TRUE(initial.ok());
+  const auto& event = initial.value();
+  ASSERT_TRUE(event.has_value());
+  const auto snapshot = event.value_or(lf::a2a::v1::StreamResponse{});
+  EXPECT_EQ(snapshot.task().status().state(), lf::a2a::v1::TASK_STATE_AUTH_REQUIRED);
+}
+
+TEST_F(TaskAuthorizationServiceTest, ImmediateCredentialArrivalKeepsSendStreamRegistered) {
+  std::promise<void> ready;
+  std::thread credentials;
+  RegisterImmediateCredentials(store_, service_, credentials, ready);
+  auto stream = service_.SendStreamingMessage(Message(kFollowupId), RequestContext{}, explanation_);
+  credentials.join();
+  ASSERT_TRUE(stream.ok());
+  CheckInitialAuthorization(*stream.value());
+  auto states = Drain(*stream.value());
+  ASSERT_TRUE(states.ok());
+  ASSERT_FALSE(states.value().empty());
+  EXPECT_EQ(states.value().front(), lf::a2a::v1::TASK_STATE_WORKING);
+  EXPECT_EQ(states.value().back(), lf::a2a::v1::TASK_STATE_COMPLETED);
+}
+
 }  // namespace

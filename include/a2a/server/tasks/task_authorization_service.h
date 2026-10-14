@@ -25,11 +25,21 @@ class TaskAuthorizationService final {
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Complete(std::string_view task_id);
   [[nodiscard]] core::Result<lf::a2a::v1::Task> Cancel(std::string_view task_id);
   [[nodiscard]] core::Result<std::unique_ptr<ServerStreamSession>> Subscribe(std::string_view task_id);
+  [[nodiscard]] core::Result<std::unique_ptr<ServerStreamSession>> SendStreamingMessage(
+      const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context,
+      const lf::a2a::v1::Message& explanation);
   [[nodiscard]] static bool IsAuthorizationTask(const lf::a2a::v1::Task& task);
   void Shutdown();
 
  private:
-  [[nodiscard]] core::Result<lf::a2a::v1::Task> Transition(std::string_view task_id, lf::a2a::v1::TaskState state);
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> RequestAuthorizationLocked(
+      const lf::a2a::v1::SendMessageRequest& request, const RequestContext& context,
+      const lf::a2a::v1::Message& explanation);
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> ReceiveMessageLocked(const lf::a2a::v1::SendMessageRequest& request);
+  [[nodiscard]] core::Result<TaskStore::TaskSnapshot> Snapshot(std::string_view task_id) const;
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> Persist(TaskStore::TaskSnapshot snapshot);
+  [[nodiscard]] core::Result<lf::a2a::v1::Task> Transition(TaskStore::TaskSnapshot snapshot,
+                                                           lf::a2a::v1::TaskState state);
   TaskStore* store_;
   TaskLifecycleService lifecycle_;
   CredentialValidator validator_;
