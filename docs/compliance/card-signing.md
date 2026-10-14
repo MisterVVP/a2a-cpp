@@ -57,7 +57,9 @@ discovery.SetAgentCardVerifier([&](std::string_view json) {
 
 Discovery verifies before protobuf parsing and caching. Cached JSON is verified
 again on each cache hit, so key revocation and expiration take effect without
-waiting for cache expiry. Extended discovery uses the same verifier. Discovery
+waiting for cache expiry. A failed cached verification discards the entry and
+fetches a replacement, which must pass the current verifier. A failed refresh
+never returns the invalid cached card. Extended discovery uses the same verifier. Discovery
 without an explicitly configured verifier retains its existing unsigned-card
 behavior. Applications decide whether signed cards are required and how trusted
 key IDs are provisioned; keys are never fetched from an untrusted card header.

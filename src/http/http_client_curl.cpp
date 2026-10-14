@@ -292,6 +292,9 @@ core::Result<void> ConfigureCurlMethodAndBody(CURL* handle, const Request& reque
 
 core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
                                  std::string* response_body, HeaderCapture* response_headers) {
+  // Restore per-request defaults, including the compiled CA bundle, on pooled
+  // handles. libcurl retains the connection, DNS, and TLS session caches.
+  curl_easy_reset(handle);
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();
@@ -317,9 +320,9 @@ core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const Cur
   const auto set_tls_minimum = curl_easy_setopt(handle, CURLOPT_SSLVERSION, minimum_tls);
   const auto set_verify_peer = curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, kVerifyCertificatePeer);
   const auto set_verify_host = curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, kVerifyCertificateHostname);
-  const char* ca_bundle =
-      request.tls.has_value() && !request.tls->ca_bundle_path.empty() ? request.tls->ca_bundle_path.c_str() : nullptr;
-  const auto set_ca = curl_easy_setopt(handle, CURLOPT_CAINFO, ca_bundle);
+  const auto set_ca = request.tls.has_value() && !request.tls->ca_bundle_path.empty()
+                          ? curl_easy_setopt(handle, CURLOPT_CAINFO, request.tls->ca_bundle_path.c_str())
+                          : CURLE_OK;
   const auto set_suppress_connect_headers = curl_easy_setopt(handle, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L);
   if (set_url != CURLE_OK || set_headers != CURLE_OK || set_timeout != CURLE_OK || set_connect_timeout != CURLE_OK ||
       set_no_signal != CURLE_OK || set_write != CURLE_OK || set_write_data != CURLE_OK || set_header != CURLE_OK ||

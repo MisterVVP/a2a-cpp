@@ -4,6 +4,8 @@ HTTP+JSON and JSON-RPC clients accept `CallOptions::tls`. The shared HTTP client
 accepts `Request::tls`, and discovery accepts TLS options through
 `MakeDefaultHttpFetcher`. These options configure a local CA bundle without
 changing system trust or disabling peer/hostname verification.
+An absent TLS configuration or an empty CA path uses libcurl's compiled default
+trust settings, including after a pooled handle has used a custom CA bundle.
 
 ```cpp
 a2a::client::CallOptions options;

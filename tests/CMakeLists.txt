@@ -145,6 +145,10 @@ target_link_libraries(http_client_test
 )
 
 gtest_discover_tests(http_client_test PROPERTIES LABELS "tsan")
+if(A2A_HAS_LIBCURL)
+  target_include_directories(http_client_test PRIVATE ${PROJECT_SOURCE_DIR}/src/http)
+  target_link_libraries(http_client_test PRIVATE CURL::libcurl)
+endif()
 
 add_executable(mcp_client_test
   unit/mcp_client_test.cpp

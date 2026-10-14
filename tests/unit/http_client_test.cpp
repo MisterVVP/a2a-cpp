@@ -25,6 +25,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -40,6 +41,8 @@
 #include "a2a/core/non_copyable.h"
 
 #if defined(A2A_HAS_LIBCURL)
+#include "http_client_internal.h"
+
 namespace a2a::http::testing {
 bool StreamDispatchExecutorHandlesPartialConstructionFailure();
 bool StreamDispatchExecutorUsesProcessStateLifetime();
@@ -825,11 +828,109 @@ class HangingLoopbackServer final : private a2a::core::NonCopyable {
   std::thread worker_;
 };
 
+#if defined(A2A_HAS_LIBCURL) && LIBCURL_VERSION_NUM >= 0x075700
+constexpr std::string_view kMissingCustomCaBundle = "/a2a-fixtures/missing-custom-ca.pem";
+constexpr long kEnabledCurlOption = 1L;
+
+int CaptureCurlTrace(CURL* handle, curl_infotype type, char* data, std::size_t size, void* context) {
+  (void)handle;
+  if (type == CURLINFO_TEXT) {
+    static_cast<std::string*>(context)->append(data, size);
+  }
+  return 0;
+}
+
+void ConfigureTraceRequest(CURL* handle, const a2a::http::Request& request, bool configure, std::string& body,
+                           a2a::http::detail::HeaderCapture& capture) {
+  a2a::http::detail::CurlHeaderList headers;
+  if (configure) {
+    EXPECT_TRUE(a2a::http::detail::ConfigureCurl(handle, request, headers, &body, &capture).ok());
+  } else {
+    EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str()), CURLE_OK);
+    EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, static_cast<long>(kLoopbackTimeoutMs)), CURLE_OK);
+  }
+}
+
+void EnableCurlTrace(CURL* handle, std::string& trace) {
+  // Exercise a bundle-only trust source, without the platform CA directory.
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_CAPATH, static_cast<const char*>(nullptr)), CURLE_OK);
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_CA_CACHE_TIMEOUT, 0L), CURLE_OK);
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_VERBOSE, kEnabledCurlOption), CURLE_OK);
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_DEBUGFUNCTION, CaptureCurlTrace), CURLE_OK);
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_DEBUGDATA, &trace), CURLE_OK);
+}
+
+void DisableCurlTrace(CURL* handle) {
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_VERBOSE, 0L), CURLE_OK);
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_DEBUGFUNCTION, static_cast<curl_debug_callback>(nullptr)), CURLE_OK);
+  EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_DEBUGDATA, static_cast<void*>(nullptr)), CURLE_OK);
+}
+
+std::string TraceTlsAttempt(CURL* handle, std::optional<a2a::http::TlsOptions> tls, bool configure) {
+  LoopbackHttpServer server(BuildHttpResponse(kRestTaskBody));
+  a2a::http::Request request;
+  request.method = a2a::core::http::kMethodGet;
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpsScheme);
+  request.timeout = std::chrono::milliseconds(kLoopbackTimeoutMs);
+  request.tls = std::move(tls);
+  std::string body;
+  std::vector<a2a::http::Header> response_headers;
+  a2a::http::detail::HeaderCapture capture{.response_headers = &response_headers};
+  ConfigureTraceRequest(handle, request, configure, body, capture);
+  std::string trace;
+  EnableCurlTrace(handle, trace);
+  EXPECT_NE(curl_easy_perform(handle), CURLE_OK);
+  DisableCurlTrace(handle);
+  return trace;
+}
+
+std::string DefaultCaBundle(CURL* handle) {
+  char* default_ca = nullptr;
+  EXPECT_EQ(curl_easy_getinfo(handle, CURLINFO_CAINFO, &default_ca), CURLE_OK);
+  return default_ca == nullptr ? std::string{} : std::string(default_ca);
+}
+
+void ConfigureCustomCa(CURL* handle) {
+  a2a::http::Request request;
+  request.method = a2a::core::http::kMethodGet;
+  request.url = kUnusedLoopbackUrl;
+  request.tls = a2a::http::TlsOptions{.ca_bundle_path = std::string(kMissingCustomCaBundle)};
+  std::string body;
+  std::vector<a2a::http::Header> response_headers;
+  a2a::http::detail::HeaderCapture capture{.response_headers = &response_headers};
+  a2a::http::detail::CurlHeaderList headers;
+  ASSERT_TRUE(a2a::http::detail::ConfigureCurl(handle, request, headers, &body, &capture).ok());
+}
+#endif
+
 #endif
 
 }  // namespace
 
 #if !defined(_WIN32) && defined(A2A_HAS_LIBCURL)
+#if LIBCURL_VERSION_NUM >= 0x075700
+TEST(SharedHttpClientTest, RestoresCompiledCaBundleForDefaultAndReusedHandles) {
+  const auto global_state = a2a::http::detail::EnsureCurlGlobalInit();
+  ASSERT_EQ(global_state->code, CURLE_OK);
+  std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
+  ASSERT_NE(handle, nullptr);
+  const auto bundle = DefaultCaBundle(handle.get());
+  if (bundle.empty()) {
+    GTEST_SKIP() << "libcurl has no compiled CA bundle";
+  }
+  const auto baseline = TraceTlsAttempt(handle.get(), std::nullopt, false);
+  if (baseline.find(bundle) == std::string::npos) {
+    GTEST_SKIP() << "TLS backend does not trace CA bundle loading";
+  }
+  const auto first_trace = TraceTlsAttempt(handle.get(), std::nullopt, true);
+  EXPECT_NE(first_trace.find(bundle), std::string::npos) << first_trace;
+  ConfigureCustomCa(handle.get());
+  EXPECT_NE(TraceTlsAttempt(handle.get(), std::nullopt, true).find(bundle), std::string::npos);
+  ConfigureCustomCa(handle.get());
+  EXPECT_NE(TraceTlsAttempt(handle.get(), a2a::http::TlsOptions{}, true).find(bundle), std::string::npos);
+}
+#endif
+
 TEST(SharedHttpClientTest, CapturesResponseHeaders) {
   LoopbackHttpServer server(BuildHttpResponse(kRestTaskBody));
   a2a::http::Client client;

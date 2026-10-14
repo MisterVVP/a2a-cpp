@@ -142,6 +142,27 @@ core::Result<void> DispatchSecurity::Authorize(const DispatchRequest& request, R
   return {};
 }
 
+core::Result<void> DispatchSecurity::AuthorizeResponse(const DispatchResponse& response,
+                                                       const RequestContext& context) const {
+  const auto* send = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
+  if (send == nullptr) {
+    return {};
+  }
+  if (send->has_task()) {
+    return policy_->CanAccessTask(send->task(), context) ? core::Result<void>{} : core::protocol_errors::TaskNotFound();
+  }
+  if (send->has_message() && !send->message().task_id().empty()) {
+    auto task = task_store_->Get(send->message().task_id());
+    if (!task.ok()) {
+      return task.error();
+    }
+    if (!policy_->CanAccessTask(task.value(), context)) {
+      return core::protocol_errors::TaskNotFound();
+    }
+  }
+  return {};
+}
+
 core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksRequest& request,
                                                            const RequestContext& context) const {
   if (request.page_size > kMaxListTasksPageSize) {

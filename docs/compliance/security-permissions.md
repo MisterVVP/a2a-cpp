@@ -27,6 +27,12 @@ HTTP 401 or gRPC `UNAUTHENTICATED`; an operation policy denial produces HTTP 403
 or gRPC `PERMISSION_DENIED`. Public Agent Card discovery remains public; extended
 card retrieval goes through authenticated dispatch.
 
+Unary send responses also pass task ownership checks before they are released.
+Returned tasks are checked directly; a returned message with a task ID is checked
+against the authoritative store. Taskless messages remain supported. Authentication,
+operation and task denials invoke `AfterDispatch` in reverse interceptor order,
+so audit and metrics hooks receive the final error even when dispatch is blocked.
+
 Task listing uses the configured authoritative store in bounded batches. It
 evaluates permissions before counting or pagination, so totals and page tokens
 reveal only permitted tasks. `SecurityPolicy::ScopeTaskList` may narrow the query

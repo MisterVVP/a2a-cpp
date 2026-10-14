@@ -36,6 +36,8 @@ class DispatchSecurity final {
  public:
   DispatchSecurity(std::shared_ptr<const SecurityPolicy> policy, TaskStore* task_store);
   [[nodiscard]] core::Result<void> Authorize(const DispatchRequest& request, RequestContext& context) const;
+  [[nodiscard]] core::Result<void> AuthorizeResponse(const DispatchResponse& response,
+                                                     const RequestContext& context) const;
   [[nodiscard]] core::Result<DispatchResponse> ListTasks(const ListTasksRequest& request,
                                                          const RequestContext& context) const;
   void ProtectStream(const DispatchRequest& request, const RequestContext& context, DispatchResponse& response) const;

@@ -11,9 +11,11 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
 
 #include "a2a/client/discovery.h"
 #include "a2a/core/agent_card/agent_card_builder.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protojson.h"
 #include "support/security/fixtures.h"
 
@@ -41,6 +43,21 @@ constexpr std::array<std::string_view, 4> kInvalidHeaderShapes{R"([])", R"(null)
 constexpr std::string_view kUnknownFieldSuffix = R"(,"unknownSignedExtension":true})";
 constexpr int kHttpOk = 200;
 constexpr std::size_t kTwoSignatures = 2;
+constexpr std::string_view kRotatedKeyId = "rotated-fixture-key";
+constexpr std::string_view kRotatedDescription = "Rotated SDK fixture";
+// RFC 8032 section 7.1, second public Ed25519 test vector.
+constexpr std::string_view kRotatedPrivateKey = R"(-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIEzNCJso/5banbbDRuwRTg9bijGfNaumJNqM9u1PuKb7
+-----END PRIVATE KEY-----
+)";
+constexpr std::string_view kRotatedPublicKey = R"(-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAPUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=
+-----END PUBLIC KEY-----
+)";
+constexpr std::size_t kInitialFetchCount = 1;
+constexpr std::size_t kRefreshedFetchCount = 2;
+constexpr std::size_t kRetriedFetchCount = 3;
+constexpr std::string_view kDiscoveryUnavailable = "fixture discovery unavailable";
 
 lf::a2a::v1::AgentCard Card() {
   return a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = std::string(kRestUrl),
@@ -134,14 +151,31 @@ TEST(AgentCardSigningTest, RejectsMalformedUnprotectedHeaderTypes) {
   }
 }
 
+a2a::core::Result<std::string> SignedCardJson(std::string_view id, std::string_view description,
+                                              std::string_view private_key = kPrivateKey) {
+  auto card = Card();
+  card.set_description(std::string(description));
+  auto signed_card = a2a::core::SignAgentCard(card, id, private_key);
+  if (!signed_card.ok()) {
+    return signed_card.error();
+  }
+  return a2a::core::MessageToJson(signed_card.value());
+}
+
+std::string DiscoveryCardJson(std::string_view id, std::string_view description,
+                              std::string_view private_key = kPrivateKey) {
+  auto json = SignedCardJson(id, description, private_key);
+  EXPECT_TRUE(json.ok());
+  return json.ok() ? std::move(json.value()) : std::string{};
+}
+
 TEST(AgentCardSigningTest, DiscoveryRevalidatesCachedCardsAgainstCurrentKeyPolicy) {
-  auto signed_card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
-  ASSERT_TRUE(signed_card.ok());
-  auto json = a2a::core::MessageToJson(signed_card.value());
-  ASSERT_TRUE(json.ok());
+  const auto json = DiscoveryCardJson(kKeyId, kDescription);
   bool revoked = false;
+  std::size_t fetches = 0;
   a2a::client::DiscoveryClient discovery(
-      [body = json.value()](std::string_view) -> a2a::core::Result<a2a::client::HttpResponse> {
+      [body = json, &fetches](std::string_view) -> a2a::core::Result<a2a::client::HttpResponse> {
+        ++fetches;
         return a2a::client::HttpResponse{.status_code = kHttpOk, .body = body};
       });
   discovery.SetAgentCardVerifier([&revoked](std::string_view body) {
@@ -152,7 +186,83 @@ TEST(AgentCardSigningTest, DiscoveryRevalidatesCachedCardsAgainstCurrentKeyPolic
   EXPECT_TRUE(discovery.Fetch(kBaseUrl).ok());
   revoked = true;
   EXPECT_FALSE(discovery.Fetch(kBaseUrl).ok());
+  EXPECT_EQ(fetches, kRefreshedFetchCount);
+  EXPECT_FALSE(discovery.Fetch(kBaseUrl).ok());
+  EXPECT_EQ(fetches, kRetriedFetchCount);
 }
+
+class DiscoveryRotation final : private a2a::core::NonCopyable {
+ public:
+  explicit DiscoveryRotation(bool expire)
+      : expire_(expire),
+        body_(DiscoveryCardJson(kKeyId, kDescription)),
+        rotated_(DiscoveryCardJson(kRotatedKeyId, kRotatedDescription, kRotatedPrivateKey)),
+        discovery_([this](std::string_view) { return Fetch(); }) {
+    discovery_.SetAgentCardVerifier([this](std::string_view json) {
+      return a2a::core::VerifyAgentCardJson(json, [this](std::string_view id) { return Resolve(id); }, kNow);
+    });
+  }
+  void CheckInitialCache() {
+    ASSERT_TRUE(discovery_.Fetch(kBaseUrl).ok());
+    ASSERT_TRUE(discovery_.Fetch(kBaseUrl).ok());
+    EXPECT_EQ(fetches_, kInitialFetchCount);
+  }
+  void CheckRefreshFailure() {
+    retired_ = true;
+    body_ = rotated_;
+    unavailable_ = true;
+    auto failed = discovery_.Fetch(kBaseUrl);
+    ASSERT_FALSE(failed.ok());
+    EXPECT_EQ(failed.error().code(), a2a::core::ErrorCode::kNetwork);
+  }
+  void CheckReplacementCache() {
+    unavailable_ = false;
+    auto replacement = discovery_.Fetch(kBaseUrl);
+    ASSERT_TRUE(replacement.ok());
+    EXPECT_EQ(replacement.value().description(), kRotatedDescription);
+    ASSERT_TRUE(discovery_.Fetch(kBaseUrl).ok());
+    EXPECT_EQ(fetches_, kRetriedFetchCount);
+  }
+
+ private:
+  a2a::core::Result<a2a::client::HttpResponse> Fetch() {
+    ++fetches_;
+    if (unavailable_) {
+      return a2a::core::Error::Network(std::string(kDiscoveryUnavailable));
+    }
+    return a2a::client::HttpResponse{.status_code = kHttpOk, .body = body_};
+  }
+  a2a::core::Result<a2a::core::AgentCardVerificationKey> Resolve(std::string_view id) const {
+    if (id != kKeyId && id != kRotatedKeyId) {
+      return a2a::core::Error::Validation(std::string(kUnknownKeyMessage));
+    }
+    auto key = Key();
+    key.public_key_pem = id == kRotatedKeyId ? kRotatedPublicKey : kPublicKey;
+    if (id == kKeyId && retired_) {
+      key.revoked = !expire_;
+      key.valid_until = expire_ ? kNow : key.valid_until;
+    }
+    return key;
+  }
+  bool expire_;
+  bool retired_ = false;
+  bool unavailable_ = false;
+  std::size_t fetches_ = 0;
+  std::string body_;
+  std::string rotated_;
+  a2a::client::DiscoveryClient discovery_;
+};
+
+void CheckDiscoveryRotation(bool expire) {
+  DiscoveryRotation rotation(expire);
+  rotation.CheckInitialCache();
+  rotation.CheckRefreshFailure();
+  rotation.CheckReplacementCache();
+}
+
+TEST(AgentCardSigningTest, DiscoveryRefreshesAfterCachedSigningKeyIsRevoked) { CheckDiscoveryRotation(false); }
+
+TEST(AgentCardSigningTest, DiscoveryRefreshesAfterCachedSigningKeyExpires) { CheckDiscoveryRotation(true); }
 
 constexpr std::string_view kVectorCard = "card";
 constexpr std::string_view kVectorKid = "kid";

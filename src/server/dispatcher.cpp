@@ -267,7 +267,10 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   if (security != nullptr) {
     auto authorized = security->Authorize(request, context);
     if (!authorized.ok()) {
-      return authorized.error();
+      core::Result<DispatchResponse> failure = authorized.error();
+      read_lock.unlock();
+      RunAfterInterceptors(request, context, failure);
+      return failure;
     }
   }
   for (const auto& interceptor : interceptors_) {
@@ -289,7 +292,12 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
                              ? security->ListTasks(*list, context)
                              : DispatchToExecutor(*executor_, request, context, agent_card_provider_);
   if (security != nullptr && dispatch_result.ok()) {
-    security->ProtectStream(request, context, dispatch_result.value());
+    auto authorized = security->AuthorizeResponse(dispatch_result.value(), context);
+    if (!authorized.ok()) {
+      dispatch_result = authorized.error();
+    } else {
+      security->ProtectStream(request, context, dispatch_result.value());
+    }
   }
   RunAfterInterceptors(request, context, dispatch_result);
   return dispatch_result;

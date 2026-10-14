@@ -5,7 +5,9 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "a2a/core/http_constants.h"
@@ -34,6 +36,62 @@ constexpr std::string_view kMessageId = "security-message";
 constexpr std::string_view kText = "security text";
 constexpr std::size_t kOwnedTaskCount = 2;
 constexpr auto kPollTimeout = std::chrono::milliseconds(1);
+constexpr int kFirstAuditId = 1;
+constexpr int kSecondAuditId = 2;
+constexpr std::size_t kAuditInterceptorCount = 2;
+constexpr std::string_view kMissingAuditError = "audit hook did not receive the dispatch error";
+
+struct AuditEvent {
+  int id;
+  std::optional<a2a::core::Error> error;
+};
+
+class AuditInterceptor final : public ServerInterceptor {
+ public:
+  AuditInterceptor(int id, std::vector<AuditEvent>& events, std::size_t& before_calls)
+      : id_(id), events_(events), before_calls_(before_calls) {}
+  a2a::core::Result<void> BeforeDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/) override {
+    ++before_calls_;
+    return {};
+  }
+  void AfterDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/,
+                     const a2a::core::Result<DispatchResponse>& result) override {
+    events_.push_back({id_, result.ok() ? std::nullopt : std::optional(result.error())});
+  }
+
+ private:
+  int id_;
+  std::vector<AuditEvent>& events_;
+  std::size_t& before_calls_;
+};
+
+class UnaryResponseExecutor final : public AgentExecutor {
+ public:
+  explicit UnaryResponseExecutor(lf::a2a::v1::SendMessageResponse response) : response_(std::move(response)) {}
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& /*request*/,
+                                                                  RequestContext& /*context*/) override {
+    return response_;
+  }
+  a2a::core::Result<std::unique_ptr<ServerStreamSession>> SendStreamingMessage(
+      const lf::a2a::v1::SendMessageRequest& /*request*/, RequestContext& /*context*/) override {
+    return a2a::core::protocol_errors::UnsupportedOperation();
+  }
+  a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& /*request*/,
+                                               RequestContext& /*context*/) override {
+    return a2a::core::protocol_errors::UnsupportedOperation();
+  }
+  a2a::core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& /*request*/,
+                                                 RequestContext& /*context*/) override {
+    return a2a::core::protocol_errors::UnsupportedOperation();
+  }
+  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& /*request*/,
+                                                  RequestContext& /*context*/) override {
+    return a2a::core::protocol_errors::UnsupportedOperation();
+  }
+
+ private:
+  lf::a2a::v1::SendMessageResponse response_;
+};
 
 class Policy final : public SecurityPolicy {
  public:
@@ -143,6 +201,36 @@ class SdkSecurityTest : public testing::Test {
     EXPECT_EQ(page.total_size, kOwnedTaskCount);
     EXPECT_EQ(page.tasks.front().context_id(), kAlice);
   }
+  void AddAuditInterceptors(Dispatcher& target) {
+    target.AddInterceptor(std::make_shared<AuditInterceptor>(kFirstAuditId, audit_events, before_calls));
+    target.AddInterceptor(std::make_shared<AuditInterceptor>(kSecondAuditId, audit_events, before_calls));
+  }
+  void CheckAuditedFailure(const a2a::core::Result<DispatchResponse>& result) {
+    ASSERT_FALSE(result.ok());
+    ASSERT_EQ(audit_events.size(), kAuditInterceptorCount);
+    EXPECT_EQ(audit_events.front().id, kSecondAuditId);
+    EXPECT_EQ(audit_events.back().id, kFirstAuditId);
+    for (const auto& event : audit_events) {
+      CheckAuditError(event, result.error());
+    }
+  }
+  static void CheckAuditError(const AuditEvent& event, const a2a::core::Error& error) {
+    if (!event.error.has_value()) {
+      ADD_FAILURE() << kMissingAuditError;
+      return;
+    }
+    EXPECT_EQ(event.error->protocol_code(), error.protocol_code());
+    EXPECT_EQ(event.error->http_status(), error.http_status());
+  }
+  a2a::core::Result<DispatchResponse> DispatchUnary(lf::a2a::v1::SendMessageResponse response) {
+    UnaryResponseExecutor unary(std::move(response));
+    Dispatcher target(&unary);
+    target.SetSecurityPolicy(policy, &store);
+    AddAuditInterceptors(target);
+    return target.Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = Message()}, context);
+  }
+  std::vector<AuditEvent> audit_events;
+  std::size_t before_calls = 0;
   InMemoryTaskStore store;
   a2a::examples::ExampleExecutor executor{
       {.task_store = &store, .push_store = nullptr, .push_delivery = nullptr, .task_id_generator = {}}};
@@ -181,6 +269,64 @@ TEST_F(SdkSecurityTest, UnauthorizedResourcesMatchMissingResourcesOnEveryApplica
   const auto missing = ResourceOperations(kMissingTaskId);
   for (std::size_t index = 0; index < denied.size(); ++index) {
     CheckHiddenResource(denied[index], missing[index]);
+  }
+}
+
+TEST_F(SdkSecurityTest, AuthenticationFailuresReachAfterInterceptorsInReverseOrder) {
+  AddAuditInterceptors(dispatcher);
+  context.auth_metadata.clear();
+  auto result = dispatcher.Dispatch(ResourceOperations(kTaskId).front(), context);
+  CheckAuditedFailure(result);
+  EXPECT_EQ(before_calls, 0U);
+}
+
+TEST_F(SdkSecurityTest, OperationDenialsReachAfterInterceptorsInReverseOrder) {
+  AddAuditInterceptors(dispatcher);
+  policy->operations_allowed = false;
+  auto result = dispatcher.Dispatch(ResourceOperations(kTaskId).front(), context);
+  CheckAuditedFailure(result);
+  EXPECT_EQ(before_calls, 0U);
+}
+
+TEST_F(SdkSecurityTest, ResourceDenialsReachAfterInterceptorsInReverseOrder) {
+  AddAuditInterceptors(dispatcher);
+  auto result = dispatcher.Dispatch(ResourceOperations(kOtherTaskId).front(), context);
+  CheckAuditedFailure(result);
+  EXPECT_EQ(before_calls, 0U);
+}
+
+TEST_F(SdkSecurityTest, UnaryCreationRejectsForeignTasksBeforeReturningOrAuditingSuccess) {
+  lf::a2a::v1::SendMessageResponse response;
+  *response.mutable_task() = Task(kOtherTaskId, kBob);
+  auto result = DispatchUnary(std::move(response));
+  CheckAuditedFailure(result);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+  EXPECT_EQ(before_calls, kAuditInterceptorCount);
+}
+
+TEST_F(SdkSecurityTest, UnaryCreationAcceptsAnOwnedTask) {
+  lf::a2a::v1::SendMessageResponse response;
+  *response.mutable_task() = Task(kMissingTaskId, kAlice);
+  EXPECT_TRUE(DispatchUnary(std::move(response)).ok());
+}
+
+TEST_F(SdkSecurityTest, UnaryMessageRejectsForeignAndMissingAssociatedTasks) {
+  for (const auto id : {kOtherTaskId, kMissingTaskId}) {
+    lf::a2a::v1::SendMessageResponse response;
+    response.mutable_message()->set_task_id(std::string(id));
+    response.mutable_message()->set_context_id(std::string(kAlice));
+    auto result = DispatchUnary(std::move(response));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+  }
+}
+
+TEST_F(SdkSecurityTest, UnaryMessageAcceptsOwnedAndTasklessMessages) {
+  for (const auto id : {kTaskId, std::string_view{}}) {
+    lf::a2a::v1::SendMessageResponse response;
+    response.mutable_message()->set_task_id(std::string(id));
+    EXPECT_TRUE(DispatchUnary(std::move(response)).ok());
   }
 }
 TEST_F(SdkSecurityTest, ListFiltersBeforeCountsProjectionsAndPagination) {

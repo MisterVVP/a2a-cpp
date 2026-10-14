@@ -131,13 +131,12 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
   const auto now = std::chrono::steady_clock::now();
   const auto cached = cache_.find(discovery_url.value());
   if (cached != cache_.end() && cached->second.expires_at >= now) {
-    if (verifier_) {
-      auto verified = verifier_(cached->second.json);
-      if (!verified.ok()) {
-        return verified.error();
-      }
+    if (!verifier_ || verifier_(cached->second.json).ok()) {
+      return cached->second.card;
     }
-    return cached->second.card;
+    // Key policy may have changed before the cache TTL. Re-fetch and verify a
+    // replacement; never fall back to a card that no longer verifies.
+    cache_.erase(cached);
   }
 
   const auto response = fetcher_(discovery_url.value());
