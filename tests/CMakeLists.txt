@@ -879,6 +879,9 @@ target_include_directories(sut_runtime
   PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
 )
 target_link_libraries(sut_runtime PUBLIC a2a::server a2a::core a2a::proto_generated)
+if(A2A_ENABLE_SIGNING)
+  target_link_libraries(sut_runtime PUBLIC a2a::signing)
+endif()
 
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
@@ -888,6 +891,9 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
+  if(A2A_ENABLE_SIGNING)
+    target_link_libraries(sut_runtime_diagnostics PUBLIC a2a::signing)
+  endif()
   target_include_directories(sut_runtime_diagnostics
     PUBLIC ${CMAKE_SOURCE_DIR}/tests
     PRIVATE ${CMAKE_SOURCE_DIR}/tests/support/example_support
@@ -1146,9 +1152,10 @@ target_compile_definitions(json_canonicalization_test PRIVATE
   A2A_JCS_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jcs_vectors.json")
 gtest_discover_tests(json_canonicalization_test PROPERTIES LABELS "security;card_signing")
 
+if(A2A_ENABLE_SIGNING)
 add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
 target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(agent_card_signing_test PRIVATE a2a::client GTest::gtest_main)
+target_link_libraries(agent_card_signing_test PRIVATE a2a::client a2a::signing GTest::gtest_main)
 target_compile_definitions(agent_card_signing_test PRIVATE
   A2A_SIGNING_INTEROP_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/sdk_signing_vector.json"
   A2A_JWS_HEADER_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jws_header_vectors.json")
@@ -1156,7 +1163,7 @@ gtest_discover_tests(agent_card_signing_test PROPERTIES LABELS "security;card_si
 
 add_executable(security_scenarios_test integration/security_scenarios_test.cpp)
 target_include_directories(security_scenarios_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
-target_link_libraries(security_scenarios_test PRIVATE a2a::client a2a::server GTest::gtest_main)
+target_link_libraries(security_scenarios_test PRIVATE a2a::client a2a::server a2a::signing GTest::gtest_main)
 find_program(A2A_SECURITY_NGINX_EXECUTABLE nginx)
 find_program(A2A_SECURITY_OPENSSL_EXECUTABLE openssl)
 if(UNIX AND Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL AND A2A_SECURITY_NGINX_EXECUTABLE AND A2A_SECURITY_OPENSSL_EXECUTABLE)
@@ -1172,6 +1179,8 @@ if(UNIX AND Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL AND A2A_SECURITY_NGINX
     set_tests_properties(security_scenarios_${security_backend}
       PROPERTIES LABELS "security" TIMEOUT 240 SKIP_RETURN_CODE 77)
   endforeach()
+endif()
+
 endif()
 
 add_executable(task_authorization_service_test unit/task_authorization_service_test.cpp)

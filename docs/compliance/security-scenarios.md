@@ -8,11 +8,18 @@ TLS clients and card signing/verification reside in public SDK APIs.
 
 ```bash
 ./scripts/install_build_deps.sh
-cmake -S . -B build -DA2A_ENABLE_POSTGRES_STORE=ON
+./scripts/install_security_test_deps.sh
+cmake -S . -B build -DA2A_ENABLE_POSTGRES_STORE=ON -DA2A_ENABLE_SIGNING=ON
 cmake --build build --parallel 2
 A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
   ctest --test-dir build -L security --output-on-failure
 ```
+
+Signing is disabled by default. Ordinary SDK builds do not require nginx or the
+OpenSSL CLI. The signing-enabled profile above includes signed-card and live
+security scenarios; canonicalization, permissions and task-authorization tests
+also run with signing disabled. For canonical contributor validation use
+`A2A_VERIFY_SIGNING=ON` with `./scripts/verify_changes.sh`.
 
 The independent SDK unit and adapter integration tests run through CTest on
 supported platforms. Live SUT scenarios require Unix, Python, libcurl, nginx and

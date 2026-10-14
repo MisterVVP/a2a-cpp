@@ -5,6 +5,14 @@ and a nonempty key ID. Cryptographic operations use OpenSSL. The protected JWS
 header contains `alg: EdDSA`, `kid` and `typ: JOSE`; the payload excludes the entire
 `signatures` field and uses RFC 8785 JSON Canonicalization Scheme (JCS).
 
+Signing is optional and disabled by default. Enable `A2A_ENABLE_SIGNING=ON`
+and link `a2a::signing`; this target requires OpenSSL 3.0 or newer. Core,
+client and server builds do not acquire this new direct dependency. With vcpkg,
+select the manifest's `signing` feature as well (`VCPKG_MANIFEST_FEATURES=signing`).
+Installed packages expose `A2A_CPP_HAS_AGENT_CARD_SIGNING` and the signing target
+when enabled. Canonicalization remains available in `a2a::core` through
+`a2a/core/json_canonicalization.h`.
+
 ```cpp
 auto signed_card = a2a::core::SignAgentCard(card, key_id, private_key_pem);
 auto verified = a2a::core::VerifyAgentCardJson(raw_json, key_resolver, now);
@@ -32,6 +40,12 @@ annotations are allowed, but overlapping protected/unprotected parameter names
 are rejected. This Ed25519 profile implements no critical JWS extensions and
 rejects `crit` and unencoded payloads. It does not support ES256 or RS256 yet.
 `jku` never triggers a network fetch; applications provision trusted key IDs.
+Verification preserves received JSON members apart from `signatures`; signing
+uses the SDK's protobuf field-presence serialization. The shared SDK fixture
+covers a payload both SDKs canonicalize identically. Cross-SDK treatment of
+empty/default fields remains an upstream clarification
+([A2A #2122](https://github.com/a2aproject/A2A/issues/2122)); this profile does not
+silently remove arbitrary extension fields or empty values during verification.
 
 Configure discovery verification before fetching cards:
 

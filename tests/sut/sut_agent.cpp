@@ -68,6 +68,7 @@ class SutSecurityPolicy final : public server::SecurityPolicy {
     return task.context_id() == context.principal;
   }
 
+
  private:
   std::string alice_token_;
   std::string bob_token_;
@@ -123,6 +124,23 @@ class SutPolicy final : public server::ServerInterceptor {
   std::string auth_token_;
 };
 
+lf::a2a::v1::AgentCard MaybeSignCard(lf::a2a::v1::AgentCard card, const SutAgentOptions& options) {
+  if (options.signing_private_key.empty()) {
+    return card;
+  }
+#ifdef A2A_HAS_AGENT_CARD_SIGNING
+  card.clear_signatures();
+  auto signed_card = core::SignAgentCard(card, options.signing_key_id, options.signing_private_key);
+  if (!signed_card.ok()) {
+    throw std::invalid_argument(std::string(signed_card.error().message()));
+  }
+  return std::move(signed_card.value());
+#else
+  constexpr std::string_view kSigningUnavailable = "Agent Card signing requires A2A_ENABLE_SIGNING=ON";
+  throw std::invalid_argument(std::string(kSigningUnavailable));
+#endif
+}
+
 lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOptions& options) {
   auto card =
       core::AgentCardBuilder::ConformancePreset(
@@ -137,14 +155,7 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
     scheme.mutable_http_auth_security_scheme()->set_scheme(std::string(kBearerScheme));
     (*card.add_security_requirements()->mutable_schemes())[std::string(kSecuritySchemeName)];
   }
-  if (!options.signing_private_key.empty()) {
-    auto signed_card = core::SignAgentCard(card, options.signing_key_id, options.signing_private_key);
-    if (!signed_card.ok()) {
-      throw std::invalid_argument(std::string(signed_card.error().message()));
-    }
-    return signed_card.value();
-  }
-  return card;
+  return MaybeSignCard(std::move(card), options);
 }
 
 std::optional<lf::a2a::v1::AgentCard> ExtendedCard(const lf::a2a::v1::AgentCard& card, const SutAgentOptions& options) {
@@ -153,15 +164,7 @@ std::optional<lf::a2a::v1::AgentCard> ExtendedCard(const lf::a2a::v1::AgentCard&
   }
   auto extended = card;
   extended.set_description(std::string(kExtendedDescription));
-  if (!options.signing_private_key.empty()) {
-    extended.clear_signatures();
-    auto signed_card = core::SignAgentCard(extended, options.signing_key_id, options.signing_private_key);
-    if (!signed_card.ok()) {
-      throw std::invalid_argument(std::string(signed_card.error().message()));
-    }
-    return signed_card.value();
-  }
-  return extended;
+  return MaybeSignCard(std::move(extended), options);
 }
 
 }  // namespace
