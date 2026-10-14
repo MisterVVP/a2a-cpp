@@ -147,39 +147,71 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
   if (request.page_size > kMaxListTasksPageSize) {
     return core::Error::Validation(std::string(kInvalidPageSize));
   }
-  auto query = request;
-  query.page_size = 0;
-  query.page_token.clear();
-  // Authorize full resources before applying projections or pagination.
-  query.history_length.reset();
-  query.include_artifacts = true;
-  auto listed = task_store_->List(query);
-  if (!listed.ok()) {
-    return listed.error();
-  }
-  auto& tasks = listed.value().tasks;
-  std::erase_if(tasks, [&](const auto& task) { return !policy_->CanAccessTask(task, context); });
   auto offset = ParseListPageToken(request.page_token);
   if (!offset.ok()) {
     return offset.error();
   }
-  auto valid_offset = ValidateListPageOffset(offset.value(), tasks.size());
+  const auto size = request.page_size == 0 ? kDefaultListTasksPageSize : request.page_size;
+  ListTasksResponse response;
+  response.page_size = size;
+  response.tasks.reserve(size);
+  auto query = request;
+  query.history_length.reset();
+  query.include_artifacts = true;
+  auto scoped = policy_->ScopeTaskList(query, context);
+  std::vector<std::string> selected_ids;
+  if (scoped.has_value()) {
+    auto selected = SelectTaskIds(std::move(*scoped), context, offset.value(), size, response.total_size);
+    if (!selected.ok()) {
+      return selected.error();
+    }
+    selected_ids = std::move(selected.value());
+  }
+  auto valid_offset = ValidateListPageOffset(offset.value(), response.total_size);
   if (!valid_offset.ok()) {
     return valid_offset.error();
   }
-  const auto size = request.page_size == 0 ? kDefaultListTasksPageSize : request.page_size;
-  const auto count = std::min(size, tasks.size() - offset.value());
-  ListTasksResponse response;
-  response.page_size = size;
-  response.total_size = tasks.size();
-  response.tasks.reserve(count);
-  for (std::size_t index = offset.value(); index < offset.value() + count; ++index) {
-    response.tasks.push_back(ProjectTaskForList(tasks[index], request.include_artifacts, request.history_length));
+  for (const auto& id : selected_ids) {
+    auto task = task_store_->Get(id);
+    if (!task.ok()) {
+      return task.error();
+    }
+    if (!policy_->CanAccessTask(task.value(), context)) {
+      return core::protocol_errors::TaskNotFound();
+    }
+    response.tasks.push_back(ProjectTaskForList(task.value(), request.include_artifacts, request.history_length));
   }
-  if (offset.value() + count < tasks.size()) {
-    response.next_page_token = std::to_string(offset.value() + count);
+  if (offset.value() + response.tasks.size() < response.total_size) {
+    response.next_page_token = std::to_string(offset.value() + response.tasks.size());
   }
   return DispatchResponse(std::move(response));
+}
+
+core::Result<std::vector<std::string>> DispatchSecurity::SelectTaskIds(ListTasksRequest query,
+                                                                       const RequestContext& context,
+                                                                       std::size_t offset, std::size_t page_size,
+                                                                       std::size_t& total_size) const {
+  std::vector<std::string> selected;
+  selected.reserve(page_size);
+  query.page_size = kMaxListTasksPageSize;
+  query.page_token.clear();
+  do {
+    auto listed = task_store_->List(query);
+    if (!listed.ok()) {
+      return listed.error();
+    }
+    for (const auto& task : listed.value().tasks) {
+      if (!policy_->CanAccessTask(task, context)) {
+        continue;
+      }
+      if (total_size >= offset && selected.size() < page_size) {
+        selected.push_back(task.id());
+      }
+      ++total_size;
+    }
+    query.page_token = std::move(listed.value().next_page_token);
+  } while (!query.page_token.empty());
+  return selected;
 }
 
 void DispatchSecurity::ProtectStream(const DispatchRequest& request, const RequestContext& context,

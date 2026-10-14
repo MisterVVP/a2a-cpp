@@ -27,12 +27,24 @@ HTTP 401 or gRPC `UNAUTHENTICATED`; an operation policy denial produces HTTP 403
 or gRPC `PERMISSION_DENIED`. Public Agent Card discovery remains public; extended
 card retrieval goes through authenticated dispatch.
 
-Task listing uses the configured authoritative store. It evaluates permissions on
-full tasks before projection, counting or pagination, so list totals and page
-tokens reveal only the caller's permitted tasks. This policy path currently scans
-all tasks matching the requested filters, using O(n) time and memory. Large stores
-should eventually support pushing application permission predicates into their
-queries. The unrestricted path retains the existing store pagination behavior.
+Task listing uses the configured authoritative store in bounded batches. It
+evaluates permissions before counting or pagination, so totals and page tokens
+reveal only permitted tasks. `SecurityPolicy::ScopeTaskList` may narrow the query
+filters and projections before storage reads, or return `nullopt` for an empty
+scope. A policy must retain every field its `CanAccessTask` check needs. The
+default preserves full tasks for arbitrary application policies. The SUT's
+context-based policy pushes the caller's context filter into both stores and
+uses summaries; histories and artifacts are loaded only for selected results.
+
+Exact visible counts still require inspecting every matching task. Stores may
+repeat count/filter work for each batch, so backend costs can exceed a single
+linear scan; caller filters reduce the matching set but do not eliminate this
+limitation. The dispatcher retains at most one bounded batch and one page of task IDs;
+stored protobuf blobs may still need decoding before projection in PostgreSQL.
+This change preserves existing numeric offset tokens and ordering. Cursor-based
+pagination, last-update ordering and stronger snapshot consistency remain a
+separate [ListTasks conformance follow-up (#309)](https://github.com/MisterVVP/a2a-cpp/issues/309);
+no full conformance claim is made here.
 
 Streams retain the authenticated identity and check current task permissions
 before reading and before releasing every event. Timed reads, live-stream

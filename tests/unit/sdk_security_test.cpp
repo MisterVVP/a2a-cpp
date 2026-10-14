@@ -14,6 +14,7 @@
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "example_support.h"
 #include "support/security/fixtures.h"
+#include "support/security/observed_task_store.h"
 
 namespace {
 using namespace a2a::server;
@@ -50,6 +51,21 @@ class Policy final : public SecurityPolicy {
   bool CanAccessTask(const lf::a2a::v1::Task& task, const RequestContext& context) const override {
     return resources_allowed && task.context_id() == context.principal;
   }
+  std::optional<ListTasksRequest> ScopeTaskList(const ListTasksRequest& query,
+                                                const RequestContext& context) const override {
+    if (!scope_lists) {
+      return query;
+    }
+    if (!query.context_id.empty() && query.context_id != context.principal) {
+      return std::nullopt;
+    }
+    auto scoped = query;
+    scoped.context_id = context.principal;
+    scoped.history_length = 0;
+    scoped.include_artifacts = false;
+    return scoped;
+  }
+  bool scope_lists = false;
   mutable std::atomic_size_t authentications = 0;
   bool operations_allowed = true;
   bool resources_allowed = true;
@@ -215,6 +231,72 @@ TEST_F(SdkSecurityTest, OperationDenialsAndRevokedStreamsAreEnforced) {
   auto denied = dispatcher.Dispatch({.operation = DispatcherOperation::kGetTask, .payload = get}, context);
   ASSERT_FALSE(denied.ok());
   EXPECT_EQ(denied.error().http_status(), a2a::core::http::kStatusForbidden);
+}
+
+constexpr std::size_t kLargeTaskCount = (kMaxListTasksPageSize * 2U) + 1U;
+constexpr std::size_t kExpectedLargePages = 3;
+constexpr std::string_view kListTaskPrefix = "bounded-list-task-";
+
+void PopulateListTasks(ObservedTaskStore& store) {
+  for (std::size_t index = 0; index < kLargeTaskCount; ++index) {
+    std::string id(kListTaskPrefix);
+    id.append(std::to_string(index));
+    auto task = Task(id, kAlice);
+    *task.add_history() = Message().message();
+    task.add_artifacts()->set_artifact_id(id);
+    ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  }
+  ASSERT_TRUE(store.CreateOrUpdate(Task(kOtherTaskId, kBob)).ok());
+}
+
+void CheckSelectedPage(const ListTasksResponse& page, std::size_t page_size) {
+  EXPECT_EQ(page.total_size, kLargeTaskCount);
+  ASSERT_EQ(page.tasks.size(), page_size);
+  EXPECT_FALSE(page.tasks.front().history().empty());
+  EXPECT_FALSE(page.tasks.front().artifacts().empty());
+}
+
+void CheckScopedQuery(const ListTasksRequest& query) {
+  EXPECT_EQ(query.page_size, kMaxListTasksPageSize);
+  EXPECT_EQ(query.context_id, kAlice);
+  EXPECT_EQ(query.history_length, 0);
+  EXPECT_FALSE(query.include_artifacts);
+}
+
+void CheckScopedStoreQueries(const std::vector<ListTasksRequest>& queries) {
+  ASSERT_EQ(queries.size(), kExpectedLargePages);
+  for (const auto& query : queries) {
+    CheckScopedQuery(query);
+  }
+}
+
+void CheckEmptyForeignScope(DispatchSecurity& security, const RequestContext& context, ListTasksRequest request) {
+  request.context_id = kBob;
+  EXPECT_FALSE(security.ListTasks(request, context).ok());
+  request.page_token.clear();
+  auto foreign = security.ListTasks(request, context);
+  ASSERT_TRUE(foreign.ok());
+  EXPECT_EQ(std::get<ListTasksResponse>(foreign.value().payload()).total_size, 0);
+}
+
+TEST(SdkScopedListingTest, StoreQueriesAreBoundedAndHeavyProjectionsAreLoadedForSelectedPage) {
+  ObservedTaskStore store;
+  PopulateListTasks(store);
+  auto policy = std::make_shared<Policy>();
+  policy->scope_lists = true;
+  DispatchSecurity security(policy, &store);
+  RequestContext context;
+  context.principal = kAlice;
+  ListTasksRequest request;
+  request.page_size = 1;
+  request.page_token = std::to_string(kMaxListTasksPageSize);
+  request.include_artifacts = true;
+  auto result = security.ListTasks(request, context);
+  ASSERT_TRUE(result.ok());
+  const auto& page = std::get<ListTasksResponse>(result.value().payload());
+  CheckSelectedPage(page, request.page_size);
+  CheckScopedStoreQueries(store.list_queries);
+  CheckEmptyForeignScope(security, context, request);
 }
 
 }  // namespace

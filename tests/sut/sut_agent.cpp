@@ -68,6 +68,17 @@ class SutSecurityPolicy final : public server::SecurityPolicy {
     return task.context_id() == context.principal;
   }
 
+  [[nodiscard]] std::optional<server::ListTasksRequest> ScopeTaskList(
+      const server::ListTasksRequest& query, const server::RequestContext& context) const override {
+    if (!query.context_id.empty() && query.context_id != context.principal) {
+      return std::nullopt;
+    }
+    auto scoped = query;
+    scoped.context_id = context.principal;
+    scoped.history_length = 0;
+    scoped.include_artifacts = false;
+    return scoped;
+  }
 
  private:
   std::string alice_token_;
