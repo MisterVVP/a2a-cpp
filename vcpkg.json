@@ -7,8 +7,7 @@
     "protobuf",
     "grpc",
     "curl",
-    "openssl",
-    "nlohmann-json"
+    "openssl"
   ],
   "builtin-baseline": "3426db05b996481ca31e95fff3734cf23e0f51bc",
   "homepage": "https://mistervvp.github.io/a2a-cpp/"

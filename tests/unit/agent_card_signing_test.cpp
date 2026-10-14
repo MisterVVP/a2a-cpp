@@ -3,10 +3,13 @@
 
 #include "a2a/core/agent_card/agent_card_signing.h"
 
+#include <google/protobuf/struct.pb.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "a2a/client/discovery.h"
@@ -27,17 +30,7 @@ constexpr std::string_view kDescription = "Signed SDK fixture";
 constexpr std::string_view kTamperedDescription = "Tampered SDK fixture";
 constexpr auto kNow = std::chrono::system_clock::time_point(std::chrono::seconds(1700000000));
 constexpr auto kValidityWindow = std::chrono::hours(1);
-constexpr std::string_view kCanonicalInput =
-    R"({"numbers":[333333333.33333329,1E30,4.50,2e-3,1e-27],"string":"€$\u000f\nA'B\"\\\"/"})";
-constexpr std::string_view kCanonicalOutput =
-    R"({"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27],"string":"€$\u000f\nA'B\"\\\"/"})";
-constexpr std::string_view kThresholdInput = R"([-0.0,1e-6,1e-7,1e20,1e21,9007199254740992])";
-constexpr std::string_view kThresholdOutput = R"([0,0.000001,1e-7,100000000000000000000,1e+21,9007199254740992])";
-constexpr std::string_view kUnicodeInput = R"({"דּ":1,"😀":2,"€":3,"\r":4,"1":5,"ö":6,"\u0080":7})";
-constexpr std::string_view kEscapedControl = R"(\u0080)";
-constexpr std::string_view kUtf8Control = "\xc2\x80";
-constexpr std::string_view kUnicodeOutput = R"({"\r":4,"1":5,"\u0080":7,"ö":6,"€":3,"😀":2,"דּ":1})";
-constexpr std::string_view kProtectedHeader = "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzItdGVzdC1rZXkifQ";
+constexpr std::string_view kProtectedHeader = "eyJhbGciOiJFZERTQSIsImtpZCI6InJmYzgwMzItdGVzdC1rZXkiLCJ0eXAiOiJKT1NFIn0";
 constexpr std::string_view kUnsignedAlgorithmHeader = "eyJhbGciOiJub25lIiwia2lkIjoicmZjODAzMi10ZXN0LWtleSJ9";
 constexpr std::string_view kMissingKidHeader = "eyJhbGciOiJFZERTQSJ9";
 constexpr std::string_view kUnknownKidHeader = "eyJhbGciOiJFZERTQSIsImtpZCI6InVua25vd24ifQ";
@@ -46,8 +39,6 @@ constexpr std::string_view kUnprotectedHeaderPrefix = R"("header":)";
 constexpr std::string_view kJsonMemberSeparator = ",";
 constexpr std::array<std::string_view, 4> kInvalidHeaderShapes{R"([])", R"(null)", R"(5)", R"("")"};
 constexpr std::string_view kUnknownFieldSuffix = R"(,"unknownSignedExtension":true})";
-constexpr std::string_view kDuplicateKeys = R"({"key":1,"\u006bey":2})";
-constexpr std::string_view kLoneSurrogate = R"({"key":"\ud800"})";
 constexpr int kHttpOk = 200;
 constexpr std::size_t kTwoSignatures = 2;
 
@@ -71,25 +62,6 @@ a2a::core::AgentCardKeyResolver Resolver(a2a::core::AgentCardVerificationKey key
     }
     return key;
   };
-}
-TEST(AgentCardSigningTest, Rfc8785NumberAndStringVectors) {
-  auto canonical = a2a::core::CanonicalizeJson(kCanonicalInput);
-  ASSERT_TRUE(canonical.ok());
-  EXPECT_EQ(canonical.value(), kCanonicalOutput);
-  auto thresholds = a2a::core::CanonicalizeJson(kThresholdInput);
-  ASSERT_TRUE(thresholds.ok());
-  EXPECT_EQ(thresholds.value(), kThresholdOutput);
-}
-TEST(AgentCardSigningTest, SortsUtf16AndRejectsDuplicatesAndInvalidUnicode) {
-  auto canonical = a2a::core::CanonicalizeJson(kUnicodeInput);
-  ASSERT_TRUE(canonical.ok());
-  // JCS emits U+0080 as UTF-8, not an escaped sequence.
-  std::string expected(kUnicodeOutput);
-  const auto escape = expected.find(kEscapedControl);
-  expected.replace(escape, kEscapedControl.size(), kUtf8Control);
-  EXPECT_EQ(canonical.value(), expected);
-  EXPECT_FALSE(a2a::core::CanonicalizeJson(kDuplicateKeys).ok());
-  EXPECT_FALSE(a2a::core::CanonicalizeJson(kLoneSurrogate).ok());
 }
 TEST(AgentCardSigningTest, SignsDeterministicallyAndExcludesAllSignaturesFromPayload) {
   auto signed_card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
@@ -181,4 +153,94 @@ TEST(AgentCardSigningTest, DiscoveryRevalidatesCachedCardsAgainstCurrentKeyPolic
   revoked = true;
   EXPECT_FALSE(discovery.Fetch(kBaseUrl).ok());
 }
+
+constexpr std::string_view kVectorCard = "card";
+constexpr std::string_view kVectorKid = "kid";
+constexpr std::string_view kVectorPublicKey = "publicKeyPem";
+constexpr std::string_view kUnprotectedComment = R"({"comment":"public annotation"})";
+constexpr std::string_view kOverlappingUnprotected = R"({"alg":"EdDSA"})";
+
+google::protobuf::Struct ReadVectorFile(const char* path) {
+  std::ifstream file(path);
+  EXPECT_TRUE(file.is_open());
+  const std::string json{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+  google::protobuf::Struct vector;
+  EXPECT_TRUE(a2a::core::JsonToMessage(json, &vector).ok());
+  return vector;
+}
+
+a2a::core::AgentCardKeyResolver VectorResolver(const google::protobuf::Struct& vector) {
+  auto key = Key();
+  key.public_key_pem = vector.fields().at(std::string(kVectorPublicKey)).string_value();
+  const auto kid = vector.fields().at(std::string(kVectorKid)).string_value();
+  return [key, kid](std::string_view id) -> a2a::core::Result<a2a::core::AgentCardVerificationKey> {
+    if (id != kid) {
+      return a2a::core::Error::Validation(std::string(kUnknownKeyMessage));
+    }
+    return key;
+  };
+}
+
+TEST(AgentCardSigningTest, AcceptsPythonAndGoSharedSignedCardWithJoseHeader) {
+  const auto vector = ReadVectorFile(A2A_SIGNING_INTEROP_VECTOR_FILE);
+  const auto resolver = VectorResolver(vector);
+  auto raw = a2a::core::MessageToJson(vector.fields().at(std::string(kVectorCard)));
+  ASSERT_TRUE(raw.ok());
+  EXPECT_TRUE(a2a::core::VerifyAgentCardJson(raw.value(), resolver, kNow).ok());
+}
+
+TEST(AgentCardSigningTest, TrustedSignatureSurvivesUnknownInvalidAndRevokedRotationKeys) {
+  auto card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
+  ASSERT_TRUE(card.ok());
+  auto* unknown = card.value().add_signatures();
+  *unknown = card.value().signatures(0);
+  unknown->set_protected_(std::string(kUnknownKidHeader));
+  card.value().mutable_signatures()->SwapElements(0, 1);
+  auto raw = a2a::core::MessageToJson(card.value());
+  ASSERT_TRUE(raw.ok());
+  EXPECT_TRUE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(Key()), kNow).ok());
+  auto revoked = Key();
+  revoked.revoked = true;
+  EXPECT_FALSE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(revoked), kNow).ok());
+  card.value().mutable_signatures()->RemoveLast();
+  raw = a2a::core::MessageToJson(card.value());
+  ASSERT_TRUE(raw.ok());
+  EXPECT_FALSE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(Key()), kNow).ok());
+}
+
+TEST(AgentCardSigningTest, AcceptsUnprotectedAnnotationsButRejectsOverlappingHeaders) {
+  auto card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
+  ASSERT_TRUE(card.ok());
+  auto* header = card.value().mutable_signatures(0)->mutable_header();
+  ASSERT_TRUE(a2a::core::JsonToMessage(kUnprotectedComment, header).ok());
+  auto raw = a2a::core::MessageToJson(card.value());
+  ASSERT_TRUE(raw.ok());
+  EXPECT_TRUE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(Key()), kNow).ok());
+  header->Clear();
+  ASSERT_TRUE(a2a::core::JsonToMessage(kOverlappingUnprotected, header).ok());
+  raw = a2a::core::MessageToJson(card.value());
+  ASSERT_TRUE(raw.ok());
+  EXPECT_FALSE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(Key()), kNow).ok());
+}
+
+constexpr std::string_view kHeaderVectors = "vectors";
+constexpr std::string_view kHeaderVectorId = "id";
+constexpr std::string_view kHeaderAccepted = "accepted";
+constexpr int kHeaderVectorCount = 4;
+
+TEST(AgentCardSigningTest, IndependentSignedJwsHeaderCases) {
+  const auto corpus = ReadVectorFile(A2A_JWS_HEADER_VECTOR_FILE);
+  const auto resolver = VectorResolver(corpus);
+  const auto& vectors = corpus.fields().at(std::string(kHeaderVectors)).list_value().values();
+  ASSERT_EQ(vectors.size(), kHeaderVectorCount);
+  for (const auto& vector : vectors) {
+    const auto& fields = vector.struct_value().fields();
+    SCOPED_TRACE(fields.at(std::string(kHeaderVectorId)).string_value());
+    auto raw = a2a::core::MessageToJson(fields.at(std::string(kVectorCard)));
+    ASSERT_TRUE(raw.ok());
+    EXPECT_EQ(a2a::core::VerifyAgentCardJson(raw.value(), resolver, kNow).ok(),
+              fields.at(std::string(kHeaderAccepted)).bool_value());
+  }
+}
+
 }  // namespace

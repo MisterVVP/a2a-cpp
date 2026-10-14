@@ -3,11 +3,12 @@
 
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <google/protobuf/struct.pb.h>
+
 #include <string>
 #include <string_view>
 
 namespace a2a::core::internal {
-[[nodiscard]] nlohmann::json ParseSigningJson(std::string_view input);
-[[nodiscard]] std::string Canonicalize(const nlohmann::json& value);
+[[nodiscard]] google::protobuf::Value ParseSigningJson(std::string_view input);
+[[nodiscard]] std::string Canonicalize(const google::protobuf::Value& value);
 }  // namespace a2a::core::internal

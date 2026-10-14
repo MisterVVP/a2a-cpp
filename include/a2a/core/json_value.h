@@ -9,6 +9,10 @@
 
 namespace a2a::core::json {
 
+// Checks RFC 8259 grammar with a bounded nesting depth. String decoding,
+// duplicate-member detection and Unicode validation remain the parser's job.
+[[nodiscard]] bool HasStrictJsonSyntax(std::string_view json) noexcept;
+
 struct ValueRange final {
   std::size_t begin;
   std::size_t end;

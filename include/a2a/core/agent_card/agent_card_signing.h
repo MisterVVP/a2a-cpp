@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "a2a/core/json_canonicalization.h"
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
 
@@ -21,7 +22,6 @@ struct AgentCardVerificationKey final {
 };
 using AgentCardKeyResolver = std::function<Result<AgentCardVerificationKey>(std::string_view key_id)>;
 
-[[nodiscard]] Result<std::string> CanonicalizeJson(std::string_view json);
 [[nodiscard]] Result<lf::a2a::v1::AgentCard> SignAgentCard(const lf::a2a::v1::AgentCard& card, std::string_view key_id,
                                                            std::string_view private_key_pem);
 [[nodiscard]] Result<void> VerifyAgentCardJson(std::string_view json, const AgentCardKeyResolver& resolver,

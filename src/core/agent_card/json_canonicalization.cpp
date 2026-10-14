@@ -9,16 +9,16 @@
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
-#include <unordered_set>
 #include <vector>
 
-#include "a2a/core/agent_card/agent_card_signing.h"
 #include "a2a/core/error.h"
+#include "a2a/core/json_canonicalization.h"
+#include "a2a/core/json_value.h"
+#include "a2a/core/protojson.h"
 
 namespace a2a::core::internal {
 namespace {
 constexpr std::size_t kMaximumJsonSize = std::size_t{1024} * 1024U;
-constexpr int kMaximumJsonDepth = 128;
 constexpr int kSmallestDecimalExponent = -6;
 constexpr int kLargestDecimalExponent = 21;
 constexpr std::size_t kNumberBufferSize = 64;
@@ -130,70 +130,129 @@ std::string Number(double value) {
   return result;
 }
 
-void AppendCanonical(const nlohmann::json& value, std::string& output) {
-  if (value.is_number()) {
-    output.append(Number(value.get<double>()));
-    return;
-  }
-  if (value.is_object()) {
-    std::vector<std::pair<std::vector<std::uint16_t>, std::string>> keys;
-    keys.reserve(value.size());
-    for (const auto& entry : value.items()) {
-      keys.emplace_back(Utf16(entry.key()), entry.key());
-    }
-    std::ranges::sort(keys);
-    output.push_back('{');
-    bool first = true;
-    for (const auto& [sort_key, key] : keys) {
-      (void)sort_key;
-      if (!first) {
-        output.push_back(',');
+constexpr std::string_view kHexDigits = "0123456789abcdef";
+constexpr unsigned char kFirstPrintableCharacter = 0x20U;
+constexpr unsigned kHexDigitBits = 4U;
+constexpr unsigned char kHexDigitMask = 0x0FU;
+constexpr std::string_view kCanonicalNull = "null";
+constexpr std::string_view kCanonicalTrue = "true";
+constexpr std::string_view kCanonicalFalse = "false";
+
+void AppendString(std::string_view text, std::string& output) {
+  output.push_back('"');
+  for (const char character : text) {
+    switch (character) {
+      case '"':
+        output.append(R"(\")");
+        break;
+      case '\\':
+        output.append(R"(\\)");
+        break;
+      case '\b':
+        output.append(R"(\b)");
+        break;
+      case '\f':
+        output.append(R"(\f)");
+        break;
+      case '\n':
+        output.append(R"(\n)");
+        break;
+      case '\r':
+        output.append(R"(\r)");
+        break;
+      case '\t':
+        output.append(R"(\t)");
+        break;
+      default: {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte < kFirstPrintableCharacter) {
+          output.append(R"(\u00)");
+          output.push_back(kHexDigits[byte >> kHexDigitBits]);
+          output.push_back(kHexDigits[byte & kHexDigitMask]);
+        } else {
+          output.push_back(character);
+        }
       }
-      first = false;
-      output.append(nlohmann::json(key).dump());
-      output.push_back(':');
-      AppendCanonical(value.at(key), output);
     }
-    output.push_back('}');
-    return;
   }
-  if (value.is_array()) {
-    output.push_back('[');
-    bool first = true;
-    for (const auto& item : value) {
-      if (!first) {
-        output.push_back(',');
+  output.push_back('"');
+}
+
+void AppendCanonical(const google::protobuf::Value& value, std::string& output);
+
+void AppendObject(const google::protobuf::Struct& object, std::string& output) {
+  std::vector<std::pair<std::vector<std::uint16_t>, std::string>> keys;
+  keys.reserve(object.fields().size());
+  for (const auto& [key, value] : object.fields()) {
+    (void)value;
+    keys.emplace_back(Utf16(key), key);
+  }
+  std::ranges::sort(keys);
+  output.push_back('{');
+  bool first = true;
+  for (const auto& [sort_key, key] : keys) {
+    (void)sort_key;
+    if (!first) {
+      output.push_back(',');
+    }
+    first = false;
+    AppendString(key, output);
+    output.push_back(':');
+    AppendCanonical(object.fields().at(key), output);
+  }
+  output.push_back('}');
+}
+
+void AppendCanonical(const google::protobuf::Value& value, std::string& output) {
+  using Value = google::protobuf::Value;
+  switch (value.kind_case()) {
+    case Value::kNumberValue:
+      output.append(Number(value.number_value()));
+      break;
+    case Value::kStringValue:
+      AppendString(value.string_value(), output);
+      break;
+    case Value::kBoolValue:
+      output.append(value.bool_value() ? kCanonicalTrue : kCanonicalFalse);
+      break;
+    case Value::kNullValue:
+      output.append(kCanonicalNull);
+      break;
+    case Value::kStructValue:
+      AppendObject(value.struct_value(), output);
+      break;
+    case Value::kListValue: {
+      output.push_back('[');
+      bool first = true;
+      for (const auto& item : value.list_value().values()) {
+        if (!first) {
+          output.push_back(',');
+        }
+        first = false;
+        AppendCanonical(item, output);
       }
-      first = false;
-      AppendCanonical(item, output);
+      output.push_back(']');
+      break;
     }
-    output.push_back(']');
-    return;
+    default:
+      throw std::invalid_argument(std::string(kInvalidSigningJson));
   }
-  output.append(value.dump());
 }
 }  // namespace
 
-nlohmann::json ParseSigningJson(std::string_view input) {
-  if (input.size() > kMaximumJsonSize) {
+google::protobuf::Value ParseSigningJson(std::string_view input) {
+  if (input.size() > kMaximumJsonSize || !json::HasStrictJsonSyntax(input)) {
     throw std::invalid_argument(std::string(kInvalidSigningJson));
   }
-  std::vector<std::unordered_set<std::string>> keys(static_cast<std::size_t>(kMaximumJsonDepth + 1));
-  return nlohmann::json::parse(input, [&keys](int depth, nlohmann::json::parse_event_t event, nlohmann::json& parsed) {
-    if (depth < 0 || depth >= kMaximumJsonDepth) {
-      throw std::invalid_argument(std::string(kInvalidSigningJson));
-    }
-    const auto slot = static_cast<std::size_t>(depth);
-    if (event == nlohmann::json::parse_event_t::object_start) {
-      keys[slot + 1].clear();
-    }
-    if (event == nlohmann::json::parse_event_t::key && !keys[slot].insert(parsed.get<std::string>()).second) {
-      throw std::invalid_argument(std::string(kInvalidSigningJson));
-    }
-    return true;
-  });
+  google::protobuf::Value value;
+  // Protobuf's generic JSON parser retains unknown fields and rejects duplicate
+  // decoded member names and malformed Unicode. It does not parse an AgentCard.
+  if (!JsonToMessage(input, &value).ok()) {
+    throw std::invalid_argument(std::string(kInvalidSigningJson));
+  }
+  return value;
 }
-std::string Canonicalize(const nlohmann::json& value) {
+std::string Canonicalize(const google::protobuf::Value& value) {
   std::string result;
   AppendCanonical(value, result);
   return result;

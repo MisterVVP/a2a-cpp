@@ -52,7 +52,6 @@ install_debian_dependencies() {
     protobuf-compiler-grpc
     libgrpc++-dev
     libssl-dev
-    nlohmann-json3-dev
     nginx
     openssl
     libcurl4-openssl-dev

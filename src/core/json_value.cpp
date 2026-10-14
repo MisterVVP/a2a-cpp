@@ -220,6 +220,111 @@ void SkipDigits(const char*& current, const char* end) noexcept {
   }
 }
 
+constexpr std::string_view kJsonEscapes = "\"\\/bfnrt";
+constexpr unsigned char kFirstPrintableCharacter = 0x20U;
+constexpr std::size_t kUnicodeEscapeDigits = 4U;
+
+[[nodiscard]] bool ScanStrictString(const char*& current, const char* end) noexcept {
+  if (current == end || *current != '"') {
+    return false;
+  }
+  ++current;
+  while (current != end) {
+    const auto character = static_cast<unsigned char>(*current++);
+    if (character == '"') {
+      return true;
+    }
+    if (character < kFirstPrintableCharacter) {
+      return false;
+    }
+    if (character != '\\') {
+      continue;
+    }
+    if (current == end) {
+      return false;
+    }
+    const char escaped = *current++;
+    if (kJsonEscapes.find(escaped) != std::string_view::npos) {
+      continue;
+    }
+    if (escaped != 'u' || static_cast<std::size_t>(end - current) < kUnicodeEscapeDigits) {
+      return false;
+    }
+    for (std::size_t digit = 0; digit < kUnicodeEscapeDigits; ++digit) {
+      const char value = *current++;
+      if (!IsDigit(value) && (value < 'a' || value > 'f') && (value < 'A' || value > 'F')) {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] bool ScanStrictValue(const char*& current, const char* end, std::size_t depth) noexcept;
+
+[[nodiscard]] bool ScanStrictComposite(const char*& current, const char* end, std::size_t depth) noexcept {
+  if (depth >= kMaximumNestingDepth) {
+    return false;
+  }
+  const bool object = *current == '{';
+  const char closing = ClosingDelimiter(*current++);
+  SkipWhitespace(current, end);
+  if (current != end && *current == closing) {
+    ++current;
+    return true;
+  }
+  while (current != end) {
+    if (object) {
+      if (!ScanStrictString(current, end)) {
+        return false;
+      }
+      SkipWhitespace(current, end);
+      if (current == end || *current != ':') {
+        return false;
+      }
+      ++current;
+    }
+    if (!ScanStrictValue(current, end, depth + 1U)) {
+      return false;
+    }
+    SkipWhitespace(current, end);
+    if (current == end) {
+      return false;
+    }
+    const char separator = *current++;
+    if (separator == closing) {
+      return true;
+    }
+    if (separator != ',') {
+      return false;
+    }
+    SkipWhitespace(current, end);
+  }
+  return false;
+}
+
+[[nodiscard]] bool ScanStrictValue(const char*& current, const char* end, std::size_t depth) noexcept {
+  SkipWhitespace(current, end);
+  if (current == end) {
+    return false;
+  }
+  switch (*current) {
+    case '{':
+    case '[':
+      return ScanStrictComposite(current, end, depth);
+    case '"':
+      return ScanStrictString(current, end);
+    case 't':
+      return ScanLiteral(current, end, "true");
+    case 'f':
+      return ScanLiteral(current, end, "false");
+    case 'n':
+      return ScanLiteral(current, end, "null");
+    default:
+      return ScanNumber(current, end);
+  }
+}
+
 [[nodiscard]] bool MemberNameMatches(const char* begin, const char* end, std::string_view member_name) noexcept {
   const auto length = static_cast<std::size_t>(end - begin);
 
@@ -347,6 +452,19 @@ std::optional<ValueRange> FindTopLevelObjectMemberValue(std::string_view json, s
   }
 
   return std::nullopt;
+}
+
+bool HasStrictJsonSyntax(std::string_view json) noexcept {
+  if (json.empty()) {
+    return false;
+  }
+  const char* current = json.data();
+  const char* const end = current + json.size();
+  if (!ScanStrictValue(current, end, 0U)) {
+    return false;
+  }
+  SkipWhitespace(current, end);
+  return current == end;
 }
 
 }  // namespace a2a::core::json

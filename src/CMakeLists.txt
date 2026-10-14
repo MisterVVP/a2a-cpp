@@ -47,8 +47,6 @@ target_link_libraries(a2a_core
     a2a::proto_generated
     protobuf::libprotobuf
     OpenSSL::Crypto
-  PRIVATE
-    nlohmann_json::nlohmann_json
 )
 
 add_library(a2a_http STATIC
