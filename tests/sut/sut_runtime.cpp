@@ -60,6 +60,9 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
     endpoints.rest_url = std::string(public_base).append(kRestApiBasePath);
     endpoints.json_rpc_url = std::string(public_base).append(kJsonRpcPath);
   }
+  if (const char* public_target = std::getenv(kPublicGrpcTargetEnv)) {
+    endpoints.grpc_url = public_target;
+  }
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);

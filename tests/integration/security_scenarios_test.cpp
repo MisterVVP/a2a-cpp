@@ -178,16 +178,21 @@ class SecurityScenariosTest : public testing::TestWithParam<BindingPair> {
       transport = a2a::client::JsonRpcTransport::CreateDefault(iface);
     } else {
       iface.url = grpc_url_;
-      auto credentials = grpc::InsecureChannelCredentials();
-      const auto ca = Environment(kCaFileEnv);
-      if (!ca.empty()) {
-        grpc::SslCredentialsOptions ssl;
-        ssl.pem_root_certs = ReadFile(ca);
-        credentials = grpc::SslCredentials(ssl);
-      }
-      transport = std::make_unique<a2a::client::GrpcTransport>(iface, grpc::CreateChannel(grpc_url_, credentials));
+      return MakeGrpcClient(iface);
     }
     return std::make_unique<a2a::client::A2AClient>(std::move(transport));
+  }
+  [[nodiscard]] static std::unique_ptr<a2a::client::A2AClient> MakeGrpcClient(
+      const a2a::client::ResolvedInterface& iface) {
+    auto credentials = grpc::InsecureChannelCredentials();
+    const auto ca = Environment(kCaFileEnv);
+    if (!ca.empty()) {
+      grpc::SslCredentialsOptions ssl;
+      ssl.pem_root_certs = ReadFile(ca);
+      credentials = grpc::SslCredentials(ssl);
+    }
+    return std::make_unique<a2a::client::A2AClient>(
+        std::make_unique<a2a::client::GrpcTransport>(iface, grpc::CreateChannel(iface.url, credentials)));
   }
   void CheckHiddenRead(std::string_view id, const a2a::client::CallOptions& bob) {
     lf::a2a::v1::GetTaskRequest get;
@@ -390,6 +395,21 @@ TEST_P(SecurityScenariosTest, TlsTrustAndServerIdentity) {
   } else {
     EXPECT_FALSE(response.ok());
   }
+}
+
+TEST_P(SecurityScenariosTest, TlsDiscoveryConnectsToTheAdvertisedGrpcTarget) {
+  const auto mode = Environment(kSecurityModeEnv);
+  if (mode != kPlaintextMode && mode != kTrustedMode) {
+    return;
+  }
+  const auto options = Options(kAliceToken);
+  a2a::client::DiscoveryClient discovery(a2a::client::MakeDefaultHttpFetcher(options.tls));
+  auto card = discovery.Fetch(base_);
+  ASSERT_TRUE(card.ok());
+  auto resolved = a2a::client::AgentCardResolver::SelectPreferredInterface(card.value(), Binding::kGrpc);
+  ASSERT_TRUE(resolved.ok());
+  const auto client = MakeGrpcClient(resolved.value());
+  EXPECT_TRUE(client->SendMessage(Message(kAlice), options).ok());
 }
 
 TEST_P(SecurityScenariosTest, SignedDiscoveryChecksCurrentKeyPolicy) {

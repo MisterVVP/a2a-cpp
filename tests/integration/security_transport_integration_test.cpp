@@ -56,6 +56,8 @@ constexpr std::string_view kOtherTaskId = "sdk-transport-other-task";
 constexpr std::string_view kMissingTaskId = "sdk-transport-missing-task";
 constexpr std::string_view kErrorField = "error";
 constexpr std::string_view kMessageField = "message";
+constexpr std::string_view kPushUrl = "https://example.invalid/security-push";
+constexpr std::string_view kPushId = "sdk-transport-push";
 constexpr std::string_view kAlice = "alice";
 constexpr std::string_view kBob = "bob";
 constexpr std::string_view kBearerKey = "bearer_token";
@@ -143,6 +145,38 @@ class ResponseExecutor final : public a2a::examples::ExampleExecutor {
                                      : ExampleExecutor::CancelTask(request, context);
   }
   std::optional<lf::a2a::v1::Task> task_response;
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, a2a::server::RequestContext& context) override {
+    return push_response.has_value() ? a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>(*push_response)
+                                     : ExampleExecutor::CreateTaskPushNotificationConfig(request, context);
+  }
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, a2a::server::RequestContext& context) override {
+    return push_response.has_value() ? a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>(*push_response)
+                                     : ExampleExecutor::GetTaskPushNotificationConfig(request, context);
+  }
+  a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+      a2a::server::RequestContext& context) override {
+    if (!push_response.has_value()) {
+      return ExampleExecutor::ListTaskPushNotificationConfigs(request, context);
+    }
+    lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
+    *response.add_configs() = *push_response;
+    response.mutable_configs(0)->set_task_id(request.task_id());
+    *response.add_configs() = *push_response;
+    return response;
+  }
+  std::optional<lf::a2a::v1::TaskPushNotificationConfig> push_response;
+};
+
+class PrincipalMutator final : public a2a::server::ServerInterceptor {
+ public:
+  a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& /*request*/,
+                                         a2a::server::RequestContext& context) override {
+    context.principal = kBob;
+    return {};
+  }
 };
 
 class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> {
@@ -228,7 +262,8 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
       EXPECT_EQ(error.protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
     }
   }
-  static void ExpectHiddenTask(const a2a::core::Result<lf::a2a::v1::Task>& result) {
+  template <typename Payload>
+  static void ExpectHiddenTask(const a2a::core::Result<Payload>& result) {
     ASSERT_FALSE(result.ok());
     ExpectHidden(result.error());
   }
@@ -301,6 +336,36 @@ TEST_P(SecurityTransportIntegrationTest, GetAndCancelRejectForeignExecutorRespon
   ExpectHiddenTask(client_->GetTask(get, Options(kAliceToken)));
   ExpectHiddenTask(client_->CancelTask(cancel, Options(kAliceToken)));
 }
+TEST_P(SecurityTransportIntegrationTest, PushResponsesCannotExposeForeignConfigurations) {
+  lf::a2a::v1::TaskPushNotificationConfig foreign;
+  foreign.set_task_id(std::string(kOtherTaskId));
+  foreign.set_id(std::string(kPushId));
+  foreign.set_url(std::string(kPushUrl));
+  foreign.set_token(std::string(kTaskCredential));
+  executor_.push_response = foreign;
+  lf::a2a::v1::TaskPushNotificationConfig create;
+  create.set_task_id(std::string(kTaskId));
+  create.set_id(std::string(kPushId));
+  create.set_url(std::string(kPushUrl));
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest get;
+  get.set_task_id(std::string(kTaskId));
+  get.set_id(std::string(kPushId));
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest list;
+  list.set_task_id(std::string(kTaskId));
+  const auto options = Options(kAliceToken);
+  ExpectHiddenTask(client_->CreateTaskPushNotificationConfig(create, options));
+  ExpectHiddenTask(client_->GetTaskPushNotificationConfig(get, options));
+  ExpectHiddenTask(client_->ListTaskPushNotificationConfigs(list, options));
+}
+
+TEST_P(SecurityTransportIntegrationTest, InterceptorsCannotChangeTheAuthenticatedListScope) {
+  dispatcher_.AddInterceptor(std::make_shared<PrincipalMutator>());
+  auto listed = client_->ListTasks({}, Options(kAliceToken));
+  ASSERT_TRUE(listed.ok());
+  ASSERT_EQ(listed.value().tasks.size(), kTaskCount);
+  EXPECT_EQ(listed.value().tasks.front().context_id(), kAlice);
+}
+
 TEST_P(SecurityTransportIntegrationTest, TlsCertificateValidationWithoutSut) {
   if (GetParam() != Binding::kGrpc) {
     GTEST_SKIP() << kTlsTestScope;

@@ -34,6 +34,50 @@ core::Result<lf::a2a::v1::Task> GetAuthorizedTask(TaskStore& store, const Securi
   return task;
 }
 
+struct ResponseAuthorizer final {
+  const SecurityPolicy& policy;
+  TaskStore& store;
+  const RequestContext& context;
+
+  [[nodiscard]] core::Result<void> AuthorizeId(std::string_view id) const {
+    if (id.empty()) {
+      return core::protocol_errors::TaskNotFound();
+    }
+    auto task = GetAuthorizedTask(store, policy, context, id);
+    return task.ok() ? core::Result<void>{} : task.error();
+  }
+  core::Result<void> operator()(const lf::a2a::v1::Task& task) const {
+    return policy.CanAccessTask(task, context) ? core::Result<void>{} : core::protocol_errors::TaskNotFound();
+  }
+  core::Result<void> operator()(const lf::a2a::v1::SendMessageResponse& send) const {
+    if (send.has_task()) {
+      return (*this)(send.task());
+    }
+    return send.has_message() && !send.message().task_id().empty() ? AuthorizeId(send.message().task_id())
+                                                                   : core::Result<void>{};
+  }
+  core::Result<void> operator()(const lf::a2a::v1::TaskPushNotificationConfig& config) const {
+    return AuthorizeId(config.task_id());
+  }
+  core::Result<void> operator()(const lf::a2a::v1::ListTaskPushNotificationConfigsResponse& response) const {
+    for (const auto& config : response.configs()) {
+      auto authorized = (*this)(config);
+      if (!authorized.ok()) {
+        return authorized.error();
+      }
+    }
+    return {};
+  }
+  template <typename Payload>
+  core::Result<void> operator()(const Payload& /*payload*/) const {
+    // Lists are authorized before projection; streams are checked on read.
+    static_assert(std::is_same_v<Payload, ListTasksResponse> || std::is_same_v<Payload, lf::a2a::v1::AgentCard> ||
+                  std::is_same_v<Payload, std::unique_ptr<ServerStreamSession>> ||
+                  std::is_same_v<Payload, std::monostate>);
+    return {};
+  }
+};
+
 std::string TaskId(const DispatchRequest& request) {
   return std::visit(
       [](const auto& payload) -> std::string {
@@ -154,17 +198,8 @@ core::Result<void> DispatchSecurity::Authorize(const DispatchRequest& request, R
 
 core::Result<void> DispatchSecurity::AuthorizeResponse(const DispatchResponse& response,
                                                        const RequestContext& context) const {
-  const auto* task = std::get_if<lf::a2a::v1::Task>(&response.payload());
-  if (const auto* send = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload())) {
-    if (send->has_task()) {
-      task = &send->task();
-    } else if (send->has_message() && !send->message().task_id().empty()) {
-      auto associated = GetAuthorizedTask(*task_store_, *policy_, context, send->message().task_id());
-      return associated.ok() ? core::Result<void>{} : associated.error();
-    }
-  }
-  return task == nullptr || policy_->CanAccessTask(*task, context) ? core::Result<void>{}
-                                                                   : core::protocol_errors::TaskNotFound();
+  return std::visit(ResponseAuthorizer{.policy = *policy_, .store = *task_store_, .context = context},
+                    response.payload());
 }
 
 core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksRequest& request,

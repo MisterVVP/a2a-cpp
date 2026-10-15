@@ -29,6 +29,7 @@ inline constexpr char kSigningKeyIdEnv[] = "A2A_TCK_SIGNING_KEY_ID";
 inline constexpr char kTlsCertificateFileEnv[] = "A2A_TCK_TLS_CERT_FILE";
 inline constexpr char kTlsKeyFileEnv[] = "A2A_TCK_TLS_KEY_FILE";
 inline constexpr char kPublicHttpsBaseEnv[] = "A2A_TCK_PUBLIC_HTTPS_BASE";
+inline constexpr char kPublicGrpcTargetEnv[] = "A2A_TCK_PUBLIC_GRPC_TARGET";
 inline constexpr char kAliceTokenEnv[] = "A2A_TCK_ALICE_TOKEN";
 inline constexpr char kBobTokenEnv[] = "A2A_TCK_BOB_TOKEN";
 inline constexpr std::string_view kSecurityProfile = "security";

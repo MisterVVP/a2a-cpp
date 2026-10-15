@@ -43,8 +43,9 @@ dispatcher.SetSecurityPolicy(policy, stores.task_store.get());
 
 `Authenticate` returns an identity or SDK error, `AuthorizeOperation` controls
 operations, and `CanAccessTask` evaluates authoritative tasks. The SDK clears and
-reauthenticates `RequestContext::principal` each call. Applications own token
-validation, identity lifetime, ownership and scope rules. Synchronize mutable
+reauthenticates `RequestContext::principal` each call, preserving it across
+interceptors and executor callbacks. Applications own token validation, identity
+lifetime, ownership and scope rules. Synchronize mutable
 policy data: callbacks can run concurrently. Client-supplied context IDs are not identities.
 
 Checks cover reads, cancellation, continuation, subscriptions and all push
@@ -53,8 +54,8 @@ configuration operations. Hidden and missing tasks return the same canonical
 HTTP 401 or gRPC `UNAUTHENTICATED`; operation denials to HTTP 403 or
 `PERMISSION_DENIED`. Public card discovery stays public; extended cards use
 authenticated dispatch. Returned tasks from sends, reads and cancellation are
-checked before release. Associated messages are checked against the store;
-taskless messages are supported. Denials reach `AfterDispatch` in reverse order.
+checked before release. Returned push configurations, including every list entry,
+and associated messages are checked against the store; taskless messages are supported. Denials reach `AfterDispatch` in reverse order.
 
 Listing checks permissions before counting/pagination. `ScopeTaskList` can narrow
 store filters/projections or return `nullopt` for an empty scope. Retain fields
@@ -201,8 +202,10 @@ only. This local fixture is not an A2A credential endpoint or production identit
 
 Set `A2A_TCK_TLS_CERT_FILE` and `A2A_TCK_TLS_KEY_FILE` together for native gRPC
 TLS, and `A2A_TCK_PUBLIC_HTTPS_BASE` for externally terminated HTTP card URLs;
-secure HTTP listeners remain loopback. `A2A_TCK_SIGNING_KEY_FILE` and
-`A2A_TCK_SIGNING_KEY_ID` enable card signing, including re-signing extended cards.
+secure HTTP listeners remain loopback. `A2A_TCK_PUBLIC_GRPC_TARGET` sets the
+certificate hostname and gRPC port advertised to discovery clients.
+`A2A_TCK_SIGNING_KEY_FILE` and `A2A_TCK_SIGNING_KEY_ID` enable card signing,
+including re-signing extended cards.
 
 CI runs SDK evidence separately from the unmodified upstream mandatory runner.
 At `263b9cfaf16a554bdfb166a7ba5b67716e946349`, upstream security groups lack

@@ -68,14 +68,42 @@ class AuditInterceptor final : public ServerInterceptor {
 
 class ResponseExecutor final : public a2a::examples::ExampleExecutor {
  public:
-  explicit ResponseExecutor(lf::a2a::v1::SendMessageResponse response) : response_(std::move(response)) {}
+  explicit ResponseExecutor(lf::a2a::v1::SendMessageResponse response,
+                            std::optional<std::string> principal_override = std::nullopt)
+      : response_(std::move(response)), principal_override_(std::move(principal_override)) {}
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& /*request*/,
-                                                                  RequestContext& /*context*/) override {
+                                                                  RequestContext& context) override {
+    if (principal_override_.has_value()) {
+      context.principal = *principal_override_;
+    }
     return response_;
   }
 
  private:
   lf::a2a::v1::SendMessageResponse response_;
+  std::optional<std::string> principal_override_;
+};
+
+class PrincipalMutator final : public ServerInterceptor {
+ public:
+  explicit PrincipalMutator(std::string replacement) : replacement_(std::move(replacement)) {}
+  a2a::core::Result<void> BeforeDispatch(const DispatchRequest& /*request*/, RequestContext& context) override {
+    Mutate(context);
+    return deny ? a2a::core::Result<void>(a2a::core::protocol_errors::PermissionDenied()) : a2a::core::Result<void>{};
+  }
+  void AfterDispatch(const DispatchRequest& /*request*/, RequestContext& context,
+                     const a2a::core::Result<DispatchResponse>& /*result*/) override {
+    Mutate(context);
+  }
+  std::vector<std::string> observed;
+  bool deny = false;
+
+ private:
+  void Mutate(RequestContext& context) {
+    observed.push_back(context.principal);
+    context.principal = replacement_;
+  }
+  std::string replacement_;
 };
 
 class Policy final : public SecurityPolicy {
@@ -213,8 +241,9 @@ class SdkSecurityTest : public testing::Test {
     EXPECT_EQ(event.error->protocol_code(), error.protocol_code());
     EXPECT_EQ(event.error->http_status(), error.http_status());
   }
-  a2a::core::Result<DispatchResponse> DispatchUnary(lf::a2a::v1::SendMessageResponse response) {
-    ResponseExecutor unary(std::move(response));
+  a2a::core::Result<DispatchResponse> DispatchUnary(lf::a2a::v1::SendMessageResponse response,
+                                                    std::optional<std::string> principal_override = std::nullopt) {
+    ResponseExecutor unary(std::move(response), std::move(principal_override));
     Dispatcher target(&unary);
     target.SetSecurityPolicy(policy, &store);
     AddAuditInterceptors(target);
@@ -272,6 +301,74 @@ TEST_F(SdkSecurityTest, UnauthorizedResourcesMatchMissingResourcesOnEveryApplica
   for (std::size_t index = 0; index < denied.size(); ++index) {
     CheckHiddenResource(denied[index], missing[index]);
   }
+}
+
+TEST_F(SdkSecurityTest, EveryInterceptorAndAuditHookSeesTheAuthenticatedIdentity) {
+  auto forge = std::make_shared<PrincipalMutator>(std::string(kBob));
+  auto clear = std::make_shared<PrincipalMutator>(std::string{});
+  dispatcher.AddInterceptor(forge);
+  dispatcher.AddInterceptor(clear);
+  EXPECT_TRUE(dispatcher.Dispatch(ResourceOperations(kTaskId).front(), context).ok());
+  const std::vector<std::string> expected{std::string(kAlice), std::string(kAlice)};
+  EXPECT_EQ(forge->observed, expected);
+  EXPECT_EQ(clear->observed, expected);
+  EXPECT_EQ(context.principal, kAlice);
+}
+
+TEST_F(SdkSecurityTest, DeniedInterceptorsCannotChangeTheAuditedIdentity) {
+  auto forge = std::make_shared<PrincipalMutator>(std::string(kBob));
+  forge->deny = true;
+  dispatcher.AddInterceptor(forge);
+  EXPECT_FALSE(dispatcher.Dispatch(ResourceOperations(kTaskId).front(), context).ok());
+  const std::vector<std::string> expected{std::string(kAlice), std::string(kAlice)};
+  EXPECT_EQ(forge->observed, expected);
+  EXPECT_EQ(context.principal, kAlice);
+}
+
+TEST_F(SdkSecurityTest, HooksCannotChangeListOrStreamOwnership) {
+  dispatcher.AddInterceptor(std::make_shared<PrincipalMutator>(std::string(kBob)));
+  const auto listed = ListPage({});
+  for (const auto& task : listed.tasks) {
+    EXPECT_EQ(task.context_id(), kAlice);
+  }
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  auto subscribed = dispatcher.Dispatch({.operation = DispatcherOperation::kSubscribeTask, .payload = get}, context);
+  ASSERT_TRUE(subscribed.ok());
+  auto& stream = std::get<std::unique_ptr<ServerStreamSession>>(subscribed.value().payload());
+  EXPECT_TRUE(stream->Next().ok());
+}
+
+TEST_F(SdkSecurityTest, UnconfiguredSecurityPreservesApplicationManagedPrincipalHooks) {
+  Dispatcher unprotected(&executor);
+  unprotected.AddInterceptor(std::make_shared<PrincipalMutator>(std::string(kBob)));
+  EXPECT_TRUE(unprotected.Dispatch(ResourceOperations(kTaskId).front(), context).ok());
+  EXPECT_EQ(context.principal, kBob);
+}
+
+TEST_F(SdkSecurityTest, ExecutorsCannotForgeResponseAuthorizationIdentity) {
+  lf::a2a::v1::SendMessageResponse response;
+  *response.mutable_task() = Task(kOtherTaskId, kBob);
+  auto result = DispatchUnary(std::move(response), std::string(kBob));
+  CheckAuditedFailure(result);
+  EXPECT_EQ(context.principal, kAlice);
+}
+
+TEST_F(SdkSecurityTest, PushResponsesAndEveryListEntryRequireAnAccessibleTask) {
+  DispatchSecurity security(policy, &store);
+  context.principal = kAlice;
+  for (const auto id : {kTaskId, kOtherTaskId, kMissingTaskId, std::string_view{}}) {
+    lf::a2a::v1::TaskPushNotificationConfig config;
+    config.set_task_id(std::string(id));
+    EXPECT_EQ(security.AuthorizeResponse(DispatchResponse(config), context).ok(), id == kTaskId);
+    lf::a2a::v1::ListTaskPushNotificationConfigsResponse list;
+    list.add_configs()->set_task_id(std::string(kTaskId));
+    *list.add_configs() = config;
+    EXPECT_EQ(security.AuthorizeResponse(DispatchResponse(list), context).ok(), id == kTaskId);
+  }
+  EXPECT_TRUE(
+      security.AuthorizeResponse(DispatchResponse(lf::a2a::v1::ListTaskPushNotificationConfigsResponse{}), context)
+          .ok());
 }
 
 TEST_F(SdkSecurityTest, AuthenticationFailuresReachAfterInterceptorsInReverseOrder) {

@@ -15,6 +15,7 @@ ALICE_TOKEN = "security-fixture-alice"
 BOB_TOKEN = "security-fixture-bob"
 TASK_CREDENTIAL = "security-fixture-task-credential"
 KEY_ID = "security-fixture-card-key"
+PUBLIC_GRPC_TARGET_ENV = "A2A_TCK_PUBLIC_GRPC_TARGET"
 VALID_FROM = "20200101000000Z"
 VALID_UNTIL = "21000101000000Z"
 EXPIRED_UNTIL = "20210101000000Z"
@@ -93,6 +94,7 @@ def run_scenario(args, environment, directory, mode):
         env["A2A_SECURITY_TLS_HOST"] = host
         env["A2A_SECURITY_HTTPS_PORT"] = str(tls_port)
         env["A2A_TCK_PUBLIC_HTTPS_BASE"] = f"https://{host}:{tls_port}"
+        env[PUBLIC_GRPC_TARGET_ENV] = f"{host}:{port + 1}"
         config = directory / "nginx.conf"
         config.write_text(f"""pid {directory}/nginx.pid;
 error_log {directory}/nginx-error.log;
@@ -153,7 +155,8 @@ def main():
     environment["A2A_TCK_TASK_CREDENTIAL"] = TASK_CREDENTIAL
     environment["A2A_TCK_STORE_BACKEND"] = args.backend
     environment["A2A_TCK_EXTENDED_AGENT_CARD_MODE"] = "configured"
-    for name in ("A2A_TCK_TLS_CERT_FILE", "A2A_TCK_TLS_KEY_FILE", "A2A_TCK_PUBLIC_HTTPS_BASE"):
+    for name in ("A2A_TCK_TLS_CERT_FILE", "A2A_TCK_TLS_KEY_FILE", "A2A_TCK_PUBLIC_HTTPS_BASE",
+                 PUBLIC_GRPC_TARGET_ENV):
         environment.pop(name, None)
     schema = f"security_{uuid.uuid4().hex}"
     if args.backend == "postgres":
