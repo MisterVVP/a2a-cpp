@@ -1,10 +1,8 @@
 # SDK security scenarios
 
-The TCK SUT's `security` profile shares one SDK dispatcher, security policy, task
-store and executor across JSON-RPC, HTTP+JSON and gRPC. It supplies two identities,
-a fixture permission policy, credentials, keys and an application trigger. The
-security enforcement, authorization lifecycle, streams, TLS clients and card
-signing/verification reside in public SDK APIs.
+The TCK SUT's `security` profile shares SDK policy, storage and execution across
+JSON-RPC, HTTP+JSON and gRPC. Its two identities, permission rules, keys and
+credential trigger are application fixtures; enforcement resides in public SDK APIs.
 
 ```bash
 ./scripts/install_build_deps.sh
@@ -15,79 +13,69 @@ A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
   ctest --test-dir build -L security --output-on-failure
 ```
 
-Signing is disabled by default. Ordinary builds do not require nginx or the
-OpenSSL CLI. Canonicalization, permissions and task-authorization tests also run
-with signing disabled. For canonical contributor validation use
-`A2A_VERIFY_SIGNING=ON` with `./scripts/verify_changes.sh`.
+Signing is optional and disabled by default. Permissions, task authorization and
+canonicalization also run without it. Ordinary builds need neither nginx nor
+the OpenSSL CLI. Contributor validation uses `A2A_VERIFY_SIGNING=ON` with
+`./scripts/verify_changes.sh`.
 
-SDK unit and adapter integration tests run through CTest on supported platforms.
-Live SUT scenarios require Unix, Python, libcurl, nginx and the OpenSSL CLI and
-are registered when those tools are present. PostgreSQL requires
-`A2A_TEST_POSTGRES_DSN`; its absence produces an explicit skip. Each launcher run
-uses temporary credential/CA files, free loopback ports and an isolated database
-schema which it removes afterward.
+SDK unit/adapter tests run on supported platforms. Live scenarios require Unix,
+Python, libcurl, nginx and the OpenSSL CLI; PostgreSQL requires
+`A2A_TEST_POSTGRES_DSN`, otherwise that scenario explicitly skips. The launcher
+isolates temporary files, loopback ports and database schemas and cleans up afterward.
+It covers both stores, all nine ordered binding pairs, plaintext local/trusted
+TLS/unrelated CA/expired/hostname-mismatch profiles, and authorization with two
+simultaneously active streams. All calls use public C++ SDK clients.
 
-The live matrix covers both stores, all nine ordered binding pairs, and
-plaintext local, trusted TLS, unrelated CA, expired certificate and hostname-
-mismatch profiles. All tests use public C++ SDK clients. Authorization scenarios
-retain both the send stream and a separate subscription while receiving a
-pending message, then resume the same task after a credential file is written.
+| SDK behavior | Independent test suite | Requirements |
+| --- | --- | --- |
+| Caller permissions | `SdkSecurityTest`, `SecurityTransportIntegrationTest` | `AUTH-SERVER-002`, `AUTH-SCOPE-001..003` |
+| Additional task authorization | `TaskAuthorizationServiceTest` | `AUTH-INTASK-001..006` |
+| TLS/server identity | `SecurityTransportIntegrationTest`, live scenarios | `AUTH-TLS-001/002`, `AUTH-SERVER-001`, `GRPC-SVC-003` |
+| Signed cards | `JsonCanonicalizationTest`, `AgentCardSigningTest` | `CARD-SIGN-001..004` |
 
 ## Caller permissions
 
-Configure the dispatcher with the same authoritative task store as the executor:
+Configure the dispatcher with its executor's authoritative store:
 
 ```cpp
 dispatcher.SetSecurityPolicy(policy, stores.task_store.get());
 ```
 
-`SecurityPolicy::Authenticate` returns an identity or a rich SDK error;
-`AuthorizeOperation` controls operation permissions, and `CanAccessTask` evaluates
-an authoritative task. The SDK clears and reauthenticates `RequestContext::principal`
-on each call. Applications own token validation, identity lifetime, ownership
-records, scope rules and permission changes. Policy methods can run concurrently;
-synchronize mutable data. Client-supplied context IDs are not authenticated identities.
+`Authenticate` returns an identity or SDK error, `AuthorizeOperation` controls
+operations, and `CanAccessTask` evaluates authoritative tasks. The SDK clears and
+reauthenticates `RequestContext::principal` each call. Applications own token
+validation, identity lifetime, ownership and scope rules. Synchronize mutable
+policy data: callbacks can run concurrently. Client-supplied context IDs are not identities.
 
-Existing tasks are checked before reads, cancellation, continuation, subscription
-and every push configuration operation. Unauthorized tasks use the same
-`TaskNotFoundError` as absent tasks. Missing/invalid credentials produce HTTP 401
-or gRPC `UNAUTHENTICATED`; an operation denial produces HTTP 403 or gRPC
-`PERMISSION_DENIED`. Public Agent Card discovery remains public; extended cards
-use authenticated dispatch. Unary send responses pass ownership checks before
-release: returned tasks are checked directly, associated messages against the
-store, and taskless messages remain supported. Denials invoke `AfterDispatch`
-in reverse interceptor order so audit/metrics hooks receive the final error.
+Checks cover reads, cancellation, continuation, subscriptions and all push
+configuration operations. Hidden and missing tasks return the same canonical
+`TaskNotFoundError`, including message text. Missing/invalid credentials map to
+HTTP 401 or gRPC `UNAUTHENTICATED`; operation denials to HTTP 403 or
+`PERMISSION_DENIED`. Public card discovery stays public; extended cards use
+authenticated dispatch. Returned tasks from sends, reads and cancellation are
+checked before release. Associated messages are checked against the store;
+taskless messages are supported. Denials reach `AfterDispatch` in reverse order.
 
-Listing evaluates permissions before counting and pagination. `ScopeTaskList`
-can narrow store filters/projections, or return `nullopt` for an empty scope.
-Retain every field needed by `CanAccessTask`; the default preserves full tasks.
-The SUT pushes the caller's context filter into both stores and uses summaries,
-loading histories/artifacts only for selected results. Exact visible counts
-still inspect every matching task; repeated backend filtering/counting can cost
-more than one linear scan. The dispatcher retains one bounded batch and one
-page of IDs; PostgreSQL may still decode stored protobuf blobs before projection.
-Numeric offset tokens and ordering remain unchanged. Cursor pagination,
-last-update ordering and stronger snapshot consistency are tracked in
-[ListTasks follow-up #309](https://github.com/MisterVVP/a2a-cpp/issues/309).
+Listing checks permissions before counting/pagination. `ScopeTaskList` can narrow
+store filters/projections or return `nullopt` for an empty scope. Retain fields
+needed by `CanAccessTask`; defaults preserve full tasks. The SUT pushes its
+context filter into both stores, loading histories/artifacts only for selected
+results. The dispatcher retains one bounded batch and one page of IDs. Exact
+counts still inspect all matching tasks; backends may repeat filtering/counting
+or decode protobuf blobs before projection. Numeric offsets/ordering remain;
+cursor pagination, update-time ordering and snapshot consistency are tracked in
+[ListTasks #309](https://github.com/MisterVVP/a2a-cpp/issues/309).
 
-Streams retain the authenticated identity and check current task permissions
-before reading and releasing events. Task-bearing events without IDs are
-rejected; taskless messages remain supported. Timed reads, live semantics and
-cancellation delegate to the underlying session. Keep the policy/store alive
-until streams finish. Credentials are authenticated when connecting; applications
-can include revocation/expiry in `CanAccessTask` for subsequent events. New
-SUT streams use SDK-generated IDs so a reused message ID cannot select another
-caller's task.
-
-`SdkSecurityTest` covers operations, visibility, revocation, malformed events and
-filtered pagination. `SecurityTransportIntegrationTest` independently checks
-adapter error mapping and scoped results. Requirement mapping:
-`AUTH-SERVER-002`, `AUTH-SCOPE-001..003`.
+Streams check current task permissions before reading and releasing events,
+reject task-bearing events without IDs, and allow taskless messages. They
+preserve timed reads, live semantics and cancellation. Keep policies/stores alive
+until sessions finish. Credentials are authenticated on connection; include
+revocation/expiry in `CanAccessTask` for subsequent events. New SUT streams use
+SDK-generated IDs so reused message IDs cannot select another caller's task.
 
 ## Task authorization
 
-`TaskAuthorizationService` combines storage, lifecycle transitions, history and
-subscriptions for additional authorization during a task:
+`TaskAuthorizationService` combines storage, lifecycle, history and subscriptions:
 
 ```cpp
 a2a::server::TaskAuthorizationService authorization(
@@ -97,37 +85,30 @@ auto resumed = authorization.Authorize(task_id, out_of_band_credential);
 auto completed = authorization.Complete(task_id);
 ```
 
-`RequestAuthorization` requires an agent explanation with a message ID and a
-part. It persists `TASK_STATE_AUTH_REQUIRED` and `TaskStatus::message`.
-`ReceiveMessage` validates task/context association and deduplicates history by
-message ID while leaving authorization pending; message text never grants
-authorization. Invalid credentials leave the task unchanged. `Authorize` calls
-the application validator and moves the task to `WORKING`; `Complete` rejects a
-pending task. Cancellation remains available while pending.
+`RequestAuthorization` requires an agent explanation with a message ID and part;
+it persists `TASK_STATE_AUTH_REQUIRED` and `TaskStatus::message`. `ReceiveMessage`
+validates task/context association and deduplicates history by message ID without
+granting authorization. Invalid credentials leave state unchanged. `Authorize`
+validates credentials and moves to `WORKING`; `Complete` rejects pending tasks.
+Cancellation remains available while pending.
 
+Route mutations/subscriptions through this service and keep its store alive.
 Send streams and subscriptions remain live during `auth_required` and receive
-working/completed events after authorization. Route mutations/subscriptions
-through this service and keep its store alive until streams finish. Its mutex
-serializes mutations. `SendStreamingMessage` registers the stream before
-out-of-band continuation can run; separate creation/subscription calls can miss
-completion between them.
+working/completed events afterward. A mutex serializes mutations;
+`SendStreamingMessage` registers its stream before continuation can run.
+Separate creation/subscription calls can miss completion between them.
 
-Mutations require conditional writes, supported by both stores. Transitions
-clear the previous explanation and commit the complete task in one revision-
-checked write. Only successful writes publish events. Failures preserve prior
-state; conflicts report an error rather than overwrite concurrent cancellation
-or history. Validation is not retried automatically; validators should be safe
-to call again. All writers must respect revisions: unconditional writes can
-replace a committed state afterward.
-
-`TaskAuthorizationServiceTest` independently covers persistence, explanations,
-credentials, pending messages, concurrent writes, active streams and continuation.
-Requirement mapping: `AUTH-INTASK-001..006`.
+Both stores support the required conditional writes. Each transition clears the
+previous explanation and commits the complete task in one revision-checked write;
+only success publishes events. Failures preserve prior state; conflicts report
+errors instead of overwriting cancellation/history. Validation is not retried
+automatically, so validators should be safe to repeat. All writers must respect
+revisions: unconditional writes can replace committed state afterward.
 
 ## TLS and server identity
 
-HTTP bindings accept `CallOptions::tls`, the shared HTTP client accepts
-`Request::tls`, and discovery accepts TLS options through `MakeDefaultHttpFetcher`:
+HTTP bindings accept `CallOptions::tls`, the shared client `Request::tls`, and
+discovery `MakeDefaultHttpFetcher` TLS options, for unary and streaming requests:
 
 ```cpp
 a2a::client::CallOptions options;
@@ -136,35 +117,28 @@ options.tls = a2a::http::TlsOptions{.ca_bundle_path = ca_bundle_path,
 auto task = client.GetTask(request, options);
 ```
 
-Options propagate to unary/streaming requests. libcurl verifies certificates and
-hostnames. An absent configuration or empty CA path uses compiled default trust,
-including after pooled-handle reuse with a custom CA. Ordinary defaults require
-TLS 1.2 or later; an explicit TLS configuration defaults to TLS 1.3. Set
-`require_tls13=false` for TLS 1.2 deployments. HTTP remains available for local
-fixtures; applications must enforce HTTPS ingress in production.
+libcurl verifies certificates/hostnames. Absent options or empty CA paths preserve
+compiled default trust even after pooled custom-CA use; transfer errors retain
+detailed diagnostics. Ordinary defaults require TLS 1.2+, explicit options default
+to TLS 1.3; set `require_tls13=false` for TLS 1.2. HTTP supports local fixtures;
+applications must enforce HTTPS ingress in production.
 
-gRPC uses `grpc::SslCredentials` and `grpc::SslServerCredentials`. Supply trusted
-PEM roots when constructing channels and certificate/key pairs on the server
-builder. The SDK uses that channel; avoid production target-name overrides.
-HTTP server adapters operate on an application-owned byte transport. The tested
-deployment uses nginx TLS 1.3 termination, loopback upstreams and SSE buffering
-disabled. Protect the proxy-to-adapter path with same-host loopback or an
-independently secured connection/network.
-
-The [launcher](../../tests/scripts/run_security_scenarios.py) generates isolated
-CAs and localhost certificates with fixed validity windows. Public clients
-accept trusted certificates and reject unrelated CAs, expired certificates and
-hostname mismatches on every binding. It also runs a standalone gRPC TLS adapter
-test. Tests never disable verification or depend on external services.
-Requirement mapping: `AUTH-TLS-001/002`, `AUTH-SERVER-001`, `GRPC-SVC-003`.
+gRPC uses native `grpc::SslCredentials`/`grpc::SslServerCredentials`: supply PEM
+roots on channels and certificate/key pairs on the server builder. Avoid production
+target-name overrides. HTTP adapters use application-owned byte transports; the
+fixture uses nginx TLS 1.3 termination, loopback upstreams and SSE buffering disabled.
+Protect proxy-to-adapter traffic with same-host loopback or another secured connection.
+The [launcher](../../tests/scripts/run_security_scenarios.py) generates isolated CAs
+and fixed-validity certificates and checks trust, expiry and hostname failures
+without disabling verification or contacting external services.
 
 ## Signed Agent Cards
 
-Enable `A2A_ENABLE_SIGNING=ON` and link `a2a::signing` for OpenSSL 3.0+ Ed25519
-signing. Core/client/server acquire no new direct dependency. With vcpkg select
-`VCPKG_MANIFEST_FEATURES=signing`. Installed packages expose
-`A2A_CPP_HAS_AGENT_CARD_SIGNING` and the signing target when enabled.
-Canonicalization remains in `a2a::core` via `a2a/core/json_canonicalization.h`.
+Enable `A2A_ENABLE_SIGNING=ON` and link `a2a::signing` for OpenSSL 3.0+ Ed25519.
+Only signing adds this direct dependency. With vcpkg select
+`VCPKG_MANIFEST_FEATURES=signing`; installed packages expose
+`A2A_CPP_HAS_AGENT_CARD_SIGNING` and the enabled target. Canonicalization stays in
+`a2a::core` via `a2a/core/json_canonicalization.h`.
 
 ```cpp
 auto signed_card = a2a::core::SignAgentCard(card, key_id, private_key_pem);
@@ -174,36 +148,38 @@ discovery.SetAgentCardVerifier([&](std::string_view json) {
 });
 ```
 
-The protected JWS header contains `alg: EdDSA`, nonempty `kid` and `typ: JOSE`;
-the payload excludes the entire `signatures` field and uses RFC 8785 JCS.
-`CanonicalizeJson` validates strict JSON, rejects duplicate keys, invalid Unicode
-and nonfinite numbers, sorts members by UTF-16 code units and formats IEEE-754
-numbers using ECMAScript thresholds. Arrays retain order. Limits are 1 MiB and
-128 nesting levels. Existing ProtoJSON helpers and generic protobuf `Value`
-retain unknown fields; no additional JSON library is required.
+Protected JWS headers contain `alg: EdDSA`, nonempty `kid`, and `typ: JOSE`.
+RFC 8785 JCS canonicalizes the payload after removing `signatures`.
+`CanonicalizeJson` rejects duplicate keys, invalid Unicode and nonfinite numbers,
+sorts members by UTF-16 code units, uses ECMAScript number thresholds and retains
+array order. Limits are 1 MiB and 128 nesting levels. Strict syntax validation
+and existing ProtoJSON/protobuf `Value` parsing require no new JSON library.
 
-Verification uses original discovery JSON including unknown fields. At least one
-signature must verify with an application-trusted EdDSA key; unknown, invalid,
-expired or revoked signatures do not defeat another trusted signature. The
-resolver supplies a public key, validity interval and revocation status; callers
-supply time. Noncritical headers (`typ`, `jku`, etc.) and unprotected annotations
-are accepted, but overlapping protected/unprotected names are rejected. This
-profile rejects `crit` and unencoded payloads and does not yet support ES256 or
-RS256. `jku` never triggers a network fetch. Applications provision trusted keys.
+Verification preserves original JSON, including unknown fields. At least one
+signature must verify with an application-trusted key; unknown/invalid/expired/
+revoked signatures do not defeat another valid signature. Resolvers provide
+keys, validity and revocation; callers supply time. Noncritical protected headers
+(`typ`, `jku`, etc.) and unprotected annotations are accepted; overlapping names,
+`crit` and unencoded payloads are rejected. ES256/RS256 are not implemented.
+`jku` never fetches keys. Signing uses protobuf field-presence serialization;
+empty/default-field differences await [A2A #2122](https://github.com/a2aproject/A2A/issues/2122).
 
-Signing uses protobuf field-presence serialization; verification preserves all
-received members except `signatures`. Cross-SDK empty/default-field treatment
-remains an [upstream clarification (A2A #2122)](https://github.com/a2aproject/A2A/issues/2122).
-Discovery verifies before parsing/caching and again on every cache hit. Failed
-cached verification evicts the entry and fetches a replacement under the current
-verifier; refresh failure never returns the invalid card. Extended discovery
-uses the same verifier. Without a configured verifier, unsigned-card behavior
-remains unchanged. Applications decide whether signatures are required.
+Discovery verifies before parsing/caching and on every cache hit, including
+extended cards. Invalid cached cards are evicted and refreshed under the current
+verifier; refresh failure never returns the invalid card. Without a verifier,
+unsigned behavior remains unchanged. Applications choose signature requirements
+and provision trusted keys.
 
-`JsonCanonicalizationTest` uses the Python SDK's independent RFC 8785 corpus.
-`AgentCardSigningTest` uses the Python/Go shared Ed25519 card and independently
-signed header cases, with provenance retained, plus tampering, key validity and
-cached policy-change tests. Requirement mapping: `CARD-SIGN-001..004`.
+The [JCS corpus](../../tests/support/security/jcs_vectors.json) is Python SDK
+`a2a-jcs-v01` at `0ee47d7baa47a706e33934a4e4c3d46bad16298f`, with independent
+oracles/provenance retained. Two rejection cases check signature-field exclusion
+separately from generic JSON syntax. The [Ed25519 vector](../../tests/support/security/sdk_signing_vector.json)
+is Go SDK `a2acrypto/testdata/golden.json` at
+`e85760e87ce007bfbd02e38374a4ce2fc2037fe3`, generated by its Python-SDK
+`gen_golden.py` and reproduced by Go tests. Both SDKs use Apache-2.0.
+Additional header cases use OpenSSL CLI and the published test key; Python sorted,
+compact ASCII JSON matches the golden payload. All fixture keys are public test
+material, never deployment credentials.
 
 ## SUT configuration and upstream reporting
 
@@ -217,25 +193,22 @@ export A2A_TCK_TASK_CREDENTIAL='<out-of-band credential fixture>'
 ./scripts/run_tck_sut.sh
 ```
 
-Tokens must be nonempty and distinct. New messages use `contextId=alice` or
-`contextId=bob` with the matching identity. A `request-authorization` text part
-creates a pending task. The background fixture reader authorizes/completes it
-when a file named after its server-generated ID contains exactly the configured
-credential. Keep files/directories owner-readable only. These are deterministic
-application fixtures, not a production identity system or an A2A credential endpoint.
+Tokens must be distinct/nonempty; messages use `contextId=alice`/`bob` with the
+matching identity. A `request-authorization` text part creates a pending task.
+The fixture reader authorizes/completes it when a file named after its generated
+ID exactly matches the configured credential. Keep files/directories owner-readable
+only. This local fixture is not an A2A credential endpoint or production identity system.
 
-Configure `A2A_TCK_TLS_CERT_FILE` and `A2A_TCK_TLS_KEY_FILE` together for native
-gRPC TLS, and `A2A_TCK_PUBLIC_HTTPS_BASE` for externally terminated HTTP card URLs.
-The secure HTTP listener remains loopback. Configure `A2A_TCK_SIGNING_KEY_FILE`
-and `A2A_TCK_SIGNING_KEY_ID` to sign public/extended cards; the extended card is
-re-signed after modification.
+Set `A2A_TCK_TLS_CERT_FILE` and `A2A_TCK_TLS_KEY_FILE` together for native gRPC
+TLS, and `A2A_TCK_PUBLIC_HTTPS_BASE` for externally terminated HTTP card URLs;
+secure HTTP listeners remain loopback. `A2A_TCK_SIGNING_KEY_FILE` and
+`A2A_TCK_SIGNING_KEY_ID` enable card signing, including re-signing extended cards.
 
-TCK CI runs SDK security CTest evidence separately from the unmodified upstream
-mandatory runner. No local Python TCK assertions or report gates are added.
-At upstream revision `263b9cfaf16a554bdfb166a7ba5b67716e946349`, security groups
-are registered without executable assertions and remain **NOT TESTED** in
-upstream reports. The SDK evidence does not raise that percentage. Upstream
-integration is tracked by [a2a-cpp #305](https://github.com/MisterVVP/a2a-cpp/issues/305),
-[a2a-tck task 27](https://github.com/a2aproject/a2a-tck/blob/main/backlog/tasks/task-27%20-%20Add-auth-security-conformance-tests-AUTH.md),
-[a2a-tck task 29](https://github.com/a2aproject/a2a-tck/blob/main/backlog/tasks/task-29%20-%20Add-agent-card-signing-conformance-tests-CARD-SIGN.md)
-and the `GRPC-SVC-003` coverage backlog.
+CI runs SDK evidence separately from the unmodified upstream mandatory runner.
+At `263b9cfaf16a554bdfb166a7ba5b67716e946349`, upstream security groups lack
+executable assertions and remain **NOT TESTED**. SDK tests do not raise that
+percentage; no local TCK assertions/report gates are added. Follow-ups:
+[a2a-cpp #305](https://github.com/MisterVVP/a2a-cpp/issues/305),
+[TCK task 27](https://github.com/a2aproject/a2a-tck/blob/main/backlog/tasks/task-27%20-%20Add-auth-security-conformance-tests-AUTH.md),
+[TCK task 29](https://github.com/a2aproject/a2a-tck/blob/main/backlog/tasks/task-29%20-%20Add-agent-card-signing-conformance-tests-CARD-SIGN.md)
+and `GRPC-SVC-003`.

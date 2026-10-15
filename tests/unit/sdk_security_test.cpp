@@ -40,6 +40,7 @@ constexpr int kFirstAuditId = 1;
 constexpr int kSecondAuditId = 2;
 constexpr std::size_t kAuditInterceptorCount = 2;
 constexpr std::string_view kMissingAuditError = "audit hook did not receive the dispatch error";
+constexpr std::string_view kReadFailure = "injected task lookup failure";
 
 struct AuditEvent {
   int id;
@@ -169,8 +170,14 @@ class SdkSecurityTest : public testing::Test {
     ASSERT_FALSE(hidden.ok());
     ASSERT_FALSE(absent.ok());
     EXPECT_EQ(hidden.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
-    EXPECT_EQ(hidden.error().protocol_code(), absent.error().protocol_code());
-    EXPECT_EQ(hidden.error().http_status(), absent.error().http_status());
+    CheckSameError(hidden.error(), absent.error());
+  }
+  static void CheckSameError(const a2a::core::Error& actual, const a2a::core::Error& expected) {
+    EXPECT_EQ(actual.code(), expected.code());
+    EXPECT_EQ(actual.message(), expected.message());
+    EXPECT_EQ(actual.protocol_code(), expected.protocol_code());
+    EXPECT_EQ(actual.http_status(), expected.http_status());
+    EXPECT_EQ(actual.transport(), expected.transport());
   }
   ListTasksResponse ListPage(const ListTasksRequest& query) {
     auto result = dispatcher.Dispatch({.operation = DispatcherOperation::kListTasks, .payload = query}, context);
@@ -226,7 +233,7 @@ class SdkSecurityTest : public testing::Test {
   }
   std::vector<AuditEvent> audit_events;
   std::size_t before_calls = 0;
-  InMemoryTaskStore store;
+  ObservedTaskStore store;
   a2a::examples::ExampleExecutor executor{
       {.task_store = &store, .push_store = nullptr, .push_delivery = nullptr, .task_id_generator = {}}};
   Dispatcher dispatcher{&executor};
@@ -306,6 +313,25 @@ TEST_F(SdkSecurityTest, UnaryCreationAcceptsAnOwnedTask) {
   EXPECT_TRUE(DispatchUnary(std::move(response)).ok());
 }
 
+TEST_F(SdkSecurityTest, TaskResponsesAuthorizeTheActualTask) {
+  DispatchSecurity security(policy, &store);
+  context.principal = kAlice;
+  auto denied = security.AuthorizeResponse(DispatchResponse(Task(kOtherTaskId, kBob)), context);
+  ASSERT_FALSE(denied.ok());
+  CheckSameError(denied.error(), a2a::core::protocol_errors::TaskNotFound());
+  EXPECT_TRUE(security.AuthorizeResponse(DispatchResponse(Task(kThirdTaskId, kAlice)), context).ok());
+}
+
+TEST_F(SdkSecurityTest, TaskLookupFailuresPreserveErrorsOtherThanTaskNotFound) {
+  for (const auto& error : {a2a::core::Error::Internal(std::string(kReadFailure)),
+                            a2a::core::protocol_errors::PermissionDenied(std::string(kReadFailure))}) {
+    store.read_error = error;
+    auto result = dispatcher.Dispatch(ResourceOperations(kTaskId).front(), context);
+    ASSERT_FALSE(result.ok());
+    CheckSameError(result.error(), error);
+  }
+}
+
 TEST_F(SdkSecurityTest, UnaryMessageRejectsForeignAndMissingAssociatedTasks) {
   for (const auto id : {kOtherTaskId, kMissingTaskId}) {
     lf::a2a::v1::SendMessageResponse response;
@@ -313,7 +339,7 @@ TEST_F(SdkSecurityTest, UnaryMessageRejectsForeignAndMissingAssociatedTasks) {
     response.mutable_message()->set_context_id(std::string(kAlice));
     auto result = DispatchUnary(std::move(response));
     ASSERT_FALSE(result.ok());
-    EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+    CheckSameError(result.error(), a2a::core::protocol_errors::TaskNotFound());
   }
 }
 
@@ -356,6 +382,9 @@ TEST_F(SdkSecurityTest, StreamsAllowTasklessMessagesAndCheckAssociatedMessageOwn
     event.mutable_message()->set_task_id(std::string(id));
     auto result = ReadProtectedEvent(event);
     EXPECT_EQ(result.ok(), id.empty() || id == kTaskId);
+    if (!result.ok()) {
+      CheckSameError(result.error(), a2a::core::protocol_errors::TaskNotFound());
+    }
   }
 }
 

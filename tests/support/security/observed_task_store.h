@@ -4,6 +4,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "a2a/server/tasks/in_memory_task_store.h"
@@ -33,7 +34,9 @@ class ObservedTaskStore final : public server::TaskStore {
     }
     return result;
   }
-  core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override { return backing.Get(id); }
+  core::Result<lf::a2a::v1::Task> Get(std::string_view id) const override {
+    return read_error.has_value() ? core::Result<lf::a2a::v1::Task>(*read_error) : backing.Get(id);
+  }
   core::Result<server::ListTasksResponse> List(const server::ListTasksRequest& request) const override {
     list_queries.push_back(request);
     return backing.List(request);
@@ -48,6 +51,7 @@ class ObservedTaskStore final : public server::TaskStore {
   }
 
   server::InMemoryTaskStore backing;
+  std::optional<core::Error> read_error;
   bool fail_next_write = false;
   std::size_t conditional_writes = 0;
   std::function<void()> before_write;

@@ -18,6 +18,22 @@ constexpr std::string_view kMissingSecurityConfiguration = "security policy and 
 constexpr std::string_view kInvalidPageSize = "page size exceeds maximum";
 constexpr std::string_view kEmptyIdentity = "authentication returned an empty identity";
 
+core::Result<lf::a2a::v1::Task> GetAuthorizedTask(TaskStore& store, const SecurityPolicy& policy,
+                                                  const RequestContext& context, std::string_view id) {
+  auto task = store.Get(id);
+  if (!task.ok()) {
+    const auto& error = task.error();
+    return error.code() == core::ErrorCode::kRemoteProtocol &&
+                   error.protocol_code() == core::protocol_codes::kTaskNotFound
+               ? core::protocol_errors::TaskNotFound()
+               : error;
+  }
+  if (!policy.CanAccessTask(task.value(), context)) {
+    return core::protocol_errors::TaskNotFound();
+  }
+  return task;
+}
+
 std::string TaskId(const DispatchRequest& request) {
   return std::visit(
       [](const auto& payload) -> std::string {
@@ -71,12 +87,9 @@ class AuthorizedStream final : public ServerStreamSession {
  private:
   core::Result<std::optional<lf::a2a::v1::StreamResponse>> Read(std::optional<std::chrono::milliseconds> timeout) {
     if (!task_id_.empty()) {
-      auto task = store_->Get(task_id_);
+      auto task = GetAuthorizedTask(*store_, *policy_, context_, task_id_);
       if (!task.ok()) {
         return task.error();
-      }
-      if (!policy_->CanAccessTask(task.value(), context_)) {
-        return core::protocol_errors::TaskNotFound();
       }
     }
     auto event = timeout.has_value() ? stream_->NextFor(*timeout) : stream_->Next();
@@ -94,12 +107,9 @@ class AuthorizedStream final : public ServerStreamSession {
       }
       return event;
     }
-    auto task = store_->Get(id);
+    auto task = GetAuthorizedTask(*store_, *policy_, context_, id);
     if (!task.ok()) {
       return task.error();
-    }
-    if (!policy_->CanAccessTask(task.value(), context_)) {
-      return core::protocol_errors::TaskNotFound();
     }
     task_id_ = id;
     return event;
@@ -131,12 +141,9 @@ core::Result<void> DispatchSecurity::Authorize(const DispatchRequest& request, R
   context.principal = std::move(identity.value());
   const auto task_id = TaskId(request);
   if (!task_id.empty()) {
-    auto task = task_store_->Get(task_id);
+    auto task = GetAuthorizedTask(*task_store_, *policy_, context, task_id);
     if (!task.ok()) {
       return task.error();
-    }
-    if (!policy_->CanAccessTask(task.value(), context)) {
-      return core::protocol_errors::TaskNotFound();
     }
   }
   if (!policy_->AuthorizeOperation(request, context)) {
@@ -147,23 +154,17 @@ core::Result<void> DispatchSecurity::Authorize(const DispatchRequest& request, R
 
 core::Result<void> DispatchSecurity::AuthorizeResponse(const DispatchResponse& response,
                                                        const RequestContext& context) const {
-  const auto* send = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload());
-  if (send == nullptr) {
-    return {};
-  }
-  if (send->has_task()) {
-    return policy_->CanAccessTask(send->task(), context) ? core::Result<void>{} : core::protocol_errors::TaskNotFound();
-  }
-  if (send->has_message() && !send->message().task_id().empty()) {
-    auto task = task_store_->Get(send->message().task_id());
-    if (!task.ok()) {
-      return task.error();
-    }
-    if (!policy_->CanAccessTask(task.value(), context)) {
-      return core::protocol_errors::TaskNotFound();
+  const auto* task = std::get_if<lf::a2a::v1::Task>(&response.payload());
+  if (const auto* send = std::get_if<lf::a2a::v1::SendMessageResponse>(&response.payload())) {
+    if (send->has_task()) {
+      task = &send->task();
+    } else if (send->has_message() && !send->message().task_id().empty()) {
+      auto associated = GetAuthorizedTask(*task_store_, *policy_, context, send->message().task_id());
+      return associated.ok() ? core::Result<void>{} : associated.error();
     }
   }
-  return {};
+  return task == nullptr || policy_->CanAccessTask(*task, context) ? core::Result<void>{}
+                                                                   : core::protocol_errors::TaskNotFound();
 }
 
 core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksRequest& request,
@@ -196,12 +197,9 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
     return valid_offset.error();
   }
   for (const auto& id : selected_ids) {
-    auto task = task_store_->Get(id);
+    auto task = GetAuthorizedTask(*task_store_, *policy_, context, id);
     if (!task.ok()) {
       return task.error();
-    }
-    if (!policy_->CanAccessTask(task.value(), context)) {
-      return core::protocol_errors::TaskNotFound();
     }
     response.tasks.push_back(ProjectTaskForList(task.value(), request.include_artifacts, request.history_length));
   }

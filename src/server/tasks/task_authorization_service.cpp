@@ -117,9 +117,6 @@ core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Persist(TaskStore::Tas
 core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Authorize(std::string_view task_id,
                                                                     std::string_view credential) {
   std::lock_guard lock(mutex_);
-  if (store_ == nullptr) {
-    return core::Error::Internal(std::string(kMissingTaskStore));
-  }
   auto snapshot = Snapshot(task_id);
   if (!snapshot.ok()) {
     return snapshot.error();

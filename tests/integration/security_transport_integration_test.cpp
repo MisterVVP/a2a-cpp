@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
+#include <google/protobuf/struct.pb.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/credentials.h>
 #include <grpcpp/security/server_credentials.h>
@@ -12,6 +13,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "a2a/client/grpc_transport.h"
@@ -19,6 +21,7 @@
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protojson.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
@@ -50,6 +53,9 @@ constexpr auto kCallTimeout = std::chrono::seconds(2);
 constexpr std::string_view kRestPath = "/a2a";
 constexpr std::string_view kTaskId = "sdk-transport-owned-task";
 constexpr std::string_view kOtherTaskId = "sdk-transport-other-task";
+constexpr std::string_view kMissingTaskId = "sdk-transport-missing-task";
+constexpr std::string_view kErrorField = "error";
+constexpr std::string_view kMessageField = "message";
 constexpr std::string_view kAlice = "alice";
 constexpr std::string_view kBob = "bob";
 constexpr std::string_view kBearerKey = "bearer_token";
@@ -123,6 +129,22 @@ class Policy final : public a2a::server::SecurityPolicy {
   }
 };
 
+class ResponseExecutor final : public a2a::examples::ExampleExecutor {
+ public:
+  using ExampleExecutor::ExampleExecutor;
+  a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                               a2a::server::RequestContext& context) override {
+    return task_response.has_value() ? a2a::core::Result<lf::a2a::v1::Task>(*task_response)
+                                     : ExampleExecutor::GetTask(request, context);
+  }
+  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                  a2a::server::RequestContext& context) override {
+    return task_response.has_value() ? a2a::core::Result<lf::a2a::v1::Task>(*task_response)
+                                     : ExampleExecutor::CancelTask(request, context);
+  }
+  std::optional<lf::a2a::v1::Task> task_response;
+};
+
 class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> {
  protected:
   void SetUp() override {
@@ -169,7 +191,7 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
     ASSERT_TRUE(store_.CreateOrUpdate(task).ok());
   }
-  a2a::core::Result<a2a::client::HttpClientResponse> Handle(const a2a::client::HttpRequest& request) const {
+  a2a::core::Result<a2a::client::HttpClientResponse> Handle(const a2a::client::HttpRequest& request) {
     a2a::server::HttpServerRequest incoming{.method = request.method,
                                             .target = a2a::core::ExtractTargetPath(request.url),
                                             .headers = request.headers,
@@ -179,6 +201,7 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
     if (!response.ok()) {
       return response.error();
     }
+    last_http_body_ = response.value().body;
     return a2a::client::HttpClientResponse{.status_code = response.value().status_code,
                                            .headers = response.value().headers,
                                            .body = response.value().body};
@@ -205,8 +228,30 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
       EXPECT_EQ(error.protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
     }
   }
+  static void ExpectHiddenTask(const a2a::core::Result<lf::a2a::v1::Task>& result) {
+    ASSERT_FALSE(result.ok());
+    ExpectHidden(result.error());
+  }
+  std::string ServerErrorMessage(const a2a::core::Error& error) const {
+    if (GetParam() == Binding::kGrpc) {
+      return std::string(error.message());
+    }
+    google::protobuf::Struct envelope;
+    const auto parsed = a2a::core::JsonToMessage(last_http_body_, &envelope);
+    EXPECT_TRUE(parsed.ok());
+    if (!parsed.ok()) {
+      return {};
+    }
+    return envelope.fields()
+        .at(std::string(kErrorField))
+        .struct_value()
+        .fields()
+        .at(std::string(kMessageField))
+        .string_value();
+  }
+  std::string last_http_body_;
   a2a::server::InMemoryTaskStore store_;
-  a2a::examples::ExampleExecutor executor_{
+  ResponseExecutor executor_{
       {.task_store = &store_, .push_store = nullptr, .push_delivery = nullptr, .task_id_generator = {}}};
   a2a::server::Dispatcher dispatcher_{&executor_};
   a2a::server::RestServerTransport rest_adapter_{&dispatcher_,
@@ -232,6 +277,11 @@ TEST_P(SecurityTransportIntegrationTest, AuthenticationAndHiddenResourcesUseBind
   auto hidden = client_->GetTask(get, Options(kBobToken));
   ASSERT_FALSE(hidden.ok());
   ExpectHidden(hidden.error());
+  const auto hidden_message = ServerErrorMessage(hidden.error());
+  get.set_id(std::string(kMissingTaskId));
+  auto absent = client_->GetTask(get, Options(kBobToken));
+  ASSERT_FALSE(absent.ok());
+  EXPECT_EQ(hidden_message, ServerErrorMessage(absent.error()));
 }
 TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
   auto listed = client_->ListTasks({}, Options(kBobToken));
@@ -239,6 +289,17 @@ TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
   ASSERT_EQ(listed.value().tasks.size(), kTaskCount);
   EXPECT_EQ(listed.value().tasks.front().id(), kOtherTaskId);
   EXPECT_TRUE(listed.value().next_page_token.empty());
+}
+TEST_P(SecurityTransportIntegrationTest, GetAndCancelRejectForeignExecutorResponses) {
+  auto foreign = store_.Get(kOtherTaskId);
+  ASSERT_TRUE(foreign.ok());
+  executor_.task_response = std::move(foreign.value());
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  lf::a2a::v1::CancelTaskRequest cancel;
+  cancel.set_id(std::string(kTaskId));
+  ExpectHiddenTask(client_->GetTask(get, Options(kAliceToken)));
+  ExpectHiddenTask(client_->CancelTask(cancel, Options(kAliceToken)));
 }
 TEST_P(SecurityTransportIntegrationTest, TlsCertificateValidationWithoutSut) {
   if (GetParam() != Binding::kGrpc) {
