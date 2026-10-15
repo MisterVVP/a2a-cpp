@@ -12,7 +12,7 @@ Server-side metadata extraction (`RequestContext::auth_metadata`) is populated f
 See `README.md` and `tests/integration/rest_server_transport_integration_test.cpp` for end-to-end auth propagation examples.
 
 For server-side enforcement, configure the SDK dispatcher's
-[security policy](compliance/security-permissions.md). See also
-[task authorization](compliance/task-authorization.md),
-[TLS deployment](compliance/security-tls.md), and
-[signed Agent Cards](compliance/card-signing.md).
+[security policy](compliance/security-scenarios.md#caller-permissions). See also
+[task authorization](compliance/security-scenarios.md#task-authorization),
+[TLS deployment](compliance/security-scenarios.md#tls-and-server-identity), and
+[signed Agent Cards](compliance/security-scenarios.md#signed-agent-cards).

@@ -844,6 +844,7 @@ void ConfigureTraceRequest(CURL* handle, const a2a::http::Request& request, bool
                            a2a::http::detail::HeaderCapture& capture) {
   a2a::http::detail::CurlHeaderList headers;
   if (configure) {
+    curl_easy_reset(handle);
     EXPECT_TRUE(a2a::http::detail::ConfigureCurl(handle, request, headers, &body, &capture).ok());
   } else {
     EXPECT_EQ(curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str()), CURLE_OK);
@@ -891,6 +892,7 @@ std::string DefaultCaBundle(CURL* handle) {
 }
 
 void ConfigureCustomCa(CURL* handle) {
+  curl_easy_reset(handle);
   a2a::http::Request request;
   request.method = a2a::core::http::kMethodGet;
   request.url = kUnusedLoopbackUrl;
@@ -1175,6 +1177,27 @@ struct StreamRequestCapture final {
       },
       [] { return false; });
 }
+
+#if defined(A2A_HAS_LIBCURL)
+constexpr std::string_view kMissingDiagnosticCaBundle = "/a2a-fixtures/diagnostic-missing-ca.pem";
+
+TEST(SharedHttpClientTest, PreservesDetailedTlsErrorsForUnaryAndStreamingRequests) {
+  a2a::http::Client client;
+  for (const bool streaming : {false, true}) {
+    LoopbackHttpServer server(BuildHttpResponse(kRestTaskBody));
+    a2a::http::Request request;
+    request.method = a2a::core::http::kMethodGet;
+    request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpsScheme);
+    request.timeout = std::chrono::milliseconds(kLoopbackTimeoutMs);
+    request.tls = a2a::http::TlsOptions{.ca_bundle_path = std::string(kMissingDiagnosticCaBundle)};
+    StreamRequestCapture capture;
+    const auto response =
+        streaming ? ExecuteCapturedStreamRequest(client, request, capture) : client.SendRequest(request);
+    ASSERT_FALSE(response.ok());
+    EXPECT_NE(response.error().message().find(kMissingDiagnosticCaBundle), std::string::npos);
+  }
+}
+#endif
 
 void ExpectSuccessfulEmptyStreamResponse(const a2a::core::Result<a2a::http::Response>& response) {
   ASSERT_TRUE(response.ok()) << response.error().message();

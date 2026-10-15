@@ -89,6 +89,9 @@ class AuthorizedStream final : public ServerStreamSession {
     }
     const auto id = EventTaskId(*item);
     if (id.empty()) {
+      if (!item->has_message()) {
+        return core::protocol_errors::TaskNotFound();
+      }
       return event;
     }
     auto task = store_->Get(id);

@@ -292,9 +292,7 @@ core::Result<void> ConfigureCurlMethodAndBody(CURL* handle, const Request& reque
 
 core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,
                                  std::string* response_body, HeaderCapture* response_headers) {
-  // Restore per-request defaults, including the compiled CA bundle, on pooled
-  // handles. libcurl retains the connection, DNS, and TLS session caches.
-  curl_easy_reset(handle);
+  // Callers reset pooled handles before installing their per-transfer error buffer.
   const auto http_version = MapHttpVersion(request.http_version);
   if (!http_version.ok()) {
     return http_version.error();

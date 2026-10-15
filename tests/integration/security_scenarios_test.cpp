@@ -25,7 +25,6 @@
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/core/agent_card/agent_card_signing.h"
 #include "support/security/fixtures.h"
-#include "sut/security_executor.h"
 #include "sut/sut_agent.h"
 
 namespace {

@@ -874,7 +874,6 @@ target_link_libraries(cpp_grpc_interop_server
 add_library(sut_runtime STATIC
   sut/sut_runtime.cpp
   sut/sut_agent.cpp
-  sut/security_executor.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
@@ -891,7 +890,6 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
     sut/sut_agent.cpp
-  sut/security_executor.cpp
     sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
@@ -1163,8 +1161,7 @@ add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
 target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(agent_card_signing_test PRIVATE a2a::client a2a::signing GTest::gtest_main)
 target_compile_definitions(agent_card_signing_test PRIVATE
-  A2A_SIGNING_INTEROP_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/sdk_signing_vector.json"
-  A2A_JWS_HEADER_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jws_header_vectors.json")
+  A2A_SIGNING_INTEROP_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/sdk_signing_vector.json")
 gtest_discover_tests(agent_card_signing_test DISCOVERY_MODE PRE_TEST
   PROPERTIES LABELS "security\;card_signing")
 

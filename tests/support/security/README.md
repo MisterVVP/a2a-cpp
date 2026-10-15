@@ -13,7 +13,7 @@ using the Python SDK, and the Go SDK tests reproduce the same signature. The
 public key is derived from its published test seed. Both SDK repositories use
 the Apache-2.0 license, as does this project.
 
-`jws_header_vectors.json` contains additional independently signed header cases
+Its `vectors` array contains additional independently signed header cases
 using the same published test key and OpenSSL's command-line Ed25519 signer.
 The ASCII-only payload uses Python's sorted, compact JSON representation;
 these payload bytes match the SDK golden card. The cases check permitted

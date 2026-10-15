@@ -333,20 +333,24 @@ TEST(AgentCardSigningTest, AcceptsUnprotectedAnnotationsButRejectsOverlappingHea
   EXPECT_FALSE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(Key()), kNow).ok());
 }
 
+constexpr std::string_view kVectorSignatures = "signatures";
 constexpr std::string_view kHeaderVectors = "vectors";
 constexpr std::string_view kHeaderVectorId = "id";
 constexpr std::string_view kHeaderAccepted = "accepted";
 constexpr int kHeaderVectorCount = 4;
 
 TEST(AgentCardSigningTest, IndependentSignedJwsHeaderCases) {
-  const auto corpus = ReadVectorFile(A2A_JWS_HEADER_VECTOR_FILE);
+  const auto corpus = ReadVectorFile(A2A_SIGNING_INTEROP_VECTOR_FILE);
   const auto resolver = VectorResolver(corpus);
   const auto& vectors = corpus.fields().at(std::string(kHeaderVectors)).list_value().values();
   ASSERT_EQ(vectors.size(), kHeaderVectorCount);
   for (const auto& vector : vectors) {
     const auto& fields = vector.struct_value().fields();
     SCOPED_TRACE(fields.at(std::string(kHeaderVectorId)).string_value());
-    auto raw = a2a::core::MessageToJson(fields.at(std::string(kVectorCard)));
+    auto card = corpus.fields().at(std::string(kVectorCard));
+    (*card.mutable_struct_value()->mutable_fields())[std::string(kVectorSignatures)] =
+        fields.at(std::string(kVectorSignatures));
+    auto raw = a2a::core::MessageToJson(card);
     ASSERT_TRUE(raw.ok());
     EXPECT_EQ(a2a::core::VerifyAgentCardJson(raw.value(), resolver, kNow).ok(),
               fields.at(std::string(kHeaderAccepted)).bool_value());

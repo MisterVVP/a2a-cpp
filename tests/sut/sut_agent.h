@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "a2a/core/result.h"
 #include "a2a/server/dispatcher.h"
@@ -13,6 +14,13 @@
 #include "sut/tck_sut.h"
 
 namespace a2a::tests::sut {
+
+inline constexpr std::string_view kAuthorizationTrigger = "request-authorization";
+inline constexpr std::string_view kAuthorizationExplanation =
+    "Supply the task credential using the out-of-band fixture directory.";
+inline constexpr std::string_view kAuthorizationStatusId = "authorization-request";
+inline constexpr char kCredentialDirectoryEnv[] = "A2A_TCK_CREDENTIAL_DIRECTORY";
+inline constexpr char kTaskCredentialEnv[] = "A2A_TCK_TASK_CREDENTIAL";
 
 inline constexpr char kProfileEnv[] = "A2A_TCK_PROFILE";
 inline constexpr char kAuthTokenEnv[] = "A2A_TCK_AUTH_TOKEN";

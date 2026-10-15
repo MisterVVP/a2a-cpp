@@ -65,28 +65,12 @@ class AuditInterceptor final : public ServerInterceptor {
   std::size_t& before_calls_;
 };
 
-class UnaryResponseExecutor final : public AgentExecutor {
+class ResponseExecutor final : public a2a::examples::ExampleExecutor {
  public:
-  explicit UnaryResponseExecutor(lf::a2a::v1::SendMessageResponse response) : response_(std::move(response)) {}
+  explicit ResponseExecutor(lf::a2a::v1::SendMessageResponse response) : response_(std::move(response)) {}
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& /*request*/,
                                                                   RequestContext& /*context*/) override {
     return response_;
-  }
-  a2a::core::Result<std::unique_ptr<ServerStreamSession>> SendStreamingMessage(
-      const lf::a2a::v1::SendMessageRequest& /*request*/, RequestContext& /*context*/) override {
-    return a2a::core::protocol_errors::UnsupportedOperation();
-  }
-  a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& /*request*/,
-                                               RequestContext& /*context*/) override {
-    return a2a::core::protocol_errors::UnsupportedOperation();
-  }
-  a2a::core::Result<ListTasksResponse> ListTasks(const ListTasksRequest& /*request*/,
-                                                 RequestContext& /*context*/) override {
-    return a2a::core::protocol_errors::UnsupportedOperation();
-  }
-  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& /*request*/,
-                                                  RequestContext& /*context*/) override {
-    return a2a::core::protocol_errors::UnsupportedOperation();
   }
 
  private:
@@ -223,11 +207,22 @@ class SdkSecurityTest : public testing::Test {
     EXPECT_EQ(event.error->http_status(), error.http_status());
   }
   a2a::core::Result<DispatchResponse> DispatchUnary(lf::a2a::v1::SendMessageResponse response) {
-    UnaryResponseExecutor unary(std::move(response));
+    ResponseExecutor unary(std::move(response));
     Dispatcher target(&unary);
     target.SetSecurityPolicy(policy, &store);
     AddAuditInterceptors(target);
     return target.Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = Message()}, context);
+  }
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> ReadProtectedEvent(
+      const lf::a2a::v1::StreamResponse& event, bool timed = false) {
+    DispatchSecurity security(policy, &store);
+    context.principal = kAlice;
+    DispatchResponse response(
+        std::make_unique<a2a::examples::SequenceStreamSession>(std::vector<lf::a2a::v1::StreamResponse>{event}));
+    security.ProtectStream({.operation = DispatcherOperation::kSendStreamingMessage, .payload = Message()}, context,
+                           response);
+    auto& stream = std::get<std::unique_ptr<ServerStreamSession>>(response.payload());
+    return timed ? stream->NextFor(kPollTimeout) : stream->Next();
   }
   std::vector<AuditEvent> audit_events;
   std::size_t before_calls = 0;
@@ -329,6 +324,41 @@ TEST_F(SdkSecurityTest, UnaryMessageAcceptsOwnedAndTasklessMessages) {
     EXPECT_TRUE(DispatchUnary(std::move(response)).ok());
   }
 }
+std::vector<lf::a2a::v1::StreamResponse> MissingTaskIdEvents() {
+  std::vector<lf::a2a::v1::StreamResponse> events;
+  lf::a2a::v1::StreamResponse event;
+  event.mutable_task()->set_context_id(std::string(kBob));
+  events.push_back(event);
+  event.Clear();
+  event.mutable_status_update()->set_context_id(std::string(kBob));
+  events.push_back(event);
+  event.Clear();
+  event.mutable_artifact_update()->set_context_id(std::string(kBob));
+  events.push_back(event);
+  event.Clear();
+  events.push_back(event);
+  return events;
+}
+
+TEST_F(SdkSecurityTest, StreamsRejectTaskEventsWithoutIdsOnOrdinaryAndTimedReads) {
+  for (const auto& event : MissingTaskIdEvents()) {
+    for (const bool timed : {false, true}) {
+      auto result = ReadProtectedEvent(event, timed);
+      ASSERT_FALSE(result.ok()) << event.DebugString();
+      EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+    }
+  }
+}
+
+TEST_F(SdkSecurityTest, StreamsAllowTasklessMessagesAndCheckAssociatedMessageOwnership) {
+  for (const auto id : {std::string_view{}, kTaskId, kOtherTaskId, kMissingTaskId}) {
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_message()->set_task_id(std::string(id));
+    auto result = ReadProtectedEvent(event);
+    EXPECT_EQ(result.ok(), id.empty() || id == kTaskId);
+  }
+}
+
 TEST_F(SdkSecurityTest, ListFiltersBeforeCountsProjectionsAndPagination) {
   ListTasksRequest query;
   query.page_size = 1;

@@ -92,7 +92,7 @@ class SequenceStreamSession final : public server::ServerStreamSession {
   std::size_t index_ = 0;
 };
 
-class ExampleExecutor final : public server::AgentExecutor {
+class ExampleExecutor : public server::AgentExecutor {
  public:
   explicit ExampleExecutor(ExampleExecutorOptions options = {})
       : owned_task_store_(options.task_store == nullptr ? std::make_unique<server::InMemoryTaskStore>() : nullptr),
