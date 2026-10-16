@@ -7,8 +7,10 @@
 #include <openssl/pem.h>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -43,12 +45,24 @@ using Digest = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
 
 [[noreturn]] void InvalidSignature() { throw std::invalid_argument(std::string(kInvalidSignature)); }
 
-std::string Base64Url(std::string_view input) {
+std::span<const unsigned char> Bytes(std::string_view text) {
+  // C++ permits unsigned char to inspect any object's representation. This view
+  // borrows the original text without changing its alignment, lifetime or size.
+  return {reinterpret_cast<const unsigned char*>(text.data()), text.size()};
+}
+
+std::string Base64Url(std::span<const unsigned char> input) {
+  // EVP_EncodeBlock returns an int and also writes a terminating NUL.
+  constexpr auto kMaximumInputSize =
+      (static_cast<std::size_t>(std::numeric_limits<int>::max()) - 1) / kBase64BlockSize * kBase64InputBlockSize;
+  if (input.size() > kMaximumInputSize) {
+    InvalidSignature();
+  }
   const auto encoded_size = kBase64BlockSize * ((input.size() + kBase64InputBlockSize - 1) / kBase64InputBlockSize);
   std::string output(encoded_size + 1, '\0');
+  // unsigned char may also write char storage; capacity includes OpenSSL's NUL.
   const int size =
-      EVP_EncodeBlock(reinterpret_cast<unsigned char*>(output.data()),
-                      reinterpret_cast<const unsigned char*>(input.data()), static_cast<int>(input.size()));
+      EVP_EncodeBlock(reinterpret_cast<unsigned char*>(output.data()), input.data(), static_cast<int>(input.size()));
   if (size < 0) {
     InvalidSignature();
   }
@@ -60,6 +74,8 @@ std::string Base64Url(std::string_view input) {
   std::ranges::replace(output, '/', '_');
   return output;
 }
+
+std::string Base64Url(std::string_view input) { return Base64Url(Bytes(input)); }
 
 std::string DecodeBase64Url(std::string_view encoded) {
   if (encoded.empty() || encoded.size() % kBase64BlockSize == 1) {
@@ -77,10 +93,14 @@ std::string DecodeBase64Url(std::string_view encoded) {
   std::ranges::replace(padded, '_', '/');
   const auto padding = (kBase64BlockSize - padded.size() % kBase64BlockSize) % kBase64BlockSize;
   padded.append(padding, '=');
+  if (padded.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    InvalidSignature();
+  }
   std::string decoded(padded.size(), '\0');
-  const int size =
-      EVP_DecodeBlock(reinterpret_cast<unsigned char*>(decoded.data()),
-                      reinterpret_cast<const unsigned char*>(padded.data()), static_cast<int>(padded.size()));
+  // Byte access to char storage is permitted; decoding writes at most 3/4 of
+  // padded.size() bytes, including bytes later removed for '=' padding.
+  const int size = EVP_DecodeBlock(reinterpret_cast<unsigned char*>(decoded.data()), Bytes(padded).data(),
+                                   static_cast<int>(padded.size()));
   if (size < 0 || static_cast<std::size_t>(size) < padding) {
     InvalidSignature();
   }
@@ -162,12 +182,12 @@ void ValidateHeaders(const JsonObject& protected_header, const JsonObject& signa
   }
 }
 
-std::string SigningInput(std::string_view protected_header, std::string_view encoded_payload) {
-  std::string input;
+std::vector<unsigned char> SigningInput(std::string_view protected_header, std::string_view encoded_payload) {
+  std::vector<unsigned char> input;
   input.reserve(protected_header.size() + encoded_payload.size() + 1);
-  input.append(protected_header);
+  input.insert(input.end(), protected_header.begin(), protected_header.end());
   input.push_back('.');
-  input.append(encoded_payload);
+  input.insert(input.end(), encoded_payload.begin(), encoded_payload.end());
   return input;
 }
 
@@ -198,8 +218,7 @@ void VerifySignature(const JsonValue& signature_value, std::string_view encoded_
   const auto input = SigningInput(protected_header, encoded_payload);
   Digest digest(EVP_MD_CTX_new(), EVP_MD_CTX_free);
   if (digest == nullptr || EVP_DigestVerifyInit(digest.get(), nullptr, nullptr, nullptr, key.get()) != 1 ||
-      EVP_DigestVerify(digest.get(), reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size(),
-                       reinterpret_cast<const unsigned char*>(input.data()), input.size()) != 1) {
+      EVP_DigestVerify(digest.get(), Bytes(bytes).data(), bytes.size(), input.data(), input.size()) != 1) {
     InvalidSignature();
   }
 }
@@ -228,11 +247,10 @@ Result<lf::a2a::v1::AgentCard> SignAgentCard(const lf::a2a::v1::AgentCard& card,
     const auto input = SigningInput(protected_header, Base64Url(internal::Canonicalize(payload)));
     auto key = ReadKey(private_key_pem, true);
     Digest digest(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    std::string signature(kEd25519SignatureSize, '\0');
+    std::array<unsigned char, kEd25519SignatureSize> signature{};
     std::size_t size = signature.size();
     if (digest == nullptr || EVP_DigestSignInit(digest.get(), nullptr, nullptr, nullptr, key.get()) != 1 ||
-        EVP_DigestSign(digest.get(), reinterpret_cast<unsigned char*>(signature.data()), &size,
-                       reinterpret_cast<const unsigned char*>(input.data()), input.size()) != 1 ||
+        EVP_DigestSign(digest.get(), signature.data(), &size, input.data(), input.size()) != 1 ||
         size != signature.size()) {
       InvalidSignature();
     }

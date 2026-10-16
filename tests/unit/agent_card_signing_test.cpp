@@ -60,6 +60,9 @@ constexpr std::size_t kRetriedFetchCount = 3;
 constexpr std::string_view kDiscoveryUnavailable = "fixture discovery unavailable";
 constexpr std::string_view kInvalidDiscoveryJson = "invalid discovery JSON";
 constexpr std::size_t kDiscoveryEndpointCount = 2;
+constexpr std::string_view kInvalidBase64Length = "A";
+constexpr std::string_view kInvalidBase64Character = "+";
+constexpr char kBase64Padding = '=';
 
 lf::a2a::v1::AgentCard Card() {
   return a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = std::string(kRestUrl),
@@ -94,6 +97,33 @@ TEST(AgentCardSigningTest, SignsDeterministicallyAndExcludesAllSignaturesFromPay
   ASSERT_TRUE(json.ok());
   EXPECT_TRUE(a2a::core::VerifyAgentCardJson(json.value(), Resolver(Key()), kNow).ok());
 }
+
+TEST(AgentCardSigningTest, RejectsMalformedSignatureByteEncodings) {
+  auto signed_card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
+  ASSERT_TRUE(signed_card.ok());
+  const auto signature = signed_card.value().signatures(0).signature();
+  ASSERT_FALSE(signature.empty());
+  auto noncanonical = signature;
+  // A 64-byte signature has four unused low bits in its last base64 character.
+  // Incrementing that character preserves decoded bytes but sets a padding bit.
+  ++noncanonical.back();
+  auto padded = signature;
+  padded.push_back(kBase64Padding);
+  const std::array invalid{std::string{},
+                           std::string(kInvalidBase64Length),
+                           std::string(kInvalidBase64Character),
+                           signature.substr(1),
+                           padded,
+                           noncanonical};
+  for (const auto& encoded : invalid) {
+    SCOPED_TRACE(encoded);
+    signed_card.value().mutable_signatures(0)->set_signature(encoded);
+    auto json = a2a::core::MessageToJson(signed_card.value());
+    ASSERT_TRUE(json.ok());
+    EXPECT_FALSE(a2a::core::VerifyAgentCardJson(json.value(), Resolver(Key()), kNow).ok());
+  }
+}
+
 TEST(AgentCardSigningTest, RejectsTamperingUnknownKeysAndExpiredOrRevokedKeys) {
   auto signed_card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
   ASSERT_TRUE(signed_card.ok());
