@@ -1,6 +1,10 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
+set(A2A_CPP_HAS_AGENT_CARD_SIGNING "@A2A_ENABLE_SIGNING@")
+if(A2A_CPP_HAS_AGENT_CARD_SIGNING)
+  find_dependency(OpenSSL 3.0)
+endif()
 
 find_dependency(Protobuf)
 find_dependency(gRPC)

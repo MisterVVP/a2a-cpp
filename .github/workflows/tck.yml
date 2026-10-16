@@ -47,7 +47,16 @@ jobs:
       - name: Install dependencies
         run: |
           ./scripts/install_build_deps.sh
+          ./scripts/install_security_test_deps.sh
           sudo apt-get install -y --no-install-recommends libpq-dev netcat-openbsd jq python3-venv nodejs npm postgresql-client
+
+      - name: Validate SDK security scenarios across bindings and stores
+        env:
+          A2A_TEST_POSTGRES_DSN: ${{ env.A2A_TCK_POSTGRES_DSN }}
+        run: |
+          cmake -S . -B build-security -G Ninja -DCMAKE_BUILD_TYPE=Debug -DA2A_ENABLE_POSTGRES_STORE=ON -DA2A_ENABLE_SIGNING=ON
+          cmake --build build-security --parallel 2 --target tck_sut sdk_security_test json_canonicalization_test task_authorization_service_test agent_card_signing_test security_transport_integration_test security_scenarios_test
+          ctest --test-dir build-security -L security --output-on-failure
 
       - name: Checkout TCK
         uses: actions/checkout@v6

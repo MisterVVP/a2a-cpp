@@ -1,0 +1,480 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
+
+#include <google/protobuf/struct.pb.h>
+#include <grpcpp/create_channel.h>
+#include <grpcpp/security/credentials.h>
+#include <grpcpp/security/server_credentials.h>
+#include <grpcpp/server_builder.h>
+#include <gtest/gtest.h>
+
+#include <array>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <string>
+
+#include "a2a/client/grpc_transport.h"
+#include "a2a/client/http_json_transport.h"
+#include "a2a/client/json_rpc_transport.h"
+#include "a2a/core/http_utils.h"
+#include "a2a/core/protocol_codes.h"
+#include "a2a/core/protojson.h"
+#include "a2a/server/grpc_server_transport.h"
+#include "a2a/server/json_rpc_server_transport.h"
+#include "a2a/server/rest_server_transport.h"
+#include "example_support.h"
+#include "support/security/fixtures.h"
+
+namespace {
+using Binding = a2a::client::PreferredTransport;
+using namespace a2a::tests::security;
+constexpr char kCertificateEnv[] = "A2A_TCK_TLS_CERT_FILE";
+constexpr char kPrivateKeyEnv[] = "A2A_TCK_TLS_KEY_FILE";
+constexpr char kCaEnv[] = "A2A_SECURITY_CA_FILE";
+constexpr char kTlsHostEnv[] = "A2A_SECURITY_TLS_HOST";
+constexpr char kModeEnv[] = "A2A_SECURITY_MODE";
+constexpr std::string_view kTrustedMode = "trusted";
+constexpr std::string_view kPlaintextMode = "plaintext";
+constexpr std::string_view kHostSeparator = ":";
+constexpr std::string_view kTlsTestScope = "TLS fixture assertions apply to native gRPC; HTTP adapters are in-process";
+constexpr std::string_view kRestBindingName = "HttpJson";
+constexpr std::string_view kRpcBindingName = "JsonRpc";
+constexpr std::string_view kGrpcBindingName = "Grpc";
+constexpr std::array kBindings{Binding::kRest, Binding::kJsonRpc, Binding::kGrpc};
+constexpr std::string_view kBindAddress = "127.0.0.1:0";
+constexpr std::string_view kHostPrefix = "127.0.0.1:";
+constexpr std::string_view kRestUrl = "http://agent.local/a2a";
+constexpr std::string_view kRpcUrl = "http://agent.local/rpc";
+constexpr std::string_view kRpcPath = "/rpc";
+constexpr auto kCallTimeout = std::chrono::seconds(2);
+constexpr std::string_view kRestPath = "/a2a";
+constexpr std::string_view kTaskId = "sdk-transport-owned-task";
+constexpr std::string_view kOtherTaskId = "sdk-transport-other-task";
+constexpr std::string_view kMissingTaskId = "sdk-transport-missing-task";
+constexpr std::string_view kMessageId = "sdk-transport-message";
+constexpr std::string_view kMessageText = "security request";
+constexpr std::string_view kErrorField = "error";
+constexpr std::string_view kMessageField = "message";
+constexpr std::string_view kPushUrl = "https://example.invalid/security-push";
+constexpr std::string_view kPushId = "sdk-transport-push";
+constexpr std::string_view kAlice = "alice";
+constexpr std::string_view kBob = "bob";
+constexpr std::string_view kBearerKey = "bearer_token";
+constexpr int kUnauthorized = 401;
+constexpr int kGrpcUnauthenticated = 16;
+constexpr int kGrpcInternal = 13;
+constexpr std::string_view kJsonRpcInternal = "-32603";
+constexpr int kNotFound = 404;
+constexpr int kGrpcNotFound = 5;
+constexpr std::size_t kTaskCount = 1;
+
+std::string BindingName(Binding binding) {
+  switch (binding) {
+    case Binding::kRest:
+      return std::string(kRestBindingName);
+    case Binding::kJsonRpc:
+      return std::string(kRpcBindingName);
+    case Binding::kGrpc:
+      return std::string(kGrpcBindingName);
+  }
+  return {};
+}
+
+std::string Environment(const char* name) {
+  const char* value = std::getenv(name);
+  return value == nullptr ? std::string{} : std::string(value);
+}
+std::string ReadFile(const std::string& path) {
+  std::ifstream file(path);
+  return {std::istreambuf_iterator<char>(file), {}};
+}
+std::shared_ptr<grpc::ServerCredentials> ServerCredentials() {
+  const auto certificate = Environment(kCertificateEnv);
+  if (certificate.empty()) {
+    return grpc::InsecureServerCredentials();
+  }
+  grpc::SslServerCredentialsOptions options;
+  options.pem_key_cert_pairs.push_back({ReadFile(Environment(kPrivateKeyEnv)), ReadFile(certificate)});
+  return grpc::SslServerCredentials(options);
+}
+std::shared_ptr<grpc::ChannelCredentials> ChannelCredentials() {
+  const auto ca = Environment(kCaEnv);
+  if (ca.empty()) {
+    return grpc::InsecureChannelCredentials();
+  }
+  grpc::SslCredentialsOptions options;
+  options.pem_root_certs = ReadFile(ca);
+  return grpc::SslCredentials(options);
+}
+
+class Policy final : public a2a::server::SecurityPolicy {
+ public:
+  [[nodiscard]] a2a::core::Result<std::string> Authenticate(const a2a::server::RequestContext& context) const override {
+    const auto token = context.auth_metadata.find(std::string(kBearerKey));
+    if (token == context.auth_metadata.end()) {
+      return a2a::core::protocol_errors::Unauthenticated();
+    }
+    if (token->second == kAliceToken) {
+      return std::string(kAlice);
+    }
+    if (token->second == kBobToken) {
+      return std::string(kBob);
+    }
+    return a2a::core::protocol_errors::Unauthenticated();
+  }
+  [[nodiscard]] bool AuthorizeOperation(const a2a::server::DispatchRequest& /*request*/,
+                                        const a2a::server::RequestContext& /*context*/) const override {
+    return true;
+  }
+  [[nodiscard]] bool CanAccessTask(const lf::a2a::v1::Task& task,
+                                   const a2a::server::RequestContext& context) const override {
+    return task.context_id() == context.principal;
+  }
+};
+
+class ResponseExecutor final : public a2a::examples::ExampleExecutor {
+ public:
+  using ExampleExecutor::ExampleExecutor;
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
+    if (!task_response.has_value()) {
+      return ExampleExecutor::SendMessage(request, context);
+    }
+    lf::a2a::v1::SendMessageResponse response;
+    *response.mutable_task() = *task_response;
+    return response;
+  }
+  a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                               a2a::server::RequestContext& context) override {
+    return task_response.has_value() ? a2a::core::Result<lf::a2a::v1::Task>(*task_response)
+                                     : ExampleExecutor::GetTask(request, context);
+  }
+  a2a::core::Result<lf::a2a::v1::Task> CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
+                                                  a2a::server::RequestContext& context) override {
+    return task_response.has_value() ? a2a::core::Result<lf::a2a::v1::Task>(*task_response)
+                                     : ExampleExecutor::CancelTask(request, context);
+  }
+  std::optional<lf::a2a::v1::Task> task_response;
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> CreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, a2a::server::RequestContext& context) override {
+    return push_response.has_value() ? a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>(*push_response)
+                                     : ExampleExecutor::CreateTaskPushNotificationConfig(request, context);
+  }
+  a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig> GetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, a2a::server::RequestContext& context) override {
+    return push_response.has_value() ? a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>(*push_response)
+                                     : ExampleExecutor::GetTaskPushNotificationConfig(request, context);
+  }
+  a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> ListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
+      a2a::server::RequestContext& context) override {
+    if (!push_response.has_value()) {
+      return ExampleExecutor::ListTaskPushNotificationConfigs(request, context);
+    }
+    lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
+    *response.add_configs() = *push_response;
+    response.mutable_configs(0)->set_task_id(request.task_id());
+    *response.add_configs() = *push_response;
+    return response;
+  }
+  std::optional<lf::a2a::v1::TaskPushNotificationConfig> push_response;
+};
+
+class ReassigningStream final : public a2a::server::ServerStreamSession {
+ public:
+  explicit ReassigningStream(a2a::server::TaskStore& store) : store_(store) {}
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    auto task = store_.Get(kTaskId);
+    if (!task.ok()) {
+      return task.error();
+    }
+    task.value().set_context_id(std::string(kBob));
+    auto saved = store_.CreateOrUpdate(task.value());
+    if (!saved.ok()) {
+      return saved.error();
+    }
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_message()->set_context_id(std::string(kAlice));
+    return std::optional(std::move(event));
+  }
+
+ private:
+  a2a::server::TaskStore& store_;
+};
+
+TEST(SecurityStreamIntegrationTest, StoreOwnershipChangesDuringReadHideTasklessMessages) {
+  a2a::server::InMemoryTaskStore store;
+  lf::a2a::v1::Task task;
+  task.set_id(std::string(kTaskId));
+  task.set_context_id(std::string(kAlice));
+  ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  a2a::server::DispatchSecurity security(std::make_shared<Policy>(), &store);
+  a2a::server::RequestContext context;
+  context.principal = kAlice;
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  a2a::server::DispatchResponse response(std::make_unique<ReassigningStream>(store));
+  ASSERT_TRUE(security
+                  .ProtectStream({.operation = a2a::server::DispatcherOperation::kSubscribeTask, .payload = get},
+                                 context, response)
+                  .ok());
+  auto result = std::get<std::unique_ptr<a2a::server::ServerStreamSession>>(response.payload())->Next();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+}
+
+class PrincipalMutator final : public a2a::server::ServerInterceptor {
+ public:
+  a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& /*request*/,
+                                         a2a::server::RequestContext& context) override {
+    context.principal = kBob;
+    return {};
+  }
+};
+
+class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> {
+ protected:
+  void SetUp() override {
+    SaveTask(kTaskId, kAlice);
+    SaveTask(kOtherTaskId, kBob);
+    dispatcher_.SetSecurityPolicy(std::make_shared<Policy>(), &store_);
+    grpc::ServerBuilder builder;
+    int port = 0;
+    builder.AddListeningPort(std::string(kBindAddress), ServerCredentials(), &port);
+    builder.RegisterService(&grpc_adapter_);
+    server_ = builder.BuildAndStart();
+    ASSERT_NE(server_, nullptr);
+    const auto tls_host = Environment(kTlsHostEnv);
+    const auto grpc_url = tls_host.empty() ? std::string(kHostPrefix).append(std::to_string(port))
+                                           : std::string(tls_host).append(kHostSeparator).append(std::to_string(port));
+    a2a::client::ResolvedInterface iface{
+        .transport = GetParam(), .url = {}, .security_requirements = {}, .security_schemes = {}};
+    std::unique_ptr<a2a::client::ClientTransport> transport;
+    if (GetParam() == Binding::kGrpc) {
+      iface.url = grpc_url;
+      transport =
+          std::make_unique<a2a::client::GrpcTransport>(iface, grpc::CreateChannel(grpc_url, ChannelCredentials()));
+    } else {
+      iface.url = GetParam() == Binding::kRest ? kRestUrl : kRpcUrl;
+      auto requester = [this](const a2a::client::HttpRequest& request) { return Handle(request); };
+      if (GetParam() == Binding::kRest) {
+        transport = std::make_unique<a2a::client::HttpJsonTransport>(iface, requester);
+      } else {
+        transport = std::make_unique<a2a::client::JsonRpcTransport>(iface, requester);
+      }
+    }
+    client_ = std::make_unique<a2a::client::A2AClient>(std::move(transport));
+  }
+  void TearDown() override {
+    client_.reset();
+    if (server_) {
+      server_->Shutdown();
+    }
+  }
+  void SaveTask(std::string_view id, std::string_view owner) {
+    lf::a2a::v1::Task task;
+    task.set_id(std::string(id));
+    task.set_context_id(std::string(owner));
+    task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+    ASSERT_TRUE(store_.CreateOrUpdate(task).ok());
+  }
+  a2a::core::Result<a2a::client::HttpClientResponse> Handle(const a2a::client::HttpRequest& request) {
+    a2a::server::HttpServerRequest incoming{.method = request.method,
+                                            .target = a2a::core::ExtractTargetPath(request.url),
+                                            .headers = request.headers,
+                                            .body = request.body,
+                                            .remote_address = {}};
+    auto response = GetParam() == Binding::kRest ? rest_adapter_.Handle(incoming) : rpc_adapter_.Handle(incoming);
+    if (!response.ok()) {
+      return response.error();
+    }
+    last_http_body_ = response.value().body;
+    return a2a::client::HttpClientResponse{.status_code = response.value().status_code,
+                                           .headers = response.value().headers,
+                                           .body = response.value().body};
+  }
+  static a2a::client::CallOptions Options(std::string_view token) {
+    a2a::client::CallOptions options;
+    options.timeout = kCallTimeout;
+    options.credential_provider = std::make_shared<a2a::client::BearerTokenCredentialProvider>(std::string(token));
+    return options;
+  }
+  static void ExpectUnauthenticated(const a2a::core::Error& error) {
+    if (GetParam() == Binding::kGrpc) {
+      EXPECT_EQ(error.protocol_code(), std::to_string(kGrpcUnauthenticated));
+    } else {
+      EXPECT_EQ(error.http_status(), kUnauthorized);
+    }
+  }
+  static void ExpectHidden(const a2a::core::Error& error) {
+    if (GetParam() == Binding::kGrpc) {
+      EXPECT_EQ(error.protocol_code(), std::to_string(kGrpcNotFound));
+    } else if (GetParam() == Binding::kRest) {
+      EXPECT_EQ(error.http_status(), kNotFound);
+    } else {
+      EXPECT_EQ(error.protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+    }
+  }
+  template <typename Payload>
+  static void ExpectHiddenTask(const a2a::core::Result<Payload>& result) {
+    ASSERT_FALSE(result.ok());
+    ExpectHidden(result.error());
+  }
+  static void ExpectInternalError(const a2a::core::Error& error) {
+    if (GetParam() == Binding::kGrpc) {
+      EXPECT_EQ(error.protocol_code(), std::to_string(kGrpcInternal));
+    } else if (GetParam() == Binding::kRest) {
+      EXPECT_EQ(error.http_status(), a2a::core::http::kStatusInternalServerError);
+    } else {
+      EXPECT_EQ(error.protocol_code(), kJsonRpcInternal);
+    }
+  }
+  void CheckRejectedUnaryTaskResponses() {
+    lf::a2a::v1::GetTaskRequest get;
+    get.set_id(std::string(kTaskId));
+    lf::a2a::v1::CancelTaskRequest cancel;
+    cancel.set_id(std::string(kTaskId));
+    lf::a2a::v1::SendMessageRequest send;
+    auto* message = send.mutable_message();
+    message->set_message_id(std::string(kMessageId));
+    message->set_role(lf::a2a::v1::ROLE_USER);
+    message->set_context_id(std::string(kAlice));
+    message->add_parts()->set_text(std::string(kMessageText));
+    const auto options = Options(kAliceToken);
+    ExpectHiddenTask(client_->GetTask(get, options));
+    ExpectHiddenTask(client_->CancelTask(cancel, options));
+    ExpectHiddenTask(client_->SendMessage(send, options));
+  }
+  std::string ServerErrorMessage(const a2a::core::Error& error) const {
+    if (GetParam() == Binding::kGrpc) {
+      return std::string(error.message());
+    }
+    google::protobuf::Struct envelope;
+    const auto parsed = a2a::core::JsonToMessage(last_http_body_, &envelope);
+    EXPECT_TRUE(parsed.ok());
+    if (!parsed.ok()) {
+      return {};
+    }
+    return envelope.fields()
+        .at(std::string(kErrorField))
+        .struct_value()
+        .fields()
+        .at(std::string(kMessageField))
+        .string_value();
+  }
+  std::string last_http_body_;
+  a2a::server::InMemoryTaskStore store_;
+  ResponseExecutor executor_{
+      {.task_store = &store_, .push_store = nullptr, .push_delivery = nullptr, .task_id_generator = {}}};
+  a2a::server::Dispatcher dispatcher_{&executor_};
+  a2a::server::RestServerTransport rest_adapter_{&dispatcher_,
+                                                 {},
+                                                 {.rest_api_base_path = std::string(kRestPath),
+                                                  .require_version_header = true,
+                                                  .include_legacy_transport_fields = false,
+                                                  .agent_card_cache_settings = std::nullopt,
+                                                  .required_extensions = {}}};
+  a2a::server::JsonRpcServerTransport rpc_adapter_{&dispatcher_, {.rpc_path = std::string(kRpcPath)}};
+  a2a::server::GrpcServerTransport grpc_adapter_{&dispatcher_};
+  std::unique_ptr<grpc::Server> server_;
+  std::unique_ptr<a2a::client::A2AClient> client_;
+};
+
+TEST_P(SecurityTransportIntegrationTest, AuthenticationAndHiddenResourcesUseBindingErrors) {
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  auto missing = client_->GetTask(get, {});
+  ASSERT_FALSE(missing.ok());
+  ExpectUnauthenticated(missing.error());
+  EXPECT_TRUE(client_->GetTask(get, Options(kAliceToken)).ok());
+  auto hidden = client_->GetTask(get, Options(kBobToken));
+  ASSERT_FALSE(hidden.ok());
+  ExpectHidden(hidden.error());
+  const auto hidden_message = ServerErrorMessage(hidden.error());
+  get.set_id(std::string(kMissingTaskId));
+  auto absent = client_->GetTask(get, Options(kBobToken));
+  ASSERT_FALSE(absent.ok());
+  EXPECT_EQ(hidden_message, ServerErrorMessage(absent.error()));
+}
+TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
+  auto listed = client_->ListTasks({}, Options(kBobToken));
+  ASSERT_TRUE(listed.ok());
+  ASSERT_EQ(listed.value().tasks.size(), kTaskCount);
+  EXPECT_EQ(listed.value().tasks.front().id(), kOtherTaskId);
+  EXPECT_TRUE(listed.value().next_page_token.empty());
+}
+TEST_P(SecurityTransportIntegrationTest, UnaryRequestsRejectForeignExecutorTaskResponses) {
+  auto foreign = store_.Get(kOtherTaskId);
+  ASSERT_TRUE(foreign.ok());
+  executor_.task_response = std::move(foreign.value());
+  CheckRejectedUnaryTaskResponses();
+}
+TEST_P(SecurityTransportIntegrationTest, UnaryRequestsRejectExecutorTasksWithoutIds) {
+  auto malformed = store_.Get(kTaskId);
+  ASSERT_TRUE(malformed.ok());
+  malformed.value().clear_id();
+  executor_.task_response = std::move(malformed.value());
+  CheckRejectedUnaryTaskResponses();
+}
+TEST_P(SecurityTransportIntegrationTest, PushResponsesCannotExposeForeignConfigurations) {
+  lf::a2a::v1::TaskPushNotificationConfig foreign;
+  foreign.set_task_id(std::string(kOtherTaskId));
+  foreign.set_id(std::string(kPushId));
+  foreign.set_url(std::string(kPushUrl));
+  foreign.set_token(std::string(kTaskCredential));
+  executor_.push_response = foreign;
+  lf::a2a::v1::TaskPushNotificationConfig create;
+  create.set_task_id(std::string(kTaskId));
+  create.set_id(std::string(kPushId));
+  create.set_url(std::string(kPushUrl));
+  lf::a2a::v1::GetTaskPushNotificationConfigRequest get;
+  get.set_task_id(std::string(kTaskId));
+  get.set_id(std::string(kPushId));
+  lf::a2a::v1::ListTaskPushNotificationConfigsRequest list;
+  list.set_task_id(std::string(kTaskId));
+  const auto options = Options(kAliceToken);
+  ExpectHiddenTask(client_->CreateTaskPushNotificationConfig(create, options));
+  ExpectHiddenTask(client_->GetTaskPushNotificationConfig(get, options));
+  ExpectHiddenTask(client_->ListTaskPushNotificationConfigs(list, options));
+}
+
+TEST_P(SecurityTransportIntegrationTest, InterceptorsCannotChangeTheAuthenticatedListScope) {
+  dispatcher_.AddInterceptor(std::make_shared<PrincipalMutator>());
+  auto listed = client_->ListTasks({}, Options(kAliceToken));
+  ASSERT_TRUE(listed.ok());
+  ASSERT_EQ(listed.value().tasks.size(), kTaskCount);
+  EXPECT_EQ(listed.value().tasks.front().context_id(), kAlice);
+}
+
+TEST_P(SecurityTransportIntegrationTest, MissingSecurityDependenciesReturnErrorsAcrossBindings) {
+  for (const bool missing_policy : {false, true}) {
+    dispatcher_.SetSecurityPolicy(missing_policy ? nullptr : std::make_shared<Policy>(),
+                                  missing_policy ? &store_ : nullptr);
+    lf::a2a::v1::GetTaskRequest get;
+    get.set_id(std::string(kTaskId));
+    auto result = client_->GetTask(get, Options(kAliceToken));
+    ASSERT_FALSE(result.ok());
+    ExpectInternalError(result.error());
+  }
+}
+
+TEST_P(SecurityTransportIntegrationTest, TlsCertificateValidationWithoutSut) {
+  if (GetParam() != Binding::kGrpc) {
+    GTEST_SKIP() << kTlsTestScope;
+  }
+  const auto mode = Environment(kModeEnv);
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  const auto result = client_->GetTask(get, Options(kAliceToken));
+  if (mode.empty() || mode == kTrustedMode || mode == kPlaintextMode) {
+    EXPECT_TRUE(result.ok());
+  } else {
+    EXPECT_FALSE(result.ok());
+  }
+}
+INSTANTIATE_TEST_SUITE_P(AllBindings, SecurityTransportIntegrationTest, testing::ValuesIn(kBindings),
+                         [](const testing::TestParamInfo<Binding>& info) { return BindingName(info.param); });
+}  // namespace

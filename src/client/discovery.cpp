@@ -95,9 +95,10 @@ std::optional<std::string_view> ToWireTransport(PreferredTransport transport) {
 
 }  // namespace
 
-HttpFetcher MakeDefaultHttpFetcher() {
-  return [client = a2a::http::Client{}](std::string_view url) -> core::Result<HttpResponse> {
+HttpFetcher MakeDefaultHttpFetcher(std::optional<http::TlsOptions> tls) {
+  return [client = a2a::http::Client{}, tls = std::move(tls)](std::string_view url) -> core::Result<HttpResponse> {
     a2a::http::Request request;
+    request.tls = tls;
     request.method = std::string(core::http::kMethodGet);
     request.url = std::string(url);
     request.headers.push_back({std::string(core::Version::kHeaderName), core::Version::HeaderValue()});
@@ -116,6 +117,11 @@ DiscoveryClient DiscoveryClient::CreateDefault(std::chrono::seconds cache_ttl) {
   return DiscoveryClient(MakeDefaultHttpFetcher(), cache_ttl);
 }
 
+void DiscoveryClient::SetAgentCardVerifier(AgentCardVerifier verifier) {
+  verifier_ = std::move(verifier);
+  cache_.clear();
+}
+
 core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view base_url) {
   const auto discovery_url = BuildDiscoveryUrl(base_url);
   if (!discovery_url.ok()) {
@@ -125,10 +131,15 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
   const auto now = std::chrono::steady_clock::now();
   const auto cached = cache_.find(discovery_url.value());
   if (cached != cache_.end() && cached->second.expires_at >= now) {
-    return cached->second.card;
+    if (!verifier_ || verifier_(cached->second.json).ok()) {
+      return cached->second.card;
+    }
+    // Key policy may have changed before the cache TTL. Re-fetch and verify a
+    // replacement; never fall back to a card that no longer verifies.
+    cache_.erase(cached);
   }
 
-  const auto response = fetcher_(discovery_url.value());
+  auto response = fetcher_(discovery_url.value());
   if (!response.ok()) {
     return response.error();
   }
@@ -143,18 +154,13 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
         .WithHttpStatus(response.value().status_code);
   }
 
-  lf::a2a::v1::AgentCard card;
-  const auto parse = core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
-  if (!parse.ok()) {
-    return parse.error();
+  auto card = VerifyAndParseAgentCard(response.value().body);
+  if (!card.ok()) {
+    return card.error();
   }
 
-  const auto validation = ValidateAgentCard(card);
-  if (!validation.ok()) {
-    return validation.error();
-  }
-
-  cache_[discovery_url.value()] = CacheEntry{.card = card, .expires_at = now + cache_ttl_};
+  cache_[discovery_url.value()] =
+      CacheEntry{.card = card.value(), .json = std::move(response.value().body), .expires_at = now + cache_ttl_};
   return card;
 }
 
@@ -179,8 +185,18 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(std
         .WithHttpStatus(response.value().status_code);
   }
 
+  return VerifyAndParseAgentCard(response.value().body);
+}
+
+core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::VerifyAndParseAgentCard(std::string_view json) const {
+  if (verifier_) {
+    auto verified = verifier_(json);
+    if (!verified.ok()) {
+      return verified.error();
+    }
+  }
   lf::a2a::v1::AgentCard card;
-  const auto parse = core::JsonToMessage(response.value().body, &card, {.ignore_unknown_fields = true});
+  const auto parse = core::JsonToMessage(json, &card, {.ignore_unknown_fields = true});
   if (!parse.ok()) {
     return parse.error();
   }

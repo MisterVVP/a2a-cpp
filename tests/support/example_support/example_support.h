@@ -55,6 +55,7 @@ constexpr std::string_view kStructuredDataKey = "key";
 constexpr std::string_view kStructuredDataValue = "value";
 constexpr std::string_view kStructuredDataCountKey = "count";
 constexpr double kStructuredDataCount = 42.0;
+constexpr std::string_view kDefaultStreamingTaskId = "task-test-stream-default";
 constexpr std::string_view kStreamingTaskIdPrefix = "task-stream-";
 constexpr std::size_t kTaskLockStripeCount = 64U;
 constexpr std::size_t kConditionalWriteRetryLimit = 8U;
@@ -91,7 +92,7 @@ class SequenceStreamSession final : public server::ServerStreamSession {
   std::size_t index_ = 0;
 };
 
-class ExampleExecutor final : public server::AgentExecutor {
+class ExampleExecutor : public server::AgentExecutor {
  public:
   explicit ExampleExecutor(ExampleExecutorOptions options = {})
       : owned_task_store_(options.task_store == nullptr ? std::make_unique<server::InMemoryTaskStore>() : nullptr),
@@ -272,28 +273,28 @@ class ExampleExecutor final : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
-    (void)context;
-    std::string task_id = request.has_message() ? request.message().task_id() : "";
-    if (task_id.empty()) {
-      if (request.has_message() && !request.message().message_id().empty()) {
-        task_id.reserve(kStreamingTaskIdPrefix.size() + request.message().message_id().size());
-        task_id.append(kStreamingTaskIdPrefix);
-        task_id.append(request.message().message_id());
-      } else {
-        task_id = "task-test-stream-default";
-      }
+    auto resolved = ResolveStreamingTaskId(request, context);
+    if (!resolved.ok()) {
+      return resolved.error();
     }
+    const auto& task_id = resolved.value();
 
     auto existing = task_store_->Get(task_id);
     lf::a2a::v1::Task task;
     if (existing.ok()) {
+      if (!context.principal.empty()) {
+        const auto valid = lifecycle_.ValidateTaskForSendRequest(request, existing.value());
+        if (!valid.ok()) {
+          return valid.error();
+        }
+      }
       task = existing.value();
     } else {
       if (!IsTaskNotFoundError(existing.error())) {
         return existing.error();
       }
       task.set_id(task_id);
-      task.set_context_id("ctx-" + task_id);
+      task.set_context_id(context.principal.empty() ? "ctx-" + task_id : request.message().context_id());
       task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
       const auto stored = lifecycle_.CreateOrUpdateTask(task);
       if (!stored.ok()) {
@@ -392,6 +393,22 @@ class ExampleExecutor final : public server::AgentExecutor {
   void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
 
  private:
+  [[nodiscard]] core::Result<std::string> ResolveStreamingTaskId(const lf::a2a::v1::SendMessageRequest& request,
+                                                                 const server::RequestContext& context) const {
+    if (!request.message().task_id().empty()) {
+      return request.message().task_id();
+    }
+    if (!context.principal.empty()) {
+      return lifecycle_.ResolveTaskIdForSendRequest(request, context);
+    }
+    if (!request.message().message_id().empty()) {
+      std::string id(kStreamingTaskIdPrefix);
+      id.append(request.message().message_id());
+      return id;
+    }
+    return std::string(kDefaultStreamingTaskId);
+  }
+
   [[nodiscard]] std::mutex& TaskMutex(std::string_view task_id) noexcept {
     return task_mutexes_[std::hash<std::string_view>{}(task_id) % task_mutexes_.size()];
   }

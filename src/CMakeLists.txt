@@ -17,6 +17,7 @@ endif()
 
 set(A2A_CORE_SOURCES
   core/agent_card/agent_card_builder.cpp
+  core/agent_card/json_canonicalization.cpp
   core/agent_card/agent_card_provider.cpp
   core/core.cpp
   core/error.cpp
@@ -45,6 +46,14 @@ target_link_libraries(a2a_core
     a2a::proto_generated
     protobuf::libprotobuf
 )
+
+if(A2A_ENABLE_SIGNING)
+  add_library(a2a_signing STATIC core/agent_card/agent_card_signing.cpp)
+  add_library(a2a::signing ALIAS a2a_signing)
+  set_target_properties(a2a_signing PROPERTIES EXPORT_NAME signing)
+  target_link_libraries(a2a_signing PUBLIC a2a::core OpenSSL::Crypto)
+  target_compile_definitions(a2a_signing PUBLIC A2A_HAS_AGENT_CARD_SIGNING=1)
+endif()
 
 add_library(a2a_http STATIC
   http/curl_stream_reactor.cpp
@@ -126,11 +135,13 @@ set(A2A_SERVER_SOURCES
   server/task_subscription_service.cpp
   server/transport/transport_mux.cpp
   server/dispatcher.cpp
+  server/security_policy.cpp
   server/request_context.cpp
   server/tasks/in_memory_task_store.cpp
   server/tasks/list_tasks.cpp
   server/tasks/task_history.cpp
   server/tasks/task_lifecycle_service.cpp
+  server/tasks/task_authorization_service.cpp
   server/tasks/task_ordering.cpp
   server/stores/store_factory.cpp
 )
@@ -218,6 +229,9 @@ if(A2A_ENABLE_POSTGRES_STORE)
 endif()
 
 set(A2A_INSTALL_TARGETS a2a_core a2a_http a2a_client a2a_server)
+if(A2A_ENABLE_SIGNING)
+  list(APPEND A2A_INSTALL_TARGETS a2a_signing)
+endif()
 if(A2A_ENABLE_POSTGRES_STORE)
   list(APPEND A2A_INSTALL_TARGETS a2a_store_postgres)
 endif()

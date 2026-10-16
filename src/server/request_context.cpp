@@ -26,7 +26,7 @@ std::unordered_map<std::string, std::string> ExtractAuthMetadata(
 
   for (const auto& [name, value] : headers) {
     const std::string lowered_name = core::strings::ToLowerAscii(name);
-    if (lowered_name == "authorization" || lowered_name == "proxy-authorization") {
+    if (lowered_name == "authorization") {
       const std::string trimmed_value(core::strings::TrimAsciiWhitespace(value));
       auth_metadata.insert_or_assign("authorization", trimmed_value);
 

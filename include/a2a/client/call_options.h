@@ -11,6 +11,7 @@
 
 #include "a2a/client/auth.h"
 #include "a2a/core/version.h"
+#include "a2a/http/http_client.h"
 
 namespace a2a::client {
 
@@ -22,6 +23,7 @@ struct CallOptions final {
   std::shared_ptr<const CredentialProvider> credential_provider;
   AuthContext auth_context;
   std::optional<MtlsConfig> mtls = std::nullopt;
+  std::optional<http::TlsOptions> tls = std::nullopt;
   std::string protocol_version = std::string(core::Version::kProtocolVersion);
 };
 

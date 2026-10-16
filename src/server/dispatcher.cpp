@@ -21,6 +21,12 @@
 namespace a2a::server {
 namespace {
 
+void RestorePrincipal(RequestContext& context, const std::optional<std::string>& principal) {
+  if (principal.has_value()) {
+    context.principal = *principal;
+  }
+}
+
 template <std::size_t MessageSize>
 [[nodiscard]] core::Error DispatchPayloadTypeMismatchError(const std::array<char, MessageSize>& message) {
   return core::Error::Validation(core::protocol_error_messages::ToString(message));
@@ -263,23 +269,51 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   }
 
   std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
+  const auto security = security_;
+  const auto authorized = security != nullptr ? security->Authorize(request, context) : core::Result<void>{};
+  const auto principal = security != nullptr ? std::optional(context.principal) : std::nullopt;
+  if (!authorized.ok()) {
+    core::Result<DispatchResponse> failure = authorized.error();
+    read_lock.unlock();
+    RunAfterInterceptors(request, context, failure, principal);
+    return failure;
+  }
   for (const auto& interceptor : interceptors_) {
     if (interceptor == nullptr) {
       continue;
     }
     const auto before_result = interceptor->BeforeDispatch(request, context);
+    RestorePrincipal(context, principal);
     if (!before_result.ok()) {
       core::Result<DispatchResponse> failure = before_result.error();
       read_lock.unlock();
-      RunAfterInterceptors(request, context, failure);
+      RunAfterInterceptors(request, context, failure, principal);
       return before_result.error();
     }
   }
   read_lock.unlock();
 
-  auto dispatch_result = DispatchToExecutor(*executor_, request, context, agent_card_provider_);
-  RunAfterInterceptors(request, context, dispatch_result);
+  const auto* list = std::get_if<ListTasksRequest>(&request.payload);
+  auto dispatch_result = security != nullptr && request.operation == DispatcherOperation::kListTasks && list != nullptr
+                             ? security->ListTasks(*list, context)
+                             : DispatchToExecutor(*executor_, request, context, agent_card_provider_);
+  RestorePrincipal(context, principal);
+  if (security != nullptr && dispatch_result.ok()) {
+    auto authorized = security->AuthorizeResponse(dispatch_result.value(), context);
+    if (authorized.ok()) {
+      authorized = security->ProtectStream(request, context, dispatch_result.value());
+    }
+    if (!authorized.ok()) {
+      dispatch_result = authorized.error();
+    }
+  }
+  RunAfterInterceptors(request, context, dispatch_result, principal);
   return dispatch_result;
+}
+
+void Dispatcher::SetSecurityPolicy(std::shared_ptr<const SecurityPolicy> policy, TaskStore* task_store) {
+  std::unique_lock lock(interceptor_mutex_);
+  security_ = std::make_shared<DispatchSecurity>(std::move(policy), task_store);
 }
 
 void Dispatcher::AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor) {
@@ -291,13 +325,15 @@ void Dispatcher::AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor) 
 }
 
 void Dispatcher::RunAfterInterceptors(const DispatchRequest& request, RequestContext& context,
-                                      const core::Result<DispatchResponse>& result) const {
+                                      const core::Result<DispatchResponse>& result,
+                                      const std::optional<std::string>& authenticated_principal) const {
   std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
   for (const auto& interceptor : std::ranges::reverse_view(interceptors_)) {
     if (interceptor == nullptr) {
       continue;
     }
     interceptor->AfterDispatch(request, context, result);
+    RestorePrincipal(context, authenticated_principal);
   }
 }
 
