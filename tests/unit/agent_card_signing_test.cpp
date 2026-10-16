@@ -58,6 +58,8 @@ constexpr std::size_t kInitialFetchCount = 1;
 constexpr std::size_t kRefreshedFetchCount = 2;
 constexpr std::size_t kRetriedFetchCount = 3;
 constexpr std::string_view kDiscoveryUnavailable = "fixture discovery unavailable";
+constexpr std::string_view kInvalidDiscoveryJson = "invalid discovery JSON";
+constexpr std::size_t kDiscoveryEndpointCount = 2;
 
 lf::a2a::v1::AgentCard Card() {
   return a2a::core::AgentCardBuilder::ConformancePreset({.rest_url = std::string(kRestUrl),
@@ -189,6 +191,24 @@ TEST(AgentCardSigningTest, DiscoveryRevalidatesCachedCardsAgainstCurrentKeyPolic
   EXPECT_EQ(fetches, kRefreshedFetchCount);
   EXPECT_FALSE(discovery.Fetch(kBaseUrl).ok());
   EXPECT_EQ(fetches, kRetriedFetchCount);
+}
+
+TEST(AgentCardSigningTest, DiscoveryVerifiesPublicAndExtendedBodiesBeforeParsing) {
+  a2a::client::DiscoveryClient discovery([](std::string_view) -> a2a::core::Result<a2a::client::HttpResponse> {
+    return a2a::client::HttpResponse{.status_code = kHttpOk, .body = std::string(kInvalidDiscoveryJson)};
+  });
+  std::size_t checks = 0;
+  discovery.SetAgentCardVerifier([&checks](std::string_view json) -> a2a::core::Result<void> {
+    ++checks;
+    EXPECT_EQ(json, kInvalidDiscoveryJson);
+    return a2a::core::Error::Validation(std::string(kUnknownKeyMessage));
+  });
+  for (const bool extended : {false, true}) {
+    auto result = extended ? discovery.FetchExtendedAgentCard(kBaseUrl) : discovery.Fetch(kBaseUrl);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().message(), kUnknownKeyMessage);
+  }
+  EXPECT_EQ(checks, kDiscoveryEndpointCount);
 }
 
 class DiscoveryRotation final : private a2a::core::NonCopyable {

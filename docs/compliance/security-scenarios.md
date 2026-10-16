@@ -170,11 +170,12 @@ keys, validity and revocation; callers supply time. Noncritical protected header
 `jku` never fetches keys. Signing uses protobuf field-presence serialization;
 empty/default-field differences await [A2A #2122](https://github.com/a2aproject/A2A/issues/2122).
 
-Discovery verifies before parsing/caching and on every cache hit, including
-extended cards. Invalid cached cards are evicted and refreshed under the current
-verifier; refresh failure never returns the invalid card. Without a verifier,
-unsigned behavior remains unchanged. Applications choose signature requirements
-and provision trusted keys.
+Discovery verifies public and extended cards before parsing. Public cache hits
+recheck signatures against current key policy. `AgentCardVerifier` names the
+owning callback type; replacing or clearing it invalidates the cache. Invalid
+cached cards are evicted and refreshed; refresh failure never returns the invalid
+card. Without a verifier, unsigned behavior remains unchanged. Applications
+choose signature requirements and provision trusted keys.
 
 The [JCS corpus](../../tests/support/security/jcs_vectors.json) is Python SDK
 `a2a-jcs-v01` at `0ee47d7baa47a706e33934a4e4c3d46bad16298f`, with independent

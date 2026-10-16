@@ -79,9 +79,9 @@ struct ResponseAuthorizer final {
   }
 };
 
-std::string TaskId(const DispatchRequest& request) {
+std::string_view TaskId(const DispatchRequest& request) {
   return std::visit(
-      [](const auto& payload) -> std::string {
+      [](const auto& payload) -> std::string_view {
         using Payload = std::decay_t<decltype(payload)>;
         if constexpr (std::is_same_v<Payload, lf::a2a::v1::SendMessageRequest>) {
           return payload.message().task_id();
@@ -291,7 +291,8 @@ core::Result<void> DispatchSecurity::ProtectStream(const DispatchRequest& reques
   if (stream == nullptr || *stream == nullptr) {
     return {};
   }
-  *stream = std::make_unique<AuthorizedStream>(std::move(*stream), policy_, task_store_, context, TaskId(request));
+  *stream = std::make_unique<AuthorizedStream>(std::move(*stream), policy_, task_store_, context,
+                                               std::string(TaskId(request)));
   return {};
 }
 

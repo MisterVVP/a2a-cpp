@@ -32,6 +32,8 @@ struct HttpResponse final {
 };
 
 using HttpFetcher = std::function<core::Result<HttpResponse>(std::string_view url)>;
+// Verifies the original JSON before parsing; errors reject the card.
+using AgentCardVerifier = std::function<core::Result<void>(std::string_view json)>;
 
 [[nodiscard]] HttpFetcher MakeDefaultHttpFetcher(std::optional<http::TlsOptions> tls = std::nullopt);
 
@@ -48,7 +50,7 @@ class DiscoveryClient final {
 
   [[nodiscard]] static DiscoveryClient CreateDefault(std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
-  void SetAgentCardVerifier(std::function<core::Result<void>(std::string_view)> verifier);
+  void SetAgentCardVerifier(AgentCardVerifier verifier);
 
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(std::string_view base_url);
@@ -63,8 +65,9 @@ class DiscoveryClient final {
   [[nodiscard]] static core::Result<std::string> BuildDiscoveryUrl(std::string_view base_url);
   [[nodiscard]] static core::Result<std::string> BuildExtendedDiscoveryUrl(std::string_view base_url);
   [[nodiscard]] static core::Result<void> ValidateAgentCard(const lf::a2a::v1::AgentCard& card);
+  [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> VerifyAndParseAgentCard(std::string_view json) const;
 
-  std::function<core::Result<void>(std::string_view)> verifier_;
+  AgentCardVerifier verifier_;
   HttpFetcher fetcher_;
   std::chrono::seconds cache_ttl_;
   std::unordered_map<std::string, CacheEntry> cache_;
