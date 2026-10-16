@@ -144,12 +144,16 @@ class AuthorizedStream final : public ServerStreamSession {
     if (!item.has_value()) {
       return event;
     }
-    const auto id = EventTaskId(*item);
+    auto id = EventTaskId(*item);
     if (id.empty()) {
       if (!item->has_message()) {
         return core::protocol_errors::TaskNotFound();
       }
-      return event;
+      // A taskless message still belongs to an already associated stream.
+      if (task_id_.empty()) {
+        return event;
+      }
+      id = task_id_;
     }
     auto task = GetAuthorizedTask(*store_, *policy_, context_, id);
     if (!task.ok()) {
@@ -198,12 +202,18 @@ core::Result<void> DispatchSecurity::Authorize(const DispatchRequest& request, R
 
 core::Result<void> DispatchSecurity::AuthorizeResponse(const DispatchResponse& response,
                                                        const RequestContext& context) const {
+  if (policy_ == nullptr || task_store_ == nullptr) {
+    return core::Error::Internal(std::string(kMissingSecurityConfiguration));
+  }
   return std::visit(ResponseAuthorizer{.policy = *policy_, .store = *task_store_, .context = context},
                     response.payload());
 }
 
 core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksRequest& request,
                                                            const RequestContext& context) const {
+  if (policy_ == nullptr || task_store_ == nullptr) {
+    return core::Error::Internal(std::string(kMissingSecurityConfiguration));
+  }
   if (request.page_size > kMaxListTasksPageSize) {
     return core::Error::Validation(std::string(kInvalidPageSize));
   }
@@ -271,13 +281,17 @@ core::Result<std::vector<std::string>> DispatchSecurity::SelectTaskIds(ListTasks
   return selected;
 }
 
-void DispatchSecurity::ProtectStream(const DispatchRequest& request, const RequestContext& context,
-                                     DispatchResponse& response) const {
+core::Result<void> DispatchSecurity::ProtectStream(const DispatchRequest& request, const RequestContext& context,
+                                                   DispatchResponse& response) const {
+  if (policy_ == nullptr || task_store_ == nullptr) {
+    return core::Error::Internal(std::string(kMissingSecurityConfiguration));
+  }
   auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&response.payload());
   if (stream == nullptr || *stream == nullptr) {
-    return;
+    return {};
   }
   *stream = std::make_unique<AuthorizedStream>(std::move(*stream), policy_, task_store_, context, TaskId(request));
+  return {};
 }
 
 }  // namespace a2a::server

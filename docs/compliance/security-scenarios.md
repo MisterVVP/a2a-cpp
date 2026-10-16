@@ -68,8 +68,10 @@ cursor pagination, update-time ordering and snapshot consistency are tracked in
 [ListTasks #309](https://github.com/MisterVVP/a2a-cpp/issues/309).
 
 Streams check current task permissions before reading and releasing events,
-reject task-bearing events without IDs, and allow taskless messages. They
-preserve timed reads, live semantics and cancellation. Keep policies/stores alive
+reject task-bearing events without IDs, and allow taskless messages. On a stream
+associated with a task, even taskless messages recheck that task after reading,
+so revocation during a blocking read is enforced. Streams preserve timed reads,
+live semantics and cancellation. Keep policies/stores alive
 until sessions finish. Credentials are authenticated on connection; include
 revocation/expiry in `CanAccessTask` for subsequent events. New SUT streams use
 SDK-generated IDs so reused message IDs cannot select another caller's task.
@@ -158,7 +160,9 @@ and existing ProtoJSON/protobuf `Value` parsing require no new JSON library.
 
 Verification preserves original JSON, including unknown fields. At least one
 signature must verify with an application-trusted key; unknown/invalid/expired/
-revoked signatures do not defeat another valid signature. Resolvers provide
+revoked signatures do not defeat another valid signature. Signing and verification
+allow at most 16 signatures (`kMaxAgentCardSignatures`); oversized arrays are
+rejected before resolver calls or cryptographic verification. Resolvers provide
 keys, validity and revocation; callers supply time. Noncritical protected headers
 (`typ`, `jku`, etc.) and unprotected annotations are accepted; overlapping names,
 `crit` and unencoded payloads are rejected. ES256/RS256 are not implemented.

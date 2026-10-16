@@ -318,6 +318,85 @@ TEST(AgentCardSigningTest, TrustedSignatureSurvivesUnknownInvalidAndRevokedRotat
   EXPECT_FALSE(a2a::core::VerifyAgentCardJson(raw.value(), Resolver(Key()), kNow).ok());
 }
 
+lf::a2a::v1::AgentCard SignatureLimitCard() {
+  auto signed_card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
+  EXPECT_TRUE(signed_card.ok());
+  if (!signed_card.ok()) {
+    return {};
+  }
+  auto card = std::move(signed_card.value());
+  const auto valid = card.signatures(0);
+  card.clear_signatures();
+  for (std::size_t index = 1; index < a2a::core::kMaxAgentCardSignatures; ++index) {
+    auto* unknown = card.add_signatures();
+    *unknown = valid;
+    unknown->set_protected_(std::string(kUnknownKidHeader));
+  }
+  *card.add_signatures() = valid;
+  return card;
+}
+
+TEST(AgentCardSigningTest, AcceptsValidLastSignatureAtLimitAndRefusesFurtherSigning) {
+  auto card = SignatureLimitCard();
+  auto json = a2a::core::MessageToJson(card);
+  ASSERT_TRUE(json.ok());
+  std::size_t calls = 0;
+  auto resolver = [&calls](std::string_view id) {
+    ++calls;
+    return Resolver(Key())(id);
+  };
+  EXPECT_TRUE(a2a::core::VerifyAgentCardJson(json.value(), resolver, kNow).ok());
+  EXPECT_EQ(calls, a2a::core::kMaxAgentCardSignatures);
+  EXPECT_FALSE(a2a::core::SignAgentCard(card, kKeyId, kPrivateKey).ok());
+  card.mutable_signatures()->RemoveLast();
+  EXPECT_TRUE(a2a::core::SignAgentCard(card, kKeyId, kPrivateKey).ok());
+}
+
+TEST(AgentCardSigningTest, RejectsOversizedSignatureArraysBeforeResolvingAnyKeys) {
+  auto card = SignatureLimitCard();
+  const auto valid = card.signatures(card.signatures_size() - 1);
+  *card.add_signatures() = valid;
+  std::size_t calls = 0;
+  auto resolver = [&calls](std::string_view id) {
+    ++calls;
+    return Resolver(Key())(id);
+  };
+  for (const bool valid_first : {false, true}) {
+    if (valid_first) {
+      card.mutable_signatures()->SwapElements(0, card.signatures_size() - 1);
+    }
+    auto json = a2a::core::MessageToJson(card);
+    ASSERT_TRUE(json.ok());
+    EXPECT_FALSE(a2a::core::VerifyAgentCardJson(json.value(), resolver, kNow).ok());
+    EXPECT_EQ(calls, 0U);
+  }
+}
+
+TEST(AgentCardSigningTest, DiscoveryRejectsOversizedSignatureArraysWithoutCachingThem) {
+  auto card = SignatureLimitCard();
+  *card.add_signatures() = card.signatures(0);
+  auto oversized = a2a::core::MessageToJson(card);
+  ASSERT_TRUE(oversized.ok());
+  std::string body = oversized.value();
+  std::size_t calls = 0;
+  a2a::client::DiscoveryClient discovery([&body](std::string_view) -> a2a::core::Result<a2a::client::HttpResponse> {
+    return a2a::client::HttpResponse{.status_code = kHttpOk, .body = body};
+  });
+  discovery.SetAgentCardVerifier([&calls](std::string_view json) {
+    return a2a::core::VerifyAgentCardJson(
+        json,
+        [&calls](std::string_view id) {
+          ++calls;
+          return Resolver(Key())(id);
+        },
+        kNow);
+  });
+  EXPECT_FALSE(discovery.Fetch(kBaseUrl).ok());
+  EXPECT_EQ(calls, 0U);
+  body = DiscoveryCardJson(kKeyId, kDescription);
+  EXPECT_TRUE(discovery.Fetch(kBaseUrl).ok());
+}
+
 TEST(AgentCardSigningTest, AcceptsUnprotectedAnnotationsButRejectsOverlappingHeaders) {
   auto card = a2a::core::SignAgentCard(Card(), kKeyId, kPrivateKey);
   ASSERT_TRUE(card.ok());

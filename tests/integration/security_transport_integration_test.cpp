@@ -63,6 +63,8 @@ constexpr std::string_view kBob = "bob";
 constexpr std::string_view kBearerKey = "bearer_token";
 constexpr int kUnauthorized = 401;
 constexpr int kGrpcUnauthenticated = 16;
+constexpr int kGrpcInternal = 13;
+constexpr std::string_view kJsonRpcInternal = "-32603";
 constexpr int kNotFound = 404;
 constexpr int kGrpcNotFound = 5;
 constexpr std::size_t kTaskCount = 1;
@@ -170,6 +172,49 @@ class ResponseExecutor final : public a2a::examples::ExampleExecutor {
   std::optional<lf::a2a::v1::TaskPushNotificationConfig> push_response;
 };
 
+class ReassigningStream final : public a2a::server::ServerStreamSession {
+ public:
+  explicit ReassigningStream(a2a::server::TaskStore& store) : store_(store) {}
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    auto task = store_.Get(kTaskId);
+    if (!task.ok()) {
+      return task.error();
+    }
+    task.value().set_context_id(std::string(kBob));
+    auto saved = store_.CreateOrUpdate(task.value());
+    if (!saved.ok()) {
+      return saved.error();
+    }
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_message()->set_context_id(std::string(kAlice));
+    return std::optional(std::move(event));
+  }
+
+ private:
+  a2a::server::TaskStore& store_;
+};
+
+TEST(SecurityStreamIntegrationTest, StoreOwnershipChangesDuringReadHideTasklessMessages) {
+  a2a::server::InMemoryTaskStore store;
+  lf::a2a::v1::Task task;
+  task.set_id(std::string(kTaskId));
+  task.set_context_id(std::string(kAlice));
+  ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  a2a::server::DispatchSecurity security(std::make_shared<Policy>(), &store);
+  a2a::server::RequestContext context;
+  context.principal = kAlice;
+  lf::a2a::v1::GetTaskRequest get;
+  get.set_id(std::string(kTaskId));
+  a2a::server::DispatchResponse response(std::make_unique<ReassigningStream>(store));
+  ASSERT_TRUE(security
+                  .ProtectStream({.operation = a2a::server::DispatcherOperation::kSubscribeTask, .payload = get},
+                                 context, response)
+                  .ok());
+  auto result = std::get<std::unique_ptr<a2a::server::ServerStreamSession>>(response.payload())->Next();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
+}
+
 class PrincipalMutator final : public a2a::server::ServerInterceptor {
  public:
   a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& /*request*/,
@@ -266,6 +311,15 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
   static void ExpectHiddenTask(const a2a::core::Result<Payload>& result) {
     ASSERT_FALSE(result.ok());
     ExpectHidden(result.error());
+  }
+  static void ExpectInternalError(const a2a::core::Error& error) {
+    if (GetParam() == Binding::kGrpc) {
+      EXPECT_EQ(error.protocol_code(), std::to_string(kGrpcInternal));
+    } else if (GetParam() == Binding::kRest) {
+      EXPECT_EQ(error.http_status(), a2a::core::http::kStatusInternalServerError);
+    } else {
+      EXPECT_EQ(error.protocol_code(), kJsonRpcInternal);
+    }
   }
   std::string ServerErrorMessage(const a2a::core::Error& error) const {
     if (GetParam() == Binding::kGrpc) {
@@ -364,6 +418,18 @@ TEST_P(SecurityTransportIntegrationTest, InterceptorsCannotChangeTheAuthenticate
   ASSERT_TRUE(listed.ok());
   ASSERT_EQ(listed.value().tasks.size(), kTaskCount);
   EXPECT_EQ(listed.value().tasks.front().context_id(), kAlice);
+}
+
+TEST_P(SecurityTransportIntegrationTest, MissingSecurityDependenciesReturnErrorsAcrossBindings) {
+  for (const bool missing_policy : {false, true}) {
+    dispatcher_.SetSecurityPolicy(missing_policy ? nullptr : std::make_shared<Policy>(),
+                                  missing_policy ? &store_ : nullptr);
+    lf::a2a::v1::GetTaskRequest get;
+    get.set_id(std::string(kTaskId));
+    auto result = client_->GetTask(get, Options(kAliceToken));
+    ASSERT_FALSE(result.ok());
+    ExpectInternalError(result.error());
+  }
 }
 
 TEST_P(SecurityTransportIntegrationTest, TlsCertificateValidationWithoutSut) {

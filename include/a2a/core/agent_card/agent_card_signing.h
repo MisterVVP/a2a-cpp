@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,9 @@
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::core {
+
+// Bound resolver and cryptographic work for untrusted discovery documents.
+inline constexpr std::size_t kMaxAgentCardSignatures = 16;
 
 struct AgentCardVerificationKey final {
   std::string public_key_pem;

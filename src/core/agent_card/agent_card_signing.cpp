@@ -208,7 +208,8 @@ void VerifySignature(const JsonValue& signature_value, std::string_view encoded_
 Result<lf::a2a::v1::AgentCard> SignAgentCard(const lf::a2a::v1::AgentCard& card, std::string_view key_id,
                                              std::string_view private_key_pem) {
   try {
-    if (key_id.empty() || key_id.size() > kMaximumKeyIdSize) {
+    if (key_id.empty() || key_id.size() > kMaximumKeyIdSize ||
+        static_cast<std::size_t>(card.signatures_size()) >= kMaxAgentCardSignatures) {
       InvalidSignature();
     }
     auto unsigned_card = card;
@@ -254,6 +255,9 @@ Result<void> VerifyAgentCardJson(std::string_view json, const AgentCardKeyResolv
     auto payload = internal::ParseSigningJson(json);
     const auto& signature_value = Field(Object(payload), kSignatures);
     if (signature_value.kind_case() != JsonValue::kListValue || signature_value.list_value().values().empty()) {
+      InvalidSignature();
+    }
+    if (static_cast<std::size_t>(signature_value.list_value().values_size()) > kMaxAgentCardSignatures) {
       InvalidSignature();
     }
     auto signatures = signature_value.list_value();

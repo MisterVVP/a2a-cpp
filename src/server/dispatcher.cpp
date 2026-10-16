@@ -300,10 +300,11 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   RestorePrincipal(context, principal);
   if (security != nullptr && dispatch_result.ok()) {
     auto authorized = security->AuthorizeResponse(dispatch_result.value(), context);
+    if (authorized.ok()) {
+      authorized = security->ProtectStream(request, context, dispatch_result.value());
+    }
     if (!authorized.ok()) {
       dispatch_result = authorized.error();
-    } else {
-      security->ProtectStream(request, context, dispatch_result.value());
     }
   }
   RunAfterInterceptors(request, context, dispatch_result, principal);

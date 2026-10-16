@@ -149,6 +149,31 @@ lf::a2a::v1::Task Task(std::string_view id, std::string_view owner) {
   task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
   return task;
 }
+
+class RevokingStream final : public ServerStreamSession {
+ public:
+  RevokingStream(bool& allowed, bool introduce_task) : allowed_(allowed), introduce_task_(introduce_task) {}
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> Next() override {
+    lf::a2a::v1::StreamResponse event;
+    if (std::exchange(introduce_task_, false)) {
+      *event.mutable_task() = Task(kTaskId, kAlice);
+    } else {
+      allowed_ = false;  // Revoke during the underlying read, after its precheck.
+      event.mutable_message()->set_context_id(std::string(kAlice));
+    }
+    return std::optional(std::move(event));
+  }
+  a2a::core::Result<std::optional<lf::a2a::v1::StreamResponse>> NextFor(
+      std::chrono::milliseconds /*timeout*/) override {
+    return Next();
+  }
+  [[nodiscard]] bool SupportsTimedNext() const noexcept override { return true; }
+
+ private:
+  bool& allowed_;
+  bool introduce_task_;
+};
+
 lf::a2a::v1::SendMessageRequest Message(std::string_view id = kMessageId) {
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_message()->set_message_id(std::string(id));
@@ -255,10 +280,34 @@ class SdkSecurityTest : public testing::Test {
     context.principal = kAlice;
     DispatchResponse response(
         std::make_unique<a2a::examples::SequenceStreamSession>(std::vector<lf::a2a::v1::StreamResponse>{event}));
-    security.ProtectStream({.operation = DispatcherOperation::kSendStreamingMessage, .payload = Message()}, context,
-                           response);
+    auto protected_stream = security.ProtectStream(
+        {.operation = DispatcherOperation::kSendStreamingMessage, .payload = Message()}, context, response);
+    if (!protected_stream.ok()) {
+      return protected_stream.error();
+    }
     auto& stream = std::get<std::unique_ptr<ServerStreamSession>>(response.payload());
     return timed ? stream->NextFor(kPollTimeout) : stream->Next();
+  }
+  void CheckRevocationDuringRead(bool timed, bool introduce_task) {
+    DispatchSecurity security(policy, &store);
+    context.principal = kAlice;
+    policy->resources_allowed = true;
+    auto request = Message();
+    if (!introduce_task) {
+      request.mutable_message()->set_task_id(std::string(kTaskId));
+    }
+    DispatchResponse response(std::make_unique<RevokingStream>(policy->resources_allowed, introduce_task));
+    ASSERT_TRUE(security
+                    .ProtectStream({.operation = DispatcherOperation::kSendStreamingMessage, .payload = request},
+                                   context, response)
+                    .ok());
+    auto& stream = std::get<std::unique_ptr<ServerStreamSession>>(response.payload());
+    if (introduce_task) {
+      EXPECT_TRUE(stream->Next().ok());
+    }
+    auto result = timed ? stream->NextFor(kPollTimeout) : stream->Next();
+    ASSERT_FALSE(result.ok());
+    CheckSameError(result.error(), a2a::core::protocol_errors::TaskNotFound());
   }
   std::vector<AuditEvent> audit_events;
   std::size_t before_calls = 0;
@@ -482,6 +531,46 @@ TEST_F(SdkSecurityTest, StreamsAllowTasklessMessagesAndCheckAssociatedMessageOwn
     if (!result.ok()) {
       CheckSameError(result.error(), a2a::core::protocol_errors::TaskNotFound());
     }
+  }
+}
+
+TEST_F(SdkSecurityTest, TasklessEventsRecheckKnownTasksAfterOrdinaryAndTimedReads) {
+  for (const bool timed : {false, true}) {
+    for (const bool introduce_task : {false, true}) {
+      CheckRevocationDuringRead(timed, introduce_task);
+    }
+  }
+}
+
+TEST_F(SdkSecurityTest, GenuinelyTasklessStreamsRemainIndependentOfTaskPermissions) {
+  DispatchSecurity security(policy, &store);
+  context.principal = kAlice;
+  DispatchResponse response(std::make_unique<RevokingStream>(policy->resources_allowed, false));
+  ASSERT_TRUE(security
+                  .ProtectStream({.operation = DispatcherOperation::kSendStreamingMessage, .payload = Message()},
+                                 context, response)
+                  .ok());
+  auto result = std::get<std::unique_ptr<ServerStreamSession>>(response.payload())->Next();
+  ASSERT_TRUE(result.ok());
+  ASSERT_TRUE(result.value().has_value());
+  EXPECT_TRUE(result.value().value_or(lf::a2a::v1::StreamResponse{}).has_message());
+}
+
+template <typename Value>
+void CheckConfigurationError(const a2a::core::Result<Value>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
+}
+
+TEST_F(SdkSecurityTest, EveryPublicSecurityEntryPointRejectsMissingDependencies) {
+  for (const auto& security :
+       {DispatchSecurity(nullptr, &store), DispatchSecurity(policy, nullptr), DispatchSecurity(nullptr, nullptr)}) {
+    const DispatchRequest request{.operation = DispatcherOperation::kSendMessage, .payload = Message()};
+    DispatchResponse response(Task(kTaskId, kAlice));
+    CheckConfigurationError(security.Authorize(request, context));
+    CheckConfigurationError(security.AuthorizeResponse(response, context));
+    CheckConfigurationError(security.ListTasks({}, context));
+    CheckConfigurationError(security.ProtectStream(request, context, response));
   }
 }
 

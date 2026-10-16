@@ -40,7 +40,8 @@ class DispatchSecurity final {
                                                      const RequestContext& context) const;
   [[nodiscard]] core::Result<DispatchResponse> ListTasks(const ListTasksRequest& request,
                                                          const RequestContext& context) const;
-  void ProtectStream(const DispatchRequest& request, const RequestContext& context, DispatchResponse& response) const;
+  [[nodiscard]] core::Result<void> ProtectStream(const DispatchRequest& request, const RequestContext& context,
+                                                 DispatchResponse& response) const;
 
  private:
   [[nodiscard]] core::Result<std::vector<std::string>> SelectTaskIds(ListTasksRequest query,
