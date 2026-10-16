@@ -54,7 +54,8 @@ configuration operations. Hidden and missing tasks return the same canonical
 HTTP 401 or gRPC `UNAUTHENTICATED`; operation denials to HTTP 403 or
 `PERMISSION_DENIED`. Public card discovery stays public; extended cards use
 authenticated dispatch. Returned tasks from sends, reads and cancellation are
-checked before release. Returned push configurations, including every list entry,
+checked before release; tasks without IDs are rejected before calling the policy.
+Returned push configurations, including every list entry,
 and associated messages are checked against the store; taskless messages are supported. Denials reach `AfterDispatch` in reverse order.
 
 Listing checks permissions before counting/pagination. `ScopeTaskList` can narrow

@@ -47,7 +47,8 @@ struct ResponseAuthorizer final {
     return task.ok() ? core::Result<void>{} : task.error();
   }
   core::Result<void> operator()(const lf::a2a::v1::Task& task) const {
-    return policy.CanAccessTask(task, context) ? core::Result<void>{} : core::protocol_errors::TaskNotFound();
+    return !task.id().empty() && policy.CanAccessTask(task, context) ? core::Result<void>{}
+                                                                     : core::protocol_errors::TaskNotFound();
   }
   core::Result<void> operator()(const lf::a2a::v1::SendMessageResponse& send) const {
     if (send.has_task()) {

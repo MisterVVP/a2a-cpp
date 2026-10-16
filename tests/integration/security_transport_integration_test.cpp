@@ -54,6 +54,8 @@ constexpr std::string_view kRestPath = "/a2a";
 constexpr std::string_view kTaskId = "sdk-transport-owned-task";
 constexpr std::string_view kOtherTaskId = "sdk-transport-other-task";
 constexpr std::string_view kMissingTaskId = "sdk-transport-missing-task";
+constexpr std::string_view kMessageId = "sdk-transport-message";
+constexpr std::string_view kMessageText = "security request";
 constexpr std::string_view kErrorField = "error";
 constexpr std::string_view kMessageField = "message";
 constexpr std::string_view kPushUrl = "https://example.invalid/security-push";
@@ -136,6 +138,15 @@ class Policy final : public a2a::server::SecurityPolicy {
 class ResponseExecutor final : public a2a::examples::ExampleExecutor {
  public:
   using ExampleExecutor::ExampleExecutor;
+  a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
+                                                                  a2a::server::RequestContext& context) override {
+    if (!task_response.has_value()) {
+      return ExampleExecutor::SendMessage(request, context);
+    }
+    lf::a2a::v1::SendMessageResponse response;
+    *response.mutable_task() = *task_response;
+    return response;
+  }
   a2a::core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                a2a::server::RequestContext& context) override {
     return task_response.has_value() ? a2a::core::Result<lf::a2a::v1::Task>(*task_response)
@@ -321,6 +332,22 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
       EXPECT_EQ(error.protocol_code(), kJsonRpcInternal);
     }
   }
+  void CheckRejectedUnaryTaskResponses() {
+    lf::a2a::v1::GetTaskRequest get;
+    get.set_id(std::string(kTaskId));
+    lf::a2a::v1::CancelTaskRequest cancel;
+    cancel.set_id(std::string(kTaskId));
+    lf::a2a::v1::SendMessageRequest send;
+    auto* message = send.mutable_message();
+    message->set_message_id(std::string(kMessageId));
+    message->set_role(lf::a2a::v1::ROLE_USER);
+    message->set_context_id(std::string(kAlice));
+    message->add_parts()->set_text(std::string(kMessageText));
+    const auto options = Options(kAliceToken);
+    ExpectHiddenTask(client_->GetTask(get, options));
+    ExpectHiddenTask(client_->CancelTask(cancel, options));
+    ExpectHiddenTask(client_->SendMessage(send, options));
+  }
   std::string ServerErrorMessage(const a2a::core::Error& error) const {
     if (GetParam() == Binding::kGrpc) {
       return std::string(error.message());
@@ -379,16 +406,18 @@ TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
   EXPECT_EQ(listed.value().tasks.front().id(), kOtherTaskId);
   EXPECT_TRUE(listed.value().next_page_token.empty());
 }
-TEST_P(SecurityTransportIntegrationTest, GetAndCancelRejectForeignExecutorResponses) {
+TEST_P(SecurityTransportIntegrationTest, UnaryRequestsRejectForeignExecutorTaskResponses) {
   auto foreign = store_.Get(kOtherTaskId);
   ASSERT_TRUE(foreign.ok());
   executor_.task_response = std::move(foreign.value());
-  lf::a2a::v1::GetTaskRequest get;
-  get.set_id(std::string(kTaskId));
-  lf::a2a::v1::CancelTaskRequest cancel;
-  cancel.set_id(std::string(kTaskId));
-  ExpectHiddenTask(client_->GetTask(get, Options(kAliceToken)));
-  ExpectHiddenTask(client_->CancelTask(cancel, Options(kAliceToken)));
+  CheckRejectedUnaryTaskResponses();
+}
+TEST_P(SecurityTransportIntegrationTest, UnaryRequestsRejectExecutorTasksWithoutIds) {
+  auto malformed = store_.Get(kTaskId);
+  ASSERT_TRUE(malformed.ok());
+  malformed.value().clear_id();
+  executor_.task_response = std::move(malformed.value());
+  CheckRejectedUnaryTaskResponses();
 }
 TEST_P(SecurityTransportIntegrationTest, PushResponsesCannotExposeForeignConfigurations) {
   lf::a2a::v1::TaskPushNotificationConfig foreign;

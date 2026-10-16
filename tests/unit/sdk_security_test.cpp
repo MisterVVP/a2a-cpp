@@ -120,6 +120,7 @@ class Policy final : public SecurityPolicy {
     return operations_allowed;
   }
   bool CanAccessTask(const lf::a2a::v1::Task& task, const RequestContext& context) const override {
+    ++access_checks;
     return resources_allowed && task.context_id() == context.principal;
   }
   std::optional<ListTasksRequest> ScopeTaskList(const ListTasksRequest& query,
@@ -138,6 +139,7 @@ class Policy final : public SecurityPolicy {
   }
   bool scope_lists = false;
   mutable std::atomic_size_t authentications = 0;
+  mutable std::atomic_size_t access_checks = 0;
   bool operations_allowed = true;
   bool resources_allowed = true;
 };
@@ -466,6 +468,22 @@ TEST_F(SdkSecurityTest, TaskResponsesAuthorizeTheActualTask) {
   ASSERT_FALSE(denied.ok());
   CheckSameError(denied.error(), a2a::core::protocol_errors::TaskNotFound());
   EXPECT_TRUE(security.AuthorizeResponse(DispatchResponse(Task(kThirdTaskId, kAlice)), context).ok());
+}
+
+TEST_F(SdkSecurityTest, UnaryTasksWithoutIdsAreRejectedBeforeCallingThePolicy) {
+  DispatchSecurity security(policy, &store);
+  context.principal = kAlice;
+  auto task = Task({}, kAlice);
+  *task.add_history() = Message().message();
+  task.add_artifacts()->set_artifact_id(std::string(kMessageId));
+  lf::a2a::v1::SendMessageResponse send;
+  *send.mutable_task() = task;
+  for (const auto& response : {DispatchResponse(task), DispatchResponse(send)}) {
+    auto result = security.AuthorizeResponse(response, context);
+    ASSERT_FALSE(result.ok());
+    CheckSameError(result.error(), a2a::core::protocol_errors::TaskNotFound());
+  }
+  EXPECT_EQ(policy->access_checks.load(), 0U);
 }
 
 TEST_F(SdkSecurityTest, TaskLookupFailuresPreserveErrorsOtherThanTaskNotFound) {
