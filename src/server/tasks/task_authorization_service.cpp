@@ -17,6 +17,7 @@ constexpr std::string_view kInvalidAuthorizationExplanation = "authorization req
 constexpr std::string_view kAuthorizationNotPending = "task is not awaiting authorization";
 constexpr std::string_view kTaskChanged = "task changed while updating authorization; retry the operation";
 constexpr std::string_view kAuthorizationNotGranted = "task authorization has not been granted";
+constexpr std::string_view kNotAuthorizationTask = "task does not belong to the authorization service";
 }  // namespace
 
 TaskAuthorizationService::TaskAuthorizationService(TaskStore* store, CredentialValidator validator)
@@ -133,6 +134,9 @@ core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Authorize(std::string_
 
 core::Result<lf::a2a::v1::Task> TaskAuthorizationService::Transition(TaskStore::TaskSnapshot snapshot,
                                                                      lf::a2a::v1::TaskState state) {
+  if (!IsAuthorizationTask(snapshot.task)) {
+    return core::protocol_errors::UnsupportedOperation(std::string(kNotAuthorizationTask));
+  }
   if (core::IsTerminalTaskState(snapshot.task.status().state())) {
     return state == lf::a2a::v1::TASK_STATE_CANCELED ? core::protocol_errors::TaskNotCancelable()
                                                      : core::protocol_errors::UnsupportedOperation();

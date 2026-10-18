@@ -22,9 +22,11 @@
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protojson.h"
+#include "a2a/core/url_utils.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
+#include "a2a/server/tasks/task_authorization_service.h"
 #include "example_support.h"
 #include "support/security/fixtures.h"
 
@@ -50,6 +52,7 @@ constexpr std::string_view kRestUrl = "http://agent.local/a2a";
 constexpr std::string_view kRpcUrl = "http://agent.local/rpc";
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr auto kCallTimeout = std::chrono::seconds(2);
+constexpr auto kPollTimeout = std::chrono::milliseconds(1);
 constexpr std::string_view kRestPath = "/a2a";
 constexpr std::string_view kTaskId = "sdk-transport-owned-task";
 constexpr std::string_view kOtherTaskId = "sdk-transport-other-task";
@@ -131,8 +134,9 @@ class Policy final : public a2a::server::SecurityPolicy {
   }
   [[nodiscard]] bool CanAccessTask(const lf::a2a::v1::Task& task,
                                    const a2a::server::RequestContext& context) const override {
-    return task.context_id() == context.principal;
+    return task.context_id() == context.principal && (!require_history || !task.history().empty());
   }
+  bool require_history = false;
 };
 
 class ResponseExecutor final : public a2a::examples::ExampleExecutor {
@@ -226,6 +230,25 @@ TEST(SecurityStreamIntegrationTest, StoreOwnershipChangesDuringReadHideTasklessM
   EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kTaskNotFound);
 }
 
+TEST(SecurityStreamIntegrationTest, OrdinaryTaskCancellationDoesNotWriteOrPublishAuthorizationEvents) {
+  a2a::server::InMemoryTaskStore store;
+  lf::a2a::v1::Task task;
+  task.set_id(std::string(kTaskId));
+  task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+  ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  a2a::server::TaskAuthorizationService authorization(&store, {});
+  auto stream = authorization.Subscribe(kTaskId);
+  ASSERT_TRUE(stream.ok());
+  ASSERT_TRUE(stream.value()->Next().ok());
+  EXPECT_FALSE(authorization.Cancel(kTaskId).ok());
+  auto stored = store.Get(kTaskId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
+  auto event = stream.value()->NextFor(kPollTimeout);
+  ASSERT_TRUE(event.ok());
+  EXPECT_FALSE(event.value().has_value());
+}
+
 class PrincipalMutator final : public a2a::server::ServerInterceptor {
  public:
   a2a::core::Result<void> BeforeDispatch(const a2a::server::DispatchRequest& /*request*/,
@@ -282,11 +305,12 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
     ASSERT_TRUE(store_.CreateOrUpdate(task).ok());
   }
   a2a::core::Result<a2a::client::HttpClientResponse> Handle(const a2a::client::HttpRequest& request) {
-    a2a::server::HttpServerRequest incoming{.method = request.method,
-                                            .target = a2a::core::ExtractTargetPath(request.url),
-                                            .headers = request.headers,
-                                            .body = request.body,
-                                            .remote_address = {}};
+    a2a::server::HttpServerRequest incoming{
+        .method = request.method,
+        .target = a2a::core::ExtractTargetPath(request.url, a2a::core::UrlSuffixPolicy::kPathAndQuery),
+        .headers = request.headers,
+        .body = request.body,
+        .remote_address = {}};
     auto response = GetParam() == Binding::kRest ? rest_adapter_.Handle(incoming) : rpc_adapter_.Handle(incoming);
     if (!response.ok()) {
       return response.error();
@@ -405,6 +429,38 @@ TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
   ASSERT_EQ(listed.value().tasks.size(), kTaskCount);
   EXPECT_EQ(listed.value().tasks.front().id(), kOtherTaskId);
   EXPECT_TRUE(listed.value().next_page_token.empty());
+}
+
+TEST_P(SecurityTransportIntegrationTest, HistoryProjectionDoesNotChangeTaskAuthorization) {
+  auto task = store_.Get(kTaskId);
+  ASSERT_TRUE(task.ok());
+  task.value().add_history()->set_message_id(std::string(kMessageId));
+  ASSERT_TRUE(store_.CreateOrUpdate(task.value()).ok());
+  auto policy = std::make_shared<Policy>();
+  policy->require_history = true;
+  dispatcher_.SetSecurityPolicy(policy, &store_);
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+  request.set_history_length(0);
+  auto result = client_->GetTask(request, Options(kAliceToken));
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result.value().history().empty());
+}
+
+TEST_P(SecurityTransportIntegrationTest, SendHistoryProjectionDoesNotChangeTaskAuthorization) {
+  auto policy = std::make_shared<Policy>();
+  policy->require_history = true;
+  dispatcher_.SetSecurityPolicy(policy, &store_);
+  lf::a2a::v1::SendMessageRequest request;
+  request.mutable_message()->set_message_id(std::string(kMessageId));
+  request.mutable_message()->set_context_id(std::string(kAlice));
+  request.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  request.mutable_message()->add_parts()->set_text(std::string(kMessageText));
+  request.mutable_configuration()->set_history_length(0);
+  auto result = client_->SendMessage(request, Options(kAliceToken));
+  ASSERT_TRUE(result.ok());
+  ASSERT_TRUE(result.value().has_task());
+  EXPECT_TRUE(result.value().task().history().empty());
 }
 TEST_P(SecurityTransportIntegrationTest, UnaryRequestsRejectForeignExecutorTaskResponses) {
   auto foreign = store_.Get(kOtherTaskId);

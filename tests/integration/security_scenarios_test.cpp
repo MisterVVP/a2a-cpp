@@ -148,7 +148,7 @@ class Recorder final : public a2a::client::StreamObserver {
   bool finished_ = false;
 };
 
-class SecurityScenariosTest : public testing::TestWithParam<BindingPair> {
+class SecurityFixture : public testing::Test {
  protected:
   void SetUp() override {
     const auto port = Environment(kSutPortEnv);
@@ -163,8 +163,6 @@ class SecurityScenariosTest : public testing::TestWithParam<BindingPair> {
     grpc_url_.append(host.empty() ? kLoopbackHost : host)
         .append(kEndpointSeparator)
         .append(std::to_string(std::stoi(port) + 1));
-    source_ = MakeClient(std::get<0>(GetParam()));
-    target_ = MakeClient(std::get<1>(GetParam()));
   }
   [[nodiscard]] std::unique_ptr<a2a::client::A2AClient> MakeClient(Binding binding) const {
     a2a::client::ResolvedInterface iface{
@@ -337,6 +335,25 @@ class SecurityScenariosTest : public testing::TestWithParam<BindingPair> {
   std::unique_ptr<a2a::client::A2AClient> source_, target_;
 };
 
+class SecurityScenariosTest : public SecurityFixture, public testing::WithParamInterface<BindingPair> {
+ protected:
+  void SetUp() override {
+    ASSERT_NO_FATAL_FAILURE(SecurityFixture::SetUp());
+    source_ = MakeClient(std::get<0>(GetParam()));
+    target_ = MakeClient(std::get<1>(GetParam()));
+  }
+};
+
+class SecurityTlsTest : public SecurityFixture, public testing::WithParamInterface<Binding> {
+ protected:
+  void SetUp() override {
+    ASSERT_NO_FATAL_FAILURE(SecurityFixture::SetUp());
+    target_ = MakeClient(GetParam());
+  }
+};
+
+using SecurityDiscoveryTest = SecurityFixture;
+
 TEST_P(SecurityScenariosTest, CallerPermissionsHideTasksAcrossBindings) {
   auto alice = Options(kAliceToken);
   auto bob = Options(kBobToken);
@@ -387,7 +404,7 @@ TEST_P(SecurityScenariosTest, AuthorizationKeepsStreamsOpenAndAcceptsPendingMess
   CheckCompletedStreams(id, alice, active, subscribed);
 }
 
-TEST_P(SecurityScenariosTest, TlsTrustAndServerIdentity) {
+TEST_P(SecurityTlsTest, TlsTrustAndServerIdentity) {
   const auto mode = Environment(kSecurityModeEnv);
   auto response = target_->SendMessage(Message(kAlice), Options(kAliceToken));
   if (mode == kPlaintextMode || mode == kTrustedMode) {
@@ -397,11 +414,7 @@ TEST_P(SecurityScenariosTest, TlsTrustAndServerIdentity) {
   }
 }
 
-TEST_P(SecurityScenariosTest, TlsDiscoveryConnectsToTheAdvertisedGrpcTarget) {
-  const auto mode = Environment(kSecurityModeEnv);
-  if (mode != kPlaintextMode && mode != kTrustedMode) {
-    return;
-  }
+TEST_F(SecurityDiscoveryTest, TlsDiscoveryConnectsToTheAdvertisedGrpcTarget) {
   const auto options = Options(kAliceToken);
   a2a::client::DiscoveryClient discovery(a2a::client::MakeDefaultHttpFetcher(options.tls));
   auto card = discovery.Fetch(base_);
@@ -412,7 +425,7 @@ TEST_P(SecurityScenariosTest, TlsDiscoveryConnectsToTheAdvertisedGrpcTarget) {
   EXPECT_TRUE(client->SendMessage(Message(kAlice), options).ok());
 }
 
-TEST_P(SecurityScenariosTest, SignedDiscoveryChecksCurrentKeyPolicy) {
+TEST_F(SecurityDiscoveryTest, SignedDiscoveryChecksCurrentKeyPolicy) {
   const auto now = std::chrono::system_clock::now();
   auto options = Options(kAliceToken);
   a2a::client::DiscoveryClient discovery(a2a::client::MakeDefaultHttpFetcher(options.tls));
@@ -444,4 +457,6 @@ INSTANTIATE_TEST_SUITE_P(AllBindings, SecurityScenariosTest,
                                .append(kBindingPairSeparator)
                                .append(BindingName(std::get<1>(info.param)));
                          });
+INSTANTIATE_TEST_SUITE_P(AllBindings, SecurityTlsTest, testing::ValuesIn(kBindings),
+                         [](const testing::TestParamInfo<Binding>& info) { return BindingName(info.param); });
 }  // namespace

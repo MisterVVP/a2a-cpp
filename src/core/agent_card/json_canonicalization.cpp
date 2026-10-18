@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "a2a/core/error.h"
@@ -42,8 +43,8 @@ constexpr unsigned kSurrogateBits = 10U;
 constexpr std::uint32_t kLowSurrogateStart = 0xDC00U;
 constexpr std::uint32_t kSurrogateMask = 0x3FFU;
 
-std::vector<std::uint16_t> Utf16(std::string_view text) {
-  std::vector<std::uint16_t> result;
+std::u16string Utf16(std::string_view text) {
+  std::u16string result;
   for (std::size_t index = 0; index < text.size();) {
     auto code = static_cast<std::uint32_t>(static_cast<unsigned char>(text[index++]));
     unsigned remaining = 0;
@@ -62,10 +63,10 @@ std::vector<std::uint16_t> Utf16(std::string_view text) {
     }
     if (code > kMaximumBmpCodePoint) {
       code -= kSupplementaryCodePointOffset;
-      result.push_back(static_cast<std::uint16_t>(kHighSurrogateStart + (code >> kSurrogateBits)));
-      result.push_back(static_cast<std::uint16_t>(kLowSurrogateStart + (code & kSurrogateMask)));
+      result.push_back(static_cast<char16_t>(kHighSurrogateStart + (code >> kSurrogateBits)));
+      result.push_back(static_cast<char16_t>(kLowSurrogateStart + (code & kSurrogateMask)));
     } else {
-      result.push_back(static_cast<std::uint16_t>(code));
+      result.push_back(static_cast<char16_t>(code));
     }
   }
   return result;
@@ -180,25 +181,29 @@ void AppendString(std::string_view text, std::string& output) {
 
 void AppendCanonical(const google::protobuf::Value& value, std::string& output);
 
+struct CanonicalMember {
+  std::u16string sort_key;
+  std::string_view name;
+  const google::protobuf::Value* value;
+};
+
 void AppendObject(const google::protobuf::Struct& object, std::string& output) {
-  std::vector<std::pair<std::vector<std::uint16_t>, std::string>> keys;
-  keys.reserve(object.fields().size());
+  std::vector<CanonicalMember> members;
+  members.reserve(object.fields().size());
   for (const auto& [key, value] : object.fields()) {
-    (void)value;
-    keys.emplace_back(Utf16(key), key);
+    members.push_back({.sort_key = Utf16(key), .name = key, .value = &value});
   }
-  std::ranges::sort(keys);
+  std::ranges::sort(members, {}, &CanonicalMember::sort_key);
   output.push_back('{');
   bool first = true;
-  for (const auto& [sort_key, key] : keys) {
-    (void)sort_key;
+  for (const auto& member : members) {
     if (!first) {
       output.push_back(',');
     }
     first = false;
-    AppendString(key, output);
+    AppendString(member.name, output);
     output.push_back(':');
-    AppendCanonical(object.fields().at(key), output);
+    AppendCanonical(*member.value, output);
   }
   output.push_back('}');
 }

@@ -115,13 +115,20 @@ TEST(AgentCardSigningTest, RejectsMalformedSignatureByteEncodings) {
                            signature.substr(1),
                            padded,
                            noncanonical};
+  std::size_t resolutions = 0;
+  const auto trusted = Resolver(Key());
+  const auto resolver = [&](std::string_view id) {
+    ++resolutions;
+    return trusted(id);
+  };
   for (const auto& encoded : invalid) {
     SCOPED_TRACE(encoded);
     signed_card.value().mutable_signatures(0)->set_signature(encoded);
     auto json = a2a::core::MessageToJson(signed_card.value());
     ASSERT_TRUE(json.ok());
-    EXPECT_FALSE(a2a::core::VerifyAgentCardJson(json.value(), Resolver(Key()), kNow).ok());
+    EXPECT_FALSE(a2a::core::VerifyAgentCardJson(json.value(), resolver, kNow).ok());
   }
+  EXPECT_EQ(resolutions, 0U);
 }
 
 TEST(AgentCardSigningTest, RejectsTamperingUnknownKeysAndExpiredOrRevokedKeys) {

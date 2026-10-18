@@ -45,6 +45,7 @@ constexpr std::string_view kReadFailure = "injected task lookup failure";
 struct AuditEvent {
   int id;
   std::optional<a2a::core::Error> error;
+  std::optional<int> history_size = std::nullopt;
 };
 
 class AuditInterceptor final : public ServerInterceptor {
@@ -58,6 +59,12 @@ class AuditInterceptor final : public ServerInterceptor {
   void AfterDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/,
                      const a2a::core::Result<DispatchResponse>& result) override {
     events_.push_back({id_, result.ok() ? std::nullopt : std::optional(result.error())});
+    if (result.ok()) {
+      const auto* task = std::get_if<lf::a2a::v1::Task>(&result.value().payload());
+      if (task != nullptr) {
+        events_.back().history_size = task->history_size();
+      }
+    }
   }
 
  private:
@@ -121,7 +128,7 @@ class Policy final : public SecurityPolicy {
   }
   bool CanAccessTask(const lf::a2a::v1::Task& task, const RequestContext& context) const override {
     ++access_checks;
-    return resources_allowed && task.context_id() == context.principal;
+    return resources_allowed && task.context_id() == context.principal && (!require_history || !task.history().empty());
   }
   std::optional<ListTasksRequest> ScopeTaskList(const ListTasksRequest& query,
                                                 const RequestContext& context) const override {
@@ -142,6 +149,7 @@ class Policy final : public SecurityPolicy {
   mutable std::atomic_size_t access_checks = 0;
   bool operations_allowed = true;
   bool resources_allowed = true;
+  bool require_history = false;
 };
 
 lf::a2a::v1::Task Task(std::string_view id, std::string_view owner) {
@@ -258,6 +266,13 @@ class SdkSecurityTest : public testing::Test {
     EXPECT_EQ(audit_events.back().id, kFirstAuditId);
     for (const auto& event : audit_events) {
       CheckAuditError(event, result.error());
+    }
+  }
+  void CheckProjectedGetTaskAndAudit(const DispatchResponse& response) {
+    EXPECT_TRUE(std::get<lf::a2a::v1::Task>(response.payload()).history().empty());
+    ASSERT_EQ(audit_events.size(), kAuditInterceptorCount);
+    for (const auto& event : audit_events) {
+      EXPECT_EQ(event.history_size, 0);
     }
   }
   static void CheckAuditError(const AuditEvent& event, const a2a::core::Error& error) {
@@ -459,6 +474,37 @@ TEST_F(SdkSecurityTest, UnaryCreationAcceptsAnOwnedTask) {
   lf::a2a::v1::SendMessageResponse response;
   *response.mutable_task() = Task(kMissingTaskId, kAlice);
   EXPECT_TRUE(DispatchUnary(std::move(response)).ok());
+}
+
+TEST_F(SdkSecurityTest, GetTaskAuthorizesFullHistoryBeforeProjectingResponsesAndAuditHooks) {
+  auto task = Task(kTaskId, kAlice);
+  task.add_history()->set_message_id(std::string(kMessageId));
+  ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  policy->require_history = true;
+  AddAuditInterceptors(dispatcher);
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+  request.set_history_length(0);
+  auto result = dispatcher.Dispatch({.operation = DispatcherOperation::kGetTask, .payload = request}, context);
+  ASSERT_TRUE(result.ok());
+  CheckProjectedGetTaskAndAudit(result.value());
+  auto stored = store.Get(kTaskId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_FALSE(stored.value().history().empty());
+}
+
+TEST_F(SdkSecurityTest, SendMessageAuthorizesFullHistoryBeforeProjectingTheTask) {
+  policy->require_history = true;
+  auto request = Message();
+  request.mutable_configuration()->set_history_length(0);
+  auto result = dispatcher.Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = request}, context);
+  ASSERT_TRUE(result.ok());
+  const auto& response = std::get<lf::a2a::v1::SendMessageResponse>(result.value().payload());
+  ASSERT_TRUE(response.has_task());
+  EXPECT_TRUE(response.task().history().empty());
+  auto stored = store.Get(response.task().id());
+  ASSERT_TRUE(stored.ok());
+  EXPECT_FALSE(stored.value().history().empty());
 }
 
 TEST_F(SdkSecurityTest, TaskResponsesAuthorizeTheActualTask) {

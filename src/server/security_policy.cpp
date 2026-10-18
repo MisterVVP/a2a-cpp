@@ -232,11 +232,12 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
   auto scoped = policy_->ScopeTaskList(query, context);
   std::vector<std::string> selected_ids;
   if (scoped.has_value()) {
-    auto selected = SelectTaskIds(std::move(*scoped), context, offset.value(), size, response.total_size);
+    auto selected = SelectTaskIds(std::move(*scoped), context, offset.value(), size);
     if (!selected.ok()) {
       return selected.error();
     }
-    selected_ids = std::move(selected.value());
+    response.total_size = selected.value().total_size;
+    selected_ids = std::move(selected.value().task_ids);
   }
   auto valid_offset = ValidateListPageOffset(offset.value(), response.total_size);
   if (!valid_offset.ok()) {
@@ -255,12 +256,12 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
   return DispatchResponse(std::move(response));
 }
 
-core::Result<std::vector<std::string>> DispatchSecurity::SelectTaskIds(ListTasksRequest query,
-                                                                       const RequestContext& context,
-                                                                       std::size_t offset, std::size_t page_size,
-                                                                       std::size_t& total_size) const {
-  std::vector<std::string> selected;
-  selected.reserve(page_size);
+core::Result<DispatchSecurity::VisibleTaskPage> DispatchSecurity::SelectTaskIds(ListTasksRequest query,
+                                                                                const RequestContext& context,
+                                                                                std::size_t offset,
+                                                                                std::size_t page_size) const {
+  VisibleTaskPage selected;
+  selected.task_ids.reserve(page_size);
   query.page_size = kMaxListTasksPageSize;
   query.page_token.clear();
   do {
@@ -272,10 +273,10 @@ core::Result<std::vector<std::string>> DispatchSecurity::SelectTaskIds(ListTasks
       if (!policy_->CanAccessTask(task, context)) {
         continue;
       }
-      if (total_size >= offset && selected.size() < page_size) {
-        selected.push_back(task.id());
+      if (selected.total_size >= offset && selected.task_ids.size() < page_size) {
+        selected.task_ids.push_back(task.id());
       }
-      ++total_size;
+      ++selected.total_size;
     }
     query.page_token = std::move(listed.value().next_page_token);
   } while (!query.page_token.empty());

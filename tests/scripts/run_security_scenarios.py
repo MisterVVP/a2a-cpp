@@ -5,11 +5,12 @@ import argparse
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import tempfile
 import uuid
 
-from run_binding_scenarios import reserve_ports, wait_until_ready, READY_TIMEOUT, SCENARIO_TIMEOUT
+from run_binding_scenarios import wait_until_ready, READY_TIMEOUT, SCENARIO_TIMEOUT
 
 ALICE_TOKEN = "security-fixture-alice"
 BOB_TOKEN = "security-fixture-bob"
@@ -19,6 +20,27 @@ PUBLIC_GRPC_TARGET_ENV = "A2A_TCK_PUBLIC_GRPC_TARGET"
 VALID_FROM = "20200101000000Z"
 VALID_UNTIL = "21000101000000Z"
 EXPIRED_UNTIL = "20210101000000Z"
+LOOPBACK_HOST = "127.0.0.1"
+MAX_PORT = 65535
+PORT_ATTEMPTS = 100
+PORT_RESERVATION_FAILURE = "could not reserve disjoint SUT and TLS proxy ports"
+
+
+def reserve_security_ports():
+    for _ in range(PORT_ATTEMPTS):
+        with socket.socket() as http, socket.socket() as grpc, socket.socket() as tls:
+            http.bind((LOOPBACK_HOST, 0))
+            port = http.getsockname()[1]
+            if port == MAX_PORT:
+                continue
+            try:
+                grpc.bind((LOOPBACK_HOST, port + 1))
+                # Keep both SUT sockets bound until the proxy port is selected.
+                tls.bind((LOOPBACK_HOST, 0))
+                return port, tls.getsockname()[1]
+            except OSError:
+                continue
+    raise RuntimeError(PORT_RESERVATION_FAILURE)
 
 
 def openssl(directory, *arguments):
@@ -76,7 +98,7 @@ def stop(process):
 
 def run_scenario(args, environment, directory, mode):
     env = dict(environment)
-    port = reserve_ports()
+    port, tls_port = reserve_security_ports()
     env["A2A_SECURITY_SUT_PORT"] = str(port)
     env["A2A_SECURITY_MODE"] = mode
     env["A2A_TCK_CREDENTIAL_DIRECTORY"] = str(directory / "credentials")
@@ -85,7 +107,6 @@ def run_scenario(args, environment, directory, mode):
     env["A2A_SECURITY_CARD_PUBLIC_KEY"] = str(directory / "card.pub")
     proxy = None
     if mode != "plaintext":
-        tls_port = reserve_ports()
         certificate = directory / ("expired.pem" if mode == "expired" else "server.pem")
         env["A2A_TCK_TLS_CERT_FILE"] = str(certificate)
         env["A2A_TCK_TLS_KEY_FILE"] = str(directory / "server.key")
@@ -130,7 +151,7 @@ http {{
                                             timeout=SCENARIO_TIMEOUT, check=False)
                 if sdk_result.returncode:
                     return sdk_result.returncode
-            test_filter = "*Tls*" if mode not in ("plaintext", "trusted") else "*"
+            test_filter = "*TlsTrustAndServerIdentity*" if mode not in ("plaintext", "trusted") else "*"
             return subprocess.run([str(args.scenarios), f"--gtest_filter={test_filter}"], env=env,
                                   timeout=SCENARIO_TIMEOUT, check=False).returncode
         finally:

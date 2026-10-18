@@ -23,6 +23,7 @@ constexpr std::string_view kMessageId = "authorization-message";
 constexpr std::string_view kFollowupId = "authorization-followup";
 constexpr std::string_view kText = "authorization text";
 constexpr int kHistoryCount = 2;
+constexpr std::string_view kOrdinaryTaskId = "ordinary-task";
 
 lf::a2a::v1::SendMessageRequest Message(std::string_view id = kMessageId) {
   lf::a2a::v1::SendMessageRequest request;
@@ -120,6 +121,19 @@ TEST_F(TaskAuthorizationServiceTest, RejectsMismatchedContextAndAllowsCancellati
   ASSERT_TRUE(canceled.ok());
   EXPECT_EQ(canceled.value().status().state(), lf::a2a::v1::TASK_STATE_CANCELED);
   EXPECT_FALSE(service_.Authorize(id_, kTaskCredential).ok());
+}
+
+TEST_F(TaskAuthorizationServiceTest, CancellationRejectsOrdinaryTasksWithoutWriting) {
+  lf::a2a::v1::Task task;
+  task.set_id(std::string(kOrdinaryTaskId));
+  task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+  ASSERT_TRUE(store_.CreateOrUpdate(task).ok());
+  const auto writes = store_.conditional_writes;
+  EXPECT_FALSE(service_.Cancel(kOrdinaryTaskId).ok());
+  EXPECT_EQ(store_.conditional_writes, writes);
+  auto stored = store_.Get(kOrdinaryTaskId);
+  ASSERT_TRUE(stored.ok());
+  EXPECT_EQ(stored.value().status().state(), lf::a2a::v1::TASK_STATE_WORKING);
 }
 TEST_F(TaskAuthorizationServiceTest, RejectsMissingExplanationsAndUnconfiguredStore) {
   EXPECT_FALSE(service_.RequestAuthorization(Message(), RequestContext{}, {}).ok());

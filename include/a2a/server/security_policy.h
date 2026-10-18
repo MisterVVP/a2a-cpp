@@ -44,10 +44,12 @@ class DispatchSecurity final {
                                                  DispatchResponse& response) const;
 
  private:
-  [[nodiscard]] core::Result<std::vector<std::string>> SelectTaskIds(ListTasksRequest query,
-                                                                     const RequestContext& context, std::size_t offset,
-                                                                     std::size_t page_size,
-                                                                     std::size_t& total_size) const;
+  struct VisibleTaskPage {
+    std::vector<std::string> task_ids;
+    std::size_t total_size = 0;
+  };
+  [[nodiscard]] core::Result<VisibleTaskPage> SelectTaskIds(ListTasksRequest query, const RequestContext& context,
+                                                            std::size_t offset, std::size_t page_size) const;
   std::shared_ptr<const SecurityPolicy> policy_;
   TaskStore* task_store_;
 };

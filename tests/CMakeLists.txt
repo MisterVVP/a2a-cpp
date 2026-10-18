@@ -1188,6 +1188,11 @@ endif()
 endif()
 
 add_executable(task_authorization_service_test unit/task_authorization_service_test.cpp)
+if(UNIX AND Python3_Interpreter_FOUND)
+  add_test(NAME security_launcher_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/security_launcher_test.py)
+  set_tests_properties(security_launcher_test PROPERTIES LABELS "security")
+endif()
 target_include_directories(task_authorization_service_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(task_authorization_service_test PRIVATE a2a::server GTest::gtest_main)
 gtest_discover_tests(task_authorization_service_test PROPERTIES LABELS "security")

@@ -123,16 +123,21 @@ core::Result<DispatchResponse> DispatchSubscribeToExecutor(AgentExecutor& execut
 }
 
 core::Result<DispatchResponse> DispatchSendMessageToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                             RequestContext& context) {
+                                                             RequestContext& context, bool require_full_task) {
   const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
   if (payload == nullptr) {
     return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendMessage);
   }
-  const auto response = executor.SendMessage(*payload, context);
+  std::optional<lf::a2a::v1::SendMessageRequest> full_query;
+  if (require_full_task && payload->configuration().has_history_length()) {
+    full_query = *payload;
+    full_query->mutable_configuration()->clear_history_length();
+  }
+  auto response = executor.SendMessage(full_query.has_value() ? *full_query : *payload, context);
   if (!response.ok()) {
     return response.error();
   }
-  return DispatchResponse(response.value());
+  return DispatchResponse(std::move(response.value()));
 }
 
 core::Result<DispatchResponse> DispatchSendStreamingMessageToExecutor(AgentExecutor& executor,
@@ -151,20 +156,38 @@ core::Result<DispatchResponse> DispatchSendStreamingMessageToExecutor(AgentExecu
 }
 
 core::Result<DispatchResponse> DispatchGetTaskToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                         RequestContext& context) {
+                                                         RequestContext& context, bool require_full_task) {
   const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
   if (payload == nullptr) {
     return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask);
   }
-  auto response = executor.GetTask(*payload, context);
+  std::optional<lf::a2a::v1::GetTaskRequest> full_query;
+  if (require_full_task && payload->has_history_length()) {
+    full_query = *payload;
+    full_query->clear_history_length();
+  }
+  auto response = executor.GetTask(full_query.has_value() ? *full_query : *payload, context);
   if (!response.ok()) {
     return response.error();
   }
-  lf::a2a::v1::Task task = std::move(response.value());
-  if (payload->has_history_length()) {
-    ApplyHistoryRetention(&task, static_cast<std::size_t>(payload->history_length()));
+  return DispatchResponse(std::move(response.value()));
+}
+
+void ProjectTaskResponse(const DispatchRequest& request, DispatchResponse& response) {
+  if (request.operation == DispatcherOperation::kGetTask) {
+    const auto& query = std::get<lf::a2a::v1::GetTaskRequest>(request.payload);
+    if (query.has_history_length()) {
+      ApplyHistoryRetention(&std::get<lf::a2a::v1::Task>(response.payload()),
+                            query.history_length() <= 0 ? 0 : static_cast<std::size_t>(query.history_length()));
+    }
+  } else if (request.operation == DispatcherOperation::kSendMessage) {
+    const auto& query = std::get<lf::a2a::v1::SendMessageRequest>(request.payload);
+    auto& send = std::get<lf::a2a::v1::SendMessageResponse>(response.payload());
+    if (query.configuration().has_history_length() && send.has_task()) {
+      const auto limit = query.configuration().history_length();
+      ApplyHistoryRetention(send.mutable_task(), limit <= 0 ? 0 : static_cast<std::size_t>(limit));
+    }
   }
-  return DispatchResponse(std::move(task));
 }
 
 core::Result<DispatchResponse> DispatchListTasksToExecutor(AgentExecutor& executor, const DispatchRequest& request,
@@ -216,18 +239,19 @@ core::Result<DispatchResponse> DispatchExtendedAgentCard(
 
 core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
                                                   RequestContext& context,
-                                                  const std::shared_ptr<core::AgentCardProvider>& agent_card_provider) {
+                                                  const std::shared_ptr<core::AgentCardProvider>& agent_card_provider,
+                                                  bool require_full_task) {
   if (IsPushNotificationOperation(request.operation)) {
     return DispatchPushToExecutor(executor, request, context);
   }
 
   switch (request.operation) {
     case DispatcherOperation::kSendMessage:
-      return DispatchSendMessageToExecutor(executor, request, context);
+      return DispatchSendMessageToExecutor(executor, request, context, require_full_task);
     case DispatcherOperation::kSendStreamingMessage:
       return DispatchSendStreamingMessageToExecutor(executor, request, context);
     case DispatcherOperation::kGetTask:
-      return DispatchGetTaskToExecutor(executor, request, context);
+      return DispatchGetTaskToExecutor(executor, request, context, require_full_task);
     case DispatcherOperation::kSubscribeTask: {
       return DispatchSubscribeToExecutor(executor, request, context);
     }
@@ -296,7 +320,8 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   const auto* list = std::get_if<ListTasksRequest>(&request.payload);
   auto dispatch_result = security != nullptr && request.operation == DispatcherOperation::kListTasks && list != nullptr
                              ? security->ListTasks(*list, context)
-                             : DispatchToExecutor(*executor_, request, context, agent_card_provider_);
+                             : DispatchToExecutor(*executor_, request, context, agent_card_provider_,
+                                                  /*require_full_task=*/security != nullptr);
   RestorePrincipal(context, principal);
   if (security != nullptr && dispatch_result.ok()) {
     auto authorized = security->AuthorizeResponse(dispatch_result.value(), context);
@@ -306,6 +331,10 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
     if (!authorized.ok()) {
       dispatch_result = authorized.error();
     }
+  }
+  if (dispatch_result.ok()) {
+    // Policies see the full task; callers and audit hooks see its projection.
+    ProjectTaskResponse(request, dispatch_result.value());
   }
   RunAfterInterceptors(request, context, dispatch_result, principal);
   return dispatch_result;

@@ -205,16 +205,16 @@ void VerifySignature(const JsonValue& signature_value, std::string_view encoded_
     InvalidSignature();
   }
   ValidateHeaders(header, signature);
+  const auto bytes = DecodeBase64Url(String(Field(signature, kSignature)));
+  if (bytes.size() != kEd25519SignatureSize) {
+    InvalidSignature();
+  }
   auto resolved = resolver(kid);
   if (!resolved.ok() || resolved.value().revoked || now < resolved.value().valid_from ||
       now >= resolved.value().valid_until) {
     InvalidSignature();
   }
   auto key = ReadKey(resolved.value().public_key_pem, false);
-  const auto bytes = DecodeBase64Url(String(Field(signature, kSignature)));
-  if (bytes.size() != kEd25519SignatureSize) {
-    InvalidSignature();
-  }
   const auto input = SigningInput(protected_header, encoded_payload);
   Digest digest(EVP_MD_CTX_new(), EVP_MD_CTX_free);
   if (digest == nullptr || EVP_DigestVerifyInit(digest.get(), nullptr, nullptr, nullptr, key.get()) != 1 ||

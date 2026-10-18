@@ -22,9 +22,10 @@ SDK unit/adapter tests run on supported platforms. Live scenarios require Unix,
 Python, libcurl, nginx and the OpenSSL CLI; PostgreSQL requires
 `A2A_TEST_POSTGRES_DSN`, otherwise that scenario explicitly skips. The launcher
 isolates temporary files, loopback ports and database schemas and cleans up afterward.
-It covers both stores, all nine ordered binding pairs, plaintext local/trusted
-TLS/unrelated CA/expired/hostname-mismatch profiles, and authorization with two
-simultaneously active streams. All calls use public C++ SDK clients.
+Both stores run all nine ordered binding pairs for permissions and streaming,
+including authorization with two simultaneously active streams. TLS checks run
+once per target binding for plaintext/trusted/unrelated CA/expired/hostname-mismatch
+profiles; each discovery check runs once per positive profile. All calls use public C++ SDK clients.
 
 | SDK behavior | Independent test suite | Requirements |
 | --- | --- | --- |
@@ -57,6 +58,8 @@ authenticated dispatch. Returned tasks from sends, reads and cancellation are
 checked before release; tasks without IDs are rejected before calling the policy.
 Returned push configurations, including every list entry,
 and associated messages are checked against the store; taskless messages are supported. Denials reach `AfterDispatch` in reverse order.
+Secured `GetTask` and unary `SendMessage` calls request the full executor response for authorization, then
+apply the caller's history limit before returning it or invoking audit hooks.
 
 Listing checks permissions before counting/pagination. `ScopeTaskList` can narrow
 store filters/projections or return `nullopt` for an empty scope. Retain fields
@@ -95,6 +98,8 @@ validates task/context association and deduplicates history by message ID withou
 granting authorization. Invalid credentials leave state unchanged. `Authorize`
 validates credentials and moves to `WORKING`; `Complete` rejects pending tasks.
 Cancellation remains available while pending.
+Transitions reject tasks without the service's authorization marker, so cancellation
+cannot mutate an unrelated ordinary task.
 
 Route mutations/subscriptions through this service and keep its store alive.
 Send streams and subscriptions remain live during `auth_required` and receive
