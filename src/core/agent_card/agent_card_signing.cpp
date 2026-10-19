@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "a2a/core/protojson.h"
-#include "json_canonicalization.h"
+#include "agent_card_json.h"
 
 namespace a2a::core {
 namespace {
@@ -130,56 +130,64 @@ Key ReadKey(std::string_view pem, bool private_key) {
   return key;
 }
 
-using JsonValue = google::protobuf::Value;
-using JsonObject = google::protobuf::Struct;
+using internal::ReadJson;
 
-const JsonObject& Object(const JsonValue& value) {
-  if (value.kind_case() != JsonValue::kStructValue) {
-    InvalidSignature();
+// Decoded strings borrow the parent signing document until verification finishes.
+struct JwsSignature {
+  std::string_view protected_header;
+  std::string_view encoded_signature;
+  std::vector<std::string_view> unprotected_names;
+};
+
+JwsSignature ReadSignature(simdjson::ondemand::value value) {
+  JwsSignature signature;
+  for (auto field_result : ReadJson(value.get_object())) {
+    auto field = ReadJson(std::move(field_result));
+    const auto name = ReadJson(field.unescaped_key());
+    if (name == kProtected) {
+      signature.protected_header = ReadJson(field.value().get_string());
+    } else if (name == kSignature) {
+      signature.encoded_signature = ReadJson(field.value().get_string());
+    } else if (name == kUnprotectedHeader) {
+      for (auto annotation_result : ReadJson(field.value().get_object())) {
+        auto annotation = ReadJson(std::move(annotation_result));
+        const auto key = ReadJson(annotation.unescaped_key());
+        if (key == kAlg || key == kKid || key == kCritical || key == kEncodedPayload) {
+          InvalidSignature();
+        }
+        signature.unprotected_names.emplace_back(key);
+      }
+    }
   }
-  return value.struct_value();
+  std::ranges::sort(signature.unprotected_names);
+  return signature;
 }
-const JsonValue& Field(const JsonObject& object, std::string_view name) {
-  const auto found = object.fields().find(std::string(name));
-  if (found == object.fields().end()) {
-    InvalidSignature();
-  }
-  return found->second;
-}
-std::string_view String(const JsonValue& value) {
-  if (value.kind_case() != JsonValue::kStringValue) {
-    InvalidSignature();
-  }
-  return value.string_value();
-}
-bool HasField(const JsonObject& object, std::string_view name) { return object.fields().contains(std::string(name)); }
-void ValidateHeaders(const JsonObject& protected_header, const JsonObject& signature) {
-  if (HasField(protected_header, kCritical)) {
-    // This profile implements no JWS critical extensions.
-    InvalidSignature();
-  }
-  if (HasField(protected_header, kEncodedPayload)) {
-    const auto& encoded = Field(protected_header, kEncodedPayload);
-    if (encoded.kind_case() != JsonValue::kBoolValue || !encoded.bool_value()) {
+
+std::string_view ReadKeyId(internal::SigningJson& protected_header, const JwsSignature& signature) {
+  std::string_view algorithm;
+  std::string_view kid;
+  for (auto field_result : ReadJson(protected_header.root().get_object())) {
+    auto field = ReadJson(std::move(field_result));
+    const auto name = ReadJson(field.unescaped_key());
+    if (std::ranges::binary_search(signature.unprotected_names, name) || name == kCritical) {
       InvalidSignature();
     }
-  }
-  for (const auto name : {kTyp, kJku}) {
-    if (HasField(protected_header, name)) {
-      (void)String(Field(protected_header, name));
+    if (name == kAlg) {
+      algorithm = ReadJson(field.value().get_string());
+    } else if (name == kKid) {
+      kid = ReadJson(field.value().get_string());
+    } else if (name == kEncodedPayload) {
+      if (!ReadJson(field.value().get_bool())) {
+        InvalidSignature();
+      }
+    } else if (name == kTyp || name == kJku) {
+      (void)ReadJson(field.value().get_string());
     }
   }
-  if (!HasField(signature, kUnprotectedHeader)) {
-    return;
+  if (algorithm != kAlgorithm || kid.empty() || kid.size() > kMaximumKeyIdSize) {
+    InvalidSignature();
   }
-  const auto& unprotected = Object(Field(signature, kUnprotectedHeader));
-  for (const auto& [name, value] : unprotected.fields()) {
-    (void)value;
-    if (HasField(protected_header, name) || name == kAlg || name == kKid || name == kCritical ||
-        name == kEncodedPayload) {
-      InvalidSignature();
-    }
-  }
+  return kid;
 }
 
 std::vector<unsigned char> SigningInput(std::string_view protected_header, std::string_view encoded_payload) {
@@ -191,21 +199,12 @@ std::vector<unsigned char> SigningInput(std::string_view protected_header, std::
   return input;
 }
 
-void VerifySignature(const JsonValue& signature_value, std::string_view encoded_payload,
+void VerifySignature(simdjson::ondemand::value signature_value, std::string_view encoded_payload,
                      const AgentCardKeyResolver& resolver, std::chrono::system_clock::time_point now) {
-  const auto& signature = Object(signature_value);
-  const auto protected_header = String(Field(signature, kProtected));
-  const auto parsed_header = internal::ParseSigningJson(DecodeBase64Url(protected_header));
-  const auto& header = Object(parsed_header);
-  if (String(Field(header, kAlg)) != kAlgorithm) {
-    InvalidSignature();
-  }
-  const auto kid = String(Field(header, kKid));
-  if (kid.empty() || kid.size() > kMaximumKeyIdSize) {
-    InvalidSignature();
-  }
-  ValidateHeaders(header, signature);
-  const auto bytes = DecodeBase64Url(String(Field(signature, kSignature)));
+  const auto signature = ReadSignature(signature_value);
+  internal::SigningJson parsed_header(DecodeBase64Url(signature.protected_header));
+  const auto kid = ReadKeyId(parsed_header, signature);
+  const auto bytes = DecodeBase64Url(signature.encoded_signature);
   if (bytes.size() != kEd25519SignatureSize) {
     InvalidSignature();
   }
@@ -215,7 +214,7 @@ void VerifySignature(const JsonValue& signature_value, std::string_view encoded_
     InvalidSignature();
   }
   auto key = ReadKey(resolved.value().public_key_pem, false);
-  const auto input = SigningInput(protected_header, encoded_payload);
+  const auto input = SigningInput(signature.protected_header, encoded_payload);
   Digest digest(EVP_MD_CTX_new(), EVP_MD_CTX_free);
   if (digest == nullptr || EVP_DigestVerifyInit(digest.get(), nullptr, nullptr, nullptr, key.get()) != 1 ||
       EVP_DigestVerify(digest.get(), Bytes(bytes).data(), bytes.size(), input.data(), input.size()) != 1) {
@@ -237,14 +236,18 @@ Result<lf::a2a::v1::AgentCard> SignAgentCard(const lf::a2a::v1::AgentCard& card,
     if (!json.ok()) {
       return json.error();
     }
-    const auto payload = internal::ParseSigningJson(json.value());
-    JsonValue header;
+    const internal::SigningJson payload(json.value());
+    google::protobuf::Value header;
     auto* fields = header.mutable_struct_value()->mutable_fields();
     (*fields)[std::string(kAlg)].set_string_value(std::string(kAlgorithm));
     (*fields)[std::string(kKid)].set_string_value(std::string(key_id));
     (*fields)[std::string(kTyp)].set_string_value(std::string(kJose));
-    const auto protected_header = Base64Url(internal::Canonicalize(header));
-    const auto input = SigningInput(protected_header, Base64Url(internal::Canonicalize(payload)));
+    auto header_json = MessageToJson(header);
+    if (!header_json.ok()) {
+      return header_json.error();
+    }
+    const auto protected_header = Base64Url(internal::SigningJson(header_json.value()).canonical());
+    const auto input = SigningInput(protected_header, Base64Url(payload.canonical()));
     auto key = ReadKey(private_key_pem, true);
     Digest digest(EVP_MD_CTX_new(), EVP_MD_CTX_free);
     std::array<unsigned char, kEd25519SignatureSize> signature{};
@@ -270,24 +273,26 @@ Result<void> VerifyAgentCardJson(std::string_view json, const AgentCardKeyResolv
     if (!resolver) {
       InvalidSignature();
     }
-    auto payload = internal::ParseSigningJson(json);
-    const auto& signature_value = Field(Object(payload), kSignatures);
-    if (signature_value.kind_case() != JsonValue::kListValue || signature_value.list_value().values().empty()) {
-      InvalidSignature();
-    }
-    if (static_cast<std::size_t>(signature_value.list_value().values_size()) > kMaxAgentCardSignatures) {
-      InvalidSignature();
-    }
-    auto signatures = signature_value.list_value();
-    payload.mutable_struct_value()->mutable_fields()->erase(std::string(kSignatures));
-    const auto encoded_payload = Base64Url(internal::Canonicalize(payload));
-    for (const auto& signature : signatures.values()) {
-      try {
-        VerifySignature(signature, encoded_payload, resolver, now);
-        return {};
-      } catch (const std::exception&) {
-        // Unknown, expired or invalid signatures do not prevent key rotation.
+    internal::SigningJson payload(json, kSignatures);
+    const auto encoded_payload = Base64Url(payload.canonical());
+    for (auto field_result : ReadJson(payload.root().get_object())) {
+      auto field = ReadJson(std::move(field_result));
+      if (ReadJson(field.unescaped_key()) != kSignatures) {
         continue;
+      }
+      auto signatures = ReadJson(field.value().get_array());
+      const auto count = ReadJson(signatures.count_elements());
+      if (count == 0 || count > kMaxAgentCardSignatures) {
+        InvalidSignature();
+      }
+      for (auto signature : signatures) {
+        try {
+          VerifySignature(ReadJson(signature), encoded_payload, resolver, now);
+          return {};
+        } catch (const std::exception&) {
+          // Unknown, expired or invalid signatures do not prevent key rotation.
+          continue;
+        }
       }
     }
     InvalidSignature();

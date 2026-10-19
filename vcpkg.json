@@ -11,7 +11,7 @@
   "features": {
     "signing": {
       "description": "Ed25519 Agent Card signing",
-      "dependencies": ["openssl"]
+      "dependencies": ["openssl", "simdjson"]
     }
   },
   "builtin-baseline": "3426db05b996481ca31e95fff3734cf23e0f51bc",
