@@ -17,7 +17,6 @@ endif()
 
 set(A2A_CORE_SOURCES
   core/agent_card/agent_card_builder.cpp
-  core/agent_card/json_canonicalization.cpp
   core/agent_card/agent_card_provider.cpp
   core/core.cpp
   core/error.cpp
@@ -48,10 +47,13 @@ target_link_libraries(a2a_core
 )
 
 if(A2A_ENABLE_SIGNING)
-  add_library(a2a_signing STATIC core/agent_card/agent_card_signing.cpp)
+  add_library(a2a_signing STATIC
+    core/agent_card/agent_card_signing.cpp
+    core/agent_card/agent_card_json.cpp
+  )
   add_library(a2a::signing ALIAS a2a_signing)
   set_target_properties(a2a_signing PROPERTIES EXPORT_NAME signing)
-  target_link_libraries(a2a_signing PUBLIC a2a::core OpenSSL::Crypto)
+  target_link_libraries(a2a_signing PUBLIC a2a::core PRIVATE OpenSSL::Crypto simdjson::simdjson)
   target_compile_definitions(a2a_signing PUBLIC A2A_HAS_AGENT_CARD_SIGNING=1)
 endif()
 

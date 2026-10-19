@@ -1148,20 +1148,13 @@ target_include_directories(sdk_security_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(sdk_security_test PRIVATE a2a::server GTest::gtest_main)
 gtest_discover_tests(sdk_security_test PROPERTIES LABELS "security")
 
-add_executable(json_canonicalization_test unit/json_canonicalization_test.cpp)
-target_link_libraries(json_canonicalization_test PRIVATE a2a::core GTest::gtest_main)
-target_compile_definitions(json_canonicalization_test PRIVATE
-  A2A_JCS_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jcs_vectors.json")
-# Discover through CTest to avoid Windows command-line escaping of multiple labels.
-gtest_discover_tests(json_canonicalization_test DISCOVERY_MODE PRE_TEST
-  PROPERTIES LABELS "security\;card_signing")
-
 if(A2A_ENABLE_SIGNING)
 add_executable(agent_card_signing_test unit/agent_card_signing_test.cpp)
-target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(agent_card_signing_test PRIVATE a2a::client a2a::signing GTest::gtest_main)
+target_include_directories(agent_card_signing_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(agent_card_signing_test PRIVATE a2a::client a2a::signing simdjson::simdjson GTest::gtest_main)
 target_compile_definitions(agent_card_signing_test PRIVATE
-  A2A_SIGNING_INTEROP_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/sdk_signing_vector.json")
+  A2A_SIGNING_INTEROP_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/sdk_signing_vector.json"
+  A2A_JCS_VECTOR_FILE="${CMAKE_CURRENT_SOURCE_DIR}/support/security/jcs_vectors.json")
 gtest_discover_tests(agent_card_signing_test DISCOVERY_MODE PRE_TEST
   PROPERTIES LABELS "security\;card_signing")
 

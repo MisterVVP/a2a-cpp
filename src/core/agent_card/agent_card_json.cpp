@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "json_canonicalization.h"
+#include "agent_card_json.h"
 
 #include <algorithm>
 #include <array>
@@ -10,23 +10,18 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
-
-#include "a2a/core/error.h"
-#include "a2a/core/json_canonicalization.h"
-#include "a2a/core/json_value.h"
-#include "a2a/core/protojson.h"
 
 namespace a2a::core::internal {
 namespace {
 constexpr std::size_t kMaximumJsonSize = std::size_t{1024} * 1024U;
+constexpr std::size_t kMaximumNestingDepth = 128;
 constexpr int kSmallestDecimalExponent = -6;
 constexpr int kLargestDecimalExponent = 21;
 constexpr std::size_t kNumberBufferSize = 64;
 constexpr std::string_view kCanonicalZero = "0";
 constexpr std::string_view kDecimalFractionPrefix = "0.";
-constexpr std::string_view kCanonicalizationFailure = "invalid JSON for RFC 8785 canonicalization";
-constexpr std::string_view kInvalidSigningJson = "invalid signing JSON";
 
 constexpr std::uint32_t kUtf8FourBytePrefix = 0xF0U;
 constexpr std::uint32_t kUtf8FourByteMask = 0x07U;
@@ -131,13 +126,13 @@ std::string Number(double value) {
   return result;
 }
 
+constexpr std::string_view kCanonicalNull = "null";
+constexpr std::string_view kCanonicalTrue = "true";
+constexpr std::string_view kCanonicalFalse = "false";
 constexpr std::string_view kHexDigits = "0123456789abcdef";
 constexpr unsigned char kFirstPrintableCharacter = 0x20U;
 constexpr unsigned kHexDigitBits = 4U;
 constexpr unsigned char kHexDigitMask = 0x0FU;
-constexpr std::string_view kCanonicalNull = "null";
-constexpr std::string_view kCanonicalTrue = "true";
-constexpr std::string_view kCanonicalFalse = "false";
 
 void AppendString(std::string_view text, std::string& output) {
   output.push_back('"');
@@ -179,97 +174,110 @@ void AppendString(std::string_view text, std::string& output) {
   output.push_back('"');
 }
 
-void AppendCanonical(const google::protobuf::Value& value, std::string& output);
+// simdjson validates syntax and Unicode. JCS additionally requires binary64
+// number formatting, UTF-16 member ordering and duplicate-name rejection.
+// On-Demand's get_double also accepts integer tokens outside the 64-bit range.
+template <typename Value>
+void AppendCanonical(Value& value, std::string& output, std::size_t depth, std::string_view excluded_member = {});
 
 struct CanonicalMember {
   std::u16string sort_key;
   std::string_view name;
-  const google::protobuf::Value* value;
+  std::string value;
 };
 
-void AppendObject(const google::protobuf::Struct& object, std::string& output) {
+void AppendObject(simdjson::ondemand::object object, std::string& output, std::size_t depth,
+                  std::string_view excluded_member) {
   std::vector<CanonicalMember> members;
-  members.reserve(object.fields().size());
-  for (const auto& [key, value] : object.fields()) {
-    members.push_back({.sort_key = Utf16(key), .name = key, .value = &value});
+  for (auto field_result : object) {
+    // The result wrapper keeps strict key decoding compatible across simdjson 3.x.
+    const auto name = ReadJson(field_result.unescaped_key());
+    auto field = ReadJson(std::move(field_result));
+    auto value = field.value();
+    CanonicalMember member{.sort_key = Utf16(name), .name = name, .value = {}};
+    // Consume and validate excluded signatures too, including duplicate names.
+    AppendCanonical(value, member.value, depth + 1);
+    members.push_back(std::move(member));
   }
   std::ranges::sort(members, {}, &CanonicalMember::sort_key);
   output.push_back('{');
   bool first = true;
-  for (const auto& member : members) {
+  for (std::size_t index = 0; index < members.size(); ++index) {
+    const auto& member = members[index];
+    if (index != 0 && member.name == members[index - 1].name) {
+      throw std::invalid_argument(std::string(kInvalidSigningJson));
+    }
+    if (!excluded_member.empty() && member.name == excluded_member) {
+      continue;
+    }
     if (!first) {
       output.push_back(',');
     }
     first = false;
     AppendString(member.name, output);
     output.push_back(':');
-    AppendCanonical(*member.value, output);
+    output.append(member.value);
   }
   output.push_back('}');
 }
 
-void AppendCanonical(const google::protobuf::Value& value, std::string& output) {
-  using Value = google::protobuf::Value;
-  switch (value.kind_case()) {
-    case Value::kNumberValue:
-      output.append(Number(value.number_value()));
+template <typename Value>
+void AppendCanonical(Value& value, std::string& output, std::size_t depth, std::string_view excluded_member) {
+  using Type = simdjson::ondemand::json_type;
+  const auto type = ReadJson(value.type());
+  if ((type == Type::object || type == Type::array) && depth >= kMaximumNestingDepth) {
+    throw std::invalid_argument(std::string(kInvalidSigningJson));
+  }
+  switch (type) {
+    case Type::number:
+      output.append(Number(ReadJson(value.get_double())));
       break;
-    case Value::kStringValue:
-      AppendString(value.string_value(), output);
+    case Type::string:
+      AppendString(ReadJson(value.get_string()), output);
       break;
-    case Value::kBoolValue:
-      output.append(value.bool_value() ? kCanonicalTrue : kCanonicalFalse);
+    case Type::boolean:
+      output.append(ReadJson(value.get_bool()) ? kCanonicalTrue : kCanonicalFalse);
       break;
-    case Value::kNullValue:
+    case Type::null:
+      if (!ReadJson(value.is_null())) {
+        throw std::invalid_argument(std::string(kInvalidSigningJson));
+      }
       output.append(kCanonicalNull);
       break;
-    case Value::kStructValue:
-      AppendObject(value.struct_value(), output);
+    case Type::object:
+      AppendObject(ReadJson(value.get_object()), output, depth, excluded_member);
       break;
-    case Value::kListValue: {
+    case Type::array: {
       output.push_back('[');
       bool first = true;
-      for (const auto& item : value.list_value().values()) {
+      for (auto item_result : ReadJson(value.get_array())) {
+        auto item = ReadJson(std::move(item_result));
         if (!first) {
           output.push_back(',');
         }
         first = false;
-        AppendCanonical(item, output);
+        AppendCanonical(item, output, depth + 1);
       }
       output.push_back(']');
       break;
     }
-    default:
-      throw std::invalid_argument(std::string(kInvalidSigningJson));
   }
 }
 }  // namespace
 
-google::protobuf::Value ParseSigningJson(std::string_view input) {
-  if (input.size() > kMaximumJsonSize || !json::HasStrictJsonSyntax(input)) {
+SigningJson::SigningJson(std::string_view input, std::string_view excluded_root_member) {
+  if (input.size() > kMaximumJsonSize ||
+      parser_.allocate(input.size(), kMaximumNestingDepth + 1) != simdjson::SUCCESS) {
     throw std::invalid_argument(std::string(kInvalidSigningJson));
   }
-  google::protobuf::Value value;
-  // Protobuf's generic JSON parser retains unknown fields and rejects duplicate
-  // decoded member names and malformed Unicode. It does not parse an AgentCard.
-  if (!JsonToMessage(input, &value).ok()) {
+  input_ = simdjson::padded_string(input);
+  root_ = ReadJson(parser_.iterate(input_));
+  canonical_.reserve(input.size());
+  AppendCanonical(root_, canonical_, 0, excluded_root_member);
+  // Fully consuming the root must leave no remaining structural token.
+  if (root_.current_location().error() != simdjson::OUT_OF_BOUNDS) {
     throw std::invalid_argument(std::string(kInvalidSigningJson));
   }
-  return value;
-}
-std::string Canonicalize(const google::protobuf::Value& value) {
-  std::string result;
-  AppendCanonical(value, result);
-  return result;
+  root_.rewind();
 }
 }  // namespace a2a::core::internal
-
-namespace a2a::core {
-Result<std::string> CanonicalizeJson(std::string_view json) {
-  try {
-    return internal::Canonicalize(internal::ParseSigningJson(json));
-  } catch (const std::exception&) {
-    return Error::Validation(std::string(internal::kCanonicalizationFailure));
-  }
-}
-}  // namespace a2a::core

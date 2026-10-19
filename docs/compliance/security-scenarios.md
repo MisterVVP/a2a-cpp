@@ -13,9 +13,8 @@ A2A_TEST_POSTGRES_DSN=postgresql://a2a:a2a@127.0.0.1:5432/a2a \
   ctest --test-dir build -L security --output-on-failure
 ```
 
-Signing is optional and disabled by default. Permissions, task authorization and
-canonicalization also run without it. Ordinary builds need neither nginx nor
-the OpenSSL CLI. Contributor validation uses `A2A_VERIFY_SIGNING=ON` with
+Signing is optional and disabled by default. Permissions and task authorization
+also run without it. Ordinary builds need neither nginx nor the OpenSSL CLI. Contributor validation uses `A2A_VERIFY_SIGNING=ON` with
 `./scripts/verify_changes.sh`.
 
 SDK unit/adapter tests run on supported platforms. Live scenarios require Unix,
@@ -32,7 +31,7 @@ profiles; each discovery check runs once per positive profile. All calls use pub
 | Caller permissions | `SdkSecurityTest`, `SecurityTransportIntegrationTest` | `AUTH-SERVER-002`, `AUTH-SCOPE-001..003` |
 | Additional task authorization | `TaskAuthorizationServiceTest` | `AUTH-INTASK-001..006` |
 | TLS/server identity | `SecurityTransportIntegrationTest`, live scenarios | `AUTH-TLS-001/002`, `AUTH-SERVER-001`, `GRPC-SVC-003` |
-| Signed cards | `JsonCanonicalizationTest`, `AgentCardSigningTest` | `CARD-SIGN-001..004` |
+| Signed cards | `AgentCardSigningJsonTest`, `AgentCardSigningTest` | `CARD-SIGN-001..004` |
 
 ## Caller permissions
 
@@ -143,11 +142,14 @@ without disabling verification or contacting external services.
 
 ## Signed Agent Cards
 
-Enable `A2A_ENABLE_SIGNING=ON` and link `a2a::signing` for OpenSSL 3.0+ Ed25519.
-Only signing adds this direct dependency. With vcpkg select
+Enable `A2A_ENABLE_SIGNING=ON` and link `a2a::signing` for OpenSSL 3.0+
+Ed25519 and [simdjson](https://github.com/simdjson/simdjson) 3.0+ parsing
+(Apache-2.0/MIT). Both are optional signing dependencies. With vcpkg select
 `VCPKG_MANIFEST_FEATURES=signing`; installed packages expose
-`A2A_CPP_HAS_AGENT_CARD_SIGNING` and the enabled target. Canonicalization stays in
-`a2a::core` via `a2a/core/json_canonicalization.h`.
+`A2A_CPP_HAS_AGENT_CARD_SIGNING` and the enabled target. A pinned vcpkg registry
+selects maintained OpenSSL and CMake helpers, with simdjson pinned to 3.12.3;
+other packages retain the existing baseline. Canonicalization is
+private to signing; no general JSON parser APIs or other SDK parsing paths change.
 
 ```cpp
 auto signed_card = a2a::core::SignAgentCard(card, key_id, private_key_pem);
@@ -159,10 +161,12 @@ discovery.SetAgentCardVerifier([&](std::string_view json) {
 
 Protected JWS headers contain `alg: EdDSA`, nonempty `kid`, and `typ: JOSE`.
 RFC 8785 JCS canonicalizes the payload after removing `signatures`.
-`CanonicalizeJson` rejects duplicate keys, invalid Unicode and nonfinite numbers,
-sorts members by UTF-16 code units, uses ECMAScript number thresholds and retains
-array order. Limits are 1 MiB and 128 nesting levels. Strict syntax validation
-and existing ProtoJSON/protobuf `Value` parsing require no new JSON library.
+The private adapter rejects duplicate decoded keys, invalid Unicode and nonfinite
+numbers, sorts members by UTF-16 code units, uses ECMAScript number formatting
+and retains array order. Limits are 1 MiB and 128 nesting levels. Simdjson's
+On-Demand API parses all values as binary64 where JCS requires it, including
+integer tokens beyond 64 bits. Simdjson is not a JCS implementation: the adapter
+supplies these serialization rules and validates excluded signatures too.
 
 Verification preserves original JSON, including unknown fields. At least one
 signature must verify with an application-trusted key; unknown/invalid/expired/

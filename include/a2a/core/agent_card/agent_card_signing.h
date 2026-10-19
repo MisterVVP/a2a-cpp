@@ -9,7 +9,6 @@
 #include <string>
 #include <string_view>
 
-#include "a2a/core/json_canonicalization.h"
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
 
