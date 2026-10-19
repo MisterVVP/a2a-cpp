@@ -146,7 +146,9 @@ Enable `A2A_ENABLE_SIGNING=ON` and link `a2a::signing` for OpenSSL 3.0+
 Ed25519 and [simdjson](https://github.com/simdjson/simdjson) 3.0+ parsing
 (Apache-2.0/MIT). Both are optional signing dependencies. With vcpkg select
 `VCPKG_MANIFEST_FEATURES=signing`; installed packages expose
-`A2A_CPP_HAS_AGENT_CARD_SIGNING` and the enabled target. Canonicalization is
+`A2A_CPP_HAS_AGENT_CARD_SIGNING` and the enabled target. A pinned vcpkg registry
+selects maintained OpenSSL and CMake helpers, with simdjson pinned to 3.12.3;
+other packages retain the existing baseline. Canonicalization is
 private to signing; no general JSON parser APIs or other SDK parsing paths change.
 
 ```cpp

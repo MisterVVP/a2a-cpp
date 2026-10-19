@@ -621,9 +621,10 @@ constexpr std::string_view kLargeNumberOutput =
 constexpr std::size_t kJsonSizeLimit = std::size_t{1024} * 1024U;
 constexpr std::size_t kJsonDepthLimit = 128;
 constexpr std::string_view kJsonString = R"("value")";
-constexpr std::array<std::string_view, 9> kMalformedDocuments{
-    R"({"a":1} {"b":2})", R"([1] true)",       R"(true false)",         R"({"a":[1,]})", R"({"a":{"b":1,}})",
-    R"({"a":1e400})",     R"({"a":"\udc00"})", R"({"a":1,"\u0061":2})", R"({"":1,"":2})"};
+constexpr std::array<std::string_view, 11> kMalformedDocuments{
+    R"({"a":1} {"b":2})", R"([1] true)",     R"(true false)",     R"({"a":[1,]})",
+    R"({"a":{"b":1,}})",  R"({"a":1e400})",  R"({"a":"\udc00"})", R"({"a":1,"\u0061":2})",
+    R"({"":1,"":2})",     R"({"\ud800":1})", R"({"\udc00":1})"};
 
 TEST(AgentCardSigningJsonTest, ConvertsLargeIntegerTokensToBinary64) {
   auto canonical = CanonicalizeForTest(kLargeNumberInput);

@@ -142,16 +142,15 @@ struct JwsSignature {
 JwsSignature ReadSignature(simdjson::ondemand::value value) {
   JwsSignature signature;
   for (auto field_result : ReadJson(value.get_object())) {
+    const auto name = ReadJson(field_result.unescaped_key());
     auto field = ReadJson(std::move(field_result));
-    const auto name = ReadJson(field.unescaped_key());
     if (name == kProtected) {
       signature.protected_header = ReadJson(field.value().get_string());
     } else if (name == kSignature) {
       signature.encoded_signature = ReadJson(field.value().get_string());
     } else if (name == kUnprotectedHeader) {
       for (auto annotation_result : ReadJson(field.value().get_object())) {
-        auto annotation = ReadJson(std::move(annotation_result));
-        const auto key = ReadJson(annotation.unescaped_key());
+        const auto key = ReadJson(annotation_result.unescaped_key());
         if (key == kAlg || key == kKid || key == kCritical || key == kEncodedPayload) {
           InvalidSignature();
         }
@@ -167,8 +166,8 @@ std::string_view ReadKeyId(internal::SigningJson& protected_header, const JwsSig
   std::string_view algorithm;
   std::string_view kid;
   for (auto field_result : ReadJson(protected_header.root().get_object())) {
+    const auto name = ReadJson(field_result.unescaped_key());
     auto field = ReadJson(std::move(field_result));
-    const auto name = ReadJson(field.unescaped_key());
     if (std::ranges::binary_search(signature.unprotected_names, name) || name == kCritical) {
       InvalidSignature();
     }
@@ -276,10 +275,10 @@ Result<void> VerifyAgentCardJson(std::string_view json, const AgentCardKeyResolv
     internal::SigningJson payload(json, kSignatures);
     const auto encoded_payload = Base64Url(payload.canonical());
     for (auto field_result : ReadJson(payload.root().get_object())) {
-      auto field = ReadJson(std::move(field_result));
-      if (ReadJson(field.unescaped_key()) != kSignatures) {
+      if (ReadJson(field_result.unescaped_key()) != kSignatures) {
         continue;
       }
+      auto field = ReadJson(std::move(field_result));
       auto signatures = ReadJson(field.value().get_array());
       const auto count = ReadJson(signatures.count_elements());
       if (count == 0 || count > kMaxAgentCardSignatures) {

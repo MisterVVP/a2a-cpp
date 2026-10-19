@@ -190,8 +190,9 @@ void AppendObject(simdjson::ondemand::object object, std::string& output, std::s
                   std::string_view excluded_member) {
   std::vector<CanonicalMember> members;
   for (auto field_result : object) {
+    // The result wrapper keeps strict key decoding compatible across simdjson 3.x.
+    const auto name = ReadJson(field_result.unescaped_key());
     auto field = ReadJson(std::move(field_result));
-    const auto name = ReadJson(field.unescaped_key());
     auto value = field.value();
     CanonicalMember member{.sort_key = Utf16(name), .name = name, .value = {}};
     // Consume and validate excluded signatures too, including duplicate names.
