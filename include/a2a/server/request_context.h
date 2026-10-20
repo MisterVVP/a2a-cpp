@@ -15,6 +15,7 @@ struct RequestContext final {
   std::unordered_map<std::string, std::string> auth_metadata;
   std::unordered_map<std::string, std::string> client_headers;
   std::string protocol_version = {};
+  std::string principal;
 };
 
 [[nodiscard]] std::unordered_map<std::string, std::string> ExtractAuthMetadata(

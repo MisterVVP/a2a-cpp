@@ -22,12 +22,18 @@ struct Header final {
   std::string value;
 };
 
+struct TlsOptions final {
+  std::string ca_bundle_path;
+  bool require_tls13 = true;
+};
+
 struct Request final {
   std::string method;
   std::string url;
   std::vector<Header> headers;
   std::string body;
   std::chrono::milliseconds timeout{0};
+  std::optional<TlsOptions> tls = std::nullopt;
   std::string http_version = std::string(core::http::kHttpVersion11);
 };
 

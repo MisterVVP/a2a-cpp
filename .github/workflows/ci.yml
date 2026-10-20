@@ -546,7 +546,7 @@ jobs:
         shell: pwsh
         run: |
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
-          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET --x-feature=signing
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -565,7 +565,7 @@ jobs:
           $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
           $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
           $hostTriplet = $env:VCPKG_HOST_TRIPLET
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_SIGNING=ON -DVCPKG_MANIFEST_FEATURES=signing
           cmake --build build --config RelWithDebInfo --parallel
 
       - name: Test

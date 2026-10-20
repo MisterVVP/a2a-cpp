@@ -36,8 +36,12 @@ constexpr std::string_view kEnvelopeSerializationMessage = "Failed to serialize 
 }  // namespace
 
 a2a::http::Request ToSharedHttpRequest(const HttpRequest& request) {
-  a2a::http::Request converted{
-      .method = request.method, .url = request.url, .headers = {}, .body = request.body, .timeout = request.timeout};
+  a2a::http::Request converted{.method = request.method,
+                               .url = request.url,
+                               .headers = {},
+                               .body = request.body,
+                               .timeout = request.timeout,
+                               .tls = request.tls};
   converted.headers.reserve(request.headers.size());
   for (const auto& [name, value] : request.headers) {
     converted.headers.push_back({.name = name, .value = value});

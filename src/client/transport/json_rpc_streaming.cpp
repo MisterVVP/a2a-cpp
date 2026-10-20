@@ -393,6 +393,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
       std::string(core::http::kContentTypeApplicationJson);
   http_request.headers[std::string(core::http::kAcceptHeaderName)] =
       std::string(core::http::kContentTypeTextEventStream);
+  http_request.tls = options.tls;
   http_request.mtls = options.mtls;
   if (!options.extensions.empty()) {
     http_request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);

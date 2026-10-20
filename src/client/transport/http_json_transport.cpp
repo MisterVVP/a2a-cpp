@@ -166,6 +166,7 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
   request.headers[std::string(core::http::kContentTypeHeaderName)] =
       std::string(core::http::kContentTypeApplicationJson);
   request.headers[std::string(core::http::kAcceptHeaderName)] = std::string(core::http::kContentTypeApplicationJson);
+  request.tls = options.tls;
   request.mtls = options.mtls;
 
   if (!options.extensions.empty()) {

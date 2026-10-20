@@ -26,6 +26,7 @@ constexpr std::string_view kProtocolCodeMemberName = "code";
 
 a2a::http::Request ToSharedHttpRequest(const HttpRequest& request) {
   a2a::http::Request shared_request;
+  shared_request.tls = request.tls;
   shared_request.method = request.method;
   shared_request.url = request.url;
   shared_request.body = request.body;
