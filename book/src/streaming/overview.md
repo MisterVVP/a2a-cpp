@@ -1,56 +1,179 @@
-# Streaming
+# Streaming usage
 
-Streaming is available through all production client transports:
+Streaming is exposed through `A2AClient::SendStreamingMessage` and `A2AClient::SubscribeTask` for all production client transports:
 
-- gRPC native server streaming;
-- HTTP+JSON SSE;
-- JSON-RPC response envelopes carried in SSE `data:` fields.
+- gRPC uses native server streaming;
+- HTTP+JSON uses `text/event-stream` responses from the REST streaming and task-subscription endpoints;
+- JSON-RPC over HTTP posts a JSON-RPC request envelope and receives JSON-RPC response envelopes inside SSE `data:` fields.
 
-Servers should advertise `capabilities.streaming: true` in their Agent Card.
+Servers are expected to advertise `capabilities.streaming: true` in their Agent Card. Transport instances validate the server response shape (`HTTP 2xx`, `Content-Type: text/event-stream`, valid SSE frames, valid protocol payloads), while capability discovery and policy decisions remain the caller or client-factory responsibility.
 
-## Client APIs
+## Operations
 
-- `A2AClient::SendStreamingMessage(request, observer, options)`
-- `A2AClient::SubscribeTask(request, observer, options)`
+`SendStreamingMessage` starts work and subscribes to updates in a single call. `SubscribeTask` reconnects to an existing active task and is the preferred recovery path after a broken stream. Servers close successful streams after a terminal or interrupted task state.
 
 Implement `a2a::client::StreamObserver`:
 
-- `OnEvent(const StreamResponse&)` for each decoded event.
-- `OnError(const core::Error&)` once for transport or protocol failure.
-- `OnCompleted()` once after a clean remote close.
+- `OnEvent` is called for each decoded `StreamResponse`, including `Task`, `TaskStatusUpdateEvent`, and `TaskArtifactUpdateEvent` variants.
+- `OnError` is called once for transport, HTTP, SSE, JSON/protobuf, or JSON-RPC envelope failures.
+- `OnCompleted` is called once after a clean server close. It is mutually exclusive with `OnError`.
 
-Both calls return a `StreamHandle`. Call `Cancel()` to request cancellation and `IsActive()` to check handle state. Destruction also cancels the request and joins its worker.
+For the default HTTP+JSON and JSON-RPC transports, observer callbacks are
+serialized per stream on a shared callback-dispatch executor. They never run on
+the shared libcurl reactor thread, and an idle stream does not reserve a dispatch
+worker. A slow callback can occupy one shared worker, so keep callbacks bounded
+and hand expensive processing to an application executor. Custom synchronous
+stream requesters retain a per-stream `StreamHandle`-owned worker compatibility path.
 
-## Threading contract
+Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
+pending body data. The reactor never waits for callback capacity: exceeding a
+limit fails and cancels only that stream. There is no fixed SDK limit on the
+number of active streams; network, server, and process resource limits still
+apply.
 
-Observer callbacks run on transport-managed background threads. Keep observers alive until stream completion, cancellation, or handle destruction. Callback code should be thread-safe, fast, and non-blocking.
+Callback execution is marked only for the duration of each callback. Calling
+`Cancel()` from any stream callback requests cancellation without waiting for an
+already-running callback on the target stream. This avoids self-deadlocks and
+cross-stream cancellation cycles. An external thread calling `Cancel()` waits
+until the target stream can no longer call its observer. Code that cancels a
+stream from another stream's callback must therefore keep the target observer's
+state alive until that already-running callback returns. Per-stream serialization
+preserves event order even when successive callbacks run on different shared workers.
 
-## Build the streaming client example
+## Default HTTP network reactor pool
 
-The SDK requires gRPC and Protobuf at configure time. The default HTTP streaming transports also require libcurl.
+Default libcurl-backed HTTP clients use a bounded, process-wide pool of at most
+four reactors. Each reactor owns a `CURLM` multi handle and thread and is the
+only thread that adds or removes easy handles from that multi handle. Start,
+cancellation, and shutdown operations are serialized through its synchronized
+command queue.
 
-Linux or macOS:
+Both unary and streaming HTTP transfers acquire reactor infrastructure. The
+pool creates a reactor lazily when either kind of transfer first selects an
+uninitialized pool slot; initialization is not specific to streaming requests.
+Acquired unary-request and stream slots retain their reactor affinity when they
+are reused, preserving access to that reactor's libcurl connection cache. A
+process can therefore have up to four live reactor threads, depending on which
+pool slots active clients and transfers acquire.
 
-```bash
-./scripts/run_examples.sh build-example streaming_client
+On Linux, libcurl socket and timer callbacks maintain an `epoll` readiness set
+and a `timerfd`. An `eventfd` wakes the reactor immediately for queued commands,
+including cancellation and shutdown, with no fixed polling interval. Socket and
+timer readiness is forwarded to `curl_multi_socket_action()`. Other platforms
+use libcurl's event-driven multi wakeup fallback without a fixed wake interval.
+
+`A2AClient::Destroy()` explicitly shuts down a default HTTP transport. It rejects
+new streams, wakes and drains the reactor, and cancels and detaches active
+transfers. It prevents further network stream activity, but it does not forcibly
+terminate or join application callback code: an observer callback that was
+already executing may finish naturally after `Destroy()` returns. Callers must
+therefore synchronize callback completion separately before destroying
+observer-owned state that another thread may still be using. No new callback for
+a stream begins after its shutdown has taken effect. Injected custom synchronous requesters
+are not owned by transport shutdown; their compatibility workers stay attached
+to the returned `StreamHandle` and are cancelled and joined when that handle is
+cancelled or destroyed.
+
+The synchronous `a2a::http::Client::StreamRequest()` API waits for its transfer
+while network I/O progresses on the transfer's reactor. Injected custom stream
+requesters retain their existing synchronous compatibility path.
+
+## Handles, cancellation, and timeouts
+
+The returned `StreamHandle` remains active while the request is running. `Cancel()` is idempotent and requests prompt cancellation; destroying the handle also cancels and joins the worker before returning. Cancellation is not reported as normal completion. Configure bounded operation timeouts with `CallOptions::timeout` or the transport default timeout.
+
+## HTTP transport examples
+
+```cpp
+auto rest = a2a::client::HttpJsonTransport::CreateDefault(resolved_rest_interface);
+a2a::client::A2AClient rest_client(std::move(rest));
+auto rest_stream = rest_client.SendStreamingMessage(send_request, observer, call_options);
 ```
 
-Windows Git Bash:
+```cpp
+auto jsonrpc = a2a::client::JsonRpcTransport::CreateDefault(resolved_jsonrpc_interface);
+a2a::client::A2AClient jsonrpc_client(std::move(jsonrpc));
+auto subscription = jsonrpc_client.SubscribeTask(get_task_request, observer, call_options);
+```
+
+Both default HTTP transports use the shared libcurl-backed SSE requester. Custom `HttpStreamRequester` injection remains available for tests and custom HTTP stacks.
+
+See `examples/apps/streaming_client/main.cpp` and `tests/functional/examples_functional_test.cpp`.
+
+## Build and run the paired HTTP+JSON examples
+
+The SDK build requires gRPC and Protobuf even when the examples use an HTTP transport. The default HTTP streaming client additionally requires libcurl.
+
+On Debian, Ubuntu, or macOS, build both examples with:
 
 ```bash
 ./scripts/install_build_deps.sh
-rm -rf build-example-streaming_client
-./scripts/run_examples.sh build-example streaming_client
-./build-example-streaming_client/RelWithDebInfo/a2a_example.exe --help
+./scripts/run_examples.sh build-example streaming_server streaming_client
 ```
 
-See [Installation and Build](../getting-started/installation.md) and [vcpkg](../build/vcpkg.md) for dependency and toolchain details.
+On macOS, `brew install cmake ninja protobuf grpc re2 abseil curl` may be used instead of the dependency script.
 
-## Server side
+On Windows, install Visual Studio 2022 with the C++ workload and use Git Bash:
 
-Executors return `std::unique_ptr<ServerStreamSession>` from `SendStreamingMessage` and, optionally, `SubscribeTask`. A stream session publishes `StreamResponse` values until it returns an empty optional or an error.
+```bash
+./scripts/install_build_deps.sh
+rm -rf build-example-streaming_server build-example-streaming_client
+./scripts/run_examples.sh build-example streaming_server streaming_client
+```
 
-## Examples
+The runner only invokes `--help` for these long-running/network-dependent examples. Start the server manually in the first terminal.
 
-- `examples/apps/streaming_client/main.cpp`
-- `examples/apps/streaming_server/main.cpp`
+Linux or macOS, terminal 1:
+
+```bash
+./build-example-streaming_server/a2a_example
+```
+
+Linux or macOS, terminal 2:
+
+```bash
+./build-example-streaming_client/a2a_example \
+  --transport http_json \
+  --endpoint http://127.0.0.1:8080/a2a \
+  --operation send \
+  --timeout-ms 10000
+```
+
+Windows Git Bash, terminal 1:
+
+```bash
+./build-example-streaming_server/RelWithDebInfo/a2a_example.exe
+```
+
+Windows Git Bash, terminal 2:
+
+```bash
+./build-example-streaming_client/RelWithDebInfo/a2a_example.exe \
+  --transport http_json \
+  --endpoint http://127.0.0.1:8080/a2a \
+  --operation send \
+  --timeout-ms 10000
+```
+
+Stop the server with `Ctrl+C`. The client prints the terminal status update and exits after the server closes the SSE stream.
+
+## Other servers and operations
+
+Point the generated client at any server whose Agent Card advertises `capabilities.streaming: true`:
+
+```bash
+./build-example-streaming_client/a2a_example --transport jsonrpc --endpoint http://127.0.0.1:8080/rpc --operation send --timeout-ms 10000
+./build-example-streaming_client/a2a_example --transport http_json --endpoint http://127.0.0.1:8080/a2a --operation subscribe --task-id task-123 --timeout-ms 10000
+```
+
+The repository's `streaming_server` example exposes HTTP+JSON SSE. Use a JSON-RPC-capable server for the JSON-RPC command. Add `--cancel-after-first-event` to request cancellation after the first event.
+
+## Server sessions
+
+Executors return `std::unique_ptr<ServerStreamSession>` from `SendStreamingMessage`
+and, optionally, `SubscribeTask`. A session publishes `StreamResponse` values
+until it returns an empty optional or an error.
+
+Observer signatures and ownership are defined by `a2a::client::StreamObserver`:
+`OnEvent(const StreamResponse&)`, `OnError(const core::Error&)`, and
+`OnCompleted()`. Keep observer-owned state alive until callbacks have finished.

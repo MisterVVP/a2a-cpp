@@ -31,7 +31,7 @@ notifications, authentication hooks, and HTTP+JSON, JSON-RPC, and gRPC transport
 - libcurl for built-in HTTP+JSON, JSON-RPC, and SSE clients.
 - PostgreSQL client libraries only when PostgreSQL stores are enabled.
 
-See the platform-specific [installation guide](book/src/getting-started/installation.md).
+See the platform-specific [installation guide](https://mistervvp.github.io/a2a-cpp/getting-started/installation.html).
 
 ## Quick start
 
@@ -45,7 +45,7 @@ cd a2a-cpp
 ```
 
 `hello_agent` runs a deterministic in-process client/server flow. The
-[quickstart](book/src/getting-started/quickstart.md) covers macOS, Windows,
+[quickstart](https://mistervvp.github.io/a2a-cpp/getting-started/quickstart.html) covers macOS, Windows,
 transport, streaming, push-notification, and authentication examples.
 
 ## Use with CMake FetchContent
@@ -85,8 +85,8 @@ find_package(a2a_cpp CONFIG REQUIRED)
 target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-See the [CMake integration](book/src/build/cmake.md) and
-[vcpkg](book/src/build/vcpkg.md) guides for additional workflows.
+See the [CMake integration](https://mistervvp.github.io/a2a-cpp/build/cmake.html) and
+[vcpkg](https://mistervvp.github.io/a2a-cpp/build/vcpkg.html) guides for additional workflows.
 
 ## Examples
 
@@ -100,14 +100,14 @@ streaming, push-notification, and authentication examples.
 ## Documentation
 
 - [Documentation website](https://mistervvp.github.io/a2a-cpp/)
-- [Installation and quickstart](book/src/getting-started/installation.md)
-- [Client and server APIs](book/src/client/overview.md)
-- [Transports and streaming](book/src/transports/rest.md)
-- [Authentication](book/src/auth/overview.md)
-- [Storage](docs/storage.md)
-- [Performance testing](docs/performance-testing.md)
-- [API reference](book/src/api-reference.md)
-- [Releases and versioning](book/src/releases.md)
+- [Installation and quickstart](https://mistervvp.github.io/a2a-cpp/getting-started/installation.html)
+- [Client and server APIs](https://mistervvp.github.io/a2a-cpp/client/overview.html)
+- [Transports and streaming](https://mistervvp.github.io/a2a-cpp/transports/rest.html)
+- [Authentication](https://mistervvp.github.io/a2a-cpp/auth/overview.html)
+- [Storage](https://mistervvp.github.io/a2a-cpp/server/storage.html)
+- [Performance testing](https://mistervvp.github.io/a2a-cpp/performance/workloads.html)
+- [API reference](https://mistervvp.github.io/a2a-cpp/api-reference.html)
+- [Releases and versioning](https://mistervvp.github.io/a2a-cpp/releases.html)
 
 ## Development
 
@@ -124,14 +124,21 @@ Contributors should read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 ./scripts/verify_changes.sh
 ```
 
-See [`benchmarks/README.md`](benchmarks/README.md) for microbenchmarks and
-[`docs/performance-testing.md`](docs/performance-testing.md) for workload tests.
+See [microbenchmark guide](https://mistervvp.github.io/a2a-cpp/performance/microbenchmarks.html) for microbenchmarks and
+[workload testing guide](https://mistervvp.github.io/a2a-cpp/performance/workloads.html) for workload tests.
 
 ## Production tutorials
 
 The realistic multi-process tutorials under `examples/tutorials/` demonstrate Agent Card discovery and HTTP+JSON A2A delegation. They support native Linux runs and cross-platform Docker Compose, including Docker Desktop on Windows without WSL.
 
-See the [production tutorials guide](examples/tutorials/README.md) to run both tutorials or choose an individual tutorial.
+See the [production tutorials guide](https://mistervvp.github.io/a2a-cpp/examples/tutorials.html) to run both tutorials or choose an individual tutorial.
+
+## Repository policies
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution requirements,
+[AGENTS.md](AGENTS.md) and [C++ conventions](cpp_conventions.md) for repository
+engineering rules, [SECURITY.md](SECURITY.md) for vulnerability reporting, and
+[SUPPORT.md](SUPPORT.md) for supported versions and release cadence.
 
 ## License
 
