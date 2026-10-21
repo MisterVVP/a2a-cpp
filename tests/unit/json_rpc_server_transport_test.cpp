@@ -828,12 +828,12 @@ TEST(JsonRpcServerTransportTest, RejectsInvalidListTasksValues) {
       {.method = "POST",
        .target = "/rpc",
        .headers = {{"A2A-Version", "1.0"}},
-       .body = R"({"jsonrpc":"2.0","id":"req-list-token","method":"a2a.listTasks","params":{"pageToken":"abc"}})",
+       .body = R"({"jsonrpc":"2.0","id":"req-list-token","method":"a2a.listTasks","params":{"pageToken":7}})",
        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, kHttpOk);
-  EXPECT_NE(response.value().body.find("pageToken must be a valid offset"), std::string::npos);
+  EXPECT_NE(response.value().body.find("pageToken must be a string"), std::string::npos);
 }
 
 TEST(JsonRpcServerTransportTest, RejectsPlainTextContentTypeWithProtocolErrorReason) {

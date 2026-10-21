@@ -431,6 +431,32 @@ TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
   EXPECT_TRUE(listed.value().next_page_token.empty());
 }
 
+TEST_P(SecurityTransportIntegrationTest, CursorContinuationRechecksOwnershipAndHidesOtherCallerTasks) {
+  constexpr std::string_view kNextOwnedTask = "cursor-next-owned";
+  SaveTask(kNextOwnedTask, kAlice);
+  a2a::client::ListTasksRequest query{.page_size = 1, .page_token = {}};
+  auto first = client_->ListTasks(query, Options(kAliceToken));
+  ASSERT_TRUE(first.ok()) << first.error().message();
+  ASSERT_EQ(first.value().tasks.size(), 1U);
+  EXPECT_EQ(first.value().tasks.front().id(), kNextOwnedTask);
+  ASSERT_FALSE(first.value().next_page_token.empty());
+  query.page_token = first.value().next_page_token;
+  auto next = client_->ListTasks(query, Options(kAliceToken));
+  ASSERT_TRUE(next.ok()) << next.error().message();
+  ASSERT_EQ(next.value().tasks.size(), 1U);
+  EXPECT_EQ(next.value().tasks.front().id(), kTaskId);
+  SaveTask(kTaskId, kBob);
+  auto revoked = client_->ListTasks(query, Options(kAliceToken));
+  ASSERT_TRUE(revoked.ok()) << revoked.error().message();
+  EXPECT_TRUE(revoked.value().tasks.empty());
+  EXPECT_TRUE(revoked.value().next_page_token.empty());
+  auto foreign = client_->ListTasks(query, Options(kBobToken));
+  ASSERT_TRUE(foreign.ok()) << foreign.error().message();
+  for (const auto& task : foreign.value().tasks) {
+    EXPECT_EQ(task.context_id(), kBob);
+  }
+}
+
 TEST_P(SecurityTransportIntegrationTest, HistoryProjectionDoesNotChangeTaskAuthorization) {
   auto task = store_.Get(kTaskId);
   ASSERT_TRUE(task.ok());

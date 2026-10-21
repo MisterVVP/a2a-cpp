@@ -5,9 +5,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -47,7 +49,10 @@ class InMemoryTaskStore final : public TaskStore {
     virtual void OnDedupedHistoryMessage(const HistoryDedupeEvent& event) = 0;
   };
 
-  InMemoryTaskStore() = default;
+  using UpdateClock = std::function<std::int64_t()>;
+  InMemoryTaskStore();
+  // Clock callbacks must be nonempty and nonthrowing. The clock is sampled under the store lock.
+  InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink, UpdateClock update_clock);
   explicit InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink);
 
   [[nodiscard]] core::Result<void> CreateOrUpdate(const lf::a2a::v1::Task& task) override;
@@ -64,10 +69,13 @@ class InMemoryTaskStore final : public TaskStore {
   [[nodiscard]] HistoryTelemetrySnapshot GetHistoryTelemetrySnapshot() const override;
 
  private:
-  static std::optional<std::size_t> ParsePageToken(std::string_view token);
-  [[nodiscard]] core::Result<ListTasksResponse> ListUnfiltered(const ListTasksRequest& request,
-                                                               std::size_t start) const;
-  [[nodiscard]] core::Result<ListTasksResponse> ListFiltered(const ListTasksRequest& request, std::size_t start) const;
+  struct CursorOrder {
+    bool operator()(const ListTaskCursor& lhs, const ListTaskCursor& rhs) const { return ListCursorPrecedes(lhs, rhs); }
+  };
+  void TouchTask(std::size_t index);
+  UpdateClock update_clock_;
+  std::vector<std::int64_t> updated_at_;
+  std::set<ListTaskCursor, CursorOrder> update_order_;
 
   mutable std::shared_mutex mutex_;
   std::shared_ptr<HistoryTelemetrySink> telemetry_sink_;

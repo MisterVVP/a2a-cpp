@@ -65,10 +65,11 @@ store filters/projections or return `nullopt` for an empty scope. Retain fields
 needed by `CanAccessTask`; defaults preserve full tasks. The SUT pushes its
 context filter into both stores, loading histories/artifacts only for selected
 results. The dispatcher retains one bounded batch and one page of IDs. Exact
-counts still inspect all matching tasks; backends may repeat filtering/counting
-or decode protobuf blobs before projection. Numeric offsets/ordering remain;
-cursor pagination, update-time ordering and snapshot consistency are tracked in
-[ListTasks #309](https://github.com/MisterVVP/a2a-cpp/issues/309).
+counts still inspect all matching tasks and may decode protobuf blobs before
+projection; bounded internal scans skip redundant backend counts. Listings use
+versioned cursors and descending update-time ordering. See the
+[ListTasks contract](../list-tasks-pagination.md) for live traversal consistency,
+legacy-token compatibility and migration requirements.
 
 Streams check current task permissions before reading and releasing events,
 reject task-bearing events without IDs, and allow taskless messages. On a stream

@@ -4,7 +4,8 @@
 #include "a2a/server/tasks/in_memory_task_store.h"
 
 #include <algorithm>
-#include <charconv>
+#include <cassert>
+#include <chrono>
 #include <mutex>
 #include <shared_mutex>
 #include <utility>
@@ -42,8 +43,36 @@ class TaskAppendRollback final : private core::NonCopyableOrMovable {
 
 }  // namespace
 
-InMemoryTaskStore::InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink)
-    : telemetry_sink_(std::move(telemetry_sink)) {}
+InMemoryTaskStore::InMemoryTaskStore()
+    : InMemoryTaskStore(nullptr, [] {
+        return std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+            .count();
+      }) {}
+
+InMemoryTaskStore::InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink, UpdateClock update_clock)
+    : update_clock_(std::move(update_clock)), telemetry_sink_(std::move(telemetry_sink)) {
+  assert(update_clock_);
+}
+
+InMemoryTaskStore::InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telemetry_sink) : InMemoryTaskStore() {
+  telemetry_sink_ = std::move(telemetry_sink);
+}
+
+void InMemoryTaskStore::TouchTask(std::size_t index) {
+  const auto& id = ordered_tasks_[index].id();
+  if (index == updated_at_.size()) {
+    const auto now = std::max(std::int64_t{0}, update_clock_());
+    update_order_.insert({.updated_at = now, .task_id = id});
+    updated_at_.push_back(now);
+    return;
+  }
+  const auto next_time = std::max(updated_at_[index] + 1, update_clock_());
+  auto node = update_order_.extract({.updated_at = updated_at_[index], .task_id = id});
+  node.value().updated_at = next_time;
+  update_order_.insert(std::move(node));
+  updated_at_[index] = next_time;
+}
 
 core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& task) {
   if (task.id().empty()) {
@@ -55,6 +84,7 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
   if (existing != task_indices_.end()) {
     ordered_tasks_[existing->second] = task;
     ++revisions_[existing->second];
+    TouchTask(existing->second);
     return {};
   }
 
@@ -66,6 +96,7 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
     return core::Error::Internal("Task index insertion failed");
   }
 
+  TouchTask(ordered_tasks_.size() - 1);
   rollback.Commit();
   return {};
 }
@@ -99,6 +130,7 @@ core::Result<TaskStore::ConditionalWriteResult> InMemoryTaskStore::CreateOrUpdat
     if (!task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second) {
       return core::Error::Internal("Task index insertion failed");
     }
+    TouchTask(ordered_tasks_.size() - 1);
     rollback.Commit();
     return ConditionalWriteResult::kUpdated;
   }
@@ -107,6 +139,7 @@ core::Result<TaskStore::ConditionalWriteResult> InMemoryTaskStore::CreateOrUpdat
   }
   ordered_tasks_[existing->second] = task;
   ++revisions_[existing->second];
+  TouchTask(existing->second);
   return ConditionalWriteResult::kUpdated;
 }
 
@@ -123,92 +156,44 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Get(std::string_view id) cons
   return ordered_tasks_[it->second];
 }
 
-std::optional<std::size_t> InMemoryTaskStore::ParsePageToken(std::string_view token) {
-  if (token.empty()) {
-    return std::size_t{0};
-  }
-
-  std::size_t parsed = 0;
-  const auto* begin = token.data();
-  const auto* end = token.data() + token.size();
-  const auto result = std::from_chars(begin, end, parsed);
-  if (result.ec != std::errc() || result.ptr != end) {
-    return std::nullopt;
-  }
-  return parsed;
-}
-
 core::Result<ListTasksResponse> InMemoryTaskStore::List(const ListTasksRequest& request) const {
-  const auto offset = ParseListPageToken(request.page_token);
-  if (!offset.ok()) {
-    return offset.error();
+  const auto cursor = ParseListPageToken(request.page_token);
+  if (!cursor.ok()) {
+    return cursor.error();
   }
-
   std::shared_lock<std::shared_mutex> lock(mutex_);
-  const std::size_t start = offset.value();
-  const bool has_filters =
+  ListTasksResponse response;
+  const auto capacity =
+      request.page_size == 0 ? ordered_tasks_.size() : std::min(request.page_size, ordered_tasks_.size());
+  response.tasks.reserve(capacity);
+  response.task_cursors.reserve(capacity);
+  const bool filtered =
       !request.context_id.empty() || request.status_filter.has_value() || request.status_timestamp_after.has_value();
-  return has_filters ? ListFiltered(request, start) : ListUnfiltered(request, start);
-}
-
-core::Result<ListTasksResponse> InMemoryTaskStore::ListUnfiltered(const ListTasksRequest& request,
-                                                                  std::size_t start) const {
-  const auto valid_offset = ValidateListPageOffset(start, ordered_tasks_.size());
-  if (!valid_offset.ok()) {
-    return valid_offset.error();
-  }
-
-  const std::size_t available = ordered_tasks_.size() - start;
-  const std::size_t result_size = request.page_size == 0 ? available : std::min(request.page_size, available);
-  ListTasksResponse response;
-  response.tasks.reserve(result_size);
-  const auto end = ordered_tasks_.begin() + static_cast<std::ptrdiff_t>(start + result_size);
-  for (auto it = ordered_tasks_.begin() + static_cast<std::ptrdiff_t>(start); it != end; ++it) {
-    response.tasks.push_back(ProjectTaskForList(*it, request.include_artifacts, request.history_length));
-  }
-  response.page_size = result_size;
-  response.total_size = ordered_tasks_.size();
-  if (start + result_size < ordered_tasks_.size()) {
-    response.next_page_token = std::to_string(start + result_size);
-  }
-  return response;
-}
-
-core::Result<ListTasksResponse> InMemoryTaskStore::ListFiltered(const ListTasksRequest& request,
-                                                                std::size_t start) const {
-  const std::size_t effective_page_size = request.page_size;
-  ListTasksResponse response;
-
-  if (effective_page_size == 0) {
-    response.tasks.reserve(start < ordered_tasks_.size() ? ordered_tasks_.size() - start : 0);
-  } else {
-    response.tasks.reserve(effective_page_size);
-  }
-
-  std::size_t matched_count = 0;
-  for (const auto& task : ordered_tasks_) {
-    if (MatchesListFilters(task, request)) {
-      if (matched_count >= start && (effective_page_size == 0 || response.tasks.size() < effective_page_size)) {
-        response.tasks.push_back(ProjectTaskForList(task, request.include_artifacts, request.history_length));
-      }
-      ++matched_count;
+  if (filtered && request.include_total_size) {
+    for (const auto& task : ordered_tasks_) {
+      response.total_size += MatchesListFilters(task, request) ? 1U : 0U;
     }
+  } else if (request.include_total_size) {
+    response.total_size = ordered_tasks_.size();
   }
-
-  const auto valid_offset = ValidateListPageOffset(start, matched_count);
-  if (!valid_offset.ok()) {
-    return valid_offset.error();
+  const auto& boundary = cursor.value();
+  auto it = update_order_.begin();
+  if (boundary.has_value()) {
+    it = update_order_.upper_bound(*boundary);
   }
-
+  for (; it != update_order_.end(); ++it) {
+    const auto& task = ordered_tasks_[task_indices_.at(it->task_id)];
+    if (!MatchesListFilters(task, request)) {
+      continue;
+    }
+    if (request.page_size != 0 && response.tasks.size() == request.page_size) {
+      response.next_page_token = EncodeListPageToken(response.task_cursors.back());
+      break;
+    }
+    response.tasks.push_back(ProjectTaskForList(task, request.include_artifacts, request.history_length));
+    response.task_cursors.push_back(*it);
+  }
   response.page_size = response.tasks.size();
-  response.total_size = matched_count;
-  if (effective_page_size != 0 && response.tasks.size() == effective_page_size) {
-    const std::size_t next_offset = start + response.tasks.size();
-    if (next_offset < matched_count) {
-      response.next_page_token = std::to_string(next_offset);
-    }
-  }
-
   return response;
 }
 
@@ -230,6 +215,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
   auto* mutable_status = task.mutable_status();
   mutable_status->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
   ++revisions_[it->second];
+  TouchTask(it->second);
   return task;
 }
 
@@ -265,6 +251,7 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
     } else {
       *task.add_history() = message;
       ++revisions_[it->second];
+      TouchTask(it->second);
       result = task;
     }
   }

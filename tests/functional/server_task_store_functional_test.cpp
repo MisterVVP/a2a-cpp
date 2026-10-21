@@ -34,13 +34,13 @@ TEST(ServerTaskStoreFunctionalTest, SupportsCreateGetListAndCancelLifecycle) {
   const auto list_result = store.List(a2a::server::ListTasksRequest{1, ""});
   ASSERT_TRUE(list_result.ok());
   ASSERT_EQ(list_result.value().tasks.size(), 1U);
-  EXPECT_EQ(list_result.value().tasks.front().id(), "task-1");
-  EXPECT_EQ(list_result.value().next_page_token, "1");
+  EXPECT_EQ(list_result.value().tasks.front().id(), "task-2");
+  EXPECT_FALSE(list_result.value().next_page_token.empty());
 
-  const auto page_2 = store.List(a2a::server::ListTasksRequest{10, "1"});
+  const auto page_2 = store.List(a2a::server::ListTasksRequest{10, list_result.value().next_page_token});
   ASSERT_TRUE(page_2.ok());
   ASSERT_EQ(page_2.value().tasks.size(), 1U);
-  EXPECT_EQ(page_2.value().tasks.front().id(), "task-2");
+  EXPECT_EQ(page_2.value().tasks.front().id(), "task-1");
 
   const auto cancel_result = store.Cancel("task-2");
   ASSERT_TRUE(cancel_result.ok());

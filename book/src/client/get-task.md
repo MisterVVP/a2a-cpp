@@ -16,7 +16,13 @@
 - `page_size`
 - `page_token`
 
-The response includes task values plus `next_page_token`.
+The response includes task values plus an opaque, versioned `next_page_token`.
+Tasks are ordered by last storage update, newest first, with task ID as the
+tie-breaker. History/artifact changes also affect this order. Start with an empty
+token; legacy numeric offsets are rejected. Concurrent changes can move tasks ahead
+of the cursor, so restart a traversal to see the latest changes. See the
+[ListTasks cursor contract](https://github.com/MisterVVP/a2a-cpp/blob/main/docs/list-tasks-pagination.md)
+for consistency, permissions, exact-count costs and PostgreSQL migration details.
 
 An omitted page size requests the protocol default of at most 50 tasks. Explicit
 page sizes must be between 1 and 100. Continue until `next_page_token` is empty:

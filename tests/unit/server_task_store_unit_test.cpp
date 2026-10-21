@@ -45,8 +45,6 @@ constexpr std::string_view kFirstTaskId = "task-1";
 constexpr std::string_view kSecondTaskId = "task-2";
 constexpr std::string_view kThirdTaskId = "task-3";
 constexpr std::string_view kLastHistoryMessageId = "message-2";
-constexpr std::string_view kFirstOffsetToken = "1";
-constexpr std::string_view kSecondOffsetToken = "2";
 constexpr int kUnknownTaskFieldNumber = 1000;
 constexpr std::uint64_t kUnknownTaskFieldValue = 42;
 
@@ -134,7 +132,7 @@ TEST(InMemoryTaskStoreUnitTest, AppliesFilteringPaginationAndProjectionOptions) 
                                            kTimestampBaseSeconds + 2, true))
                   .ok());
 
-  a2a::server::ListTasksRequest first_page_request(kFirstPageSize, "0");
+  a2a::server::ListTasksRequest first_page_request(kFirstPageSize, "");
   first_page_request.context_id = std::string(kContextAlpha);
   first_page_request.status_filter = lf::a2a::v1::TASK_STATE_WORKING;
   google::protobuf::Timestamp cutoff;
@@ -155,7 +153,9 @@ TEST(InMemoryTaskStoreUnitTest, AppliesFilteringPaginationAndProjectionOptions) 
   EXPECT_EQ(first_page.tasks.front().history_size(), 1);
   EXPECT_EQ(first_page.tasks.front().artifacts_size(), 0);
 
-  a2a::server::ListTasksRequest second_page_request(kFirstPageSize, "1");
+  const auto unfiltered_first = store.List({kFirstPageSize, {}});
+  ASSERT_TRUE(unfiltered_first.ok());
+  a2a::server::ListTasksRequest second_page_request(kFirstPageSize, unfiltered_first.value().next_page_token);
   const auto second_page_result = store.List(second_page_request);
   ASSERT_TRUE(second_page_result.ok());
   const auto& second_page = second_page_result.value();
@@ -187,7 +187,7 @@ TEST(InMemoryTaskStoreUnitTest, CancelUpdatesStateAndRejectsTerminalTasks) {
   ASSERT_FALSE(second_cancel_result.ok());
 }
 
-TEST(InMemoryTaskStoreUnitTest, UpdatingTaskPreservesItsListPosition) {
+TEST(InMemoryTaskStoreUnitTest, UpdatingTaskMovesItToMostRecentPosition) {
   a2a::server::InMemoryTaskStore store;
   ASSERT_TRUE(store
                   .CreateOrUpdate(MakeTask(std::string(kFirstTaskId), std::string(kContextAlpha),
@@ -257,7 +257,7 @@ TEST(InMemoryTaskStoreUnitTest, ProjectsArtifactsAndRequestedHistoryWithoutMutat
   EXPECT_EQ(stored.value().SerializeAsString(), serialized_source);
 }
 
-TEST(InMemoryTaskStoreUnitTest, PaginatesFilteredAndUnfilteredResultsInInsertionOrder) {
+TEST(InMemoryTaskStoreUnitTest, PaginatesFilteredAndUnfilteredResultsInUpdateOrder) {
   a2a::server::InMemoryTaskStore store;
   ASSERT_TRUE(store
                   .CreateOrUpdate(MakeTask(std::string(kFirstTaskId), std::string(kContextAlpha),
@@ -272,20 +272,59 @@ TEST(InMemoryTaskStoreUnitTest, PaginatesFilteredAndUnfilteredResultsInInsertion
                                            lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
                   .ok());
 
-  const auto unfiltered = store.List(a2a::server::ListTasksRequest{kFirstPageSize, std::string(kFirstOffsetToken)});
+  const auto first = store.List({kFirstPageSize, {}});
+  ASSERT_TRUE(first.ok());
+  EXPECT_EQ(first.value().tasks.front().id(), kThirdTaskId);
+  const auto unfiltered = store.List({kFirstPageSize, first.value().next_page_token});
   ASSERT_TRUE(unfiltered.ok());
   ASSERT_EQ(unfiltered.value().tasks.size(), 1U);
   EXPECT_EQ(unfiltered.value().tasks.front().id(), kSecondTaskId);
-  EXPECT_EQ(unfiltered.value().next_page_token, kSecondOffsetToken);
+  EXPECT_FALSE(unfiltered.value().next_page_token.empty());
 
-  a2a::server::ListTasksRequest filtered_request{kFirstPageSize, std::string(kFirstOffsetToken)};
+  a2a::server::ListTasksRequest filtered_request{kFirstPageSize, first.value().next_page_token};
   filtered_request.context_id = std::string(kContextAlpha);
   const auto filtered = store.List(filtered_request);
   ASSERT_TRUE(filtered.ok());
   ASSERT_EQ(filtered.value().tasks.size(), 1U);
-  EXPECT_EQ(filtered.value().tasks.front().id(), kThirdTaskId);
+  EXPECT_EQ(filtered.value().tasks.front().id(), kFirstTaskId);
   EXPECT_TRUE(filtered.value().next_page_token.empty());
   EXPECT_EQ(filtered.value().total_size, 2U);
+}
+
+void SeedEqualClockTasks(a2a::server::InMemoryTaskStore& store) {
+  const auto first = MakeTask(std::string(kFirstTaskId), std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                              kTimestampBaseSeconds, false);
+  const auto second = MakeTask(std::string(kSecondTaskId), std::string(kContextAlpha), lf::a2a::v1::TASK_STATE_WORKING,
+                               kTimestampBaseSeconds, false);
+  ASSERT_TRUE(store.CreateOrUpdate(second).ok());
+  ASSERT_TRUE(store.CreateOrUpdate(first).ok());
+}
+
+void ExpectClockPageTask(const a2a::server::ListTasksResponse& page, std::string_view id) {
+  ASSERT_EQ(page.tasks.size(), 1U);
+  EXPECT_EQ(page.tasks.front().id(), id);
+}
+
+void ExpectEqualClockPages(a2a::server::InMemoryTaskStore& store) {
+  auto page = store.List({kFirstPageSize, {}});
+  ASSERT_TRUE(page.ok());
+  ExpectClockPageTask(page.value(), kSecondTaskId);
+  auto next = store.List({kFirstPageSize, page.value().next_page_token});
+  ASSERT_TRUE(next.ok());
+  ExpectClockPageTask(next.value(), kFirstTaskId);
+  EXPECT_TRUE(next.value().next_page_token.empty());
+}
+
+TEST(InMemoryTaskStoreUnitTest, EqualUpdateTimesUseTaskIdAndMutationsAdvanceTime) {
+  a2a::server::InMemoryTaskStore store(nullptr, [] { return kTimestampBaseSeconds; });
+  SeedEqualClockTasks(store);
+  ExpectEqualClockPages(store);
+  ASSERT_TRUE(store.Cancel(kFirstTaskId).ok());
+  auto updated = store.List({kFirstPageSize, {}});
+  ASSERT_TRUE(updated.ok());
+  ExpectClockPageTask(updated.value(), kFirstTaskId);
+  ASSERT_FALSE(updated.value().task_cursors.empty());
+  EXPECT_GT(updated.value().task_cursors.front().updated_at, kTimestampBaseSeconds);
 }
 
 TEST(InMemoryTaskStoreUnitTest, AppendTaskHistoryAppliesDedupPoliciesAndPreservesOrder) {
@@ -416,20 +455,25 @@ TEST(InMemoryTaskStoreUnitTest, HandlesOutOfOrderAndMixedReplayScenarios) {
   EXPECT_EQ(result.value().history(2).message_id(), "");
 }
 
-TEST(ServerTaskUtilitiesTest, ValidatesPageTokensAndOffsets) {
-  const auto empty = a2a::server::ParseListPageToken("");
+TEST(ServerTaskUtilitiesTest, ValidatesVersionedCursorTokens) {
+  const auto empty = a2a::server::ParseListPageToken({});
   ASSERT_TRUE(empty.ok());
-  EXPECT_EQ(empty.value(), 0U);
-
-  const auto valid = a2a::server::ParseListPageToken("12");
-  ASSERT_TRUE(valid.ok());
-  EXPECT_EQ(valid.value(), 12U);
-
-  const auto invalid = a2a::server::ParseListPageToken("12x");
-  ASSERT_FALSE(invalid.ok());
-
-  EXPECT_TRUE(a2a::server::ValidateListPageOffset(2, 2).ok());
-  EXPECT_FALSE(a2a::server::ValidateListPageOffset(3, 2).ok());
+  EXPECT_FALSE(empty.value().has_value());
+  const a2a::server::ListTaskCursor cursor{.updated_at = kTimestampBaseSeconds, .task_id = std::string(kTaskId)};
+  const auto token = a2a::server::EncodeListPageToken(cursor);
+  const auto parsed = a2a::server::ParseListPageToken(token);
+  ASSERT_TRUE(parsed.ok());
+  const auto& boundary = parsed.value();
+  if (!boundary.has_value()) {
+    FAIL() << token;
+  }
+  EXPECT_EQ(boundary->updated_at, cursor.updated_at);
+  EXPECT_EQ(boundary->task_id, cursor.task_id);
+  constexpr std::string_view kMalformedTokens[] = {
+      "0", "12", "12x", "a2a2_313a61", "a2a1_", "a2a1_0", "a2a1_zz", "a2a1_2d313a61", "a2a1_30313a61", "a2a1_313a00"};
+  for (const auto malformed : kMalformedTokens) {
+    EXPECT_FALSE(a2a::server::ParseListPageToken(malformed).ok()) << malformed;
+  }
 }
 
 TEST(ServerTaskUtilitiesTest, LifecycleServiceEnforcesTerminalStateGuard) {

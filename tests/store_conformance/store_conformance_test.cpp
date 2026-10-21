@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <future>
 #include <memory>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -2504,14 +2505,14 @@ void ExpectTaskListOrder(a2a::server::stores::PostgresTaskStore& store) {
   ASSERT_TRUE(all_tasks.ok());
   ASSERT_EQ(all_tasks.value().tasks.size(), kConcurrentIds.size());
   for (std::size_t index = 0; index < kConcurrentIds.size(); ++index) {
-    EXPECT_EQ(all_tasks.value().tasks[index].id(), kConcurrentIds[index]);
+    EXPECT_EQ(all_tasks.value().tasks[index].id(), kConcurrentIds[kConcurrentIds.size() - 1 - index]);
   }
 }
 
 void ExpectTaskPaginationOrder(a2a::server::stores::PostgresTaskStore& store) {
   a2a::server::ListTasksRequest request;
   request.page_size = kConcurrentPageSize;
-  for (const std::string_view expected_id : kConcurrentIds) {
+  for (const std::string_view expected_id : std::views::reverse(kConcurrentIds)) {
     const auto page = store.List(request);
     ASSERT_TRUE(page.ok());
     ASSERT_EQ(page.value().tasks.size(), kConcurrentPageSize);
@@ -3016,6 +3017,55 @@ TEST(StoreConformanceTest, PostgresTaskStore) {
   EXPECT_EQ(shared.value().id(), "shared-postgres-task");
 }
 
+constexpr std::string_view kTieSchemaSuffix = "cursor_ties";
+constexpr std::string_view kSetEqualUpdateTime = " SET updated_at = '2000-01-01T00:00:00Z'::timestamptz";
+constexpr std::string_view kSetEqualUpdateOperation = "set equal task update times";
+
+void SeedPostgresEqualUpdateTimes(a2a::server::stores::PostgresTaskStore& store,
+                                  a2a::server::stores::PostgresConnectionPool& pool, std::string_view schema) {
+  using namespace a2a::tests::store_conformance;
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kTaskTwo), std::string(kContextOne),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kBaseSeconds))
+                  .ok());
+  ASSERT_TRUE(store
+                  .CreateOrUpdate(MakeTask(std::string(kTaskOne), std::string(kContextOne),
+                                           lf::a2a::v1::TASK_STATE_WORKING, kBaseSeconds))
+                  .ok());
+  auto connection = pool.Acquire();
+  ASSERT_TRUE(connection.ok());
+  const auto sql = std::string("UPDATE ").append(a2a::server::stores::TaskTable(schema)).append(kSetEqualUpdateTime);
+  ASSERT_TRUE(a2a::server::stores::Exec(connection.value().get(), sql, kSetEqualUpdateOperation).ok());
+}
+
+void ExpectPostgresCursorTask(const a2a::server::ListTasksResponse& page, std::string_view id) {
+  ASSERT_EQ(page.tasks.size(), 1U);
+  EXPECT_EQ(page.tasks.front().id(), id);
+}
+
+void ExpectPostgresEqualUpdateTimePages(a2a::server::stores::PostgresTaskStore& store) {
+  using namespace a2a::tests::store_conformance;
+  auto first = store.List({1, {}});
+  ASSERT_TRUE(first.ok());
+  ExpectPostgresCursorTask(first.value(), kTaskTwo);
+  auto next = store.List({1, first.value().next_page_token});
+  ASSERT_TRUE(next.ok());
+  ExpectPostgresCursorTask(next.value(), kTaskOne);
+  EXPECT_TRUE(next.value().next_page_token.empty());
+}
+
+TEST(StoreConformanceTest, PostgresEqualUpdateTimesUseTaskIdTieBreaker) {
+  const char* dsn = GetPostgresDsn();
+  if (dsn == nullptr || std::string_view(dsn).empty()) {
+    GTEST_SKIP() << kPostgresDsnEnvironmentVariable.data();
+  }
+  const auto schema = MakePostgresTestSchema(kTieSchemaSuffix);
+  auto pool = std::make_shared<a2a::server::stores::PostgresConnectionPool>(dsn, 1U);
+  a2a::server::stores::PostgresTaskStore store(pool, {.connection_string = dsn, .schema = schema});
+  SeedPostgresEqualUpdateTimes(store, *pool, schema);
+  ExpectPostgresEqualUpdateTimePages(store);
+}
+
 TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
@@ -3034,15 +3084,15 @@ TEST(StoreConformanceTest, PostgresTaskStoreListAppliesFiltersBeforePagination) 
 
   const auto first_page = store.List(request);
   ASSERT_TRUE(first_page.ok());
-  ExpectFilteredPostgresListPage(first_page.value(), kOldTargetTaskId, true);
+  ExpectFilteredPostgresListPage(first_page.value(), kNewTargetTaskId, true);
 
   request.page_token = first_page.value().next_page_token;
   const auto second_page = store.List(request);
   ASSERT_TRUE(second_page.ok());
-  ExpectFilteredPostgresListPage(second_page.value(), kNewTargetTaskId, false);
+  ExpectFilteredPostgresListPage(second_page.value(), kOldTargetTaskId, false);
 }
 
-TEST(StoreConformanceTest, PostgresTaskPaginationPreservesCreationOrderAcrossConnections) {
+TEST(StoreConformanceTest, PostgresTaskPaginationUsesUpdateOrderAcrossConnections) {
   const char* dsn_value = GetPostgresDsn();
   if (dsn_value == nullptr || std::string_view(dsn_value).empty()) {
     GTEST_SKIP() << "A2A_TEST_POSTGRES_DSN is not set";

@@ -379,3 +379,8 @@ not privileges that every push-store role must receive.
 ## Sensitive push notification data
 
 Push notification configs can include delivery URLs, tokens, and authentication metadata. Treat stored `TaskPushNotificationConfig` payloads as sensitive operational data. This SDK stores protobuf payloads in PostgreSQL but does not implement encryption at rest; use database-level encryption, access control, backups, and audit logging appropriate for your environment.
+
+## Task listing
+
+See [ListTasks cursor pagination](list-tasks-pagination.md) for last-update ordering,
+legacy-token compatibility, concurrency behavior, count costs and PostgreSQL migration SQL.
