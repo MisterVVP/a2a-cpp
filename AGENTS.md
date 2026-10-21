@@ -4,6 +4,12 @@
 These instructions apply to the entire repository. Follow them for all changes unless a more specific nested `AGENTS.md` overrides them.
 AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assisted-contributions) requirements in `CONTRIBUTING.md`.
 
+## Documentation locations
+
+- Do not create or use the repository-root `docs/` folder.
+- SDK documentation lives in mdBook under `book/`. Add SDK guides there and include them in `book/src/SUMMARY.md`.
+- Repository documentation and policies live in their related repository files: `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `SECURITY.md`, `SUPPORT.md`, and `cpp_conventions.md`. Keep their full authoritative content in those files, outside mdBook.
+
 ## C++ conventions reference
 - Contributors and AI agents must follow `cpp_conventions.md` for additional C++ conventions and performance tips.
 - In case of overlap, apply the stricter rule between this file and `cpp_conventions.md`.
@@ -111,7 +117,7 @@ Before submitting changes:
 8. Documentation changes that affect mdBook content or structure must verify that `mdbook build book` succeeds locally.
 
 ### Documentation-only and README-only exception for AI agents
-When a change set is limited to documentation and diagrams (for example files under `docs/**`, `book/**`, `README*`, and other `*.md` content) and does not modify production code, tests, build scripts, or dependency manifests, AI agents may skip checklist items **1 through 5** above.
+When a change set is limited to documentation and diagrams (for example files under `book/**`, `README*`, and other `*.md` content) and does not modify production code, tests, build scripts, or dependency manifests, AI agents may skip checklist items **1 through 5** above.
 
 For these documentation-only/README-only changes, AI agents must validate only:
 - 6. Vulnerability/dependency checks pass.

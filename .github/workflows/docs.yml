@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'book/**'
-      - 'docs/**'
       - 'include/a2a/**'
       - 'scripts/generate_api_reference.sh'
       - 'Doxyfile'
@@ -17,7 +16,6 @@ on:
   pull_request:
     paths:
       - 'book/**'
-      - 'docs/**'
       - 'include/a2a/**'
       - 'scripts/generate_api_reference.sh'
       - 'Doxyfile'

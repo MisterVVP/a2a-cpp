@@ -39,7 +39,9 @@ constexpr std::string_view kTaskIdOne = "task-1";
 constexpr std::string_view kTaskIdTwo = "task-2";
 constexpr std::string_view kSubscribeTaskId = "sub-task";
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
+#if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 constexpr std::string_view kGrpcExtensionsMetadataKey = "a2a-extensions";
+#endif
 constexpr std::string_view kUnusedChannelTarget = "127.0.0.1:1";
 
 class GrpcServerTransportTest : public ::testing::Test {
