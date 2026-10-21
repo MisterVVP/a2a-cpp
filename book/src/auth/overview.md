@@ -29,3 +29,12 @@ REST, JSON-RPC, and gRPC server paths populate `RequestContext` with transport m
 ## Example
 
 See `examples/apps/auth_policy_server/main.cpp` for an auth-policy shape.
+
+## Credential provider APIs
+
+The public providers are `ApiKeyCredentialProvider`, `BearerTokenCredentialProvider`,
+`CustomHeaderCredentialProvider` and `OAuth2BearerCredentialProvider`.
+OAuth2 token acquisition and refresh remain application responsibilities.
+
+See [security integration](security.md), including [task authorization](security.md#task-authorization),
+[TLS](security.md#tls-and-server-identity) and [signed Agent Cards](security.md#signed-agent-cards).

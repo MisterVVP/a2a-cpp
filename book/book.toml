@@ -9,6 +9,7 @@ src = "src"
 build-dir = "../book-build"
 
 [output.html]
+site-url = "/a2a-cpp/"
 default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/MisterVVP/a2a-cpp"

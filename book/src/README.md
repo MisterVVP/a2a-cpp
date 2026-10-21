@@ -1,5 +1,16 @@
 # a2a-cpp C++20 Agent2Agent (A2A) SDK Documentation
 
+This book is the canonical public SDK documentation. Shell commands run from
+the repository root unless a guide explicitly changes directory. Source-folder
+READMEs provide navigation to these guides.
+
+Repository-wide contribution and maintenance policies remain in the root
+[CONTRIBUTING.md](https://github.com/MisterVVP/a2a-cpp/blob/main/CONTRIBUTING.md),
+[AGENTS.md](https://github.com/MisterVVP/a2a-cpp/blob/main/AGENTS.md),
+[cpp_conventions.md](https://github.com/MisterVVP/a2a-cpp/blob/main/cpp_conventions.md),
+[SUPPORT.md](https://github.com/MisterVVP/a2a-cpp/blob/main/SUPPORT.md), and
+[SECURITY.md](https://github.com/MisterVVP/a2a-cpp/blob/main/SECURITY.md).
+
 **a2a-cpp** is a C++20 SDK for building Agent2Agent (A2A) protocol clients and servers. The current documented release focuses on production-oriented protocol coverage: REST, JSON-RPC, and gRPC transports; Agent Card discovery; task lifecycle APIs; streaming; push notification configuration APIs; authentication metadata propagation; interceptors; CMake package exports; and vcpkg-oriented packaging.
 
 ## What is included
@@ -25,4 +36,5 @@
 - See [Releases and Versions](releases.md) for current release details and versioning guidance.
 - The SDK is C++20-only and exports CMake targets under the `a2a::` namespace.
 - Package documentation describes vcpkg workflows only.
-- Examples are deterministic and are intended to run without external services unless the example README says otherwise.
+- Examples are deterministic and run without external services unless their
+  [guide](examples/overview.md) says otherwise.

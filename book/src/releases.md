@@ -4,7 +4,89 @@ This documentation is intended to stay version-aware without embedding a release
 
 ## Current documented release
 
-The current documented release is **v0.5.1** and is recommended for new consumers.
+The current documented release is **v0.5.2** and is recommended for new consumers.
+
+### Highlights since `v0.5.1`
+
+#### SDK security and signed Agent Cards
+
+The dispatcher can authenticate callers, enforce operation and task permissions,
+filter visible task counts and pages, and recheck permissions around blocking
+stream reads. Hidden and missing tasks share the same errors. The new
+`TaskAuthorizationService` persists explanatory `auth_required` states and
+coordinates revision-checked transitions with live subscriptions. Applications
+supply identity validation, permission rules and credential policy.
+
+HTTP clients support certificate and hostname verification with per-call TLS
+options; gRPC uses native credentials. Optional Ed25519/JWS Agent Card signing
+uses RFC 8785 canonicalization and verifies original JSON before conversion to
+SDK types. Discovery preserves unknown signed fields and can revalidate cached
+cards against key rotation, revocation and expiry policies. Signing is disabled
+by default; enabling `A2A_ENABLE_SIGNING` and linking `a2a::signing` requires
+OpenSSL 3.0+ and simdjson 3.0+. See the
+[security scenarios guide](auth/security.md) for
+application policy, supported signing features and live-test coverage.
+
+#### Protocol versions and binding validation
+
+Public C++ clients send A2A protocol versions on every operation across
+HTTP+JSON, JSON-RPC and gRPC. Negotiation matches Major.Minor and ignores numeric
+patch components. Servers reject malformed and unsupported versions before
+dispatch. Empty or omitted versions select the unsupported A2A 0.3 fallback and
+are rejected; clients should explicitly send `1.0`. `CallOptions::protocol_version`
+allows an explicit selection. SDK release `0.5.2` and A2A protocol `1.0` are
+separate version numbers.
+
+Independent C++ integration scenarios exercise all nine ordered binding pairs
+against a shared agent with both in-memory and PostgreSQL stores. SDK evidence
+and unmodified upstream TCK coverage are reported separately; passing SDK tests
+does not increase upstream coverage percentages.
+
+#### Benchmark trends and contributor validation
+
+CI retains compact benchmark trend artifacts and compares median timings with
+the preceding successful main run. A configurable noise band and advisory
+signals help identify changes that warrant confirmation across multiple runs;
+existing benchmark thresholds are unchanged. Go-only benchmark-runner changes
+have a focused formatting, vet, race-test and build validation path.
+
+#### Documentation consolidation
+
+Public SDK guidance now lives in this book, including complete
+[storage and schema migration](server/storage.md), [security integration](auth/security.md),
+[examples and tutorials](examples/overview.md), and [performance testing](performance/workloads.md).
+Source-folder READMEs link to the SDK guides. Repository-wide contribution,
+agent, coding, security-reporting and support policies remain authoritative in
+the root repository files; they are not duplicated in this book.
+Duplicate guides and historical internal planning records are removed from the
+public documentation tree.
+
+### Compatibility notes
+
+This release retains numeric `ListTasks` continuation tokens and creation-order
+listing. Omitted protocol-facing page sizes still default to `50`, and explicit
+sizes must be between `1` and `100`. Clients should copy `next_page_token`
+unchanged. Opaque cursors and descending update-time ordering from
+[PR #312](https://github.com/MisterVVP/a2a-cpp/pull/312) are reserved for `v0.6.0`.
+The broader SDK JSON parsing migration in
+[issue #311](https://github.com/MisterVVP/a2a-cpp/issues/311) is follow-up work;
+this release uses simdjson only in the optional signing path.
+
+Raw clients that omit the A2A version must send `A2A-Version: 1.0` (or gRPC
+`a2a-version` metadata). Configured security policies now enforce access before
+returning resources and can reject calls previously accepted without those
+checks. Review the application callbacks and task-authorization contract before
+upgrading secured deployments. Existing applications can continue with signing
+disabled; ordinary builds do not require OpenSSL or simdjson for signing.
+
+Rebuild the SDK and downstream binaries together. Public request/context and
+dispatcher layouts have changed since `v0.5.1`; this release does not promise
+binary compatibility. Existing PostgreSQL schema and privilege requirements
+remain in effect; this release does not include the cursor-ordering indexes.
+
+## Previous release: `v0.5.1`
+
+The following notes describe `v0.5.1`.
 
 ### Highlights since `v0.5.0`
 
@@ -20,7 +102,7 @@ textual `resources/read` validation. Job Application Assistant accepts local
 inputs or MCP resources; Customer Support Copilot retrieves tickets through
 OAuth-protected ContextForge with Keycloak. Docker Compose smoke flows cover
 both tutorials, while the native runner covers Job Application Assistant. See
-the [production tutorials guide](https://github.com/MisterVVP/a2a-cpp/blob/main/examples/tutorials/README.md)
+the [production tutorials guide](examples/tutorials.md)
 for setup and model configuration. This MCP integration is tutorial-local, not
 a new general-purpose public SDK client.
 
@@ -33,7 +115,7 @@ destroying the frame. gRPC transports use timed reads for sessions that support
 them, observing cancellation without invoking `Cancel()` concurrently with a
 blocking `Next()`; other sessions retain the cancellation-watcher fallback.
 
-A focused [ThreadSanitizer profile](https://github.com/MisterVVP/a2a-cpp/blob/main/docs/thread-sanitizer.md)
+A focused [ThreadSanitizer profile](contributing/thread-sanitizer.md)
 and CI job exercise SDK-owned streaming, subscription, reactor, and in-memory
 store concurrency without a suppression file.
 
@@ -79,7 +161,7 @@ conformance tooling continues to use `tck_sut`. The historical wire result value
 `driver_type=wire_tck_sut` remains unchanged for report compatibility. Pagination
 and PostgreSQL schema/privilege requirements from `v0.5.0` remain in effect.
 
-## Previous release: `v0.5.0`
+## Earlier release: `v0.5.0`
 
 The following notes describe `v0.5.0`; its benchmark comparisons are historical
 evidence for that release, not measurements of `v0.5.1`.
@@ -205,7 +287,7 @@ server response construction.
 
 ## Versioning guidance
 
-- Pin CMake `FetchContent` integrations to a release tag such as `v0.5.1` or to
+- Pin CMake `FetchContent` integrations to a release tag such as `v0.5.2` or to
   a reviewed commit.
 - Prefer `find_package(a2a_cpp CONFIG REQUIRED)` for installed SDK packages.
 - Keep generated protobuf headers and linked SDK libraries from the same
