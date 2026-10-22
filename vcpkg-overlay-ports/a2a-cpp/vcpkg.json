@@ -24,6 +24,10 @@
     {
       "name": "vcpkg-cmake-config",
       "host": true
+    },
+    {
+      "name": "simdjson",
+      "version>=": "3.0.1"
     }
   ],
   "features": {

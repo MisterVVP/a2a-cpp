@@ -35,6 +35,7 @@
 #include "a2a/server/agent_card/agent_card_serializer.h"
 #include "a2a/server/http_adapter.h"
 #include "a2a/server/http_server_response_builder.h"
+#include "core/json.h"
 #include "transport_components.h"
 
 namespace a2a::server {
@@ -73,17 +74,11 @@ constexpr std::string_view kProtocolCodeMemberName = "protocolCode";
 constexpr std::string_view kTransportMemberName = "transport";
 constexpr std::string_view kTaskIdJsonField = "taskId";
 constexpr std::string_view kPushNotificationConfigJsonField = "pushNotificationConfig";
-constexpr std::string_view kFlatPayloadTypeError = "JSON value does not match the request field type";
+constexpr std::string_view kEmptyJsonObject = "{}";
 
 bool HasJsonContentType(const HttpServerRequest& request) {
   const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
   return !content_type.has_value() || core::http::IsJsonContentType(*content_type);
-}
-
-bool IsValidIdType(const google::protobuf::Value& value) {
-  return value.kind_case() == ::google::protobuf::Value::kNullValue ||
-         value.kind_case() == ::google::protobuf::Value::kStringValue ||
-         value.kind_case() == ::google::protobuf::Value::kNumberValue;
 }
 
 bool IsMethod(std::string_view actual, std::string_view canonical, std::string_view legacy) {
@@ -165,198 +160,43 @@ std::optional<DispatcherOperation> MethodToOperation(std::string_view method) {
   return std::nullopt;
 }
 
-core::Result<google::protobuf::Struct> ParseJsonObject(std::string_view body) {
-  google::protobuf::Struct envelope;
-  const auto parsed = core::JsonToMessage(body, &envelope);
+template <typename T>
+core::Result<T> ParseProtoPayload(std::string_view params) {
+  T payload;
+  const auto parsed =
+      core::JsonToMessage(params, &payload, {.ignore_unknown_fields = true, .reject_duplicate_top_level_fields = true});
   if (!parsed.ok()) {
     return parsed.error();
   }
-  return envelope;
-}
-
-core::Result<google::protobuf::Value> FindIdField(const google::protobuf::Struct& envelope) {
-  const auto& fields = envelope.fields();
-  const auto id_it = fields.find("id");
-  if (id_it == fields.end() || !IsValidIdType(id_it->second)) {
-    return core::Error::Validation("JSON-RPC request id must be a string, number, or null");
-  }
-  return id_it->second;
-}
-
-core::Result<std::string> FindMethodField(const google::protobuf::Struct& envelope) {
-  const auto& fields = envelope.fields();
-  const auto method_it = fields.find("method");
-  if (method_it == fields.end() || method_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
-      method_it->second.string_value().empty()) {
-    return core::Error::Validation("JSON-RPC request method must be a non-empty string");
-  }
-  return method_it->second.string_value();
-}
-
-core::Result<google::protobuf::Struct> FindParamsField(const google::protobuf::Struct& envelope) {
-  const auto& fields = envelope.fields();
-  const auto params_it = fields.find("params");
-  if (params_it == fields.end()) {
-    return google::protobuf::Struct{};
-  }
-  if (!params_it->second.has_struct_value()) {
-    return core::Error::Validation("JSON-RPC request params must be an object");
-  }
-  return params_it->second.struct_value();
-}
-
-core::Result<void> ValidateJsonRpcVersion(const google::protobuf::Struct& envelope) {
-  const auto& fields = envelope.fields();
-  const auto version_it = fields.find("jsonrpc");
-  if (version_it == fields.end() || version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
-      version_it->second.string_value() != core::json_rpc::kVersion) {
-    return core::Error::Validation("JSON-RPC request has invalid version");
-  }
-  return {};
-}
-
-bool IsFlatPayloadDescriptor(const google::protobuf::Descriptor& descriptor) {
-  for (int index = 0; index < descriptor.field_count(); ++index) {
-    const auto* field = descriptor.field(index);
-    const auto type = field->cpp_type();
-    if (field->is_repeated() || field->real_containing_oneof() != nullptr ||
-        (type != google::protobuf::FieldDescriptor::CPPTYPE_STRING &&
-         type != google::protobuf::FieldDescriptor::CPPTYPE_BOOL &&
-         type != google::protobuf::FieldDescriptor::CPPTYPE_INT32)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool RequiresProtoJsonFallback(const google::protobuf::Struct& params, const google::protobuf::Descriptor& descriptor) {
-  const auto& fields = params.fields();
-  for (int index = 0; index < descriptor.field_count(); ++index) {
-    const auto* field = descriptor.field(index);
-    const auto proto_name_it = fields.find(field->name());
-    const auto json_name_it = field->json_name() == field->name() ? fields.end() : fields.find(field->json_name());
-    if (proto_name_it != fields.end() && json_name_it != fields.end()) {
-      return true;
-    }
-
-    const auto value_it = proto_name_it != fields.end() ? proto_name_it : json_name_it;
-    if (value_it != fields.end() && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_INT32 &&
-        value_it->second.kind_case() == google::protobuf::Value::kStringValue) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const google::protobuf::FieldDescriptor* FindJsonField(const google::protobuf::Descriptor& descriptor,
-                                                       std::string_view name) {
-  if (const auto* field = descriptor.FindFieldByName(std::string(name)); field != nullptr) {
-    return field;
-  }
-  for (int index = 0; index < descriptor.field_count(); ++index) {
-    const auto* field = descriptor.field(index);
-    if (field->json_name() == name) {
-      return field;
-    }
-  }
-  return nullptr;
-}
-
-core::Result<void> SetFlatPayloadField(google::protobuf::Message* payload,
-                                       const google::protobuf::FieldDescriptor& field,
-                                       const google::protobuf::Value& value) {
-  const auto invalid_type = [] { return core::Error::Serialization(std::string(kFlatPayloadTypeError)); };
-  const auto* reflection = payload->GetReflection();
-  if (field.cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_STRING) {
-    if (value.kind_case() != google::protobuf::Value::kStringValue) {
-      return invalid_type();
-    }
-    reflection->SetString(payload, &field, value.string_value());
-    return {};
-  }
-  if (field.cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_BOOL) {
-    if (value.kind_case() != google::protobuf::Value::kBoolValue) {
-      return invalid_type();
-    }
-    reflection->SetBool(payload, &field, value.bool_value());
-    return {};
-  }
-
-  const double number = value.number_value();
-  if (field.cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_INT32 ||
-      value.kind_case() != google::protobuf::Value::kNumberValue || !std::isfinite(number) ||
-      std::trunc(number) != number || number < std::numeric_limits<std::int32_t>::min() ||
-      number > std::numeric_limits<std::int32_t>::max()) {
-    return invalid_type();
-  }
-  reflection->SetInt32(payload, &field, static_cast<std::int32_t>(number));
-  return {};
-}
-
-template <typename T>
-core::Result<T> ParseFlatPayload(const google::protobuf::Struct& params) {
-  T payload;
-  const auto* descriptor = T::descriptor();
-  for (const auto& [name, value] : params.fields()) {
-    const auto* field = FindJsonField(*descriptor, name);
-    if (field == nullptr || value.kind_case() == google::protobuf::Value::kNullValue) {
-      continue;
-    }
-    const auto set_field = SetFlatPayloadField(&payload, *field, value);
-    if (!set_field.ok()) {
-      return set_field.error();
-    }
-  }
   return payload;
 }
 
-template <typename T>
-core::Result<T> ParseProtoPayload(const google::protobuf::Struct& params) {
-  static const bool is_flat_payload = IsFlatPayloadDescriptor(*T::descriptor());
-  if (is_flat_payload && !RequiresProtoJsonFallback(params, *T::descriptor())) {
-    return ParseFlatPayload<T>(params);
+core::Result<lf::a2a::v1::TaskPushNotificationConfig> ParseCreatePushConfigPayload(std::string_view params) {
+  core::internal::JsonDocument document;
+  const auto parsed = document.Parse(params);
+  if (!parsed.ok()) {
+    return parsed.error();
   }
-
-  const auto params_json = core::MessageToJson(params);
-  if (!params_json.ok()) {
-    return params_json.error();
-  }
-  T payload;
-  // Protobuf versions differ in whether they reject proto/JSON field aliases.
-  // Keep the flat-payload fallback's rejection independent of that parser.
-  const auto parse_payload =
-      core::JsonToMessage(params_json.value(), &payload,
-                          {.ignore_unknown_fields = true, .reject_duplicate_top_level_fields = is_flat_payload});
-  if (!parse_payload.ok()) {
-    return parse_payload.error();
-  }
-  return payload;
-}
-
-core::Result<lf::a2a::v1::TaskPushNotificationConfig> ParseCreatePushConfigPayload(
-    const google::protobuf::Struct& params) {
-  const auto& fields = params.fields();
-  const auto nested_config_it = fields.find(std::string(kPushNotificationConfigJsonField));
-  if (nested_config_it == fields.end()) {
+  const auto fields = document.root();
+  simdjson::dom::element nested;
+  if (fields[kPushNotificationConfigJsonField].get(nested) != simdjson::SUCCESS) {
     return ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(params);
   }
-  if (!nested_config_it->second.has_struct_value()) {
+  if (!nested.is_object()) {
     return core::Error::Validation("TaskPushNotificationConfig.pushNotificationConfig must be an object");
   }
-
-  auto payload = ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(nested_config_it->second.struct_value());
+  auto payload = ParseProtoPayload<lf::a2a::v1::TaskPushNotificationConfig>(
+      core::internal::JsonMember(params, kPushNotificationConfigJsonField));
   if (!payload.ok()) {
     return payload.error();
   }
-
-  const auto task_id_it = fields.find(std::string(kTaskIdJsonField));
-  if (task_id_it != fields.end()) {
-    if (task_id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+  simdjson::dom::element task_id;
+  if (fields[kTaskIdJsonField].get(task_id) == simdjson::SUCCESS) {
+    if (!task_id.is_string()) {
       return core::Error::Validation("TaskPushNotificationConfig.taskId must be a string");
     }
-    payload.value().set_task_id(task_id_it->second.string_value());
+    payload.value().set_task_id(std::string(std::string_view(task_id.get_string())));
   }
-
   return payload.value();
 }
 
@@ -505,7 +345,12 @@ core::Result<void> ApplyListTasksParsers(const google::protobuf::Struct& params,
   return ParseListTasksIncludeArtifacts(params, payload);
 }
 
-core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Struct& params) {
+core::Result<ListTasksRequest> ParseListTasksPayload(std::string_view json) {
+  google::protobuf::Struct params;
+  const auto parsed_json = core::JsonToMessage(json, &params);
+  if (!parsed_json.ok()) {
+    return parsed_json.error();
+  }
   ListTasksRequest payload;
   const auto parsed = ApplyListTasksParsers(params, &payload);
   if (!parsed.ok()) {
@@ -514,8 +359,7 @@ core::Result<ListTasksRequest> ParseListTasksPayload(const google::protobuf::Str
   return payload;
 }
 
-core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view method_name,
-                                                             const google::protobuf::Struct& params) {
+core::Result<DispatchRequest> BuildDispatchRequestFromMethod(std::string_view method_name, std::string_view params) {
   if (IsGetExtendedAgentCardMethod(method_name)) {
     auto payload = ParseProtoPayload<lf::a2a::v1::GetExtendedAgentCardRequest>(params);
     if (!payload.ok()) {
@@ -1156,32 +1000,36 @@ core::Result<JsonRpcServerTransport::JsonRpcEnvelope> JsonRpcServerTransport::Pa
 }
 
 core::Result<internal::JsonRpcEnvelope> internal::ParseJsonRpcEnvelope(std::string_view body) {
-  const auto envelope = ParseJsonObject(body);
-  if (!envelope.ok()) {
-    return envelope.error();
+  core::internal::JsonDocument document;
+  const auto parsed = document.ParseObject(body);
+  if (!parsed.ok()) {
+    return parsed.error();
   }
-
-  const auto version = ValidateJsonRpcVersion(envelope.value());
-  if (!version.ok()) {
-    return version.error();
+  const auto envelope = document.root();
+  std::string_view version;
+  if (envelope[core::json_rpc::kVersionMemberName].get_string().get(version) != simdjson::SUCCESS ||
+      version != core::json_rpc::kVersion) {
+    return core::Error::Validation("JSON-RPC request has invalid version");
   }
-
-  const auto id = FindIdField(envelope.value());
-  if (!id.ok()) {
-    return id.error();
+  simdjson::dom::element id;
+  if (envelope[core::json_rpc::kIdMemberName].get(id) != simdjson::SUCCESS ||
+      (!id.is_string() && !id.is_number() && !id.is_null())) {
+    return core::Error::Validation("JSON-RPC request id must be a string, number, or null");
   }
-
-  const auto method = FindMethodField(envelope.value());
-  if (!method.ok()) {
-    return method.error();
+  std::string_view method;
+  if (envelope[core::json_rpc::kMethodMemberName].get_string().get(method) != simdjson::SUCCESS || method.empty()) {
+    return core::Error::Validation("JSON-RPC request method must be a non-empty string");
   }
-
-  const auto params = FindParamsField(envelope.value());
-  if (!params.ok()) {
-    return params.error();
+  simdjson::dom::element params;
+  std::string params_json(kEmptyJsonObject);
+  if (envelope[core::json_rpc::kParamsMemberName].get(params) == simdjson::SUCCESS) {
+    if (!params.is_object()) {
+      return core::Error::Validation("JSON-RPC request params must be an object");
+    }
+    params_json = core::internal::JsonMember(body, core::json_rpc::kParamsMemberName);
   }
-
-  return JsonRpcEnvelope{.id = id.value(), .method = method.value(), .params = params.value()};
+  return JsonRpcEnvelope{
+      .id = core::internal::JsonToValue(id), .method = std::string(method), .params = std::move(params_json)};
 }
 
 core::Result<JsonRpcServerTransport::JsonRpcRequest> JsonRpcServerTransport::ParseRequest(

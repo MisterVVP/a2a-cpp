@@ -12,6 +12,12 @@ managed PostgreSQL schemas need the ordering-index migration. See the
 [ListTasks cursor contract](server/list-tasks-pagination.md) for compatibility,
 consistency and migration details.
 
+SDK JSON parsing now requires simdjson 3.0+ even when signing is disabled.
+The obsolete public `a2a/core/json_value.h` structural scanner was removed.
+General JSON input is limited to 64 MiB and nesting depth 128. See the
+[JSON parsing inventory](compatibility/json-parsing.md) for migration paths,
+protobuf compatibility exceptions, and ownership/input policies.
+
 The stable `v0.5.2` behavior and release notes below remain unchanged.
 
 ## Current documented release

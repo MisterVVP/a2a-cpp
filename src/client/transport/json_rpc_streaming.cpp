@@ -15,7 +15,6 @@
 #include "a2a/core/http_constants.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
-#include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
 #include "json_rpc_transport_internal.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
@@ -38,7 +37,6 @@ using json_rpc_internal::ToClientHttpResponse;
 using json_rpc_internal::ToSharedHttpRequest;
 using json_rpc_internal::ValidateResponseVersion;
 
-constexpr std::string_view kEmptyJsonObject = "{}";
 constexpr std::string_view kStreamingSuccessRequiresSseMessage =
     "JSON-RPC streaming success response must use text/event-stream";
 constexpr const char* kJsonRpcTransportName = "jsonrpc";
@@ -66,38 +64,13 @@ StreamCancellationRegistrar MakeStreamCancellationRegistrar(const std::shared_pt
 template <typename T>
 core::Result<T> ParseTypedResultPayload(std::string_view response_body, int response_status_code,
                                         std::string_view expected_id) {
-  const auto range = core::json::FindTopLevelObjectMemberValue(response_body, core::json_rpc::kResultMemberName);
-  if (!range.has_value()) {
-    const HttpClientResponse response{
-        .status_code = response_status_code, .headers = {}, .body = std::string(response_body)};
-    const auto result = ParseResponseResult(response, expected_id);
-    if (!result.ok()) {
-      return result.error();
-    }
-    return ParseResultMessage<T>(result.value(), response_status_code);
+  const HttpClientResponse response{
+      .status_code = response_status_code, .headers = {}, .body = std::string(response_body)};
+  const auto result = ParseResponseResult(response, expected_id);
+  if (!result.ok()) {
+    return result.error();
   }
-
-  const std::string_view prefix = response_body.substr(0, range->begin);
-  const std::string_view suffix = response_body.substr(range->end);
-  std::string validation_body;
-  validation_body.reserve(prefix.size() + kEmptyJsonObject.size() + suffix.size());
-  validation_body.append(prefix);
-  validation_body.append(kEmptyJsonObject);
-  validation_body.append(suffix);
-  const HttpClientResponse validation_response{
-      .status_code = response_status_code, .headers = {}, .body = std::move(validation_body)};
-  const auto validated = ParseResponseResult(validation_response, expected_id);
-  if (!validated.ok()) {
-    return validated.error();
-  }
-
-  T message;
-  const std::string_view result_json = response_body.substr(range->begin, range->end - range->begin);
-  const auto parsed = core::JsonToMessage(result_json, &message);
-  if (!parsed.ok()) {
-    return parsed.error().WithTransport(kJsonRpcTransportName).WithHttpStatus(response_status_code);
-  }
-  return message;
+  return ParseResultMessage<T>(result.value(), response_status_code);
 }
 
 bool HasSseContentType(const HeaderMap& headers) {

@@ -1,6 +1,7 @@
 # Installation and Build
 
-This page reflects the current build surface for the latest documented release.
+This page describes the current development build toward `v0.6.0`. In stable
+`v0.5.2`, simdjson is required only when signing is enabled.
 
 ## Choose an integration method
 
@@ -18,6 +19,7 @@ Install these tools before configuring the repository:
 - CMake 3.25 or newer.
 - A C++20 compiler: GCC, Clang, AppleClang, or Visual Studio 2022.
 - Protobuf with `protoc`.
+- simdjson 3.0 or newer (required even with signing disabled).
 - gRPC C++ with `grpc_cpp_plugin`.
 - libcurl when using the built-in HTTP, JSON-RPC, or SSE clients.
 - `clang-format` and `clang-tidy` for contributor validation.
@@ -38,7 +40,7 @@ The same script also supports Windows when run from Git Bash.
 ### macOS
 
 ```bash
-brew install cmake ninja protobuf grpc re2 abseil curl
+brew install cmake ninja protobuf grpc re2 abseil curl simdjson
 ```
 
 When enabling PostgreSQL-backed stores, also install the PostgreSQL client package:

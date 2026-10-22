@@ -58,18 +58,6 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   gtest_discover_tests(subscription_diagnostics_test)
 endif()
 
-add_executable(json_value_test
-  unit/json_value_test.cpp
-)
-
-target_link_libraries(json_value_test
-  PRIVATE
-    a2a::core
-    GTest::gtest_main
-)
-
-gtest_discover_tests(json_value_test)
-
 add_executable(non_copyable_test
   unit/non_copyable_test.cpp
 )

@@ -7,4 +7,4 @@ sudo_command=()
 if [[ "${EUID}" -ne 0 ]]; then
   sudo_command=(sudo)
 fi
-"${sudo_command[@]}" apt-get install -y --no-install-recommends libssl-dev libsimdjson-dev nginx openssl
+"${sudo_command[@]}" apt-get install -y --no-install-recommends libssl-dev nginx openssl

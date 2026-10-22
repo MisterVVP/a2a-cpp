@@ -74,30 +74,6 @@
   "BM_JsonRpcTransport_SuccessEnvelope": {
     "max_time_ns": 150000
   },
-  "BM_JsonValue_FindMissing_ListTasks/1": {
-    "max_time_ns": 180
-  },
-  "BM_JsonValue_FindMissing_ListTasks/200": {
-    "max_time_ns": 20100
-  },
-  "BM_JsonValue_FindMissing_ListTasks/200000": {
-    "max_time_ns": 19500000
-  },
-  "BM_JsonValue_FindMissing_ListTasks/20000000": {
-    "max_time_ns": 1910000000
-  },
-  "BM_JsonValue_FindResult_ListTasks/1": {
-    "max_time_ns": 179
-  },
-  "BM_JsonValue_FindResult_ListTasks/200": {
-    "max_time_ns": 19400
-  },
-  "BM_JsonValue_FindResult_ListTasks/200000": {
-    "max_time_ns": 19100000
-  },
-  "BM_JsonValue_FindResult_ListTasks/20000000": {
-    "max_time_ns": 1840000000
-  },
   "BM_ProtoJson_JsonToMessage_SendMessageRequest": {
     "max_time_ns": 20000
   },

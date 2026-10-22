@@ -488,7 +488,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: |
-          brew install cmake ninja protobuf grpc re2 abseil curl
+          brew install cmake ninja protobuf grpc re2 abseil curl simdjson
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DA2A_ENABLE_TESTING=ON \

@@ -49,6 +49,7 @@ install_debian_dependencies() {
     git
     protobuf-compiler
     libprotobuf-dev
+    libsimdjson-dev
     protobuf-compiler-grpc
     libgrpc++-dev
     libcurl4-openssl-dev

@@ -27,6 +27,7 @@
 - [Conformance and Compatibility](compatibility/conformance.md)
   - [Protocol Versions](compatibility/protocol-versions.md)
   - [Binding Compatibility](compatibility/bindings.md)
+  - [JSON Parsing](compatibility/json-parsing.md)
   - [Cross-SDK Interoperability](compatibility/interoperability.md)
 - [Examples](examples/overview.md)
   - [Example Applications](examples/apps.md)

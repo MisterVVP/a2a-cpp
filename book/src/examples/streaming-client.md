@@ -7,7 +7,7 @@
 The SDK always requires gRPC and Protobuf. This example also requires libcurl for the default HTTP+JSON and JSON-RPC streaming transports.
 
 - Debian/Ubuntu: run `./scripts/install_build_deps.sh`.
-- macOS: run `brew install cmake ninja protobuf grpc re2 abseil curl`.
+- macOS: run `brew install cmake ninja protobuf grpc re2 abseil curl simdjson`.
 - Windows: use Visual Studio 2022 with the Desktop development with C++ workload and Git for Windows. Run `./scripts/install_build_deps.sh` from Git Bash.
 
 ## Build the client and example server

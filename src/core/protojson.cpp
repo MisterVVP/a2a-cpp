@@ -6,421 +6,299 @@
 #include <google/protobuf/descriptor.h>
 #include <google/protobuf/struct.pb.h>
 #include <google/protobuf/util/json_util.h>
+#include <google/protobuf/wrappers.pb.h>
 
 #include <algorithm>
-#include <array>
-#include <cstddef>
+#include <charconv>
 #include <cstdint>
-#include <cstring>
-#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
+
+#include "json.h"
 
 namespace a2a::core {
 namespace {
 
-constexpr std::string_view kNullLiteral = "null";
-constexpr std::string_view kDuplicateFieldError = "ProtoJSON object contains duplicate fields";
-constexpr std::size_t kMaximumTrackedJsonDepth = 128U;
-constexpr std::size_t kMaximumTrackedProtoFields = 64U;
+using Field = google::protobuf::FieldDescriptor;
+using Descriptor = google::protobuf::Descriptor;
+using Element = simdjson::ondemand::value;
+using internal::JsonRead;
+constexpr std::string_view kInvalidField = "JSON value does not match the protobuf field type";
+constexpr std::string_view kDuplicateField = "ProtoJSON object contains duplicate fields";
+constexpr std::string_view kUnknownField = "Unknown ProtoJSON field";
+constexpr std::string_view kNullField = "ProtoJSON field must not be null";
+constexpr std::string_view kNullElement = "ProtoJSON repeated field must not contain null";
 
-enum class DuplicateFieldScanResult : std::uint8_t {
-  kClean,
-  kDuplicate,
-  kNeedsFallback,
-};
+[[noreturn]] void Reject(std::string_view reason) { throw std::invalid_argument(std::string(reason)); }
 
-struct ScannedJsonField final {
-  DuplicateFieldScanResult result;
-  const google::protobuf::Descriptor* message_descriptor;
-};
-
-[[nodiscard]] bool SkipJsonString(const char*& current, const char* end) noexcept {
-  if (current == end || *current != '"') {
-    return false;
-  }
-  ++current;
-  while (current != end) {
-    if (*current == '"') {
-      ++current;
-      return true;
-    }
-    if (*current == '\\') {
-      ++current;
-      if (current == end) {
-        return false;
-      }
-    }
-    ++current;
-  }
-  return false;
-}
-
-[[nodiscard]] bool IsBoundaryNullDepth(const std::array<char, kMaximumTrackedJsonDepth>& containers,
-                                       std::size_t depth) noexcept {
-  if (depth == 1U) {
-    return containers[0] == '{';
-  }
-  return depth == 2U && containers[0] == '{' && containers[1] == '[';
-}
-
-[[nodiscard]] bool HasBoundaryNullCandidate(std::string_view json) noexcept {
-  if (json.find(kNullLiteral) == std::string_view::npos) {
-    return false;
-  }
-
-  std::array<char, kMaximumTrackedJsonDepth> containers{};
-  std::size_t depth = 0U;
-  const char* current = json.data();
-  const char* const end = current + json.size();
-
-  while (current != end) {
-    if (*current == '"') {
-      if (!SkipJsonString(current, end)) {
-        return true;
-      }
-      continue;
-    }
-    if (*current == '{' || *current == '[') {
-      if (depth == containers.size()) {
-        return true;
-      }
-      containers[depth++] = *current++;
-      continue;
-    }
-    if (*current == '}' || *current == ']') {
-      if (depth == 0U) {
-        return true;
-      }
-      --depth;
-      ++current;
-      continue;
-    }
-    const auto remaining = static_cast<std::size_t>(end - current);
-    if (IsBoundaryNullDepth(containers, depth) && remaining >= kNullLiteral.size() &&
-        std::memcmp(current, kNullLiteral.data(), kNullLiteral.size()) == 0) {
-      return true;
-    }
-    ++current;
-  }
-  return false;
-}
-
-[[nodiscard]] const google::protobuf::FieldDescriptor* FindJsonField(const google::protobuf::Descriptor& descriptor,
-                                                                     std::string_view name) {
+const Field* FindField(const Descriptor& descriptor, std::string_view name) {
   for (int index = 0; index < descriptor.field_count(); ++index) {
     const auto* field = descriptor.field(index);
-    if (field->json_name() == name || field->name() == name) {
+    if (field->name() == name || field->json_name() == name) {
       return field;
     }
   }
   return nullptr;
 }
 
-void SkipJsonWhitespace(const char*& current, const char* end) noexcept {
-  while (current != end && (*current == ' ' || *current == '\t' || *current == '\n' || *current == '\r')) {
-    ++current;
+// Protobuf remains the semantic decoder for uncommon scalar types and
+// well-known types. Keeping this narrow fallback avoids a second base64,
+// timestamp, Any, or 64-bit numeric compatibility implementation.
+bool NeedsProtobufDecoder(const Descriptor& descriptor) {
+  if (descriptor.well_known_type() != Descriptor::WELLKNOWNTYPE_UNSPECIFIED) {
+    return true;
+  }
+  for (int index = 0; index < descriptor.field_count(); ++index) {
+    const auto* field = descriptor.field(index);
+    if ((field->is_map() && field->message_type()->map_key()->cpp_type() != Field::CPPTYPE_STRING) ||
+        (field->is_map() && NeedsProtobufDecoder(*field->message_type())) ||
+        (field->cpp_type() != Field::CPPTYPE_STRING && field->cpp_type() != Field::CPPTYPE_BOOL &&
+         field->cpp_type() != Field::CPPTYPE_INT32 && field->cpp_type() != Field::CPPTYPE_ENUM &&
+         field->cpp_type() != Field::CPPTYPE_MESSAGE)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::int32_t ReadInt32(Element value) {
+  const auto raw = JsonRead(simdjson::to_json_string(value));
+  std::int32_t number = 0;
+  const auto result = std::from_chars(raw.data(), raw.data() + raw.size(), number);
+  if (result.ec == std::errc{} && result.ptr == raw.data() + raw.size()) {
+    return number;
+  }
+  // Quoted integers and exponent notation follow protobuf's exact range and
+  // integrality rules, including decimal tokens that binary64 would round.
+  google::protobuf::Int32Value parsed;
+  const auto status = google::protobuf::util::JsonStringToMessage(std::string(raw), &parsed);
+  if (!status.ok()) {
+    Reject(kInvalidField);
+  }
+  return parsed.value();
+}
+
+std::string ReadString(Element value, const Field& field) {
+  if (field.type() != Field::TYPE_BYTES) {
+    return std::string(JsonRead(value.get_string()));
+  }
+  google::protobuf::BytesValue bytes;
+  const auto raw = JsonRead(simdjson::to_json_string(value));
+  const auto status = google::protobuf::util::JsonStringToMessage(std::string(raw), &bytes);
+  if (!status.ok()) {
+    Reject(status.ToString());
+  }
+  return std::move(*bytes.mutable_value());
+}
+
+bool ContainsNull(simdjson::dom::element value) {
+  if (value.is_null()) {
+    return true;
+  }
+  if (value.is_array()) {
+    return std::ranges::any_of(value.get_array(), [](const auto child) { return ContainsNull(child); });
+  }
+  if (value.is_object()) {
+    return std::ranges::any_of(value.get_object(), [](const auto member) { return ContainsNull(member.value); });
+  }
+  return false;
+}
+
+void DecodeMessage(Element value, google::protobuf::Message* message, const ProtoJsonParseOptions& options);
+
+void DecodeSingleField(Element value, google::protobuf::Message* message, const Field& field,
+                       const ProtoJsonParseOptions& options) {
+  const auto* reflection = message->GetReflection();
+  switch (field.cpp_type()) {
+    case Field::CPPTYPE_MESSAGE:
+      DecodeMessage(
+          value,
+          field.is_repeated() ? reflection->AddMessage(message, &field) : reflection->MutableMessage(message, &field),
+          options);
+      return;
+    case Field::CPPTYPE_STRING: {
+      const std::string text = ReadString(value, field);
+      if (field.is_repeated()) {
+        reflection->AddString(message, &field, text);
+      } else {
+        reflection->SetString(message, &field, text);
+      }
+      return;
+    }
+    case Field::CPPTYPE_BOOL:
+      if (field.is_repeated()) {
+        reflection->AddBool(message, &field, JsonRead(value.get_bool()));
+      } else {
+        reflection->SetBool(message, &field, JsonRead(value.get_bool()));
+      }
+      return;
+    case Field::CPPTYPE_INT32:
+      if (field.is_repeated()) {
+        reflection->AddInt32(message, &field, ReadInt32(value));
+      } else {
+        reflection->SetInt32(message, &field, ReadInt32(value));
+      }
+      return;
+    case Field::CPPTYPE_ENUM: {
+      int number = 0;
+      if (JsonRead(value.type()) == simdjson::ondemand::json_type::string) {
+        const auto* entry = field.enum_type()->FindValueByName(std::string(JsonRead(value.get_string())));
+        if (entry == nullptr) {
+          if (options.ignore_unknown_fields) {
+            return;
+          }
+          Reject(kInvalidField);
+        }
+        number = entry->number();
+      } else {
+        number = ReadInt32(value);
+      }
+      if (field.is_repeated()) {
+        reflection->AddEnumValue(message, &field, number);
+      } else {
+        reflection->SetEnumValue(message, &field, number);
+      }
+      return;
+    }
+    default:
+      Reject(kInvalidField);
   }
 }
 
-[[nodiscard]] DuplicateFieldScanResult TrackKnownField(
-    const google::protobuf::FieldDescriptor* field,
-    std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields>* seen_fields,
-    std::size_t* seen_field_count) {
-  if (field == nullptr) {
-    return DuplicateFieldScanResult::kClean;
-  }
-  const auto seen = std::span(*seen_fields).first(*seen_field_count);
-  if (std::ranges::find(seen, field) != seen.end()) {
-    return DuplicateFieldScanResult::kDuplicate;
-  }
-  if (*seen_field_count == seen_fields->size()) {
-    return DuplicateFieldScanResult::kNeedsFallback;
-  }
-  (*seen_fields)[(*seen_field_count)++] = field;
-  return DuplicateFieldScanResult::kClean;
-}
-
-[[nodiscard]] ScannedJsonField ScanJsonObjectField(
-    const char*& current, const char* end, const google::protobuf::Descriptor* descriptor,
-    std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields>* seen_fields,
-    std::size_t* seen_field_count) {
-  if (current == end || *current != '"') {
-    return {.result = DuplicateFieldScanResult::kNeedsFallback, .message_descriptor = nullptr};
-  }
-
-  const char* const key_begin = current + 1;
-  if (!SkipJsonString(current, end)) {
-    return {.result = DuplicateFieldScanResult::kNeedsFallback, .message_descriptor = nullptr};
-  }
-  const char* const key_end = current - 1;
-  const auto key_size = static_cast<std::size_t>(key_end - key_begin);
-  if (std::memchr(key_begin, '\\', key_size) != nullptr) {
-    return {.result = DuplicateFieldScanResult::kNeedsFallback, .message_descriptor = nullptr};
-  }
-
-  const auto name = std::string_view(key_begin, key_size);
-  const auto* field = descriptor != nullptr ? FindJsonField(*descriptor, name) : nullptr;
-  const auto field_result = TrackKnownField(field, seen_fields, seen_field_count);
-  if (field_result != DuplicateFieldScanResult::kClean) {
-    return {.result = field_result, .message_descriptor = nullptr};
-  }
-  const auto* message_descriptor =
-      field != nullptr && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_MESSAGE
-          ? field->message_type()
-          : nullptr;
-  return {.result = DuplicateFieldScanResult::kClean, .message_descriptor = message_descriptor};
-}
-
-[[nodiscard]] DuplicateFieldScanResult ScanJsonValue(const char*& current, const char* end,
-                                                     const google::protobuf::Descriptor* message_descriptor,
-                                                     std::size_t depth);
-
-[[nodiscard]] DuplicateFieldScanResult ScanJsonObject(const char*& current, const char* end,
-                                                      const google::protobuf::Descriptor* descriptor,
-                                                      std::size_t depth) {
-  if (depth >= kMaximumTrackedJsonDepth || current == end || *current != '{') {
-    return DuplicateFieldScanResult::kNeedsFallback;
-  }
-  ++current;
-
-  std::array<const google::protobuf::FieldDescriptor*, kMaximumTrackedProtoFields> seen_fields;
-  std::size_t seen_field_count = 0U;
-
-  while (current != end) {
-    SkipJsonWhitespace(current, end);
-    if (current != end && *current == '}') {
-      ++current;
-      return DuplicateFieldScanResult::kClean;
+void DecodeField(Element value, google::protobuf::Message* message, const Field& field,
+                 const ProtoJsonParseOptions& options) {
+  if (field.is_map()) {
+    const auto* key = field.message_type()->map_key();
+    const auto* map_value = field.message_type()->map_value();
+    // Non-string map keys use protobuf's numeric/bool key semantics.
+    if (key->cpp_type() != Field::CPPTYPE_STRING) {
+      Reject(kInvalidField);
     }
-
-    const auto field = ScanJsonObjectField(current, end, descriptor, &seen_fields, &seen_field_count);
-    if (field.result != DuplicateFieldScanResult::kClean) {
-      return field.result;
+    for (auto member_result : JsonRead(value.get_object())) {
+      auto member = JsonRead(std::move(member_result));
+      const auto name = JsonRead(member.unescaped_key());
+      auto member_value = member.value();
+      auto* entry = message->GetReflection()->AddMessage(message, &field);
+      entry->GetReflection()->SetString(entry, key, std::string(name));
+      if (JsonRead(member_value.is_null())) {
+        Reject(kNullElement);
+      }
+      DecodeSingleField(member_value, entry, *map_value, options);
     }
-
-    SkipJsonWhitespace(current, end);
-    if (current == end || *current != ':') {
-      return DuplicateFieldScanResult::kNeedsFallback;
-    }
-    ++current;
-
-    const auto value_result = ScanJsonValue(current, end, field.message_descriptor, depth + 1U);
-    if (value_result != DuplicateFieldScanResult::kClean) {
-      return value_result;
-    }
-
-    SkipJsonWhitespace(current, end);
-    if (current == end) {
-      return DuplicateFieldScanResult::kNeedsFallback;
-    }
-    if (*current == '}') {
-      ++current;
-      return DuplicateFieldScanResult::kClean;
-    }
-    if (*current != ',') {
-      return DuplicateFieldScanResult::kNeedsFallback;
-    }
-    ++current;
-  }
-  return DuplicateFieldScanResult::kNeedsFallback;
-}
-
-[[nodiscard]] DuplicateFieldScanResult ScanJsonArray(const char*& current, const char* end,
-                                                     const google::protobuf::Descriptor* element_descriptor,
-                                                     std::size_t depth) {
-  if (depth >= kMaximumTrackedJsonDepth || current == end || *current != '[') {
-    return DuplicateFieldScanResult::kNeedsFallback;
-  }
-  ++current;
-
-  while (current != end) {
-    SkipJsonWhitespace(current, end);
-    if (current != end && *current == ']') {
-      ++current;
-      return DuplicateFieldScanResult::kClean;
-    }
-
-    const auto value_result = ScanJsonValue(current, end, element_descriptor, depth + 1U);
-    if (value_result != DuplicateFieldScanResult::kClean) {
-      return value_result;
-    }
-
-    SkipJsonWhitespace(current, end);
-    if (current == end) {
-      return DuplicateFieldScanResult::kNeedsFallback;
-    }
-    if (*current == ']') {
-      ++current;
-      return DuplicateFieldScanResult::kClean;
-    }
-    if (*current != ',') {
-      return DuplicateFieldScanResult::kNeedsFallback;
-    }
-    ++current;
-  }
-  return DuplicateFieldScanResult::kNeedsFallback;
-}
-
-[[nodiscard]] DuplicateFieldScanResult ScanJsonValue(const char*& current, const char* end,
-                                                     const google::protobuf::Descriptor* message_descriptor,
-                                                     std::size_t depth) {
-  SkipJsonWhitespace(current, end);
-  if (current == end) {
-    return DuplicateFieldScanResult::kNeedsFallback;
-  }
-  if (*current == '{') {
-    return ScanJsonObject(current, end, message_descriptor, depth);
-  }
-  if (*current == '[') {
-    return ScanJsonArray(current, end, message_descriptor, depth);
-  }
-  if (*current == '"') {
-    return SkipJsonString(current, end) ? DuplicateFieldScanResult::kClean : DuplicateFieldScanResult::kNeedsFallback;
-  }
-
-  const char* const value_begin = current;
-  while (current != end && *current != ',' && *current != ']' && *current != '}' && *current != ' ' &&
-         *current != '\t' && *current != '\n' && *current != '\r') {
-    ++current;
-  }
-  return current != value_begin ? DuplicateFieldScanResult::kClean : DuplicateFieldScanResult::kNeedsFallback;
-}
-
-[[nodiscard]] DuplicateFieldScanResult ScanDuplicateMessageFields(std::string_view json,
-                                                                  const google::protobuf::Descriptor& descriptor) {
-  const char* current = json.data();
-  const char* const end = current + json.size();
-  const auto result = ScanJsonValue(current, end, &descriptor, 0U);
-  if (result != DuplicateFieldScanResult::kClean) {
-    return result;
-  }
-  SkipJsonWhitespace(current, end);
-  return current == end ? DuplicateFieldScanResult::kClean : DuplicateFieldScanResult::kNeedsFallback;
-}
-
-[[nodiscard]] bool RepeatedMessageContainsNull(const google::protobuf::FieldDescriptor& field,
-                                               const google::protobuf::Value& value) {
-  if (!field.is_repeated() || field.cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_MESSAGE ||
-      value.kind_case() != google::protobuf::Value::kListValue) {
-    return false;
-  }
-  return std::ranges::any_of(value.list_value().values(), [](const auto& element) {
-    return element.kind_case() == google::protobuf::Value::kNullValue;
-  });
-}
-
-[[nodiscard]] Error BuildNullFieldError(std::string_view name, bool repeated_element) {
-  std::string message = repeated_element ? "ProtoJSON repeated message field must not contain null: "
-                                         : "ProtoJSON field must not be null: ";
-  message.append(name);
-  return Error::Serialization(std::move(message));
-}
-
-[[nodiscard]] Error BuildDuplicateFieldError() { return Error::Serialization(std::string(kDuplicateFieldError)); }
-
-Result<void> ValidateDuplicateAliases(const google::protobuf::Struct& object,
-                                      const google::protobuf::Descriptor& descriptor);
-
-Result<void> ValidateNestedDuplicateAliases(const google::protobuf::FieldDescriptor& field,
-                                            const google::protobuf::Value& value) {
-  if (field.cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_MESSAGE) {
-    return {};
+    return;
   }
   if (field.is_repeated()) {
-    if (value.kind_case() != google::protobuf::Value::kListValue) {
-      return {};
-    }
-    for (const auto& element : value.list_value().values()) {
-      if (element.kind_case() != google::protobuf::Value::kStructValue) {
-        continue;
+    for (auto element_result : JsonRead(value.get_array())) {
+      auto element = JsonRead(element_result);
+      if (JsonRead(element.is_null())) {
+        Reject(kNullElement);
       }
-      const auto nested = ValidateDuplicateAliases(element.struct_value(), *field.message_type());
-      if (!nested.ok()) {
-        return nested.error();
-      }
+      DecodeSingleField(element, message, field, options);
     }
-    return {};
+    return;
   }
-  if (value.kind_case() != google::protobuf::Value::kStructValue) {
-    return {};
-  }
-  return ValidateDuplicateAliases(value.struct_value(), *field.message_type());
+  DecodeSingleField(value, message, field, options);
 }
 
-Result<void> ValidateDuplicateAliases(const google::protobuf::Struct& object,
-                                      const google::protobuf::Descriptor& descriptor) {
-  std::vector<const google::protobuf::FieldDescriptor*> seen_fields;
-  seen_fields.reserve(static_cast<std::size_t>(descriptor.field_count()));
+void ValidateField(bool is_null, const Field& field, const std::vector<const Field*>& seen,
+                   const ProtoJsonParseOptions& options, bool root) {
+  if (options.reject_duplicate_top_level_fields && std::ranges::find(seen, &field) != seen.end()) {
+    Reject(kDuplicateField);
+  }
+  if (is_null && root && options.reject_top_level_null_fields) {
+    Reject(kNullField);
+  }
+}
 
-  for (const auto& [name, value] : object.fields()) {
-    const auto* field = FindJsonField(descriptor, name);
+void ValidateFields(simdjson::dom::element value, const Descriptor& descriptor, const ProtoJsonParseOptions& options,
+                    bool root);
+
+void ValidateNestedField(simdjson::dom::element value, const Field& field, const ProtoJsonParseOptions& options,
+                         bool root) {
+  if (field.cpp_type() != Field::CPPTYPE_MESSAGE) {
+    return;
+  }
+  if (field.is_map() && value.is_object()) {
+    const auto* map_value = field.message_type()->map_value();
+    if (map_value->cpp_type() == Field::CPPTYPE_MESSAGE) {
+      for (const auto entry : value.get_object()) {
+        ValidateFields(entry.value, *map_value->message_type(), options, false);
+      }
+    }
+  } else if (field.is_repeated() && value.is_array()) {
+    for (const auto element : value.get_array()) {
+      if (root && options.reject_top_level_null_fields && element.is_null()) {
+        Reject(kNullElement);
+      }
+      ValidateFields(element, *field.message_type(), options, false);
+    }
+  } else {
+    ValidateFields(value, *field.message_type(), options, false);
+  }
+}
+
+void ValidateFields(simdjson::dom::element value, const Descriptor& descriptor, const ProtoJsonParseOptions& options,
+                    bool root) {
+  if (!value.is_object() || descriptor.well_known_type() != Descriptor::WELLKNOWNTYPE_UNSPECIFIED) {
+    return;
+  }
+  std::vector<const Field*> seen;
+  seen.reserve(static_cast<std::size_t>(descriptor.field_count()));
+  for (const auto member : value.get_object()) {
+    const auto* field = FindField(descriptor, member.key);
     if (field == nullptr) {
       continue;
     }
-    if (std::ranges::find(seen_fields, field) != seen_fields.end()) {
-      return BuildDuplicateFieldError();
-    }
-    seen_fields.push_back(field);
-
-    const auto nested = ValidateNestedDuplicateAliases(*field, value);
-    if (!nested.ok()) {
-      return nested.error();
-    }
+    ValidateField(member.value.is_null(), *field, seen, options, root);
+    seen.push_back(field);
+    ValidateNestedField(member.value, *field, options, root);
   }
-  return {};
 }
 
-Result<void> ValidateRejectedNullFields(const google::protobuf::Struct& object,
-                                        const google::protobuf::Descriptor& descriptor) {
-  for (const auto& [name, value] : object.fields()) {
-    const auto* field = FindJsonField(descriptor, name);
+void DecodeMessage(Element value, google::protobuf::Message* message, const ProtoJsonParseOptions& options) {
+  const auto& descriptor = *message->GetDescriptor();
+  if (NeedsProtobufDecoder(descriptor)) {
+    const auto raw = JsonRead(simdjson::to_json_string(value));
+    if (descriptor.well_known_type() == Descriptor::WELLKNOWNTYPE_VALUE ||
+        descriptor.well_known_type() == Descriptor::WELLKNOWNTYPE_STRUCT ||
+        descriptor.well_known_type() == Descriptor::WELLKNOWNTYPE_LISTVALUE) {
+      const auto parsed = JsonToMessage(raw, message, options);
+      if (!parsed.ok()) {
+        Reject(parsed.error().message());
+      }
+      return;
+    }
+    google::protobuf::util::JsonParseOptions parse_options;
+    parse_options.ignore_unknown_fields = options.ignore_unknown_fields;
+    const auto status = google::protobuf::util::JsonStringToMessage(std::string(raw), message, parse_options);
+    if (!status.ok()) {
+      Reject(status.ToString());
+    }
+    return;
+  }
+  for (auto member_result : JsonRead(value.get_object())) {
+    auto member = JsonRead(std::move(member_result));
+    const auto name = JsonRead(member.unescaped_key());
+    auto member_value = member.value();
+    const auto* field = FindField(descriptor, name);
     if (field == nullptr) {
+      if (!options.ignore_unknown_fields) {
+        Reject(kUnknownField);
+      }
       continue;
     }
-    if (value.kind_case() == google::protobuf::Value::kNullValue) {
-      return BuildNullFieldError(name, false);
+    const bool is_null = JsonRead(member_value.is_null());
+    if (is_null) {
+      continue;
     }
-    if (RepeatedMessageContainsNull(*field, value)) {
-      return BuildNullFieldError(name, true);
+    const auto* oneof = field->real_containing_oneof();
+    if (oneof != nullptr && message->GetReflection()->HasOneof(*message, oneof)) {
+      Reject(kDuplicateField);
     }
+    DecodeField(member_value, message, *field, options);
   }
-  return {};
-}
-
-Result<void> ValidateTopLevelFields(std::string_view json, const google::protobuf::Message& message,
-                                    const ProtoJsonParseOptions& options) {
-  const auto& descriptor = *message.GetDescriptor();
-  const auto duplicate_scan = options.reject_duplicate_top_level_fields ? ScanDuplicateMessageFields(json, descriptor)
-                                                                        : DuplicateFieldScanResult::kClean;
-  if (duplicate_scan == DuplicateFieldScanResult::kDuplicate) {
-    return BuildDuplicateFieldError();
-  }
-
-  const bool null_candidate = options.reject_top_level_null_fields && HasBoundaryNullCandidate(json);
-  const bool duplicate_fallback = duplicate_scan == DuplicateFieldScanResult::kNeedsFallback;
-  if (!null_candidate && !duplicate_fallback) {
-    return {};
-  }
-
-  google::protobuf::Struct object;
-  const auto object_status = google::protobuf::util::JsonStringToMessage(std::string(json), &object);
-  if (!object_status.ok()) {
-    return Error::Serialization(object_status.ToString());
-  }
-
-  if (duplicate_fallback) {
-    const auto duplicate_validation = ValidateDuplicateAliases(object, descriptor);
-    if (!duplicate_validation.ok()) {
-      return duplicate_validation.error();
-    }
-  }
-  if (!options.reject_top_level_null_fields) {
-    return {};
-  }
-  return ValidateRejectedNullFields(object, descriptor);
 }
 
 }  // namespace
@@ -450,23 +328,41 @@ Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* mes
   if (message == nullptr) {
     return Error::Validation("ProtoJSON parse target cannot be null");
   }
-
-  if (options.reject_top_level_null_fields || options.reject_duplicate_top_level_fields) {
-    const auto top_level_validation = ValidateTopLevelFields(json, *message, options);
-    if (!top_level_validation.ok()) {
-      return top_level_validation.error();
+  internal::JsonDocument document;
+  const auto parsed = document.Parse(json);
+  if (!parsed.ok()) {
+    return parsed.error();
+  }
+  try {
+    if (options.reject_top_level_null_fields || options.reject_duplicate_top_level_fields) {
+      ValidateFields(document.root(), *message->GetDescriptor(), options, true);
     }
+    message->Clear();
+    const auto type = message->GetDescriptor()->well_known_type();
+    if (type == Descriptor::WELLKNOWNTYPE_VALUE) {
+      message->CopyFrom(internal::JsonToValue(document.root()));
+    } else if (type == Descriptor::WELLKNOWNTYPE_STRUCT && document.root().is_object()) {
+      message->CopyFrom(internal::JsonToValue(document.root()).struct_value());
+    } else if (type == Descriptor::WELLKNOWNTYPE_LISTVALUE && document.root().is_array()) {
+      message->CopyFrom(internal::JsonToValue(document.root()).list_value());
+    } else if (NeedsProtobufDecoder(*message->GetDescriptor()) ||
+               (json.find("null") != std::string_view::npos && ContainsNull(document.root()))) {
+      google::protobuf::util::JsonParseOptions parse_options;
+      parse_options.ignore_unknown_fields = options.ignore_unknown_fields;
+      const auto status = google::protobuf::util::JsonStringToMessage(std::string(json), message, parse_options);
+      if (!status.ok()) {
+        Reject(status.ToString());
+      }
+    } else {
+      internal::JsonCursor cursor(json);
+      DecodeMessage(JsonRead(cursor.root().get_value()), message, options);
+    }
+    return {};
+  } catch (const simdjson::simdjson_error& error) {
+    return Error::Serialization(error.what());
+  } catch (const std::invalid_argument& error) {
+    return Error::Serialization(error.what());
   }
-
-  google::protobuf::util::JsonParseOptions parse_options;
-  parse_options.ignore_unknown_fields = options.ignore_unknown_fields;
-
-  const auto status = google::protobuf::util::JsonStringToMessage(std::string(json), message, parse_options);
-  if (!status.ok()) {
-    return Error::Serialization(status.ToString());
-  }
-
-  return {};
 }
 
 }  // namespace a2a::core
