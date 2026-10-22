@@ -72,7 +72,7 @@ class InMemoryTaskStore final : public TaskStore {
   struct CursorOrder {
     bool operator()(const ListTaskCursor& lhs, const ListTaskCursor& rhs) const { return ListCursorPrecedes(lhs, rhs); }
   };
-  void TouchTask(std::size_t index);
+  [[nodiscard]] core::Result<void> TouchTask(std::size_t index);
   UpdateClock update_clock_;
   std::vector<std::int64_t> updated_at_;
   std::set<ListTaskCursor, CursorOrder> update_order_;

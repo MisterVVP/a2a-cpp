@@ -48,6 +48,97 @@ constexpr std::string_view kLastHistoryMessageId = "message-2";
 constexpr int kUnknownTaskFieldNumber = 1000;
 constexpr std::uint64_t kUnknownTaskFieldValue = 42;
 
+constexpr auto kMaximumUpdateTime = std::numeric_limits<std::int64_t>::max();
+constexpr char kTimestampLimitMessageId[] = "timestamp-limit-new-message";
+constexpr char kBinaryCursorId[] = "cursor:\0boundary";
+
+class TimestampLimitTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    const auto task = MakeInitialTask();
+    ASSERT_TRUE(store_.CreateOrUpdate(task).ok());
+    const auto snapshot = store_.GetSnapshot(kFirstTaskId);
+    ASSERT_TRUE(snapshot.ok());
+    original_ = snapshot.value();
+  }
+  static lf::a2a::v1::Task MakeInitialTask() {
+    lf::a2a::v1::Task task;
+    task.set_id(std::string(kFirstTaskId));
+    task.set_context_id(std::string(kContextAlpha));
+    task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+    task.add_history()->set_message_id(kTimestampLimitMessageId);
+    return task;
+  }
+  template <typename T>
+  static void ExpectExhaustedTimestamp(const a2a::core::Result<T>& result) {
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code(), a2a::core::ErrorCode::kInternal);
+  }
+  void ExpectUnchanged() {
+    const auto actual = store_.GetSnapshot(kFirstTaskId);
+    ASSERT_TRUE(actual.ok());
+    EXPECT_EQ(actual.value().revision, original_.revision);
+    EXPECT_EQ(actual.value().task.SerializeAsString(), original_.task.SerializeAsString());
+    ExpectMaximumTimestamp();
+  }
+  void ExpectMaximumTimestamp() {
+    const auto listed = store_.List({});
+    ASSERT_TRUE(listed.ok());
+    ASSERT_EQ(listed.value().task_cursors.size(), 1U);
+    EXPECT_EQ(listed.value().task_cursors.front().updated_at, kMaximumUpdateTime);
+  }
+  a2a::server::InMemoryTaskStore store_{nullptr, [] { return kMaximumUpdateTime; }};
+  a2a::server::TaskStore::TaskSnapshot original_;
+};
+
+TEST_F(TimestampLimitTest, ReplacementFailsWithoutChangingTaskOrRevision) {
+  auto changed = original_.task;
+  changed.set_context_id(std::string(kContextBeta));
+  ExpectExhaustedTimestamp(store_.CreateOrUpdate(changed));
+  ExpectUnchanged();
+}
+
+TEST_F(TimestampLimitTest, ConditionalReplacementFailsWithoutChangingTaskOrRevision) {
+  auto changed = original_.task;
+  changed.set_context_id(std::string(kContextBeta));
+  ExpectExhaustedTimestamp(store_.CreateOrUpdateIfRevision(changed, original_.revision));
+  ExpectUnchanged();
+}
+
+TEST_F(TimestampLimitTest, CancellationFailsWithoutChangingTaskOrRevision) {
+  ExpectExhaustedTimestamp(store_.Cancel(kFirstTaskId));
+  ExpectUnchanged();
+}
+
+TEST_F(TimestampLimitTest, HistoryAppendFailsWithoutChangingTaskOrRevision) {
+  lf::a2a::v1::Message message;
+  message.set_message_id(std::string(kLastHistoryMessageId));
+  ExpectExhaustedTimestamp(
+      store_.AppendTaskHistory(kFirstTaskId, message, a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId));
+  ExpectUnchanged();
+}
+
+TEST_F(TimestampLimitTest, DuplicateHistoryRemainsANonmutatingSuccess) {
+  const auto result = store_.AppendTaskHistory(kFirstTaskId, original_.task.history(0),
+                                               a2a::server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
+  EXPECT_TRUE(result.ok());
+  ExpectUnchanged();
+  EXPECT_EQ(store_.GetHistoryTelemetrySnapshot().dedupe_dropped_total, 1U);
+}
+
+TEST(InMemoryTaskStoreUnitTest, LastAvailableTimestampIncrementSucceedsBeforeExhaustion) {
+  a2a::server::InMemoryTaskStore store(nullptr, [] { return kMaximumUpdateTime - 1; });
+  lf::a2a::v1::Task task;
+  task.set_id(std::string(kFirstTaskId));
+  ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  ASSERT_TRUE(store.CreateOrUpdate(task).ok());
+  const auto listed = store.List({});
+  ASSERT_TRUE(listed.ok());
+  ASSERT_EQ(listed.value().task_cursors.size(), 1U);
+  EXPECT_EQ(listed.value().task_cursors.front().updated_at, kMaximumUpdateTime);
+  EXPECT_FALSE(store.CreateOrUpdate(task).ok());
+}
+
 class RecordingHistoryTelemetrySink final : public a2a::server::InMemoryTaskStore::HistoryTelemetrySink {
  public:
   void OnDedupedHistoryMessage(const a2a::server::TaskStore::HistoryDedupeEvent& event) override {
@@ -474,9 +565,22 @@ TEST(ServerTaskUtilitiesTest, ValidatesVersionedCursorTokens) {
   EXPECT_EQ(boundary->task_id, cursor.task_id);
 }
 
+TEST(ServerTaskUtilitiesTest, RoundTripsBinaryCursorIds) {
+  const a2a::server::ListTaskCursor cursor{.updated_at = kMaximumUpdateTime,
+                                           .task_id = std::string(kBinaryCursorId, sizeof(kBinaryCursorId) - 1U)};
+  const auto parsed = a2a::server::ParseListPageToken(a2a::server::EncodeListPageToken(cursor));
+  ASSERT_TRUE(parsed.ok());
+  const auto& boundary = parsed.value();
+  if (!boundary.has_value()) {
+    FAIL();
+  }
+  EXPECT_EQ(boundary->task_id, cursor.task_id);
+  EXPECT_EQ(boundary->updated_at, cursor.updated_at);
+}
+
 TEST(ServerTaskUtilitiesTest, RejectsMalformedCursorTokens) {
-  constexpr std::string_view kMalformedTokens[] = {
-      "0", "12", "12x", "a2a2_313a61", "a2a1_", "a2a1_0", "a2a1_zz", "a2a1_2d313a61", "a2a1_30313a61", "a2a1_313a00"};
+  constexpr std::string_view kMalformedTokens[] = {"0",      "12",      "12x",           "a2a2_313a61",   "a2a1_",
+                                                   "a2a1_0", "a2a1_zz", "a2a1_2d313a61", "a2a1_30313a61", "a2a1_313a"};
   for (const auto malformed : kMalformedTokens) {
     EXPECT_FALSE(a2a::server::ParseListPageToken(malformed).ok()) << malformed;
   }

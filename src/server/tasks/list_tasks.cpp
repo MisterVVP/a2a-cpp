@@ -121,9 +121,8 @@ core::Result<std::optional<ListTaskCursor>> ParseListPageToken(std::string_view 
     return core::Error::Validation(std::string(kInvalidCursor));
   }
   cursor.task_id = payload.substr(separator + 1);
-  // Canonical encoding rejects aliases, NULs and malformed numeric components.
-  if (cursor.task_id.find('\0') != std::string::npos ||
-      EncodeListPageToken(cursor) != std::string(kCursorPrefix).append(page_token)) {
+  // Canonical encoding preserves every accepted task ID byte and rejects aliases.
+  if (EncodeListPageToken(cursor) != std::string(kCursorPrefix).append(page_token)) {
     return core::Error::Validation(std::string(kInvalidCursor));
   }
   return std::optional<ListTaskCursor>{std::move(cursor)};

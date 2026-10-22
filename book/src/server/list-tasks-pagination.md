@@ -10,13 +10,19 @@ status, history or artifacts), cancellation, and history append advances it.
 Rejected writes, revision conflicts, rejected cancellations and deduplicated history
 appends do not change it. Each task's time advances by at least one microsecond,
 even if the wall clock moves backward. Equal times across tasks use the ID tie-breaker.
+If a custom in-memory clock reaches the maximum signed 64-bit timestamp, further
+mutations of that task return an internal error without changing its contents,
+revision or cursor position. Deduplicated history appends remain successful
+because they do not mutate the task.
 
 Start with an empty `page_token`. Copy the returned `next_page_token` unchanged
 into the next request; stop when it is empty. Tokens are opaque, versioned v1
 boundaries, portable between JSON-RPC, HTTP+JSON and gRPC for the same store.
 They are neither credentials nor encrypted data. They never require resolving the
 boundary task or reveal whether that task currently exists or is accessible.
-Only a returned, authorized task supplies a response token.
+Only a returned, authorized task supplies a response token. Cursor encoding
+preserves every byte of nonempty task IDs accepted by the store, including
+embedded NUL bytes in the in-memory store.
 
 ## Compatibility
 

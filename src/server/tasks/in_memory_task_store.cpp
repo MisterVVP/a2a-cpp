@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <limits>
 #include <mutex>
 #include <shared_mutex>
 #include <utility>
@@ -22,6 +23,7 @@ namespace a2a::server {
 namespace {
 
 constexpr std::uint64_t kInitialTaskRevision = 1;
+constexpr char kUpdateTimeExhaustedMessage[] = "Task storage update timestamp cannot advance";
 
 class TaskAppendRollback final : private core::NonCopyableOrMovable {
  public:
@@ -59,19 +61,23 @@ InMemoryTaskStore::InMemoryTaskStore(std::shared_ptr<HistoryTelemetrySink> telem
   telemetry_sink_ = std::move(telemetry_sink);
 }
 
-void InMemoryTaskStore::TouchTask(std::size_t index) {
+core::Result<void> InMemoryTaskStore::TouchTask(std::size_t index) {
   const auto& id = ordered_tasks_[index].id();
   if (index == updated_at_.size()) {
     const auto now = std::max(std::int64_t{0}, update_clock_());
     update_order_.insert({.updated_at = now, .task_id = id});
     updated_at_.push_back(now);
-    return;
+    return {};
+  }
+  if (updated_at_[index] == std::numeric_limits<std::int64_t>::max()) {
+    return core::Error::Internal(kUpdateTimeExhaustedMessage);
   }
   const auto next_time = std::max(updated_at_[index] + 1, update_clock_());
   auto node = update_order_.extract({.updated_at = updated_at_[index], .task_id = id});
   node.value().updated_at = next_time;
   update_order_.insert(std::move(node));
   updated_at_[index] = next_time;
+  return {};
 }
 
 core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& task) {
@@ -82,9 +88,12 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
   std::unique_lock<std::shared_mutex> lock(mutex_);
   const auto existing = task_indices_.find(task.id());
   if (existing != task_indices_.end()) {
+    const auto touched = TouchTask(existing->second);
+    if (!touched.ok()) {
+      return touched.error();
+    }
     ordered_tasks_[existing->second] = task;
     ++revisions_[existing->second];
-    TouchTask(existing->second);
     return {};
   }
 
@@ -96,7 +105,11 @@ core::Result<void> InMemoryTaskStore::CreateOrUpdate(const lf::a2a::v1::Task& ta
     return core::Error::Internal("Task index insertion failed");
   }
 
-  TouchTask(ordered_tasks_.size() - 1);
+  const auto touched = TouchTask(ordered_tasks_.size() - 1);
+  if (!touched.ok()) {
+    task_indices_.erase(task.id());
+    return touched.error();
+  }
   rollback.Commit();
   return {};
 }
@@ -130,16 +143,23 @@ core::Result<TaskStore::ConditionalWriteResult> InMemoryTaskStore::CreateOrUpdat
     if (!task_indices_.try_emplace(task.id(), ordered_tasks_.size() - 1).second) {
       return core::Error::Internal("Task index insertion failed");
     }
-    TouchTask(ordered_tasks_.size() - 1);
+    const auto touched = TouchTask(ordered_tasks_.size() - 1);
+    if (!touched.ok()) {
+      task_indices_.erase(task.id());
+      return touched.error();
+    }
     rollback.Commit();
     return ConditionalWriteResult::kUpdated;
   }
   if (revisions_[existing->second] != expected_revision) {
     return ConditionalWriteResult::kConflict;
   }
+  const auto touched = TouchTask(existing->second);
+  if (!touched.ok()) {
+    return touched.error();
+  }
   ordered_tasks_[existing->second] = task;
   ++revisions_[existing->second];
-  TouchTask(existing->second);
   return ConditionalWriteResult::kUpdated;
 }
 
@@ -212,10 +232,13 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::Cancel(std::string_view id) {
     return core::protocol_errors::TaskNotCancelable();
   }
 
+  const auto touched = TouchTask(it->second);
+  if (!touched.ok()) {
+    return touched.error();
+  }
   auto* mutable_status = task.mutable_status();
   mutable_status->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
   ++revisions_[it->second];
-  TouchTask(it->second);
   return task;
 }
 
@@ -249,9 +272,12 @@ core::Result<lf::a2a::v1::Task> InMemoryTaskStore::AppendTaskHistory(std::string
       };
       result = task;
     } else {
+      const auto touched = TouchTask(it->second);
+      if (!touched.ok()) {
+        return touched.error();
+      }
       *task.add_history() = message;
       ++revisions_[it->second];
-      TouchTask(it->second);
       result = task;
     }
   }
