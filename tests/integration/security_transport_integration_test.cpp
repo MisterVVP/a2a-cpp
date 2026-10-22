@@ -56,6 +56,7 @@ constexpr auto kPollTimeout = std::chrono::milliseconds(1);
 constexpr std::string_view kRestPath = "/a2a";
 constexpr std::string_view kTaskId = "sdk-transport-owned-task";
 constexpr std::string_view kOtherTaskId = "sdk-transport-other-task";
+constexpr std::string_view kNextOwnedTask = "cursor-next-owned";
 constexpr std::string_view kMissingTaskId = "sdk-transport-missing-task";
 constexpr std::string_view kMessageId = "sdk-transport-message";
 constexpr std::string_view kMessageText = "security request";
@@ -372,6 +373,15 @@ class SecurityTransportIntegrationTest : public testing::TestWithParam<Binding> 
     ExpectHiddenTask(client_->CancelTask(cancel, options));
     ExpectHiddenTask(client_->SendMessage(send, options));
   }
+  void StartOwnedCursor(a2a::client::ListTasksRequest* query) {
+    SaveTask(kNextOwnedTask, kAlice);
+    auto first = client_->ListTasks(*query, Options(kAliceToken));
+    ASSERT_TRUE(first.ok()) << first.error().message();
+    ASSERT_EQ(first.value().tasks.size(), 1U);
+    EXPECT_EQ(first.value().tasks.front().id(), kNextOwnedTask);
+    ASSERT_FALSE(first.value().next_page_token.empty());
+    query->page_token = first.value().next_page_token;
+  }
   std::string ServerErrorMessage(const a2a::core::Error& error) const {
     if (GetParam() == Binding::kGrpc) {
       return std::string(error.message());
@@ -431,25 +441,29 @@ TEST_P(SecurityTransportIntegrationTest, ListsIncludeOnlyAuthorizedResources) {
   EXPECT_TRUE(listed.value().next_page_token.empty());
 }
 
-TEST_P(SecurityTransportIntegrationTest, CursorContinuationRechecksOwnershipAndHidesOtherCallerTasks) {
-  constexpr std::string_view kNextOwnedTask = "cursor-next-owned";
-  SaveTask(kNextOwnedTask, kAlice);
+TEST_P(SecurityTransportIntegrationTest, CursorContinuationReturnsRemainingOwnedTask) {
   a2a::client::ListTasksRequest query{.page_size = 1, .page_token = {}};
-  auto first = client_->ListTasks(query, Options(kAliceToken));
-  ASSERT_TRUE(first.ok()) << first.error().message();
-  ASSERT_EQ(first.value().tasks.size(), 1U);
-  EXPECT_EQ(first.value().tasks.front().id(), kNextOwnedTask);
-  ASSERT_FALSE(first.value().next_page_token.empty());
-  query.page_token = first.value().next_page_token;
+  ASSERT_NO_FATAL_FAILURE(StartOwnedCursor(&query));
   auto next = client_->ListTasks(query, Options(kAliceToken));
   ASSERT_TRUE(next.ok()) << next.error().message();
   ASSERT_EQ(next.value().tasks.size(), 1U);
   EXPECT_EQ(next.value().tasks.front().id(), kTaskId);
+}
+
+TEST_P(SecurityTransportIntegrationTest, CursorContinuationRechecksOwnership) {
+  a2a::client::ListTasksRequest query{.page_size = 1, .page_token = {}};
+  ASSERT_NO_FATAL_FAILURE(StartOwnedCursor(&query));
   SaveTask(kTaskId, kBob);
   auto revoked = client_->ListTasks(query, Options(kAliceToken));
   ASSERT_TRUE(revoked.ok()) << revoked.error().message();
   EXPECT_TRUE(revoked.value().tasks.empty());
   EXPECT_TRUE(revoked.value().next_page_token.empty());
+}
+
+TEST_P(SecurityTransportIntegrationTest, CursorContinuationHidesOtherCallerTasks) {
+  a2a::client::ListTasksRequest query{.page_size = 1, .page_token = {}};
+  ASSERT_NO_FATAL_FAILURE(StartOwnedCursor(&query));
+  SaveTask(kTaskId, kBob);
   auto foreign = client_->ListTasks(query, Options(kBobToken));
   ASSERT_TRUE(foreign.ok()) << foreign.error().message();
   for (const auto& task : foreign.value().tasks) {

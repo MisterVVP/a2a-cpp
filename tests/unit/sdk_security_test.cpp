@@ -256,6 +256,12 @@ class SdkSecurityTest : public testing::Test {
     EXPECT_EQ(page.total_size, kOwnedTaskCount);
     EXPECT_EQ(page.tasks.front().context_id(), kAlice);
   }
+  static void CheckTaskOwners(const ListTasksResponse& page, std::string_view owner) {
+    EXPECT_FALSE(page.tasks.empty());
+    for (const auto& task : page.tasks) {
+      EXPECT_EQ(task.context_id(), owner);
+    }
+  }
   void AddAuditInterceptors(Dispatcher& target) {
     target.AddInterceptor(std::make_shared<AuditInterceptor>(kFirstAuditId, audit_events, before_calls));
     target.AddInterceptor(std::make_shared<AuditInterceptor>(kSecondAuditId, audit_events, before_calls));
@@ -654,7 +660,7 @@ TEST_F(SdkSecurityTest, ListFiltersBeforeCountsProjectionsAndPagination) {
   EXPECT_NE(first.tasks.front().id(), last.tasks.front().id());
   EXPECT_TRUE(last.next_page_token.empty());
 }
-TEST_F(SdkSecurityTest, CursorRespectsRevocationAndScopeChangesWithoutDisclosingHiddenTasks) {
+TEST_F(SdkSecurityTest, CursorRespectsOwnershipRevocation) {
   ListTasksRequest query;
   query.page_size = 1;
   const auto first = ListPage(query);
@@ -666,15 +672,21 @@ TEST_F(SdkSecurityTest, CursorRespectsRevocationAndScopeChangesWithoutDisclosing
   EXPECT_TRUE(revoked.tasks.empty());
   EXPECT_EQ(revoked.total_size, 1U);
   EXPECT_TRUE(revoked.next_page_token.empty());
+}
+
+TEST_F(SdkSecurityTest, CursorScopeChangesDoNotDiscloseHiddenTasks) {
+  ListTasksRequest query;
+  query.page_size = 1;
+  const auto first = ListPage(query);
+  ASSERT_FALSE(first.next_page_token.empty());
+  query.page_token = first.next_page_token;
   context.auth_metadata.clear();
   DispatchSecurity security(policy, &store);
   context.principal = kBob;
   const auto foreign = security.ListTasks(query, context);
   ASSERT_TRUE(foreign.ok());
   const auto& page = std::get<ListTasksResponse>(foreign.value().payload());
-  for (const auto& task : page.tasks) {
-    EXPECT_EQ(task.context_id(), kBob);
-  }
+  CheckTaskOwners(page, kBob);
   policy->resources_allowed = false;
   const auto empty = security.ListTasks(query, context);
   ASSERT_TRUE(empty.ok());

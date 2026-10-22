@@ -455,10 +455,13 @@ TEST(InMemoryTaskStoreUnitTest, HandlesOutOfOrderAndMixedReplayScenarios) {
   EXPECT_EQ(result.value().history(2).message_id(), "");
 }
 
-TEST(ServerTaskUtilitiesTest, ValidatesVersionedCursorTokens) {
+TEST(ServerTaskUtilitiesTest, EmptyCursorTokenStartsTraversal) {
   const auto empty = a2a::server::ParseListPageToken({});
   ASSERT_TRUE(empty.ok());
   EXPECT_FALSE(empty.value().has_value());
+}
+
+TEST(ServerTaskUtilitiesTest, ValidatesVersionedCursorTokens) {
   const a2a::server::ListTaskCursor cursor{.updated_at = kTimestampBaseSeconds, .task_id = std::string(kTaskId)};
   const auto token = a2a::server::EncodeListPageToken(cursor);
   const auto parsed = a2a::server::ParseListPageToken(token);
@@ -469,6 +472,9 @@ TEST(ServerTaskUtilitiesTest, ValidatesVersionedCursorTokens) {
   }
   EXPECT_EQ(boundary->updated_at, cursor.updated_at);
   EXPECT_EQ(boundary->task_id, cursor.task_id);
+}
+
+TEST(ServerTaskUtilitiesTest, RejectsMalformedCursorTokens) {
   constexpr std::string_view kMalformedTokens[] = {
       "0", "12", "12x", "a2a2_313a61", "a2a1_", "a2a1_0", "a2a1_zz", "a2a1_2d313a61", "a2a1_30313a61", "a2a1_313a00"};
   for (const auto malformed : kMalformedTokens) {
