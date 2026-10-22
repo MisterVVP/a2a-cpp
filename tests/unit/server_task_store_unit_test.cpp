@@ -33,6 +33,7 @@ constexpr std::size_t kFirstPageSize = 1;
 constexpr std::size_t kTwoHistoryEntries = 2;
 constexpr std::size_t kThreeHistoryEntries = 3;
 constexpr int64_t kTimestampBaseSeconds = 100;
+constexpr std::int64_t kInitialStorageUpdateMicros = 100;
 constexpr int32_t kTimestampNanos = 1;
 constexpr int64_t kOrderOlderSeconds = 10;
 constexpr int64_t kOrderNewestSeconds = 11;
@@ -51,6 +52,10 @@ constexpr std::uint64_t kUnknownTaskFieldValue = 42;
 constexpr auto kMaximumUpdateTime = std::numeric_limits<std::int64_t>::max();
 constexpr char kTimestampLimitMessageId[] = "timestamp-limit-new-message";
 constexpr char kBinaryCursorId[] = "cursor:\0boundary";
+
+a2a::server::InMemoryTaskStore::UpdateClock MakeAdvancingStorageClock() {
+  return [now = kInitialStorageUpdateMicros]() mutable { return now++; };
+}
 
 class TimestampLimitTest : public testing::Test {
  protected:
@@ -279,7 +284,7 @@ TEST(InMemoryTaskStoreUnitTest, CancelUpdatesStateAndRejectsTerminalTasks) {
 }
 
 TEST(InMemoryTaskStoreUnitTest, UpdatingTaskMovesItToMostRecentPosition) {
-  a2a::server::InMemoryTaskStore store;
+  a2a::server::InMemoryTaskStore store(nullptr, MakeAdvancingStorageClock());
   ASSERT_TRUE(store
                   .CreateOrUpdate(MakeTask(std::string(kFirstTaskId), std::string(kContextAlpha),
                                            lf::a2a::v1::TASK_STATE_WORKING, kTimestampBaseSeconds, false))
