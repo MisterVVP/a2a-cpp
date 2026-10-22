@@ -24,6 +24,10 @@
 namespace a2a::server::stores {
 namespace {
 
+constexpr std::string_view kTasksUpdatedIndex = "idx_a2a_tasks_updated";
+constexpr std::string_view kTasksContextUpdatedIndex = "idx_a2a_tasks_context_updated";
+constexpr std::string_view kTasksUpdatedIndexColumns = "(updated_at DESC, id COLLATE \"C\" DESC)";
+constexpr std::string_view kTasksContextUpdatedIndexColumns = "(context_id, updated_at DESC, id COLLATE \"C\" DESC)";
 constexpr std::size_t kAlterTaskRevisionSqlReserve = 70U;
 constexpr std::size_t kTaskPushConfigLockFunctionSqlReserveSlack = 768U;
 constexpr std::size_t kTaskPushConfigLockFunctionPrivilegeSqlReserveSlack = 64U;
@@ -766,15 +770,16 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
   const std::string push_created_sequence_regclass = SqlStringLiteral(push_created_sequence);
   const std::string create_task_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + task_created_sequence + ";";
   const std::string create_push_created_sequence = "CREATE SEQUENCE IF NOT EXISTS " + push_created_sequence + ";";
-  const std::string create_tasks = "CREATE TABLE IF NOT EXISTS " + tasks +
-                                   " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
-                                   "has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE, "
-                                   "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
-                                   "revision BIGINT NOT NULL DEFAULT 1, "
-                                   "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
-                                   task_created_sequence_regclass +
-                                   "), "
-                                   "task_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());";
+  const std::string create_tasks =
+      "CREATE TABLE IF NOT EXISTS " + tasks +
+      " (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, state INTEGER NOT NULL, "
+      "has_status_timestamp BOOLEAN NOT NULL DEFAULT FALSE, "
+      "status_seconds BIGINT NOT NULL DEFAULT 0, status_nanos INTEGER NOT NULL DEFAULT 0, "
+      "revision BIGINT NOT NULL DEFAULT 1, "
+      "created_sequence BIGINT NOT NULL DEFAULT nextval(" +
+      task_created_sequence_regclass +
+      "), "
+      "task_proto BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());";
   const std::string add_tasks_created_sequence =
       "ALTER TABLE " + tasks + " ADD COLUMN IF NOT EXISTS created_sequence BIGINT NOT NULL DEFAULT nextval(" +
       task_created_sequence_regclass + ");";
@@ -839,10 +844,18 @@ core::Result<void> InitializeSchema(PGconn* connection, const PostgresStoreOptio
       QualifiedSqlIdentifier(options.schema, kPushConfigsCreatedSequenceIndex));
   drop_push_configs_created_sequence_index.push_back(';');
 
+  const std::string update_time_default =
+      std::string("ALTER TABLE ").append(tasks).append(" ALTER COLUMN updated_at SET DEFAULT clock_timestamp();");
+  const std::string update_order_index = CreateIndexStatement(kTasksUpdatedIndex, tasks, kTasksUpdatedIndexColumns);
+  const std::string context_update_order_index =
+      CreateIndexStatement(kTasksContextUpdatedIndex, tasks, kTasksContextUpdatedIndexColumns);
   const std::vector<std::string> schema_statements = {create_task_created_sequence,
                                                       create_push_created_sequence,
                                                       create_tasks,
                                                       add_tasks_created_sequence,
+                                                      update_time_default,
+                                                      update_order_index,
+                                                      context_update_order_index,
                                                       add_tasks_has_status_timestamp,
                                                       add_tasks_revision,
                                                       create_task_push_config_lock_function,

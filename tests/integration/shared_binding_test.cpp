@@ -42,6 +42,10 @@ constexpr char kText[] = "binding equivalence";
 constexpr char kPushId[] = "binding-push-config";
 constexpr char kPushUrl[] = "https://example.invalid/binding-push";
 constexpr char kMissingTaskId[] = "binding-nonexistent-task";
+constexpr char kCursorFirstMessage[] = "cursor-first-message";
+constexpr char kCursorSecondMessage[] = "cursor-second-message";
+constexpr char kInvalidCursor[] = "a2a1_invalid";
+constexpr char kLegacyOffset[] = "1";
 constexpr char kWrongToken[] = "invalid-binding-token";
 constexpr char kAuthorization[] = "Authorization";
 constexpr char kBearerPrefix[] = "Bearer ";
@@ -379,6 +383,32 @@ TEST_P(SharedBindingTest, ListTasksProducesEquivalentPages) {
   for (std::size_t index = 0; index < first.value().tasks.size(); ++index) {
     SCOPED_TRACE(index);
     ExpectTaskEqual(first.value().tasks[index], second.value().tasks[index]);
+  }
+}
+
+TEST_P(SharedBindingTest, CursorPagesRoundTripAcrossBindingsInUpdateOrder) {
+  const auto older = source_->SendMessage(Message(kCursorFirstMessage), options_);
+  ASSERT_TRUE(older.ok()) << older.error().message();
+  const auto newer = source_->SendMessage(Message(kCursorSecondMessage), options_);
+  ASSERT_TRUE(newer.ok()) << newer.error().message();
+  a2a::client::ListTasksRequest request{.page_size = 1, .page_token = {}};
+  const auto first = source_->ListTasks(request, options_);
+  ASSERT_TRUE(first.ok()) << first.error().message();
+  ASSERT_EQ(first.value().tasks.size(), 1U);
+  EXPECT_EQ(first.value().tasks.front().id(), newer.value().task().id());
+  ASSERT_FALSE(first.value().next_page_token.empty());
+  request.page_token = first.value().next_page_token;
+  const auto second = target_->ListTasks(request, options_);
+  ASSERT_TRUE(second.ok()) << second.error().message();
+  ASSERT_EQ(second.value().tasks.size(), 1U);
+  EXPECT_EQ(second.value().tasks.front().id(), older.value().task().id());
+}
+
+TEST_P(SharedBindingTest, MalformedAndLegacyListCursorsAreRejectedAcrossBindings) {
+  for (const auto* token : {kInvalidCursor, kLegacyOffset}) {
+    a2a::client::ListTasksRequest request{.page_size = 1, .page_token = token};
+    EXPECT_FALSE(source_->ListTasks(request, options_).ok());
+    EXPECT_FALSE(target_->ListTasks(request, options_).ok());
   }
 }
 

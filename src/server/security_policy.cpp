@@ -4,6 +4,7 @@
 #include "a2a/server/security_policy.h"
 
 #include <algorithm>
+#include <cassert>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -16,6 +17,7 @@ namespace {
 
 constexpr std::string_view kMissingSecurityConfiguration = "security policy and task store are required";
 constexpr std::string_view kInvalidPageSize = "page size exceeds maximum";
+constexpr std::string_view kMissingTaskCursors = "task store must provide list cursor boundaries";
 constexpr std::string_view kEmptyIdentity = "authentication returned an empty identity";
 
 core::Result<lf::a2a::v1::Task> GetAuthorizedTask(TaskStore& store, const SecurityPolicy& policy,
@@ -218,9 +220,9 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
   if (request.page_size > kMaxListTasksPageSize) {
     return core::Error::Validation(std::string(kInvalidPageSize));
   }
-  auto offset = ParseListPageToken(request.page_token);
-  if (!offset.ok()) {
-    return offset.error();
+  auto cursor = ParseListPageToken(request.page_token);
+  if (!cursor.ok()) {
+    return cursor.error();
   }
   const auto size = request.page_size == 0 ? kDefaultListTasksPageSize : request.page_size;
   ListTasksResponse response;
@@ -232,16 +234,13 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
   auto scoped = policy_->ScopeTaskList(query, context);
   std::vector<std::string> selected_ids;
   if (scoped.has_value()) {
-    auto selected = SelectTaskIds(std::move(*scoped), context, offset.value(), size);
+    auto selected = SelectTaskIds(std::move(*scoped), context, cursor.value(), size);
     if (!selected.ok()) {
       return selected.error();
     }
     response.total_size = selected.value().total_size;
     selected_ids = std::move(selected.value().task_ids);
-  }
-  auto valid_offset = ValidateListPageOffset(offset.value(), response.total_size);
-  if (!valid_offset.ok()) {
-    return valid_offset.error();
+    response.next_page_token = std::move(selected.value().next_page_token);
   }
   for (const auto& id : selected_ids) {
     auto task = GetAuthorizedTask(*task_store_, *policy_, context, id);
@@ -250,33 +249,43 @@ core::Result<DispatchResponse> DispatchSecurity::ListTasks(const ListTasksReques
     }
     response.tasks.push_back(ProjectTaskForList(task.value(), request.include_artifacts, request.history_length));
   }
-  if (offset.value() + response.tasks.size() < response.total_size) {
-    response.next_page_token = std::to_string(offset.value() + response.tasks.size());
-  }
   return DispatchResponse(std::move(response));
 }
 
-core::Result<DispatchSecurity::VisibleTaskPage> DispatchSecurity::SelectTaskIds(ListTasksRequest query,
-                                                                                const RequestContext& context,
-                                                                                std::size_t offset,
-                                                                                std::size_t page_size) const {
+core::Result<DispatchSecurity::VisibleTaskPage> DispatchSecurity::SelectTaskIds(
+    ListTasksRequest query, const RequestContext& context, const std::optional<ListTaskCursor>& cursor,
+    std::size_t page_size) const {
+  assert(page_size > 0);
   VisibleTaskPage selected;
   selected.task_ids.reserve(page_size);
   query.page_size = kMaxListTasksPageSize;
+  query.include_total_size = false;
   query.page_token.clear();
+  ListTaskCursor last_selected;
   do {
     auto listed = task_store_->List(query);
     if (!listed.ok()) {
       return listed.error();
     }
-    for (const auto& task : listed.value().tasks) {
+    if (listed.value().tasks.size() != listed.value().task_cursors.size()) {
+      return core::Error::Internal(std::string(kMissingTaskCursors));
+    }
+    for (std::size_t index = 0; index < listed.value().tasks.size(); ++index) {
+      const auto& task = listed.value().tasks[index];
       if (!policy_->CanAccessTask(task, context)) {
         continue;
       }
-      if (selected.total_size >= offset && selected.task_ids.size() < page_size) {
-        selected.task_ids.push_back(task.id());
-      }
       ++selected.total_size;
+      const auto& boundary = listed.value().task_cursors[index];
+      if (cursor.has_value() && !ListCursorPrecedes(*cursor, boundary)) {
+        continue;
+      }
+      if (selected.task_ids.size() < page_size) {
+        selected.task_ids.push_back(task.id());
+        last_selected = boundary;
+      } else if (selected.next_page_token.empty()) {
+        selected.next_page_token = EncodeListPageToken(last_selected);
+      }
     }
     query.page_token = std::move(listed.value().next_page_token);
   } while (!query.page_token.empty());

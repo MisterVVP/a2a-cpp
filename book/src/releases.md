@@ -2,6 +2,18 @@
 
 This documentation is intended to stay version-aware without embedding a release number in every page title.
 
+## Unreleased development toward `v0.6.0`
+
+`ListTasks` development replaces numeric offsets with opaque, versioned cursors
+and orders tasks by storage update time descending, then task ID descending.
+Clients must restart old pagination sequences with an empty token. Custom stores
+used with secured listing must supply aligned cursor metadata, and externally
+managed PostgreSQL schemas need the ordering-index migration. See the
+[ListTasks cursor contract](server/list-tasks-pagination.md) for compatibility,
+consistency and migration details.
+
+The stable `v0.5.2` behavior and release notes below remain unchanged.
+
 ## Current documented release
 
 The current documented release is **v0.5.2** and is recommended for new consumers.

@@ -410,17 +410,7 @@ core::Result<void> ParseListTasksPageToken(const google::protobuf::Struct& param
     return core::Error::Validation("ListTasksRequest.pageToken must be a string");
   }
   payload->page_token = page_token_it->second.string_value();
-  if (payload->page_token.empty()) {
-    return {};
-  }
-
-  std::uint64_t parsed_offset = 0;
-  const auto* begin = payload->page_token.data();
-  const auto* end = begin + payload->page_token.size();
-  const auto parsed = std::from_chars(begin, end, parsed_offset);
-  if (parsed.ec != std::errc() || parsed.ptr != end) {
-    return core::Error::Validation("ListTasksRequest.pageToken must be a valid offset");
-  }
+  // Tokens are opaque to the binding; the executor/store validates its cursor contract.
   return {};
 }
 

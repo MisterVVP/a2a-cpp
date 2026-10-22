@@ -6,11 +6,13 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "a2a/server/security_policy.h"
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/server/tasks/task_store.h"
 #include "a2a/v1/a2a.pb.h"
@@ -116,6 +118,130 @@ inline void VerifyOptimisticPersistenceContract(a2a::server::TaskStore* store) {
   EXPECT_GT(after_append.value().revision, before_append.value().revision);
 }
 
+inline constexpr std::string_view kCursorContext = "cursor-contract";
+inline constexpr std::string_view kCursorTaskA = "cursor-a";
+inline constexpr std::string_view kCursorTaskB = "cursor-b";
+inline constexpr std::string_view kCursorTaskC = "cursor-c";
+inline constexpr std::string_view kCursorTaskD = "cursor-d";
+inline constexpr std::string_view kCursorMessage = "cursor-message";
+inline constexpr std::string_view kCursorArtifact = "cursor-artifact";
+inline constexpr std::string_view kEmptyCursorPrincipal = "no-cursor-access";
+inline constexpr std::size_t kCursorTaskCount = 4;
+
+inline void ExpectNewestCursorTask(server::TaskStore& store, std::string_view expected) {
+  server::ListTasksRequest query;
+  query.context_id = kCursorContext;
+  query.page_size = 1;
+  auto page = store.List(query);
+  ASSERT_TRUE(page.ok()) << page.error().message();
+  ASSERT_EQ(page.value().tasks.size(), 1U);
+  EXPECT_EQ(page.value().tasks.front().id(), expected);
+}
+
+inline void VerifyCursorMutationContract(server::TaskStore& store) {
+  const auto task = [](std::string_view id) {
+    return MakeTask(std::string(id), std::string(kCursorContext), lf::a2a::v1::TASK_STATE_WORKING, kBaseSeconds);
+  };
+  ASSERT_TRUE(store.CreateOrUpdate(task(kCursorTaskA)).ok());
+  ASSERT_TRUE(store.CreateOrUpdate(task(kCursorTaskB)).ok());
+  ASSERT_TRUE(store.CreateOrUpdate(task(kCursorTaskC)).ok());
+  server::ListTasksRequest query;
+  query.page_size = 1;
+  query.context_id = kCursorContext;
+  auto first = store.List(query);
+  ASSERT_TRUE(first.ok());
+  ASSERT_EQ(first.value().tasks.size(), 1U);
+  EXPECT_EQ(first.value().tasks.front().id(), kCursorTaskC);
+  query.page_token = first.value().next_page_token;
+  ASSERT_FALSE(query.page_token.empty());
+  // The worker runs between reads, with no timing/sleep assumptions.
+  auto mutations = std::async(std::launch::async, [&] {
+    return store.CreateOrUpdate(task(kCursorTaskD)).ok() && store.CreateOrUpdate(task(kCursorTaskA)).ok() &&
+           store.Cancel(kCursorTaskB).ok();
+  });
+  ASSERT_TRUE(mutations.get());
+  auto end = store.List(query);
+  ASSERT_TRUE(end.ok());
+  EXPECT_TRUE(end.value().tasks.empty());
+  EXPECT_TRUE(end.value().next_page_token.empty());
+  EXPECT_EQ(end.value().total_size, kCursorTaskCount);
+  ExpectNewestCursorTask(store, kCursorTaskB);
+}
+
+inline void VerifyCursorHistoryAndArtifactContract(server::TaskStore& store) {
+  const auto message = MakeMessage(std::string(kCursorMessage), std::string(kCursorMessage));
+  const auto append =
+      store.AppendTaskHistory(kCursorTaskC, message, server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
+  ASSERT_TRUE(append.ok());
+  ExpectNewestCursorTask(store, kCursorTaskC);
+  auto deduped =
+      store.AppendTaskHistory(kCursorTaskC, message, server::TaskStore::HistoryAppendPolicy::kDedupByMessageId);
+  ASSERT_TRUE(deduped.ok());
+  auto artifact = store.GetSnapshot(kCursorTaskD);
+  ASSERT_TRUE(artifact.ok());
+  artifact.value().task.add_artifacts()->set_artifact_id(std::string(kCursorArtifact));
+  auto updated = store.CreateOrUpdateIfRevision(artifact.value().task, artifact.value().revision);
+  ASSERT_TRUE(updated.ok());
+  EXPECT_EQ(updated.value(), server::TaskStore::ConditionalWriteResult::kUpdated);
+  ExpectNewestCursorTask(store, kCursorTaskD);
+  auto stale = store.CreateOrUpdateIfRevision(append.value(), artifact.value().revision);
+  ASSERT_TRUE(stale.ok());
+  EXPECT_EQ(stale.value(), server::TaskStore::ConditionalWriteResult::kConflict);
+  ExpectNewestCursorTask(store, kCursorTaskD);
+}
+
+class CursorOwnerPolicy final : public server::SecurityPolicy {
+ public:
+  core::Result<std::string> Authenticate(const server::RequestContext& context) const override {
+    return context.principal;
+  }
+  bool AuthorizeOperation(const server::DispatchRequest& /*request*/,
+                          const server::RequestContext& /*context*/) const override {
+    return true;
+  }
+  bool CanAccessTask(const lf::a2a::v1::Task& task, const server::RequestContext& context) const override {
+    return task.context_id() == context.principal;
+  }
+};
+
+inline void VerifyCursorPermissionsContract(server::TaskStore& store) {
+  auto policy = std::make_shared<CursorOwnerPolicy>();
+  server::DispatchSecurity security(policy, &store);
+  server::RequestContext context;
+  context.principal = kCursorContext;
+  server::ListTasksRequest query;
+  query.page_size = 1;
+  auto first = security.ListTasks(query, context);
+  ASSERT_TRUE(first.ok());
+  const auto& first_page = std::get<server::ListTasksResponse>(first.value().payload());
+  EXPECT_EQ(first_page.total_size, kCursorTaskCount);
+  ASSERT_FALSE(first_page.next_page_token.empty());
+  query.page_token = first_page.next_page_token;
+  auto revoke = std::async(std::launch::async, [&] {
+    auto task = store.Get(kCursorTaskC);
+    if (!task.ok()) {
+      return false;
+    }
+    task.value().set_context_id(std::string(kContextTwo));
+    return store.CreateOrUpdate(task.value()).ok();
+  });
+  ASSERT_TRUE(revoke.get());
+  auto next = security.ListTasks(query, context);
+  ASSERT_TRUE(next.ok());
+  const auto& page = std::get<server::ListTasksResponse>(next.value().payload());
+  EXPECT_EQ(page.total_size, kCursorTaskCount - 1);
+  for (const auto& task : page.tasks) {
+    EXPECT_EQ(task.context_id(), kCursorContext);
+  }
+  context.principal = kEmptyCursorPrincipal;
+  auto empty = security.ListTasks(query, context);
+  ASSERT_TRUE(empty.ok());
+  const auto& empty_page = std::get<server::ListTasksResponse>(empty.value().payload());
+  EXPECT_EQ(empty_page.total_size, 0U);
+  EXPECT_TRUE(empty_page.tasks.empty());
+  EXPECT_TRUE(empty_page.next_page_token.empty());
+}
+
 template <typename Factory>
 void RunTaskStoreConformance(Factory&& factory) {
   auto store = factory();
@@ -140,7 +266,7 @@ void RunTaskStoreConformance(Factory&& factory) {
   ASSERT_TRUE(first_page.ok());
   EXPECT_EQ(first_page.value().page_size, 1U);
   ASSERT_EQ(first_page.value().tasks.size(), 1U);
-  EXPECT_EQ(first_page.value().tasks.front().id(), kTaskOne);
+  EXPECT_EQ(first_page.value().tasks.front().id(), kTaskTwo);
   EXPECT_FALSE(first_page.value().next_page_token.empty());
 
   a2a::server::ListTasksRequest context_request;
@@ -215,6 +341,9 @@ void RunTaskStoreConformance(Factory&& factory) {
   EXPECT_EQ(deduped.value().history_size(), 1);
   EXPECT_EQ(store->GetHistoryTelemetrySnapshot().dedupe_dropped_total, 1U);
   VerifyOptimisticPersistenceContract(store.get());
+  VerifyCursorMutationContract(*store);
+  VerifyCursorHistoryAndArtifactContract(*store);
+  VerifyCursorPermissionsContract(*store);
 }
 
 }  // namespace a2a::tests::store_conformance

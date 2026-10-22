@@ -16,6 +16,14 @@
 namespace a2a::server {
 namespace {
 
+constexpr std::string_view kCursorPrefix = "a2a1_";
+constexpr std::string_view kHexDigits = "0123456789abcdef";
+constexpr std::size_t kHexByteWidth = 2;
+constexpr unsigned int kHexShift = 4;
+constexpr unsigned int kHexMask = 15;
+constexpr char kCursorSeparator = ':';
+constexpr std::string_view kInvalidCursor = "ListTasksRequest.page_token is not a valid v1 cursor; restart pagination";
+
 constexpr std::string_view kEmptyTasksJsonMember = R"("tasks":[])";
 constexpr std::string_view kZeroPageSizeJsonMember = R"("pageSize":0)";
 constexpr std::string_view kZeroTotalSizeJsonMember = R"("totalSize":0)";
@@ -64,25 +72,60 @@ bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& r
   return true;
 }
 
-core::Result<std::size_t> ParseListPageToken(std::string_view page_token) {
-  if (page_token.empty()) {
-    return std::size_t{0};
-  }
-  std::size_t parsed = 0;
-  const auto* begin = page_token.data();
-  const auto* end = page_token.data() + page_token.size();
-  const auto result = std::from_chars(begin, end, parsed);
-  if (result.ec != std::errc() || result.ptr != end) {
-    return core::Error::Validation("ListTasksRequest.page_token must be a non-negative integer");
-  }
-  return parsed;
+bool ListCursorPrecedes(const ListTaskCursor& lhs, const ListTaskCursor& rhs) {
+  return lhs.updated_at != rhs.updated_at ? lhs.updated_at > rhs.updated_at : lhs.task_id > rhs.task_id;
 }
 
-core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size) {
-  if (offset > size) {
-    return core::Error::Validation("ListTasksRequest.page_token exceeds available task count");
+std::string EncodeListPageToken(const ListTaskCursor& cursor) {
+  std::string payload = std::to_string(cursor.updated_at);
+  payload.push_back(kCursorSeparator);
+  payload.append(cursor.task_id);
+  std::string token(kCursorPrefix);
+  token.reserve(token.size() + (payload.size() * kHexByteWidth));
+  for (const char character : payload) {
+    const auto byte = static_cast<unsigned char>(character);
+    token.push_back(kHexDigits[byte >> kHexShift]);
+    token.push_back(kHexDigits[byte & kHexMask]);
   }
-  return {};
+  return token;
+}
+
+core::Result<std::optional<ListTaskCursor>> ParseListPageToken(std::string_view page_token) {
+  if (page_token.empty()) {
+    return std::optional<ListTaskCursor>{};
+  }
+  if (!page_token.starts_with(kCursorPrefix)) {
+    return core::Error::Validation(std::string(kInvalidCursor));
+  }
+  page_token.remove_prefix(kCursorPrefix.size());
+  if (page_token.size() % kHexByteWidth != 0) {
+    return core::Error::Validation(std::string(kInvalidCursor));
+  }
+  std::string payload;
+  payload.reserve(page_token.size() / kHexByteWidth);
+  for (std::size_t index = 0; index < page_token.size(); index += kHexByteWidth) {
+    const auto high = kHexDigits.find(page_token[index]);
+    const auto low = kHexDigits.find(page_token[index + 1]);
+    if (high == std::string_view::npos || low == std::string_view::npos) {
+      return core::Error::Validation(std::string(kInvalidCursor));
+    }
+    payload.push_back(static_cast<char>((high << kHexShift) | low));
+  }
+  const auto separator = payload.find(kCursorSeparator);
+  if (separator == std::string::npos || separator + 1 == payload.size()) {
+    return core::Error::Validation(std::string(kInvalidCursor));
+  }
+  ListTaskCursor cursor;
+  const auto parsed = std::from_chars(payload.data(), payload.data() + separator, cursor.updated_at);
+  if (parsed.ec != std::errc{} || parsed.ptr != payload.data() + separator || cursor.updated_at < 0) {
+    return core::Error::Validation(std::string(kInvalidCursor));
+  }
+  cursor.task_id = payload.substr(separator + 1);
+  // Canonical encoding preserves every accepted task ID byte and rejects aliases.
+  if (EncodeListPageToken(cursor) != std::string(kCursorPrefix).append(page_token)) {
+    return core::Error::Validation(std::string(kInvalidCursor));
+  }
+  return std::optional<ListTaskCursor>{std::move(cursor)};
 }
 
 core::Result<std::string> SerializeListTasksResponse(const ListTasksResponse& response) {

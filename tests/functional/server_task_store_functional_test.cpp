@@ -3,8 +3,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <future>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,11 +16,41 @@
 
 namespace {
 
+constexpr char kBinaryBoundaryTaskId[] = "task-z\0boundary";
+constexpr std::string_view kFollowingTaskId = "task-a";
+constexpr std::int64_t kCursorTestTime = 100;
+
 lf::a2a::v1::Task MakeTask(std::string id) {
   lf::a2a::v1::Task task;
   task.set_id(std::move(id));
   task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_SUBMITTED);
   return task;
+}
+
+void ExpectSingleListedTask(const a2a::server::ListTasksResponse& page, std::string_view expected) {
+  ASSERT_EQ(page.tasks.size(), 1U);
+  EXPECT_EQ(page.tasks.front().id(), expected);
+}
+
+void StartBinaryCursor(a2a::server::InMemoryTaskStore* store, a2a::server::ListTasksRequest* query) {
+  ASSERT_TRUE(store->CreateOrUpdate(MakeTask(std::string(kFollowingTaskId))).ok());
+  ASSERT_TRUE(
+      store->CreateOrUpdate(MakeTask(std::string(kBinaryBoundaryTaskId, sizeof(kBinaryBoundaryTaskId) - 1U))).ok());
+  const auto first = store->List(*query);
+  ASSERT_TRUE(first.ok());
+  ExpectSingleListedTask(first.value(), std::string_view(kBinaryBoundaryTaskId, sizeof(kBinaryBoundaryTaskId) - 1U));
+  ASSERT_FALSE(first.value().next_page_token.empty());
+  query->page_token = first.value().next_page_token;
+}
+
+TEST(ServerTaskStoreFunctionalTest, ContinuesAfterTaskIdContainingNul) {
+  a2a::server::InMemoryTaskStore store(nullptr, [] { return kCursorTestTime; });
+  a2a::server::ListTasksRequest query{1, {}};
+  ASSERT_NO_FATAL_FAILURE(StartBinaryCursor(&store, &query));
+  const auto next = store.List(query);
+  ASSERT_TRUE(next.ok());
+  ExpectSingleListedTask(next.value(), kFollowingTaskId);
+  EXPECT_TRUE(next.value().next_page_token.empty());
 }
 
 TEST(ServerTaskStoreFunctionalTest, SupportsCreateGetListAndCancelLifecycle) {
@@ -34,13 +66,13 @@ TEST(ServerTaskStoreFunctionalTest, SupportsCreateGetListAndCancelLifecycle) {
   const auto list_result = store.List(a2a::server::ListTasksRequest{1, ""});
   ASSERT_TRUE(list_result.ok());
   ASSERT_EQ(list_result.value().tasks.size(), 1U);
-  EXPECT_EQ(list_result.value().tasks.front().id(), "task-1");
-  EXPECT_EQ(list_result.value().next_page_token, "1");
+  EXPECT_EQ(list_result.value().tasks.front().id(), "task-2");
+  EXPECT_FALSE(list_result.value().next_page_token.empty());
 
-  const auto page_2 = store.List(a2a::server::ListTasksRequest{10, "1"});
+  const auto page_2 = store.List(a2a::server::ListTasksRequest{10, list_result.value().next_page_token});
   ASSERT_TRUE(page_2.ok());
   ASSERT_EQ(page_2.value().tasks.size(), 1U);
-  EXPECT_EQ(page_2.value().tasks.front().id(), "task-2");
+  EXPECT_EQ(page_2.value().tasks.front().id(), "task-1");
 
   const auto cancel_result = store.Cancel("task-2");
   ASSERT_TRUE(cancel_result.ok());

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -73,7 +74,8 @@ constexpr std::string_view kTaskHistoryCreatedSequenceParseErrorMessage =
   sql.append(TaskTable(schema));
   sql.append(
       " SET context_id = $2, state = $3, has_status_timestamp = $4, status_seconds = $5, "
-      "status_nanos = $6, task_proto = $7, revision = revision + 1, updated_at = now() "
+      "status_nanos = $6, task_proto = $7, revision = revision + 1, updated_at = GREATEST(clock_timestamp(), "
+      "updated_at + interval '1 microsecond') "
       "WHERE id = $1 AND revision = $8 RETURNING revision");
   return sql;
 }
@@ -93,11 +95,12 @@ constexpr std::string_view kTaskHistoryCreatedSequenceParseErrorMessage =
   sql.append(
       " AS target"
       " (id, context_id, state, has_status_timestamp, status_seconds, status_nanos, task_proto, updated_at) "
-      "VALUES ($1, $2, $3, $4, $5, $6, $7, now()) "
+      "VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp()) "
       "ON CONFLICT (id) DO UPDATE SET context_id = EXCLUDED.context_id, state = EXCLUDED.state, "
       "has_status_timestamp = EXCLUDED.has_status_timestamp, status_seconds = EXCLUDED.status_seconds, "
       "status_nanos = EXCLUDED.status_nanos, task_proto = EXCLUDED.task_proto, "
-      "revision = target.revision + 1, updated_at = now()");
+      "revision = target.revision + 1, updated_at = GREATEST(clock_timestamp(), target.updated_at + interval '1 "
+      "microsecond')");
   constexpr int kTaskUpsertParameterCount = 7;
   const std::array<const char*, kTaskUpsertParameterCount> values = {task.id().c_str(), task.context_id().c_str(),
                                                                      state.c_str(),     has_timestamp.c_str(),
@@ -130,7 +133,8 @@ constexpr std::string_view kTaskHistoryCreatedSequenceParseErrorMessage =
   sql.append("UPDATE ");
   sql.append(table);
   sql.append(
-      " SET task_proto = $2, revision = revision + 1, updated_at = now() "
+      " SET task_proto = $2, revision = revision + 1, updated_at = GREATEST(clock_timestamp(), updated_at + interval "
+      "'1 microsecond') "
       "WHERE id = $1 AND revision = $3 AND created_sequence = $4");
   constexpr int kTaskHistoryUpdateParameterCount = 4;
   const std::array<const char*, kTaskHistoryUpdateParameterCount> values = {task.id().c_str(), payload.data(),
@@ -310,6 +314,64 @@ struct TaskListSqlFilter final {
     return core::Error::Internal(std::string(operation) + ": failed to parse count");
   }
   return parsed;
+}
+
+core::Result<std::size_t> CountTaskList(PGconn* connection, std::string_view schema, const TaskListSqlFilter& filter) {
+  std::string sql = "SELECT count(*) FROM ";
+  sql.append(TaskTable(schema)).append(filter.where_clause);
+  const auto values = BuildSqlParameterPointers(filter.values);
+  PgResult result(PQexecParams(connection, sql.c_str(), static_cast<int>(values.size()), nullptr, values.data(),
+                               nullptr, nullptr, 0));
+  const auto checked = CheckTuples(connection, result.get(), "count postgres tasks");
+  if (!checked.ok()) {
+    return checked.error();
+  }
+  return ParseCountResult(result.get(), "count postgres tasks");
+}
+
+void AppendTaskListBoundary(std::string* sql, std::vector<std::string>* values,
+                            const std::optional<ListTaskCursor>& cursor, bool has_filters) {
+  if (!cursor.has_value()) {
+    return;
+  }
+  const auto time_parameter = AddSqlParameter(values, std::to_string(cursor->updated_at));
+  const auto id_parameter = AddSqlParameter(values, cursor->task_id);
+  std::string timestamp = "('epoch'::timestamptz + (";
+  timestamp.append(time_parameter).append(" || ' microseconds')::interval)");
+  // Matching directions let PostgreSQL seek the complete composite key, including ties.
+  sql->append(has_filters ? " AND (updated_at, id COLLATE \"C\") < (" : " WHERE (updated_at, id COLLATE \"C\") < (");
+  sql->append(timestamp).append(", ").append(id_parameter).append(")");
+}
+
+core::Result<ListTasksResponse> ReadTaskListPage(PGresult* result, const ListTasksRequest& request,
+                                                 std::size_t total_size) {
+  ListTasksResponse response;
+  response.total_size = total_size;
+  const auto rows = static_cast<std::size_t>(PQntuples(result));
+  const auto capacity = request.page_size == 0 ? rows : std::min(request.page_size, rows);
+  response.tasks.reserve(capacity);
+  response.task_cursors.reserve(capacity);
+  for (int row = 0; row < PQntuples(result); ++row) {
+    if (request.page_size != 0 && response.tasks.size() == request.page_size) {
+      response.next_page_token = EncodeListPageToken(response.task_cursors.back());
+      break;
+    }
+    auto task = ParseTaskRow(result, row);
+    if (!task.ok()) {
+      return task.error();
+    }
+    ListTaskCursor cursor;
+    const std::string_view timestamp(PQgetvalue(result, row, 1));
+    const auto parsed = std::from_chars(timestamp.data(), timestamp.data() + timestamp.size(), cursor.updated_at);
+    if (parsed.ec != std::errc{} || parsed.ptr != timestamp.data() + timestamp.size()) {
+      return core::Error::Serialization("invalid stored task update time");
+    }
+    cursor.task_id = task.value().id();
+    response.task_cursors.push_back(std::move(cursor));
+    response.tasks.push_back(ProjectTaskForList(task.value(), request.include_artifacts, request.history_length));
+  }
+  response.page_size = response.tasks.size();
+  return response;
 }
 
 }  // namespace
@@ -494,70 +556,55 @@ core::Result<lf::a2a::v1::Task> PostgresTaskStore::Get(std::string_view id) cons
 }
 
 core::Result<ListTasksResponse> PostgresTaskStore::List(const ListTasksRequest& request) const {
-  const auto offset = ParseListPageToken(request.page_token);
-  if (!offset.ok()) {
-    return offset.error();
+  const auto cursor = ParseListPageToken(request.page_token);
+  if (!cursor.ok()) {
+    return cursor.error();
   }
-
   const TaskListSqlFilter filter = BuildTaskListSqlFilter(request);
   auto lease = pool_->Acquire();
   if (!lease.ok()) {
     return lease.error();
   }
-
-  const std::string count_sql = "SELECT count(*) FROM " + TaskTable(options_.schema) + filter.where_clause;
-  const auto count_values = BuildSqlParameterPointers(filter.values);
-  PgResult count_result(PQexecParams(lease.value().get(), count_sql.c_str(), static_cast<int>(count_values.size()),
-                                     nullptr, count_values.data(), nullptr, nullptr, 0));
-  const auto count_checked = CheckTuples(lease.value().get(), count_result.get(), "count postgres tasks");
-  if (!count_checked.ok()) {
-    return count_checked.error();
+  Transaction transaction(lease.value().get());
+  auto begun = transaction.Begin();
+  if (!begun.ok()) {
+    return begun.error();
   }
-  const auto total_size = ParseCountResult(count_result.get(), "count postgres tasks");
+  auto isolation =
+      Exec(lease.value().get(), "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", "set task list snapshot");
+  if (!isolation.ok()) {
+    return isolation.error();
+  }
+  const auto total_size = request.include_total_size ? CountTaskList(lease.value().get(), options_.schema, filter)
+                                                     : core::Result<std::size_t>(std::size_t{0});
   if (!total_size.ok()) {
     return total_size.error();
   }
-
-  const auto valid_offset = ValidateListPageOffset(offset.value(), total_size.value());
-  if (!valid_offset.ok()) {
-    return valid_offset.error();
-  }
-
-  ListTasksResponse response;
-  response.total_size = total_size.value();
-  const std::size_t remaining = total_size.value() - offset.value();
-  const std::size_t effective_page_size = request.page_size == 0 ? remaining : request.page_size;
-  const std::size_t result_size = std::min(effective_page_size, remaining);
-
+  const std::string table = TaskTable(options_.schema);
   std::vector<std::string> select_values = filter.values;
-  std::string select_sql =
-      "SELECT task_proto FROM " + TaskTable(options_.schema) + filter.where_clause + " ORDER BY created_sequence ASC";
+  std::string select_sql = "SELECT task_proto, ((extract(epoch FROM updated_at) * 1000000)::bigint)::text FROM ";
+  select_sql.append(table).append(filter.where_clause);
+  AppendTaskListBoundary(&select_sql, &select_values, cursor.value(), !filter.where_clause.empty());
+  select_sql.append(" ORDER BY updated_at DESC, id COLLATE \"C\" DESC");
   if (request.page_size != 0) {
-    select_sql += " LIMIT " + AddSqlParameter(&select_values, std::to_string(result_size));
+    // One lookahead row determines continuation without trusting a changing total.
+    const auto bounded_size = std::min(request.page_size, static_cast<std::size_t>(std::numeric_limits<int>::max()));
+    select_sql.append(" LIMIT ").append(AddSqlParameter(&select_values, std::to_string(bounded_size + 1)));
   }
-  select_sql += " OFFSET " + AddSqlParameter(&select_values, std::to_string(offset.value()));
-
-  const auto select_value_pointers = BuildSqlParameterPointers(select_values);
-  PgResult result(PQexecParams(lease.value().get(), select_sql.c_str(), static_cast<int>(select_value_pointers.size()),
-                               nullptr, select_value_pointers.data(), nullptr, nullptr, 1));
+  const auto pointers = BuildSqlParameterPointers(select_values);
+  PgResult result(PQexecParams(lease.value().get(), select_sql.c_str(), static_cast<int>(pointers.size()), nullptr,
+                               pointers.data(), nullptr, nullptr, 1));
   const auto checked = CheckTuples(lease.value().get(), result.get(), "list postgres tasks");
   if (!checked.ok()) {
     return checked.error();
   }
-
-  response.tasks.reserve(result_size);
-  for (int row = 0; row < PQntuples(result.get()); ++row) {
-    auto task = ParseTaskRow(result.get(), row);
-    if (!task.ok()) {
-      return task.error();
-    }
-    ApplyArtifactProjection(&task.value(), request.include_artifacts);
-    ApplyHistoryRetention(&task.value(), request.history_length);
-    response.tasks.push_back(std::move(task.value()));
+  auto response = ReadTaskListPage(result.get(), request, total_size.value());
+  if (!response.ok()) {
+    return response.error();
   }
-  response.page_size = response.tasks.size();
-  if (request.page_size != 0 && result_size < remaining) {
-    response.next_page_token = std::to_string(offset.value() + result_size);
+  auto committed = transaction.Commit();
+  if (!committed.ok()) {
+    return committed.error();
   }
   return response;
 }

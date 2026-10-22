@@ -31,6 +31,8 @@ struct ListTasksRequest final {
   std::optional<google::protobuf::Timestamp> status_timestamp_after;
   std::optional<std::size_t> history_length;
   bool include_artifacts = false;
+  // Internal bounded authorization scans count visible tasks themselves.
+  bool include_total_size = true;
 
   ListTasksRequest() noexcept = default;
 
@@ -44,7 +46,8 @@ struct ListTasksRequest final {
         status_filter(other.status_filter),
         status_timestamp_after(other.status_timestamp_after),
         history_length(other.history_length),
-        include_artifacts(other.include_artifacts) {}
+        include_artifacts(other.include_artifacts),
+        include_total_size(other.include_total_size) {}
 
   ListTasksRequest& operator=(const ListTasksRequest& other) {
     if (this != &other) {
@@ -55,6 +58,7 @@ struct ListTasksRequest final {
       status_timestamp_after = other.status_timestamp_after;
       history_length = other.history_length;
       include_artifacts = other.include_artifacts;
+      include_total_size = other.include_total_size;
     }
     return *this;
   }
@@ -66,7 +70,8 @@ struct ListTasksRequest final {
         status_filter(other.status_filter),
         status_timestamp_after(std::move(other.status_timestamp_after)),
         history_length(other.history_length),
-        include_artifacts(other.include_artifacts) {
+        include_artifacts(other.include_artifacts),
+        include_total_size(other.include_total_size) {
     other.page_size = 0;
     other.include_artifacts = false;
   }
@@ -80,6 +85,7 @@ struct ListTasksRequest final {
       status_timestamp_after = std::move(other.status_timestamp_after);
       history_length = other.history_length;
       include_artifacts = other.include_artifacts;
+      include_total_size = other.include_total_size;
       other.page_size = 0;
       other.include_artifacts = false;
     }
@@ -91,11 +97,23 @@ struct ListTasksRequest final {
 // explicit values outside the schema's inclusive range.
 [[nodiscard]] core::Result<std::size_t> NormalizeListTasksPageSize(std::optional<std::int64_t> page_size);
 
+// Storage update time in microseconds since Unix epoch; independent of status time.
+struct ListTaskCursor final {
+  std::int64_t updated_at = 0;
+  std::string task_id;
+};
+
+[[nodiscard]] bool ListCursorPrecedes(const ListTaskCursor& lhs, const ListTaskCursor& rhs);
+[[nodiscard]] std::string EncodeListPageToken(const ListTaskCursor& cursor);
+[[nodiscard]] core::Result<std::optional<ListTaskCursor>> ParseListPageToken(std::string_view page_token);
+
 struct ListTasksResponse final {
   std::vector<lf::a2a::v1::Task> tasks;
   std::size_t page_size = 0;
   std::size_t total_size = 0;
   std::string next_page_token;
+  // Internal boundaries for authorization before pagination. Never serialized.
+  std::vector<ListTaskCursor> task_cursors;
 };
 
 // Serializes the protocol response while guaranteeing its required top-level
@@ -103,8 +121,6 @@ struct ListTasksResponse final {
 [[nodiscard]] core::Result<std::string> SerializeListTasksResponse(const ListTasksResponse& response);
 
 [[nodiscard]] bool MatchesListFilters(const lf::a2a::v1::Task& task, const ListTasksRequest& request);
-[[nodiscard]] core::Result<std::size_t> ParseListPageToken(std::string_view page_token);
-[[nodiscard]] core::Result<void> ValidateListPageOffset(std::size_t offset, std::size_t size);
 void ApplyArtifactProjection(lf::a2a::v1::Task* task, bool include_artifacts);
 [[nodiscard]] lf::a2a::v1::Task ProjectTaskForList(const lf::a2a::v1::Task& task, bool include_artifacts,
                                                    std::optional<std::size_t> history_length);

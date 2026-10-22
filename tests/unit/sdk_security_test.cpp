@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -254,6 +255,12 @@ class SdkSecurityTest : public testing::Test {
     ASSERT_EQ(page.tasks.size(), 1U);
     EXPECT_EQ(page.total_size, kOwnedTaskCount);
     EXPECT_EQ(page.tasks.front().context_id(), kAlice);
+  }
+  static void CheckTaskOwners(const ListTasksResponse& page, std::string_view owner) {
+    EXPECT_FALSE(page.tasks.empty());
+    for (const auto& task : page.tasks) {
+      EXPECT_EQ(task.context_id(), owner);
+    }
   }
   void AddAuditInterceptors(Dispatcher& target) {
     target.AddInterceptor(std::make_shared<AuditInterceptor>(kFirstAuditId, audit_events, before_calls));
@@ -653,6 +660,39 @@ TEST_F(SdkSecurityTest, ListFiltersBeforeCountsProjectionsAndPagination) {
   EXPECT_NE(first.tasks.front().id(), last.tasks.front().id());
   EXPECT_TRUE(last.next_page_token.empty());
 }
+TEST_F(SdkSecurityTest, CursorRespectsOwnershipRevocation) {
+  ListTasksRequest query;
+  query.page_size = 1;
+  const auto first = ListPage(query);
+  ASSERT_FALSE(first.next_page_token.empty());
+  query.page_token = first.next_page_token;
+  auto revoke = std::async(std::launch::async, [&] { return store.CreateOrUpdate(Task(kTaskId, kBob)).ok(); });
+  ASSERT_TRUE(revoke.get());
+  const auto revoked = ListPage(query);
+  EXPECT_TRUE(revoked.tasks.empty());
+  EXPECT_EQ(revoked.total_size, 1U);
+  EXPECT_TRUE(revoked.next_page_token.empty());
+}
+
+TEST_F(SdkSecurityTest, CursorScopeChangesDoNotDiscloseHiddenTasks) {
+  ListTasksRequest query;
+  query.page_size = 1;
+  const auto first = ListPage(query);
+  ASSERT_FALSE(first.next_page_token.empty());
+  query.page_token = first.next_page_token;
+  context.auth_metadata.clear();
+  DispatchSecurity security(policy, &store);
+  context.principal = kBob;
+  const auto foreign = security.ListTasks(query, context);
+  ASSERT_TRUE(foreign.ok());
+  const auto& page = std::get<ListTasksResponse>(foreign.value().payload());
+  CheckTaskOwners(page, kBob);
+  policy->resources_allowed = false;
+  const auto empty = security.ListTasks(query, context);
+  ASSERT_TRUE(empty.ok());
+  EXPECT_EQ(std::get<ListTasksResponse>(empty.value().payload()).total_size, 0U);
+}
+
 TEST_F(SdkSecurityTest, NewStreamCreationUsesSdkIdentityWithoutCollidingWithAnotherCaller) {
   const auto foreign_id = std::string(kLegacyStreamingPrefix).append(kMessageId);
   ASSERT_TRUE(store.CreateOrUpdate(Task(foreign_id, kBob)).ok());
@@ -727,7 +767,7 @@ void CheckScopedStoreQueries(const std::vector<ListTasksRequest>& queries) {
 
 void CheckEmptyForeignScope(DispatchSecurity& security, const RequestContext& context, ListTasksRequest request) {
   request.context_id = kBob;
-  EXPECT_FALSE(security.ListTasks(request, context).ok());
+  EXPECT_TRUE(security.ListTasks(request, context).ok());
   request.page_token.clear();
   auto foreign = security.ListTasks(request, context);
   ASSERT_TRUE(foreign.ok());
@@ -744,7 +784,9 @@ TEST(SdkScopedListingTest, StoreQueriesAreBoundedAndHeavyProjectionsAreLoadedFor
   context.principal = kAlice;
   ListTasksRequest request;
   request.page_size = 1;
-  request.page_token = std::to_string(kMaxListTasksPageSize);
+  const auto first_page = store.backing.List({kMaxListTasksPageSize, {}});
+  ASSERT_TRUE(first_page.ok());
+  request.page_token = first_page.value().next_page_token;
   request.include_artifacts = true;
   auto result = security.ListTasks(request, context);
   ASSERT_TRUE(result.ok());
