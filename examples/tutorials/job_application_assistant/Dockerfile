@@ -1,5 +1,5 @@
 FROM alpine:3.22 AS build
-RUN apk add --no-cache build-base cmake curl-dev grpc-dev grpc-plugins ninja protobuf protobuf-dev simdjson-dev
+RUN apk add --no-cache build-base cmake curl-dev grpc-dev grpc-plugins ninja protobuf protobuf-dev simdjson-dev simdjson-static
 WORKDIR /src
 COPY . .
 RUN cmake -S . -B /build-sdk -G Ninja -DA2A_ENABLE_TESTING=OFF -DA2A_BUILD_EXAMPLES=OFF -DA2A_ENABLE_POSTGRES_STORE=OFF -DCMAKE_INSTALL_PREFIX=/install && cmake --build /build-sdk --parallel && cmake --install /build-sdk
