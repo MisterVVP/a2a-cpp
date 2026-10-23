@@ -89,7 +89,8 @@ void CheckParserParity(const std::array<std::string_view, N>& fixtures) {
 TEST(CoreProtoJsonGoldenTest, PreservesProtobufSemantics) {
   CheckParserParity<lf::a2a::v1::GetTaskRequest>(std::to_array<std::string_view>(
       {R"({"id":"t","history_length":3})", R"({"id":"t","historyLength":"3"})", R"({"historyLength":3e1})",
-       R"({"historyLength":2147483647.0000001})", R"({"historyLength":2147483648})", R"({"historyLength":null})"}));
+       R"({"i\u0064":"escaped","history\u004cength":3})", R"({"historyLength":2147483647.0000001})",
+       R"({"historyLength":2147483648})", R"({"historyLength":null})"}));
   CheckParserParity<lf::a2a::v1::Task>(std::to_array<std::string_view>(
       {R"({"id":"t","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-10-22T12:34:56.123Z"}})",
        R"({"status":{"state":2},"metadata":{"null":null,"list":[1,true,"text",{}]}})", R"({"history":[null]})",
@@ -98,7 +99,7 @@ TEST(CoreProtoJsonGoldenTest, PreservesProtobufSemantics) {
       {R"({"text":"hello"})", R"({"raw":"AP8="})", R"({"raw":"AP8"})", R"({"raw":"-__v"})", R"({"raw":"!"})",
        R"({"text":"hello","url":"https://example.test/file"})"}));
   CheckParserParity<lf::a2a::v1::AgentCard>(std::to_array<std::string_view>(
-      {R"({"name":"card","securitySchemes":{"bearer":{"httpAuthSecurityScheme":{"scheme":"bearer"}}}})",
+      {R"({"name":"card","securitySchemes":{"be\u0061rer":{"httpAuthSecurityScheme":{"scheme":"bearer"}}}})",
        R"({"capabilities":{"streaming":true},"securityRequirements":[{"schemes":{"bearer":{"list":["read"]}}}]})"}));
   CheckParserParity<google::protobuf::Int64Value>(std::to_array<std::string_view>(
       {R"("9223372036854775807")", "9007199254740993", "9007199254740993.0", "9223372036854775808"}));
@@ -109,8 +110,8 @@ TEST(CoreProtoJsonGoldenTest, PreservesProtobufSemantics) {
 TEST(CoreProtoJsonGoldenTest, RejectsMalformedAndAmbiguousProtocolObjects) {
   constexpr auto kInvalid = std::to_array<std::string_view>(
       {R"({"id":"t"} {})", R"({"id":"t",})", R"({"status":{"state":tru}})", R"({"metadata":{"value":01}})",
-       R"({"id":"\uD800"})", R"({"metadata":{"value":1e400}})", R"({"id":"first","id":"second"})", R"({"id":null})",
-       R"({"status":{"state":1,"state":2}})", R"({"history":[null]})"});
+       R"({"id":"\uD800"})", R"({"\uD800":true})", R"({"metadata":{"value":1e400}})", R"({"id":"first","id":"second"})",
+       R"({"id":null})", R"({"status":{"state":1,"state":2}})", R"({"history":[null]})"});
   constexpr a2a::core::ProtoJsonParseOptions kStrict{
       .ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true};
   for (const auto json : kInvalid) {

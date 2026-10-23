@@ -176,10 +176,9 @@ void DecodeField(Element value, google::protobuf::Message* message, const Field&
     if (key->cpp_type() != Field::CPPTYPE_STRING) {
       Reject(kInvalidField);
     }
-    for (auto member_result : JsonRead(value.get_object())) {
-      auto member = JsonRead(std::move(member_result));
+    for (auto member : JsonRead(value.get_object())) {
       const auto name = JsonRead(member.unescaped_key());
-      auto member_value = member.value();
+      auto member_value = JsonRead(member.value());
       auto* entry = message->GetReflection()->AddMessage(message, &field);
       entry->GetReflection()->SetString(entry, key, std::string(name));
       if (JsonRead(member_value.is_null())) {
@@ -278,10 +277,9 @@ void DecodeMessage(Element value, google::protobuf::Message* message, const Prot
     }
     return;
   }
-  for (auto member_result : JsonRead(value.get_object())) {
-    auto member = JsonRead(std::move(member_result));
+  for (auto member : JsonRead(value.get_object())) {
     const auto name = JsonRead(member.unescaped_key());
-    auto member_value = member.value();
+    auto member_value = JsonRead(member.value());
     const auto* field = FindField(descriptor, name);
     if (field == nullptr) {
       if (!options.ignore_unknown_fields) {

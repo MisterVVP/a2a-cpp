@@ -76,10 +76,9 @@ JsonCursor::~JsonCursor() {
 
 std::string JsonMember(std::string_view input, std::string_view name) {
   JsonCursor cursor(input);
-  for (auto member_result : JsonRead(cursor.root().get_object())) {
-    auto member = JsonRead(std::move(member_result));
+  for (auto member : JsonRead(cursor.root().get_object())) {
     if (JsonRead(member.unescaped_key()) == name) {
-      auto value = member.value();
+      auto value = JsonRead(member.value());
       return std::string(JsonRead(simdjson::to_json_string(value)));
     }
   }
