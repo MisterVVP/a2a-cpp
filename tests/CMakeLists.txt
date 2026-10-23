@@ -154,10 +154,13 @@ add_executable(core_protojson_golden_test
   unit/core_protojson_golden_test.cpp
 )
 
+target_include_directories(core_protojson_golden_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
 target_link_libraries(core_protojson_golden_test
   PRIVATE
     a2a::core
     a2a::proto_generated
+    simdjson::simdjson
     GTest::gtest_main
 )
 

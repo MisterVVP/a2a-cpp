@@ -33,14 +33,20 @@ Nested/reentrant parses acquire separate parsers; there is no process-wide lock.
 The on-demand cursor owns padded input and its own parser. DOM storage and cursor
 views never escape into SDK results or application callbacks. Returned protobuf
 messages and envelope JSON strings own their data.
+Each cache retains at most one parser with input capacity up to 1 MiB. Larger
+documents remain supported, but their DOM and on-demand parsers are released
+after use instead of retaining their large buffers on worker threads.
 
 The complete input is validated before decoding or skipping unknown fields. A
 second on-demand pass reads original tokens for typed payloads and subtree
 fallbacks, avoiding binary64 rounding of decimal integers during extraction.
 JSON-RPC envelopes must be objects and reject duplicate decoded member names,
 including escaped spellings. Typed strict parsing also rejects duplicate known
-fields/aliases in nested messages. Protobuf data maps retain their normal map
-semantics. Binding-specific null restrictions remain in place; ordinary protobuf
+fields/aliases in nested messages. Ordinary typed decoding keeps the last
+occurrence of repeated and message fields, replacing earlier arrays or objects
+even when the last occurrence is empty. Ordinary message fallbacks reject
+duplicate known fields instead of depending on version-specific merging.
+Protobuf data maps retain their normal map semantics. Binding-specific null restrictions remain in place; ordinary protobuf
 nulls leave fields unset.
 
 Inputs are limited to 64 MiB and nesting depth 128. Malformed JSON, trailing data,

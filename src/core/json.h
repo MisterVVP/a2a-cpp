@@ -20,6 +20,7 @@ namespace a2a::core::internal {
 
 inline constexpr std::size_t kMaximumJsonBytes = 64U * 1024U * 1024U;
 inline constexpr std::size_t kMaximumJsonDepth = 128U;
+inline constexpr std::size_t kMaximumCachedJsonBytes = 1024U * 1024U;
 
 // A document leases a parser from this thread's single-slot cache. Reentrant
 // parses acquire another parser; no document shares mutable storage. parse()
@@ -32,6 +33,7 @@ class JsonDocument final : private NonCopyableOrMovable {
   [[nodiscard]] Result<void> Parse(std::string_view input);
   [[nodiscard]] Result<void> ParseObject(std::string_view input);
   [[nodiscard]] simdjson::dom::element root() const { return root_; }
+  [[nodiscard]] std::size_t capacity() const { return parser_->capacity(); }
 
  private:
   std::unique_ptr<simdjson::dom::parser> parser_;
@@ -55,6 +57,7 @@ class JsonCursor final : private NonCopyableOrMovable {
   explicit JsonCursor(std::string_view input);
   ~JsonCursor();
   [[nodiscard]] simdjson::ondemand::document& root() { return root_; }
+  [[nodiscard]] std::size_t capacity() const { return parser_->capacity(); }
 
  private:
   simdjson::padded_string input_;

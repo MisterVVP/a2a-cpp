@@ -33,7 +33,26 @@ Install these tools before configuring the repository:
 cmake --version
 ```
 
-The installer supports Debian and Ubuntu. Confirm that the installed CMake version is 3.25 or newer. Some older distributions, including Ubuntu 22.04, provide an older CMake package and require a newer CMake installation from another source.
+The automatic installer supports Debian 12+ and Ubuntu 24.04+, whose packages
+provide simdjson 3.0+ and CMake 3.25+. It rejects older releases before installing
+packages.
+
+On older releases or other distributions, install the prerequisites above manually.
+Ubuntu 22.04 and Debian 11 package simdjson versions below 3.0; build a compatible
+version into a local prefix instead:
+
+```bash
+git clone --depth 1 --branch v3.12.3 https://github.com/simdjson/simdjson.git
+cmake -S simdjson -B simdjson/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DSIMDJSON_DEVELOPER_MODE=OFF \
+  -DCMAKE_INSTALL_PREFIX="$PWD/simdjson/install"
+cmake --build simdjson/build --parallel
+cmake --install simdjson/build
+cmake -S . -B build -DCMAKE_PREFIX_PATH="$PWD/simdjson/install"
+```
+
+Install CMake 3.25+ separately if the distribution's CMake is older.
 
 The same script also supports Windows when run from Git Bash.
 

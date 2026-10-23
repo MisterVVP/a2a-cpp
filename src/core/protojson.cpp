@@ -169,6 +169,10 @@ void DecodeSingleField(Element value, google::protobuf::Message* message, const 
 
 void DecodeField(Element value, google::protobuf::Message* message, const Field& field,
                  const ProtoJsonParseOptions& options) {
+  // Duplicate fields replace earlier values, including empty arrays and objects.
+  if (field.is_repeated() || field.cpp_type() == Field::CPPTYPE_MESSAGE) {
+    message->GetReflection()->ClearField(message, &field);
+  }
   if (field.is_map()) {
     const auto* key = field.message_type()->map_key();
     const auto* map_value = field.message_type()->map_value();
@@ -260,20 +264,9 @@ void DecodeMessage(Element value, google::protobuf::Message* message, const Prot
   const auto& descriptor = *message->GetDescriptor();
   if (NeedsProtobufDecoder(descriptor)) {
     const auto raw = JsonRead(simdjson::to_json_string(value));
-    if (descriptor.well_known_type() == Descriptor::WELLKNOWNTYPE_VALUE ||
-        descriptor.well_known_type() == Descriptor::WELLKNOWNTYPE_STRUCT ||
-        descriptor.well_known_type() == Descriptor::WELLKNOWNTYPE_LISTVALUE) {
-      const auto parsed = JsonToMessage(raw, message, options);
-      if (!parsed.ok()) {
-        Reject(parsed.error().message());
-      }
-      return;
-    }
-    google::protobuf::util::JsonParseOptions parse_options;
-    parse_options.ignore_unknown_fields = options.ignore_unknown_fields;
-    const auto status = google::protobuf::util::JsonStringToMessage(std::string(raw), message, parse_options);
-    if (!status.ok()) {
-      Reject(status.ToString());
+    const auto parsed = JsonToMessage(raw, message, options);
+    if (!parsed.ok()) {
+      Reject(parsed.error().message());
     }
     return;
   }
@@ -345,6 +338,10 @@ Result<void> JsonToMessage(std::string_view json, google::protobuf::Message* mes
       message->CopyFrom(internal::JsonToValue(document.root()).list_value());
     } else if (NeedsProtobufDecoder(*message->GetDescriptor()) ||
                (json.find("null") != std::string_view::npos && ContainsNull(document.root()))) {
+      // Protobuf versions differ on duplicates; never let a fallback merge them.
+      auto fallback_options = options;
+      fallback_options.reject_duplicate_top_level_fields = true;
+      ValidateFields(document.root(), *message->GetDescriptor(), fallback_options, true);
       google::protobuf::util::JsonParseOptions parse_options;
       parse_options.ignore_unknown_fields = options.ignore_unknown_fields;
       const auto status = google::protobuf::util::JsonStringToMessage(std::string(json), message, parse_options);

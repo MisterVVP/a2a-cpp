@@ -102,7 +102,10 @@ TEST(HttpJsonTransportUnitTest, GetTaskBuildsExpectedRequest) {
       MakeResolvedRest(), [&captured](const HttpRequest& request) -> a2a::core::Result<HttpClientResponse> {
         captured = request;
         return HttpClientResponse{
-            .status_code = kHttpOk, .headers = {{"A2A-Version", "1.0"}}, .body = R"({"id":"task-1"})"};
+            .status_code = kHttpOk,
+            .headers = {{"A2A-Version", "1.0"}},
+            .body =
+                R"({"id":"task-1","history":[{"messageId":"stale"}],"history":[],"status":{"state":1},"status":{}})"};
       });
 
   A2AClient client(std::move(transport));
@@ -111,6 +114,8 @@ TEST(HttpJsonTransportUnitTest, GetTaskBuildsExpectedRequest) {
   request.set_history_length(kHistoryLength);
   const auto response = client.GetTask(request);
   ASSERT_TRUE(response.ok());
+  EXPECT_TRUE(response.value().history().empty());
+  EXPECT_EQ(response.value().status().state(), lf::a2a::v1::TASK_STATE_UNSPECIFIED);
   EXPECT_EQ(captured.method, "GET");
   EXPECT_EQ(captured.url, "https://agent.example.com/a2a/tasks/task-1?historyLength=9");
   EXPECT_EQ(captured.headers.at("Accept"), "application/json");

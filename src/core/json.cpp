@@ -22,7 +22,7 @@ JsonDocument::JsonDocument() : parser_(std::move(cached_parser)) {
 }
 
 JsonDocument::~JsonDocument() {
-  if (cached_parser == nullptr) {
+  if (cached_parser == nullptr && capacity() <= kMaximumCachedJsonBytes) {
     cached_parser = std::move(parser_);
   }
 }
@@ -69,7 +69,7 @@ JsonCursor::JsonCursor(std::string_view input) : input_(input), parser_(std::mov
 }
 
 JsonCursor::~JsonCursor() {
-  if (cached_cursor == nullptr) {
+  if (cached_cursor == nullptr && capacity() <= kMaximumCachedJsonBytes) {
     cached_cursor = std::move(parser_);
   }
 }
