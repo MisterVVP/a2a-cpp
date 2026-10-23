@@ -154,4 +154,45 @@ void BM_ProtoJson_JsonToMessage_StreamResponse(benchmark::State& state) {
 }
 BENCHMARK(BM_ProtoJson_JsonToMessage_StreamResponse);
 
+void BM_ProtoJson_JsonToMessage_AgentCard(benchmark::State& state) {
+  const auto json = a2a::bench::JsonOrDie(a2a::bench::BuildAgentCard());
+  for (auto _ : state) {
+    lf::a2a::v1::AgentCard card;
+    auto parsed = a2a::core::JsonToMessage(json, &card);
+    benchmark::DoNotOptimize(parsed);
+  }
+}
+BENCHMARK(BM_ProtoJson_JsonToMessage_AgentCard);
+
+void BM_ProtoJson_JsonToMessage_TaskList(benchmark::State& state) {
+  const auto json = a2a::bench::JsonOrDie(BuildListTasksResponse(static_cast<std::int32_t>(state.range(0))));
+  for (auto _ : state) {
+    lf::a2a::v1::ListTasksResponse response;
+    auto parsed = a2a::core::JsonToMessage(json, &response,
+                                           {.ignore_unknown_fields = true,
+                                            .reject_top_level_null_fields = true,
+                                            .reject_duplicate_top_level_fields = true});
+    benchmark::DoNotOptimize(parsed);
+  }
+}
+BENCHMARK(BM_ProtoJson_JsonToMessage_TaskList)->Arg(kSingleTask)->Arg(kSmallTaskList)->Arg(kMediumTaskList);
+
+void BM_ProtoJson_JsonToMessage_LargeHistoryArtifacts(benchmark::State& state) {
+  constexpr int kHistoryMessages = 256;
+  constexpr std::size_t kTextBytes = 1024;
+  constexpr std::size_t kArtifactBytes = 16384;
+  auto task = a2a::bench::BuildTask();
+  for (int index = 0; index < kHistoryMessages; ++index) {
+    task.add_history()->add_parts()->set_text(std::string(kTextBytes, 'x'));
+  }
+  task.add_artifacts()->add_parts()->set_raw(std::string(kArtifactBytes, 'x'));
+  const auto json = a2a::bench::JsonOrDie(task);
+  for (auto _ : state) {
+    lf::a2a::v1::Task parsed_task;
+    auto parsed = a2a::core::JsonToMessage(json, &parsed_task);
+    benchmark::DoNotOptimize(parsed);
+  }
+}
+BENCHMARK(BM_ProtoJson_JsonToMessage_LargeHistoryArtifacts);
+
 }  // namespace

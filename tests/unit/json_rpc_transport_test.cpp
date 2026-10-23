@@ -443,7 +443,7 @@ TEST(JsonRpcTransportUnitTest, ParsesJsonRpcErrorObjectProtocolCodeAndMessage) {
         return HttpClientResponse{
             .status_code = kHttpBadGateway,
             .headers = {{"A2A-Version", "1.0"}},
-            .body = R"({"jsonrpc":"2.0","id":"req-123","error":{"code":-32601,"message":"missing method"}})"};
+            .body = R"({"jsonrpc":"2.0","id":"req-123","error":{"code":-32601.0,"message":"missing method"}})"};
       },
       JsonRpcTransport::kDefaultTimeout, [] { return "req-123"; });
 

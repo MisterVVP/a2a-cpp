@@ -111,7 +111,7 @@ On Debian, Ubuntu, or macOS, build both examples with:
 ./scripts/run_examples.sh build-example streaming_server streaming_client
 ```
 
-On macOS, `brew install cmake ninja protobuf grpc re2 abseil curl` may be used instead of the dependency script.
+On macOS, `brew install cmake ninja protobuf grpc re2 abseil curl simdjson` may be used instead of the dependency script.
 
 On Windows, install Visual Studio 2022 with the C++ workload and use Git Bash:
 

@@ -75,9 +75,9 @@ class JsonRpcTransport final : public ClientTransport {
                                                                            StreamObserver& observer,
                                                                            const CallOptions& options) const;
 
-  [[nodiscard]] core::Result<google::protobuf::Value> InvokeForResultValue(std::string_view method_name,
-                                                                           const google::protobuf::Message& request,
-                                                                           const CallOptions& options) const;
+  [[nodiscard]] core::Result<std::string> InvokeForResultJson(std::string_view method_name,
+                                                              const google::protobuf::Message& request,
+                                                              const CallOptions& options) const;
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;

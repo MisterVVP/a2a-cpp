@@ -17,7 +17,7 @@ namespace a2a::server::internal {
 struct JsonRpcEnvelope final {
   google::protobuf::Value id;
   std::string method;
-  google::protobuf::Struct params;
+  std::string params;
 };
 
 [[nodiscard]] core::Result<JsonRpcEnvelope> ParseJsonRpcEnvelope(std::string_view body);

@@ -17,7 +17,6 @@
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/json_rpc.h"
-#include "a2a/core/json_value.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
@@ -36,7 +35,6 @@ using json_rpc_internal::ToClientHttpResponse;
 using json_rpc_internal::ToSharedHttpRequest;
 using json_rpc_internal::ValidateResponseVersion;
 
-constexpr std::string_view kEmptyJsonObject = "{}";
 constexpr std::string_view kDefaultMtlsUnsupportedMessage =
     "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
 
@@ -68,63 +66,20 @@ core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response)
 
 core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
                                                                   std::string_view expected_id) {
-  const std::string_view response_body = response.body;
-  const auto range = core::json::FindTopLevelObjectMemberValue(response_body, core::json_rpc::kResultMemberName);
-  if (!range.has_value()) {
-    const auto result = ParseResponseResult(response, expected_id);
-    if (!result.ok()) {
-      return result.error();
-    }
-    const auto status = ValidateJsonRpcHttpStatus(response);
-    if (!status.ok()) {
-      return status.error();
-    }
-    if (result.value().kind_case() != google::protobuf::Value::kStructValue) {
-      return core::Error::Serialization("ListTasks JSON-RPC result must be an object")
-          .WithTransport("jsonrpc")
-          .WithHttpStatus(response.status_code);
-    }
-    const auto result_json = core::MessageToJson(result.value());
-    if (!result_json.ok()) {
-      return result_json.error();
-    }
-    lf::a2a::v1::ListTasksResponse decoded_result;
-    const auto parsed = core::JsonToMessage(result_json.value(), &decoded_result,
-                                            {.ignore_unknown_fields = true,
-                                             .reject_top_level_null_fields = true,
-                                             .reject_duplicate_top_level_fields = true});
-    if (!parsed.ok()) {
-      return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
-    }
-    return decoded_result;
-  }
-  const std::string_view prefix = response_body.substr(0, range->begin);
-  const std::string_view suffix = response_body.substr(range->end);
-  std::string validation_body;
-  validation_body.reserve(prefix.size() + suffix.size() + kEmptyJsonObject.size());
-  validation_body.append(prefix);
-  validation_body.append(kEmptyJsonObject);
-  validation_body.append(suffix);
-  const HttpClientResponse validation_response{
-      .status_code = response.status_code,
-      .headers = {},
-      .body = std::move(validation_body),
-  };
-  const auto validated = ParseResponseResult(validation_response, expected_id);
-  if (!validated.ok()) {
-    return validated.error();
+  const auto result_json = ParseResponseResult(response, expected_id);
+  if (!result_json.ok()) {
+    return result_json.error();
   }
   const auto status = ValidateJsonRpcHttpStatus(response);
   if (!status.ok()) {
     return status.error();
   }
   lf::a2a::v1::ListTasksResponse result;
-  const std::string_view result_json = response_body.substr(range->begin, range->end - range->begin);
   const auto parsed = core::JsonToMessage(
-      result_json, &result,
+      result_json.value(), &result,
       {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
   if (!parsed.ok()) {
-    return parsed.error().WithTransport("jsonrpc").WithHttpStatus(response.status_code);
+    return parsed.error().WithTransport(json_rpc_internal::kTransportName).WithHttpStatus(response.status_code);
   }
   return result;
 }
@@ -216,9 +171,9 @@ core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::strin
   return response.value();
 }
 
-core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(std::string_view method_name,
-                                                                             const google::protobuf::Message& request,
-                                                                             const CallOptions& options) const {
+core::Result<std::string> JsonRpcTransport::InvokeForResultJson(std::string_view method_name,
+                                                                const google::protobuf::Message& request,
+                                                                const CallOptions& options) const {
   if (method_name.empty()) {
     return core::Error::Validation("JSON-RPC method name is required");
   }
@@ -253,7 +208,7 @@ core::Result<google::protobuf::Value> JsonRpcTransport::InvokeForResultValue(std
 
 core::Result<lf::a2a::v1::SendMessageResponse> JsonRpcTransport::SendMessage(
     const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) {
-  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kSendMessage, request, options);
+  const auto result = InvokeForResultJson(core::json_rpc::MethodNames::kSendMessage, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -271,7 +226,7 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(const lf::a2a::v1::Get
     return core::Error::Validation("GetTaskRequest.id is required");
   }
 
-  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kGetTask, request, options);
+  const auto result = InvokeForResultJson(core::json_rpc::MethodNames::kGetTask, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -326,7 +281,7 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(const lf::a2a::v1::
     return core::Error::Validation("CancelTaskRequest.id is required");
   }
 
-  const auto result = InvokeForResultValue(core::json_rpc::MethodNames::kCancelTask, request, options);
+  const auto result = InvokeForResultJson(core::json_rpc::MethodNames::kCancelTask, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -340,7 +295,7 @@ core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(const lf::a2a::v1::
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
   const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig, request, options);
+      InvokeForResultJson(core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -359,7 +314,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::GetTaskP
   }
 
   const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kGetTaskPushNotificationConfig, request, options);
+      InvokeForResultJson(core::json_rpc::MethodNames::kGetTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -374,7 +329,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::GetTaskP
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> JsonRpcTransport::ListTaskPushNotificationConfigs(
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
   const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kListTaskPushNotificationConfigs, request, options);
+      InvokeForResultJson(core::json_rpc::MethodNames::kListTaskPushNotificationConfigs, request, options);
   if (!result.ok()) {
     return result.error();
   }
@@ -393,7 +348,7 @@ core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
   }
 
   const auto result =
-      InvokeForResultValue(core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig, request, options);
+      InvokeForResultJson(core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig, request, options);
   if (!result.ok()) {
     return result.error();
   }

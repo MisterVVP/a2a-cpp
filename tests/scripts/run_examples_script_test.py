@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -136,6 +137,37 @@ class RunExamplesScriptTest(unittest.TestCase):
         self.assertIn("bootstrap-vcpkg.bat", result.stdout)
         self.assertIn("vcpkg.exe", result.stdout)
         self.assertIn("--triplet x64-windows", result.stdout)
+
+    def test_linux_dependency_installer_requires_compatible_distribution(self) -> None:
+        if shutil.which("dpkg") is None:
+            self.skipTest("dpkg is required for Debian/Ubuntu version checks")
+        os_release = self.root / "os-release"
+        installer = self.root / "scripts" / "install_build_deps.sh"
+        installer.write_text(
+            installer.read_text(encoding="utf-8").replace(
+                "source /etc/os-release", f"source {shlex.quote(str(os_release))}"
+            ),
+            encoding="utf-8",
+        )
+        environment = self.environment.copy()
+        environment.update({"OS": "Linux", "A2A_DEPS_PLATFORM": "Linux"})
+        for distro, version, supported in (
+            ("ubuntu", "22.04", False), ("ubuntu", "24.04", True),
+            ("debian", "11", False), ("debian", "12", True),
+            ("fedora", "40", False),
+        ):
+            with self.subTest(distro=distro, version=version):
+                os_release.write_text(f"ID={distro}\nVERSION_ID={version}\n", encoding="utf-8")
+                result = subprocess.run(
+                    ["bash", str(installer), "--dry-run"], cwd=self.root,
+                    env=environment, check=False, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode == 0, supported, result.stderr)
+                if supported:
+                    self.assertIn("libsimdjson-dev", result.stdout)
+                else:
+                    self.assertIn("simdjson >= 3.0", result.stderr)
+                    self.assertNotIn("apt-get", result.stdout)
 
 
 if __name__ == "__main__":
