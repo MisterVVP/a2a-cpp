@@ -58,18 +58,6 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   gtest_discover_tests(subscription_diagnostics_test)
 endif()
 
-add_executable(json_value_test
-  unit/json_value_test.cpp
-)
-
-target_link_libraries(json_value_test
-  PRIVATE
-    a2a::core
-    GTest::gtest_main
-)
-
-gtest_discover_tests(json_value_test)
-
 add_executable(non_copyable_test
   unit/non_copyable_test.cpp
 )
@@ -166,10 +154,13 @@ add_executable(core_protojson_golden_test
   unit/core_protojson_golden_test.cpp
 )
 
+target_include_directories(core_protojson_golden_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
 target_link_libraries(core_protojson_golden_test
   PRIVATE
     a2a::core
     a2a::proto_generated
+    simdjson::simdjson
     GTest::gtest_main
 )
 

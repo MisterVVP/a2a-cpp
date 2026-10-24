@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Installs build/test/lint dependencies for a2a-cpp on Debian/Ubuntu or
+# Installs build/test/lint dependencies for a2a-cpp on Debian 12+/Ubuntu 24.04+ or
 # Windows through Git Bash and vcpkg.
 # Usage:
 #   ./scripts/install_build_deps.sh
@@ -33,8 +33,15 @@ is_windows_git_bash() {
 install_debian_dependencies() {
   # shellcheck disable=SC1091
   source /etc/os-release
-  if [[ "${ID:-}" != "ubuntu" && "${ID_LIKE:-}" != *"debian"* ]]; then
-    echo "This installer supports Debian/Ubuntu and Windows Git Bash." >&2
+  local minimum_version
+  case "${ID:-}" in
+    ubuntu) minimum_version=24.04 ;;
+    debian) minimum_version=12 ;;
+    *) minimum_version= ;;
+  esac
+  if [[ -z "${minimum_version}" ]] || ! dpkg --compare-versions "${VERSION_ID:-0}" ge "${minimum_version}"; then
+    echo "Automatic installation requires Ubuntu 24.04+ or Debian 12+ (simdjson >= 3.0)." >&2
+    echo "For manual installation, see book/src/getting-started/installation.md." >&2
     exit 1
   fi
 
@@ -49,6 +56,7 @@ install_debian_dependencies() {
     git
     protobuf-compiler
     libprotobuf-dev
+    libsimdjson-dev
     protobuf-compiler-grpc
     libgrpc++-dev
     libcurl4-openssl-dev

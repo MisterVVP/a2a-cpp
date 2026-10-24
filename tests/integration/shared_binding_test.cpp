@@ -39,6 +39,11 @@ constexpr char kCompletedMessageId[] = "complete-task-binding";
 constexpr char kStreamMessageId[] = "binding-stream-message";
 constexpr char kContextId[] = "binding-context";
 constexpr char kText[] = "binding equivalence";
+constexpr char kNullMetadataKey[] = "nullable";
+constexpr char kListMetadataKey[] = "values";
+constexpr char kRawPart[] = "\0\xff";
+constexpr std::size_t kRawPartBytes = 2;
+constexpr double kMetadataNumber = 42;
 constexpr char kPushId[] = "binding-push-config";
 constexpr char kPushUrl[] = "https://example.invalid/binding-push";
 constexpr char kMissingTaskId[] = "binding-nonexistent-task";
@@ -79,6 +84,12 @@ lf::a2a::v1::SendMessageRequest Message(std::string_view message_id = kMessageId
   request.mutable_message()->set_message_id(std::string(message_id));
   request.mutable_message()->set_context_id(kContextId);
   request.mutable_message()->add_parts()->set_text(kText);
+  request.mutable_message()->add_parts()->set_raw(kRawPart, kRawPartBytes);
+  auto* fields = request.mutable_message()->mutable_metadata()->mutable_fields();
+  (*fields)[kNullMetadataKey].set_null_value(google::protobuf::NULL_VALUE);
+  auto* values = (*fields)[kListMetadataKey].mutable_list_value();
+  values->add_values()->set_number_value(kMetadataNumber);
+  values->add_values()->set_bool_value(true);
   return request;
 }
 

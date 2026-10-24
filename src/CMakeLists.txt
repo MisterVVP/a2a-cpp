@@ -22,7 +22,7 @@ set(A2A_CORE_SOURCES
   core/error.cpp
   core/extensions.cpp
   core/http_utils.cpp
-  core/json_value.cpp
+  core/json.cpp
   core/protojson.cpp
   core/response_builders.cpp
   core/string_utils.cpp
@@ -44,6 +44,8 @@ target_link_libraries(a2a_core
   PUBLIC
     a2a::proto_generated
     protobuf::libprotobuf
+  PRIVATE
+    simdjson::simdjson
 )
 
 if(A2A_ENABLE_SIGNING)
@@ -166,15 +168,15 @@ target_link_libraries(a2a_server
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(a2a_core_diagnostics STATIC ${A2A_CORE_SOURCES} core/subscription_diagnostics.cpp)
   target_include_directories(a2a_core_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf)
+  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf PRIVATE simdjson::simdjson)
 
   add_library(a2a_client_diagnostics STATIC ${A2A_CLIENT_SOURCES})
   target_include_directories(a2a_client_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a::http)
+  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
 
   add_library(a2a_server_diagnostics STATIC ${A2A_SERVER_SOURCES})
   target_include_directories(a2a_server_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a::http)
+  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
 
   foreach(diagnostics_target IN ITEMS a2a_core_diagnostics a2a_client_diagnostics a2a_server_diagnostics)
     target_include_directories(${diagnostics_target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -244,3 +246,9 @@ install(TARGETS ${A2A_INSTALL_TARGETS}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+foreach(json_target IN ITEMS a2a_core a2a_client a2a_server)
+  target_include_directories(${json_target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+endforeach()
+target_link_libraries(a2a_client PRIVATE simdjson::simdjson)
+target_link_libraries(a2a_server PRIVATE simdjson::simdjson)

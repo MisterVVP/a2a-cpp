@@ -6,6 +6,7 @@
 #include <google/protobuf/struct.pb.h>
 
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -14,6 +15,7 @@
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
+#include "core/json.h"
 
 namespace a2a::client::json_rpc_internal {
 namespace {
@@ -86,84 +88,67 @@ core::Error BuildJsonRpcEnvelopeError(std::string_view message, const HttpClient
       .WithHttpStatus(response.status_code);
 }
 
-core::Error BuildRemoteJsonRpcError(const google::protobuf::Value& error_value, const HttpClientResponse& response) {
-  if (!error_value.has_struct_value()) {
+core::Error BuildRemoteJsonRpcError(simdjson::dom::element error_value, const HttpClientResponse& response) {
+  if (!error_value.is_object()) {
     return BuildJsonRpcEnvelopeError(kInvalidErrorPayloadMessage, response);
   }
-
-  const auto& fields = error_value.struct_value().fields();
   std::string message(kRequestFailedMessage);
   std::string code;
-
-  const auto message_it = fields.find(kMessageMemberName);
-  if (message_it != fields.end() && message_it->second.kind_case() == ::google::protobuf::Value::kStringValue) {
-    message = message_it->second.string_value();
+  std::string_view text;
+  if (error_value[kMessageMemberName].get_string().get(text) == simdjson::SUCCESS) {
+    message = text;
   }
-
-  const auto code_it = fields.find(kCodeMemberName);
-  if (code_it != fields.end()) {
-    if (code_it->second.kind_case() == ::google::protobuf::Value::kNumberValue) {
-      const auto numeric_code = static_cast<int>(code_it->second.number_value());
-      code = std::to_string(numeric_code);
-    } else if (code_it->second.kind_case() == ::google::protobuf::Value::kStringValue) {
-      code = code_it->second.string_value();
+  simdjson::dom::element code_value;
+  if (error_value[kCodeMemberName].get(code_value) == simdjson::SUCCESS) {
+    if (code_value.is_string()) {
+      code = std::string_view(code_value.get_string());
+    } else if (code_value.is_number()) {
+      // Preserve legacy code normalization without narrowing out-of-range input.
+      const double number = code_value.get_double();
+      if (number >= std::numeric_limits<int>::min() && number <= std::numeric_limits<int>::max()) {
+        code = std::to_string(static_cast<int>(number));
+      } else {
+        code = simdjson::minify(code_value);
+      }
     }
   }
-
-  core::Error error =
+  auto error =
       core::Error::RemoteProtocol(message).WithTransport(kJsonRpcTransportName).WithHttpStatus(response.status_code);
-  if (!code.empty()) {
-    error = error.WithProtocolCode(code);
-  }
-  return error;
+  return code.empty() ? error : error.WithProtocolCode(code);
 }
 
-core::Result<google::protobuf::Struct> ParseEnvelope(std::string_view payload, const HttpClientResponse& response) {
-  google::protobuf::Struct envelope;
-  const auto parse = core::JsonToMessage(payload, &envelope);
-  if (!parse.ok()) {
-    return parse.error().WithTransport(kJsonRpcTransportName).WithHttpStatus(response.status_code);
-  }
-  return envelope;
-}
-
-core::Result<google::protobuf::Value> ParseResponseResult(const HttpClientResponse& response,
-                                                          std::string_view expected_id) {
-  const auto parsed = ParseEnvelope(response.body, response);
+core::Result<std::string> ParseResponseResult(const HttpClientResponse& response, std::string_view expected_id) {
+  core::internal::JsonDocument document;
+  const auto parsed = document.ParseObject(response.body);
   if (!parsed.ok()) {
-    return parsed.error();
+    return parsed.error().WithTransport(kJsonRpcTransportName).WithHttpStatus(response.status_code);
   }
-
-  const auto& fields = parsed.value().fields();
-  const auto version_it = fields.find(core::json_rpc::kVersionMemberName);
-  if (version_it == fields.end() || version_it->second.kind_case() != ::google::protobuf::Value::kStringValue ||
-      version_it->second.string_value() != core::json_rpc::kVersion) {
+  const auto envelope = document.root();
+  std::string_view text;
+  if (envelope[core::json_rpc::kVersionMemberName].get_string().get(text) != simdjson::SUCCESS ||
+      text != core::json_rpc::kVersion) {
     return BuildJsonRpcEnvelopeError(kInvalidVersionMessage, response);
   }
-
-  const auto id_it = fields.find(core::json_rpc::kIdMemberName);
-  if (id_it == fields.end() || id_it->second.kind_case() != ::google::protobuf::Value::kStringValue) {
+  if (envelope[core::json_rpc::kIdMemberName].get_string().get(text) != simdjson::SUCCESS) {
     return BuildJsonRpcEnvelopeError(kInvalidIdMessage, response);
   }
-  if (id_it->second.string_value() != expected_id) {
+  if (text != expected_id) {
     return BuildJsonRpcEnvelopeError(kMismatchedIdMessage, response);
   }
-
-  const auto error_it = fields.find(kErrorMemberName);
-  const auto result_it = fields.find(core::json_rpc::kResultMemberName);
-  if (error_it != fields.end() && result_it != fields.end()) {
+  simdjson::dom::element error;
+  simdjson::dom::element result;
+  const bool has_error = envelope[kErrorMemberName].get(error) == simdjson::SUCCESS;
+  const bool has_result = envelope[core::json_rpc::kResultMemberName].get(result) == simdjson::SUCCESS;
+  if (has_error && has_result) {
     return BuildJsonRpcEnvelopeError(kResultAndErrorMessage, response);
   }
-
-  if (error_it != fields.end()) {
-    return BuildRemoteJsonRpcError(error_it->second, response);
+  if (has_error) {
+    return BuildRemoteJsonRpcError(error, response);
   }
-
-  if (result_it == fields.end()) {
+  if (!has_result) {
     return BuildJsonRpcEnvelopeError(kMissingResultMessage, response);
   }
-
-  return result_it->second;
+  return core::internal::JsonMember(response.body, core::json_rpc::kResultMemberName);
 }
 
 // Shared by unary and SSE JSON-RPC calls so request envelope fields stay consistent.

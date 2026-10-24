@@ -6,7 +6,11 @@
   "dependencies": [
     "protobuf",
     "grpc",
-    "curl"
+    "curl",
+    {
+      "name": "simdjson",
+      "version>=": "3.0.1"
+    }
   ],
   "features": {
     "signing": {
@@ -15,10 +19,6 @@
         {
           "name": "openssl",
           "version>=": "3.0.8"
-        },
-        {
-          "name": "simdjson",
-          "version>=": "3.0.1"
         }
       ]
     }

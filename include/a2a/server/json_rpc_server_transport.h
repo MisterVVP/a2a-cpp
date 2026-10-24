@@ -47,7 +47,7 @@ class JsonRpcServerTransport final {
   struct JsonRpcEnvelope final {
     ResponseId id;
     std::string method;
-    google::protobuf::Struct params;
+    std::string params;
   };
 
   struct JsonRpcRequest final {
