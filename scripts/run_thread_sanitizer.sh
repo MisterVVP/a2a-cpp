@@ -27,6 +27,11 @@ cmake -S . -B "${BUILD_DIR}" -G Ninja \
   -DA2A_ENABLE_POSTGRES_STORE=OFF \
   -DA2A_ENABLE_TESTING=ON
 
+# Include optional request lifecycle coverage only when its target is available.
+if cmake --build "${BUILD_DIR}" --target help | grep -F 'request_execution_test:' >/dev/null; then
+  TARGETS+=(request_execution_test)
+fi
+
 cmake --build "${BUILD_DIR}" --parallel --target "${TARGETS[@]}"
 
 # No suppressions are applied: reports from this focused SDK-owned set must fail.
