@@ -61,6 +61,28 @@ void RoutePayload(const DispatchRequest& request, const char* mismatch, Invoke i
   });
 }
 
+// Keep Executor dependent in these checks. MSVC otherwise resolves captured
+// executor members in generic lambdas before discarding the unary-only branch.
+template <typename Executor, typename Context, typename Completion>
+void InvokeSendStreamingMessage(Executor& executor, const lf::a2a::v1::SendMessageRequest& payload, Context& context,
+                                Completion done) {
+  if constexpr (requires { executor.SendStreamingMessage(payload, context, std::move(done)); }) {
+    executor.SendStreamingMessage(payload, context, std::move(done));
+  } else {
+    done(core::Error::Validation(kUnaryOnly));
+  }
+}
+
+template <typename Executor, typename Context, typename Completion>
+void InvokeSubscribeTask(Executor& executor, const lf::a2a::v1::GetTaskRequest& payload, Context& context,
+                         Completion done) {
+  if constexpr (requires { executor.SubscribeTask(payload, context, std::move(done)); }) {
+    executor.SubscribeTask(payload, context, std::move(done));
+  } else {
+    done(core::Error::Validation(kUnaryOnly));
+  }
+}
+
 template <typename Executor, typename Context, typename Completion>
 void RouteDispatch(Executor& executor, const DispatchRequest& request, Context& context, Completion completion) {
   using namespace core::protocol_error_messages;
@@ -75,11 +97,7 @@ void RouteDispatch(Executor& executor, const DispatchRequest& request, Context& 
       RoutePayload<lf::a2a::v1::SendMessageRequest, std::unique_ptr<ServerStreamSession>>(
           request, kDispatchPayloadTypeMismatchForSendStreamingMessage.data(),
           [&](const auto& payload, auto done) {
-            if constexpr (requires { executor.SendStreamingMessage(payload, context, std::move(done)); }) {
-              executor.SendStreamingMessage(payload, context, std::move(done));
-            } else {
-              done(core::Error::Validation(kUnaryOnly));
-            }
+            InvokeSendStreamingMessage(executor, payload, context, std::move(done));
           },
           std::move(completion));
       return;
@@ -92,13 +110,7 @@ void RouteDispatch(Executor& executor, const DispatchRequest& request, Context& 
     case DispatcherOperation::kSubscribeTask:
       RoutePayload<lf::a2a::v1::GetTaskRequest, std::unique_ptr<ServerStreamSession>>(
           request, kDispatchPayloadTypeMismatchForGetTask.data(),
-          [&](const auto& payload, auto done) {
-            if constexpr (requires { executor.SubscribeTask(payload, context, std::move(done)); }) {
-              executor.SubscribeTask(payload, context, std::move(done));
-            } else {
-              done(core::Error::Validation(kUnaryOnly));
-            }
-          },
+          [&](const auto& payload, auto done) { InvokeSubscribeTask(executor, payload, context, std::move(done)); },
           std::move(completion));
       return;
     case DispatcherOperation::kListTasks:

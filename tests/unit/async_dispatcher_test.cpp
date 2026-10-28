@@ -515,15 +515,24 @@ TEST(AsyncDispatcherTest, RequiredExtensionsUseSharedValidator) {
   EXPECT_TRUE(activated.Receive().ok());
   EXPECT_EQ(executor->calls.load(), 1);
 }
+void ExpectStreamRejected(AsyncDispatcher& dispatcher, const DispatchRequest& request) {
+  FakeTransport stream;
+  ASSERT_TRUE(stream.Send(dispatcher, request).ok());
+  const auto response = stream.Receive();
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kValidation);
+}
+
 TEST(AsyncDispatcherTest, StreamingIsRejectedAndHistoryProjectionMatchesSync) {
   auto executor = std::make_shared<FakeExecutor>();
   AsyncDispatcher dispatcher(executor);
-  FakeTransport stream;
-  ASSERT_TRUE(stream
-                  .Send(dispatcher,
-                        {.operation = DispatcherOperation::kSubscribeTask, .payload = lf::a2a::v1::GetTaskRequest{}})
-                  .ok());
-  EXPECT_FALSE(stream.Receive().ok());
+  const std::vector<DispatchRequest> streams{
+      {.operation = DispatcherOperation::kSendStreamingMessage, .payload = lf::a2a::v1::SendMessageRequest{}},
+      {.operation = DispatcherOperation::kSubscribeTask, .payload = lf::a2a::v1::GetTaskRequest{}},
+  };
+  for (const auto& request : streams) {
+    ExpectStreamRejected(dispatcher, request);
+  }
   auto query = GetTaskRequest();
   std::get<lf::a2a::v1::GetTaskRequest>(query.payload).set_history_length(kHistoryLimit);
   FakeTransport get;
