@@ -3,11 +3,37 @@
 
 #include "a2a/server/engine/request_execution.h"
 
+#include <atomic>
+#include <optional>
+#include <stop_token>
 #include <utility>
 
-#include "server/engine/request_execution_state.h"
-
 namespace a2a::server::engine {
+
+struct RequestExecutionState final {
+  explicit RequestExecutionState(RequestContext request_metadata,
+                                 std::optional<RequestExecutionContext::Clock::time_point> request_deadline)
+      : metadata(std::move(request_metadata)), deadline(request_deadline) {}
+
+  [[nodiscard]] bool TryFinish(RequestOutcome terminal) noexcept {
+    auto expected = RequestOutcome::kPending;
+    if (!outcome.compare_exchange_strong(expected, terminal)) {
+      return false;
+    }
+    if (terminal != RequestOutcome::kSucceeded && terminal != RequestOutcome::kFailed) {
+      // Publish the reason before notifying observers. No SDK lock is held while
+      // callbacks run, so observers may inspect state or attempt another signal.
+      stop_source.request_stop();
+    }
+    return true;
+  }
+
+  const RequestContext metadata;
+  const std::optional<RequestExecutionContext::Clock::time_point> deadline;
+  std::atomic<RequestOutcome> outcome{RequestOutcome::kPending};
+  std::stop_source stop_source;
+};
+
 
 RequestExecutionContext::RequestExecutionContext(std::shared_ptr<RequestExecutionState> state) noexcept
     : state_(std::move(state)) {}
