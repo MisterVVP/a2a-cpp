@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include "a2a/server/request_execution.h"
+#include "a2a/server/engine/request_execution.h"
 
 #include <gtest/gtest.h>
 
@@ -16,12 +16,12 @@
 #include <type_traits>
 
 namespace {
-using a2a::server::RequestCancellationReason;
-using a2a::server::RequestCompletion;
 using a2a::server::RequestContext;
-using a2a::server::RequestExecution;
-using a2a::server::RequestExecutionContext;
-using a2a::server::RequestOutcome;
+using a2a::server::engine::RequestCancellationReason;
+using a2a::server::engine::RequestCompletion;
+using a2a::server::engine::RequestExecution;
+using a2a::server::engine::RequestExecutionContext;
+using a2a::server::engine::RequestOutcome;
 
 constexpr auto kDeadline = RequestExecution::Clock::time_point(std::chrono::seconds(10));
 constexpr auto kBeforeDeadline = kDeadline - std::chrono::seconds(1);

@@ -1,7 +1,8 @@
 # Request execution lifetime
 
-`a2a/server/request_execution.h` provides the transport-independent lifecycle
-contract for opt-in asynchronous unary execution. This foundation is usable on its
+`a2a/server/engine/request_execution.h` provides the transport-independent lifecycle
+contract for opt-in asynchronous unary execution. All request execution types live
+in the `a2a::server::engine` namespace. This foundation is usable on its
 own; executor, dispatcher and transport integration follow in later changes.
 
 ## Availability

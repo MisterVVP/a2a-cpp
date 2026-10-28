@@ -11,11 +11,9 @@
 #include "a2a/core/non_copyable.h"
 #include "a2a/server/request_context.h"
 
-namespace a2a::server {
+namespace a2a::server::engine {
 
-namespace engine {
 struct RequestExecutionState;
-}
 
 enum class RequestOutcome { kPending, kSucceeded, kFailed, kClientCancelled, kDeadlineExceeded, kServerShutdown };
 enum class RequestCompletion { kSucceeded, kFailed };
@@ -34,8 +32,8 @@ class RequestExecutionContext final {
 
  private:
   friend class RequestExecution;
-  explicit RequestExecutionContext(std::shared_ptr<engine::RequestExecutionState> state) noexcept;
-  std::shared_ptr<engine::RequestExecutionState> state_;
+  explicit RequestExecutionContext(std::shared_ptr<RequestExecutionState> state) noexcept;
+  std::shared_ptr<RequestExecutionState> state_;
 };
 
 // Single owner for one operation. Concurrent terminal signals are safe while this
@@ -56,7 +54,7 @@ class RequestExecution final : private core::NonCopyableOrMovable {
   [[nodiscard]] bool ExpireDeadline(Clock::time_point now = Clock::now()) noexcept;
 
  private:
-  std::shared_ptr<engine::RequestExecutionState> state_;
+  std::shared_ptr<RequestExecutionState> state_;
 };
 
-}  // namespace a2a::server
+}  // namespace a2a::server::engine
