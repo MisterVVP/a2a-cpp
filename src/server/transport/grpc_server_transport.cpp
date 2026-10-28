@@ -11,229 +11,21 @@
 #include <utility>
 
 #include "a2a/core/error.h"
-#include "a2a/core/extensions.h"
-#include "a2a/core/http_constants.h"
-#include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
-#include "a2a/core/protocol_errors.h"
-#include "a2a/core/task_states.h"
-#include "a2a/core/version.h"
-#include "a2a/server/version_header_validator.h"
+#include "server/transport/grpc_dispatch.h"
 #include "stream_cancellation_watcher.h"
 
 namespace a2a::server {
 namespace {
-::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
-
+constexpr auto kDispatcherMissing = "Server dispatcher is not configured";
+constexpr auto kUnaryArgumentsMissing = "Request and response are required";
+constexpr auto kStreamArgumentsMissing = "Request and writer are required";
+constexpr auto kStreamWriteFailed = "Failed to write stream event";
+constexpr auto kCardPayloadMismatch = "GetExtendedAgentCard dispatch returned an unexpected payload";
 template <std::size_t MessageSize>
 [[nodiscard]] ::grpc::Status InternalStatus(const std::array<char, MessageSize>& message) {
   return {::grpc::StatusCode::INTERNAL, core::protocol_error_messages::ToString(message)};
 }
-
-::grpc::StatusCode ToStatusCode(const core::Error& error) {
-  switch (error.code()) {
-    case core::ErrorCode::kValidation:
-      return ::grpc::StatusCode::INVALID_ARGUMENT;
-    case core::ErrorCode::kUnsupportedVersion:
-      return ::grpc::StatusCode::UNIMPLEMENTED;
-    case core::ErrorCode::kNetwork:
-      return ::grpc::StatusCode::UNAVAILABLE;
-    case core::ErrorCode::kRemoteProtocol:
-      return RemoteProtocolStatusCode(error);
-    case core::ErrorCode::kSerialization:
-    case core::ErrorCode::kInternal:
-      return ::grpc::StatusCode::INTERNAL;
-  }
-  return ::grpc::StatusCode::INTERNAL;
-}
-
-::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error) {
-  if (error.http_status() == core::http::kStatusUnauthorized) {
-    return ::grpc::StatusCode::UNAUTHENTICATED;
-  }
-  if (error.http_status() == core::http::kStatusForbidden) {
-    return ::grpc::StatusCode::PERMISSION_DENIED;
-  }
-  const auto& protocol_code = error.protocol_code();
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
-    return ::grpc::StatusCode::NOT_FOUND;
-  }
-  if (protocol_code.has_value() && (*protocol_code == core::protocol_codes::kPushNotificationNotSupported ||
-                                    *protocol_code == core::protocol_codes::kUnsupportedOperation)) {
-    return ::grpc::StatusCode::UNIMPLEMENTED;
-  }
-  return ::grpc::StatusCode::FAILED_PRECONDITION;
-}
-
-std::string ErrorCodeName(core::ErrorCode code) {
-  switch (code) {
-    case core::ErrorCode::kValidation:
-      return "validation";
-    case core::ErrorCode::kUnsupportedVersion:
-      return "unsupported_version";
-    case core::ErrorCode::kNetwork:
-      return "network";
-    case core::ErrorCode::kRemoteProtocol:
-      return "remote_protocol";
-    case core::ErrorCode::kSerialization:
-      return "serialization";
-    case core::ErrorCode::kInternal:
-      return "internal";
-  }
-  return "internal";
-}
-
-std::string ErrorInfoReason(const core::Error& error) {
-  const auto& protocol_code = error.protocol_code();
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
-    return "TASK_NOT_FOUND";
-  }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotCancelable) {
-    return "TASK_NOT_CANCELABLE";
-  }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
-    return "PUSH_NOTIFICATION_NOT_SUPPORTED";
-  }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
-    return "UNSUPPORTED_OPERATION";
-  }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
-    return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
-  }
-  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
-    return "EXTENSION_SUPPORT_REQUIRED";
-  }
-  switch (error.code()) {
-    case core::ErrorCode::kValidation:
-      return "VALIDATION_ERROR";
-    case core::ErrorCode::kUnsupportedVersion:
-      return "VERSION_NOT_SUPPORTED";
-    case core::ErrorCode::kNetwork:
-      return "NETWORK_ERROR";
-    case core::ErrorCode::kRemoteProtocol:
-      return "REMOTE_PROTOCOL_ERROR";
-    case core::ErrorCode::kSerialization:
-      return "SERIALIZATION_ERROR";
-    case core::ErrorCode::kInternal:
-      return "INTERNAL_ERROR";
-  }
-  return "INTERNAL_ERROR";
-}
-
-int GrpcStatusCodeNumber(::grpc::StatusCode code) {
-  constexpr int kStatusOk = 0;
-  constexpr int kStatusCancelled = 1;
-  constexpr int kStatusUnknown = 2;
-  constexpr int kStatusInvalidArgument = 3;
-  constexpr int kStatusDeadlineExceeded = 4;
-  constexpr int kStatusNotFound = 5;
-  constexpr int kStatusAlreadyExists = 6;
-  constexpr int kStatusPermissionDenied = 7;
-  constexpr int kStatusResourceExhausted = 8;
-  constexpr int kStatusFailedPrecondition = 9;
-  constexpr int kStatusAborted = 10;
-  constexpr int kStatusOutOfRange = 11;
-  constexpr int kStatusUnimplemented = 12;
-  constexpr int kStatusInternal = 13;
-  constexpr int kStatusUnavailable = 14;
-  constexpr int kStatusDataLoss = 15;
-  constexpr int kStatusUnauthenticated = 16;
-  switch (code) {
-    case ::grpc::StatusCode::OK:
-      return kStatusOk;
-    case ::grpc::StatusCode::CANCELLED:
-      return kStatusCancelled;
-    case ::grpc::StatusCode::UNKNOWN:
-      return kStatusUnknown;
-    case ::grpc::StatusCode::INVALID_ARGUMENT:
-      return kStatusInvalidArgument;
-    case ::grpc::StatusCode::DEADLINE_EXCEEDED:
-      return kStatusDeadlineExceeded;
-    case ::grpc::StatusCode::NOT_FOUND:
-      return kStatusNotFound;
-    case ::grpc::StatusCode::ALREADY_EXISTS:
-      return kStatusAlreadyExists;
-    case ::grpc::StatusCode::PERMISSION_DENIED:
-      return kStatusPermissionDenied;
-    case ::grpc::StatusCode::RESOURCE_EXHAUSTED:
-      return kStatusResourceExhausted;
-    case ::grpc::StatusCode::FAILED_PRECONDITION:
-      return kStatusFailedPrecondition;
-    case ::grpc::StatusCode::ABORTED:
-      return kStatusAborted;
-    case ::grpc::StatusCode::OUT_OF_RANGE:
-      return kStatusOutOfRange;
-    case ::grpc::StatusCode::UNIMPLEMENTED:
-      return kStatusUnimplemented;
-    case ::grpc::StatusCode::INTERNAL:
-      return kStatusInternal;
-    case ::grpc::StatusCode::UNAVAILABLE:
-      return kStatusUnavailable;
-    case ::grpc::StatusCode::DATA_LOSS:
-      return kStatusDataLoss;
-    case ::grpc::StatusCode::UNAUTHENTICATED:
-      return kStatusUnauthenticated;
-    case ::grpc::StatusCode::DO_NOT_USE:
-      break;
-  }
-  return kStatusUnknown;
-}
-
-constexpr std::uint64_t kVarintContinuationBit = 0x80U;
-constexpr std::uint64_t kVarintPayloadMask = 0x7FU;
-constexpr std::uint32_t kVarintShiftBits = 7U;
-constexpr std::string_view kExtensionsMetadataKey = "a2a-extensions";
-
-void AppendVarint(std::string& out, std::uint64_t value) {
-  while (value >= kVarintContinuationBit) {
-    out.push_back(static_cast<char>((value & kVarintPayloadMask) | kVarintContinuationBit));
-    value >>= kVarintShiftBits;
-  }
-  out.push_back(static_cast<char>(value));
-}
-
-void AppendTag(std::string& out, std::uint32_t field_number, std::uint32_t wire_type) {
-  AppendVarint(out, (static_cast<std::uint64_t>(field_number) << 3U) | wire_type);
-}
-
-void AppendLengthDelimited(std::string& out, std::uint32_t field_number, const std::string& value) {
-  AppendTag(out, field_number, 2U);
-  AppendVarint(out, static_cast<std::uint64_t>(value.size()));
-  out.append(value);
-}
-
-std::string SerializeErrorInfo(const core::Error& error) {
-  std::string message;
-  AppendLengthDelimited(message, 1U, ErrorInfoReason(error));
-  AppendLengthDelimited(message, 2U, "a2a-protocol.org");
-  return message;
-}
-
-std::string SerializeAny(const std::string& type_url, const std::string& value) {
-  std::string message;
-  AppendLengthDelimited(message, 1U, type_url);
-  AppendLengthDelimited(message, 2U, value);
-  return message;
-}
-
-std::string SerializeGrpcStatusDetails(::grpc::StatusCode code, const core::Error& error) {
-  std::string message;
-  AppendTag(message, 1U, 0U);
-  AppendVarint(message, static_cast<std::uint64_t>(GrpcStatusCodeNumber(code)));
-  AppendLengthDelimited(message, 2U, std::string(error.message()));
-  AppendLengthDelimited(message, 3U,
-                        SerializeAny("type.googleapis.com/google.rpc.ErrorInfo", SerializeErrorInfo(error)));
-  return message;
-}
-
-void AddActivatedExtensionsTrailingMetadata(::grpc::ServerContext* context,
-                                            const std::vector<std::string>& activated_extensions) {
-  if (context == nullptr || activated_extensions.empty()) {
-    return;
-  }
-  context->AddTrailingMetadata(std::string(kExtensionsMetadataKey), core::Extensions::Format(activated_extensions));
-}
-
 }  // namespace
 
 GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher, GrpcServerTransportOptions options)
@@ -242,53 +34,27 @@ GrpcServerTransport::GrpcServerTransport(Dispatcher* dispatcher, GrpcServerTrans
 core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::BuildRequestContext(
     const ::grpc::ServerContext& context) const {
   if (dispatcher_ == nullptr) {
-    return core::Error::Internal("Server dispatcher is not configured");
+    return core::Error::Internal(kDispatcherMissing);
   }
 
-  RequestContext request_context;
-  request_context.remote_address = context.peer();
-
-  for (const auto& [key_ref, value_ref] : context.client_metadata()) {
-    const std::string key(key_ref.data(), key_ref.length());
-    const std::string value(value_ref.data(), value_ref.length());
-    request_context.client_headers[key] = value;
+  auto validated = BuildGrpcRequestContext(context, required_extensions_validator_);
+  if (!validated.ok()) {
+    return validated.error();
   }
-  request_context.auth_metadata = ExtractAuthMetadata(request_context.client_headers);
-  const auto version = VersionHeaderValidator{}.Validate(request_context.client_headers);
-  if (!version.ok()) {
-    return version.error().WithTransport(std::string(GrpcServerTransport::kTransportName));
-  }
-  request_context.protocol_version = core::Version::kProtocolVersion;
-
-  const auto extensions = required_extensions_validator_.Validate(request_context.client_headers);
-  if (!extensions.ok()) {
-    return extensions.error().WithTransport(std::string(GrpcServerTransport::kTransportName));
-  }
-  return ValidatedRequestContext{.request_context = std::move(request_context),
-                                 .activated_extensions = extensions.value()};
+  return ValidatedRequestContext{.request_context = std::move(validated.value().request_context),
+                                 .activated_extensions = std::move(validated.value().activated_extensions)};
 }
 
 ::grpc::Status GrpcServerTransport::ToGrpcStatus(const core::Error& error, ::grpc::ServerContext* context,
                                                  const std::vector<std::string>& activated_extensions) {
-  const auto status_code = ToStatusCode(error);
-  if (context != nullptr) {
-    AddActivatedExtensionsTrailingMetadata(context, activated_extensions);
-    context->AddTrailingMetadata("a2a-error-code", ErrorCodeName(error.code()));
-    context->AddTrailingMetadata("grpc-status-details-bin", SerializeGrpcStatusDetails(status_code, error));
-    const auto& protocol_code = error.protocol_code();
-    if (protocol_code.has_value()) {
-      context->AddTrailingMetadata(std::string(GrpcServerTransport::kProtocolCodeMetadataKey), *protocol_code);
-    }
-  }
-
-  return {status_code, std::string(error.message())};
+  return GrpcErrorStatus(error, context, activated_extensions);
 }
 
 ::grpc::Status GrpcServerTransport::SendMessage(::grpc::ServerContext* context,
                                                 const lf::a2a::v1::SendMessageRequest* request,
                                                 lf::a2a::v1::SendMessageResponse* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
 
   auto request_context = BuildRequestContext(*context);
@@ -308,7 +74,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -316,7 +82,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
                                                          const lf::a2a::v1::SendMessageRequest* request,
                                                          ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
   if (request == nullptr || writer == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kStreamArgumentsMissing};
   }
 
   auto request_context = BuildRequestContext(*context);
@@ -335,7 +101,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendStreamingMessage);
   }
 
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   const bool supports_timed_next = (*stream)->SupportsTimedNext();
   std::optional<StreamCancellationWatcher> cancellation_watcher;
   if (!supports_timed_next) {
@@ -369,7 +135,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
 ::grpc::Status GrpcServerTransport::GetTask(::grpc::ServerContext* context, const lf::a2a::v1::GetTaskRequest* request,
                                             lf::a2a::v1::Task* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
 
   auto request_context = BuildRequestContext(*context);
@@ -389,7 +155,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -397,7 +163,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
                                                const lf::a2a::v1::CancelTaskRequest* request,
                                                lf::a2a::v1::Task* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
 
   auto request_context = BuildRequestContext(*context);
@@ -417,7 +183,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
 
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -425,7 +191,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
                                               const lf::a2a::v1::ListTasksRequest* request,
                                               lf::a2a::v1::ListTasksResponse* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
 
   auto request_context = BuildRequestContext(*context);
@@ -433,34 +199,14 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  ListTasksRequest list_request;
-  const auto page_size = NormalizeListTasksPageSize(
-      request->has_page_size() ? std::optional<std::int64_t>{request->page_size()} : std::nullopt);
-  if (!page_size.ok()) {
-    return ToGrpcStatus(page_size.error(), context, request_context.value().activated_extensions);
-  }
-  list_request.page_size = page_size.value();
-  list_request.page_token = request->page_token();
-  list_request.context_id = request->context_id();
-  if (request->status() != lf::a2a::v1::TASK_STATE_UNSPECIFIED) {
-    list_request.status_filter = request->status();
-  }
-  if (request->has_history_length()) {
-    if (request->history_length() < 0) {
-      return ToGrpcStatus(core::Error::Validation("ListTasksRequest.history_length must be non-negative"), context,
-                          request_context.value().activated_extensions);
-    }
-    list_request.history_length = static_cast<std::size_t>(request->history_length());
-  }
-  if (request->has_include_artifacts()) {
-    list_request.include_artifacts = request->include_artifacts();
-  }
-  if (request->has_status_timestamp_after()) {
-    list_request.status_timestamp_after = request->status_timestamp_after();
+  const auto list_request = ParseGrpcListTasksRequest(*request);
+  if (!list_request.ok()) {
+    return ToGrpcStatus(list_request.error(), context, request_context.value().activated_extensions);
   }
 
-  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request},
-                                              request_context.value().request_context);
+  const auto dispatch =
+      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request.value()},
+                            request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
@@ -470,13 +216,8 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTasks);
   }
 
-  for (const auto& task : payload->tasks) {
-    *response->add_tasks() = task;
-  }
-  response->set_page_size(static_cast<int32_t>(payload->page_size));
-  response->set_total_size(static_cast<int32_t>(payload->total_size));
-  response->set_next_page_token(payload->next_page_token);
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  WriteGrpcListTasksResponse(*payload, *response);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -484,7 +225,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
                                                     const lf::a2a::v1::SubscribeToTaskRequest* request,
                                                     ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
   if (request == nullptr || writer == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and writer are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kStreamArgumentsMissing};
   }
 
   auto request_context = BuildRequestContext(*context);
@@ -506,7 +247,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask);
   }
 
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   const bool supports_timed_next = (*stream)->SupportsTimedNext();
   std::optional<StreamCancellationWatcher> cancellation_watcher;
   if (!supports_timed_next) {
@@ -526,7 +267,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     }
     if (!writer->Write(maybe_event.value())) {
       (*stream)->Cancel();
-      return {::grpc::StatusCode::INTERNAL, "Failed to write stream event"};
+      return {::grpc::StatusCode::INTERNAL, kStreamWriteFailed};
     }
   }
 
@@ -541,7 +282,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     ::grpc::ServerContext* context, const lf::a2a::v1::TaskPushNotificationConfig* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
   auto request_context = BuildRequestContext(*context);
   if (!request_context.ok()) {
@@ -559,7 +300,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCreateTaskPushNotificationConfig);
   }
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -567,7 +308,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     ::grpc::ServerContext* context, const lf::a2a::v1::GetTaskPushNotificationConfigRequest* request,
     lf::a2a::v1::TaskPushNotificationConfig* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
   auto request_context = BuildRequestContext(*context);
   if (!request_context.ok()) {
@@ -585,7 +326,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTaskPushNotificationConfig);
   }
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -593,7 +334,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     ::grpc::ServerContext* context, const lf::a2a::v1::ListTaskPushNotificationConfigsRequest* request,
     lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
   auto request_context = BuildRequestContext(*context);
   if (!request_context.ok()) {
@@ -611,7 +352,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
         core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTaskPushNotificationConfigs);
   }
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -619,7 +360,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     ::grpc::ServerContext* context, const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest* request,
     google::protobuf::Empty* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
   auto request_context = BuildRequestContext(*context);
   if (!request_context.ok()) {
@@ -631,7 +372,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 
@@ -639,7 +380,7 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
                                                          const lf::a2a::v1::GetExtendedAgentCardRequest* request,
                                                          lf::a2a::v1::AgentCard* response) {
   if (request == nullptr || response == nullptr) {
-    return {::grpc::StatusCode::INVALID_ARGUMENT, "Request and response are required"};
+    return {::grpc::StatusCode::INVALID_ARGUMENT, kUnaryArgumentsMissing};
   }
   auto request_context = BuildRequestContext(*context);
   if (!request_context.ok()) {
@@ -653,11 +394,11 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   }
   const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
   if (payload == nullptr) {
-    return {::grpc::StatusCode::INTERNAL, "GetExtendedAgentCard dispatch returned an unexpected payload"};
+    return {::grpc::StatusCode::INTERNAL, kCardPayloadMismatch};
   }
 
   *response = *payload;
-  AddActivatedExtensionsTrailingMetadata(context, request_context.value().activated_extensions);
+  AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
 

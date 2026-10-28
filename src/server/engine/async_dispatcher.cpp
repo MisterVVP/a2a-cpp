@@ -265,6 +265,12 @@ AsyncDispatcher::~AsyncDispatcher() {
   Shutdown();
   state_->workers.Drain();
 }
+void AsyncDispatcher::Cancel(std::shared_ptr<RequestExecution> execution, RequestCancellationReason reason) {
+  if (execution == nullptr) {
+    return;
+  }
+  state_->workers.queue->Post([execution = std::move(execution), reason] { (void)execution->Cancel(reason); });
+}
 void AsyncDispatcher::Shutdown() { state_->Shutdown(); }
 
 core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::Dispatch(

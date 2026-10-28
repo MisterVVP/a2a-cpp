@@ -46,6 +46,7 @@ class SutRuntimeObserver {
 struct SutRuntimeOptions final {
   std::string_view display_name;
   SutRuntimeObserver* observer = nullptr;
+  bool async_grpc = false;
 };
 
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options);

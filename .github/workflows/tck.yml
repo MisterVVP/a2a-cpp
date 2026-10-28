@@ -130,6 +130,27 @@ jobs:
         if: always()
         run: ./scripts/stop_tck_sut.sh
 
+      - name: Run native async unary gRPC TCK across stores
+        id: tck_async_grpc
+        continue-on-error: true
+        env:
+          A2A_TCK_GRPC_ASYNC: "1"
+          TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
+          TCK_TRANSPORTS: grpc
+        run: |
+          trap './scripts/stop_tck_sut.sh' EXIT
+          for backend in inmemory postgres; do
+            export A2A_TCK_STORE_BACKEND="${backend}"
+            export SUT_LOG_FILE="build-tck/tck-sut-async-${backend}.log"
+            export TCK_REPORT_DIR="tck-artifacts/reports/async-${backend}"
+            export TCK_LOG_DIR="tck-artifacts/logs/async-${backend}"
+            ./scripts/run_tck_sut.sh
+            ./scripts/run_tck_mandatory.sh
+            ./scripts/stop_tck_sut.sh
+          done
+
       - name: Capture runner diagnostics
         if: always()
         run: |
@@ -149,6 +170,7 @@ jobs:
             ${{ env.TCK_LOG_DIR }}
             build-tck/tck-sut-inmemory.log
             build-tck/tck-sut-postgres.log
+            build-tck/tck-sut-async-*.log
           if-no-files-found: warn
 
       - name: Verify mandatory TCK results and reports
@@ -156,6 +178,7 @@ jobs:
         env:
           INMEMORY_TCK_OUTCOME: ${{ steps.tck_inmemory.outcome }}
           POSTGRES_TCK_OUTCOME: ${{ steps.tck_postgres.outcome }}
+          ASYNC_GRPC_TCK_OUTCOME: ${{ steps.tck_async_grpc.outcome }}
         run: |
           failed=0
           if [[ "${INMEMORY_TCK_OUTCOME}" != "success" ]]; then
@@ -166,7 +189,11 @@ jobs:
             echo "PostgreSQL mandatory TCK outcome: ${POSTGRES_TCK_OUTCOME}"
             failed=1
           fi
-          for backend in inmemory postgres; do
+          if [[ "${ASYNC_GRPC_TCK_OUTCOME}" != "success" ]]; then
+            echo "Native async gRPC TCK outcome: ${ASYNC_GRPC_TCK_OUTCOME}"
+            failed=1
+          fi
+          for backend in inmemory postgres async-inmemory async-postgres; do
             report="tck-artifacts/reports/${backend}/compatibility.json"
             if [[ ! -f "${report}" ]]; then
               echo "Missing required TCK report: ${report}"

@@ -803,4 +803,21 @@ TEST(AsyncDispatcherTest, CancellationObserverCanDestroyDispatcherBeforeSdkStopC
   EXPECT_EQ(accepted.value()->Context().Outcome(), RequestOutcome::kClientCancelled);
   EXPECT_EQ(transport.reply()->outcome, RequestOutcome::kClientCancelled);
 }
+
+TEST(AsyncDispatcherTest, TransportCancellationSchedulesObserversOffCallerThread) {
+  auto executor = std::make_shared<FakeExecutor>();
+  executor->pending = true;
+  AsyncDispatcher dispatcher(executor);
+  FakeTransport transport;
+  const auto accepted = transport.Send(dispatcher);
+  ASSERT_TRUE(accepted.ok());
+  std::promise<std::thread::id> observed;
+  auto callback_thread = observed.get_future();
+  std::stop_callback observer(accepted.value()->Context().StopToken(),
+                              [&] { observed.set_value(std::this_thread::get_id()); });
+  dispatcher.Cancel(accepted.value());
+  EXPECT_FALSE(transport.Receive().ok());
+  ASSERT_EQ(callback_thread.wait_for(kWait), std::future_status::ready);
+  EXPECT_NE(callback_thread.get(), std::this_thread::get_id());
+}
 }  // namespace
