@@ -10,6 +10,7 @@
   - [Cancel Task](client/cancel-task.md)
 - [Server](server/overview.md)
   - [Custom Executor](server/custom-executor.md)
+  - [Request Execution Lifetime](server/request-execution.md)
   - [REST Server](server/rest-server.md)
   - [JSON-RPC Server](server/json-rpc-server.md)
   - [Storage Backends](server/storage.md)

@@ -647,9 +647,16 @@ bool CurlStreamReactorPoolDefersSelfThreadRelease() {
     return false;
   }
   auto transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  std::promise<void> callback_started_promise;
+  auto callback_started = callback_started_promise.get_future();
+  std::promise<void> caller_released_promise;
+  auto caller_released = caller_released_promise.get_future();
   std::promise<bool> deferred_release_promise;
   auto deferred_release = deferred_release_promise.get_future();
-  transfer->on_complete = [reactor_pool, &deferred_release_promise](CURLcode) {
+  transfer->on_complete = [reactor_pool, &callback_started_promise, &caller_released,
+                           &deferred_release_promise](CURLcode) {
+    callback_started_promise.set_value();
+    caller_released.wait();
     const bool needs_retry = !reactor_pool->ReleaseUnused();
     if (needs_retry) {
       DeferUnusedReactorRelease(reactor_pool);
@@ -657,7 +664,11 @@ bool CurlStreamReactorPoolDefersSelfThreadRelease() {
     deferred_release_promise.set_value(needs_retry);
   };
   reactor->Cancel(transfer);
+  callback_started.wait();
+  // Exercise an early callback, but check self-release only after the pool owns
+  // the final reactor reference.
   reactor.reset();
+  caller_released_promise.set_value();
   const bool was_deferred = deferred_release.get();
   const bool released_off_thread = reactor_pool->ReleaseUnused();
   return was_deferred && released_off_thread && reactor_pool->size() == 0U;

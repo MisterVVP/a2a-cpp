@@ -1185,3 +1185,9 @@ add_executable(security_transport_integration_test integration/security_transpor
 target_include_directories(security_transport_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
 target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
 gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
+
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  add_executable(request_execution_test unit/request_execution_test.cpp)
+  target_link_libraries(request_execution_test PRIVATE a2a::server GTest::gtest_main)
+  gtest_discover_tests(request_execution_test PROPERTIES LABELS "tsan")
+endif()
