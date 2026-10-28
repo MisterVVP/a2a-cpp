@@ -20,7 +20,9 @@ def cache_values(build):
 
 def run_consumer(source, build, config):
     values = cache_values(build)
-    with tempfile.TemporaryDirectory(prefix="installed-async-grpc-", dir=build) as scratch:
+    # Windows build tools can retain directory handles after the smoke test exits.
+    with tempfile.TemporaryDirectory(prefix="installed-async-grpc-", dir=build,
+                                     ignore_cleanup_errors=(os.name == "nt")) as scratch:
         root = Path(scratch)
         prefix = root / "sdk"
         consumer = root / "consumer"
