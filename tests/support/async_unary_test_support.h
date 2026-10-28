@@ -160,6 +160,10 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
     std::lock_guard lock(mutex_);
     return workers_.size();
   }
+  [[nodiscard]] GetCompletion PendingReply(std::size_t index = 0) const {
+    std::lock_guard lock(mutex_);
+    return replies_.at(index);
+  }
   void Release() {
     std::vector<GetCompletion> replies;
     {

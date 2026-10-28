@@ -3,10 +3,13 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <barrier>
+#include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -36,6 +39,10 @@ constexpr std::size_t kPendingCount = 32;
 constexpr std::size_t kWorkers = 2;
 constexpr int kRaceParticipants = 3;
 constexpr auto kShortDeadline = std::chrono::milliseconds(250);
+constexpr auto kDeadlineReplyMargin = std::chrono::milliseconds(5);
+constexpr std::array kDeadlineReplyOffsets{-kDeadlineReplyMargin, std::chrono::milliseconds::zero(),
+                                           kDeadlineReplyMargin};
+constexpr std::size_t kSingleCompletion = 1;
 
 std::string Trailing(const ::grpc::ClientContext& context, const char* key) {
   const auto found = context.GetServerTrailingMetadata().find(key);
@@ -145,8 +152,11 @@ struct ClientGet final : std::enable_shared_from_this<ClientGet> {
     PrepareGrpcClient(context);
   }
   void Begin(UnaryGrpcServer& server) {
-    server.Client().GetTask(server.Stub(), context, request, response,
-                            [self = shared_from_this()](auto status) { self->reply.set_value(std::move(status)); });
+    server.Client().GetTask(server.Stub(), context, request, response, [self = shared_from_this()](auto status) {
+      if (self->completions.fetch_add(1) == 0) {
+        self->reply.set_value(std::move(status));
+      }
+    });
   }
   ::grpc::Status Await() {
     if (future.wait_for(kAsyncWait) != std::future_status::ready) {
@@ -161,6 +171,7 @@ struct ClientGet final : std::enable_shared_from_this<ClientGet> {
   lf::a2a::v1::Task response;
   std::promise<::grpc::Status> reply;
   std::future<::grpc::Status> future;
+  std::atomic<std::size_t> completions{0};
 };
 
 class CountAfter final : public ServerInterceptor {
@@ -177,9 +188,13 @@ class CountAfter final : public ServerInterceptor {
     std::unique_lock lock(mutex_);
     return ready_.wait_for(lock, kAsyncWait, [&] { return count_ == count; });
   }
+  [[nodiscard]] std::size_t Count() const {
+    std::lock_guard lock(mutex_);
+    return count_;
+  }
 
  private:
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::condition_variable ready_;
   std::size_t count_ = 0;
 };
@@ -295,6 +310,86 @@ TEST(AsyncGrpcTest, DeadlineExpiryIsDistinctFromClientCancellation) {
   EXPECT_EQ(backend->Stopped().front(), RequestOutcome::kDeadlineExceeded);
   backend->Release();
 }
+
+bool WarmDeadlineRaceChannel(UnaryGrpcServer& server) {
+  // A version rejection warms the real channel without entering the dispatcher
+  // or changing the application's call and interceptor counters.
+  ::grpc::ClientContext context;
+  context.AddMetadata(kVersionKey, kBadVersion);
+  context.set_deadline(std::chrono::system_clock::now() + kAsyncWait);
+  lf::a2a::v1::GetTaskRequest request;
+  lf::a2a::v1::Task response;
+  return server.Stub().GetTask(&context, request, &response).error_code() == ::grpc::StatusCode::UNIMPLEMENTED;
+}
+
+void ExpectDeadlineRaceOutcome(const ::grpc::Status& status, RequestOutcome outcome) {
+  EXPECT_TRUE(status.ok() || status.error_code() == ::grpc::StatusCode::DEADLINE_EXCEEDED);
+  EXPECT_TRUE(outcome == RequestOutcome::kSucceeded || outcome == RequestOutcome::kDeadlineExceeded);
+  if (status.ok()) {
+    EXPECT_EQ(outcome, RequestOutcome::kSucceeded);
+  }
+  // Wire expiry can follow an already committed server success. It cannot turn
+  // a server deadline failure into a successful client response.
+  if (outcome == RequestOutcome::kDeadlineExceeded) {
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::DEADLINE_EXCEEDED);
+  }
+}
+
+void ExpectDeadlineRaceFinalization(const CountAfter& after, const ClientGet& call,
+                                    const RequestExecutionContext& execution, RequestOutcome outcome) {
+  EXPECT_EQ(after.Count(), kSingleCompletion);
+  EXPECT_EQ(call.completions.load(), kSingleCompletion);
+  EXPECT_EQ(execution.Outcome(), outcome);
+}
+
+void RunDeadlineCompletionRace(std::chrono::milliseconds reply_offset) {
+  auto backend = std::make_shared<UnaryBackend>(true);
+  auto after = std::make_shared<CountAfter>();
+  auto call = std::make_shared<ClientGet>();
+  std::optional<RequestExecutionContext> execution;
+  UnaryBackend::GetCompletion late_reply;
+  ::grpc::Status status;
+  {
+    AsyncDispatcherOptions options;
+    options.interceptors = {after};
+    ::grpc::ChannelArguments client_options;
+    client_options.SetInt(GRPC_ARG_ENABLE_DEADLINE_CHECKS, 0);
+    UnaryGrpcServer server(backend, true, {}, options, client_options);
+    ASSERT_TRUE(server.Ready());
+    ASSERT_TRUE(WarmDeadlineRaceChannel(server));
+    call->context.set_deadline(std::chrono::system_clock::now() + kShortDeadline);
+    call->Begin(server);
+    ASSERT_TRUE(backend->WaitForCalls(kSingleCompletion));
+    execution = backend->Context();
+    const auto deadline = execution->Deadline();
+    ASSERT_TRUE(deadline.has_value());
+    const auto reply_at = deadline.value_or(RequestExecution::Clock::time_point{}) + reply_offset;
+    late_reply = backend->PendingReply();
+    // Race the application reply with the native server timer, rather than
+    // cancelling the client or manually expiring the SDK lifecycle source.
+    std::thread application([backend, reply_at] {
+      std::this_thread::sleep_until(reply_at);
+      backend->Release();
+    });
+    status = call->Await();
+    application.join();
+    ASSERT_TRUE(after->Wait(kSingleCompletion));
+    server.Shutdown();
+    late_reply(AsyncTask());  // OnDone has released the reactor and its response.
+  }  // Drain SDK workers before inspecting exactly-once counts.
+  const auto outcome = execution->Outcome();
+  late_reply(AsyncTask());  // Also harmless after dispatcher/service destruction.
+  ExpectDeadlineRaceOutcome(status, outcome);
+  ExpectDeadlineRaceFinalization(*after, *call, *execution, outcome);
+}
+
+TEST(AsyncGrpcTest, NativeDeadlineVersusCompletionRaceRunsAfterOnceAndIgnoresLateReplies) {
+  for (const auto offset : kDeadlineReplyOffsets) {
+    SCOPED_TRACE(offset.count());
+    RunDeadlineCompletionRace(offset);
+  }
+}
+
 TEST(AsyncGrpcTest, ShutdownCompletesCallsWithoutWaitingForBackendAndRejectsAdmission) {
   auto backend = std::make_shared<UnaryBackend>(true);
   UnaryGrpcServer server(backend);
