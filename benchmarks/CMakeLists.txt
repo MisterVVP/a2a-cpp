@@ -35,6 +35,10 @@ add_executable(a2a_benchmarks
   bench_uuidv7_task_id.cpp
 )
 
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  target_sources(a2a_benchmarks PRIVATE bench_async_dispatcher.cpp)
+endif()
+
 target_link_libraries(a2a_benchmarks
   PRIVATE
     a2a::client

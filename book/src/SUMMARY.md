@@ -11,6 +11,7 @@
 - [Server](server/overview.md)
   - [Custom Executor](server/custom-executor.md)
   - [Request Execution Lifetime](server/request-execution.md)
+  - [Async unary dispatch](server/async-dispatcher.md)
   - [REST Server](server/rest-server.md)
   - [JSON-RPC Server](server/json-rpc-server.md)
   - [Storage Backends](server/storage.md)
