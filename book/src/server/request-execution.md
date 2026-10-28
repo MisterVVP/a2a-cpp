@@ -3,8 +3,8 @@
 `a2a/server/engine/request_execution.h` provides the transport-independent lifecycle
 contract for opt-in asynchronous unary execution. All request execution types live
 in the `a2a::server::engine` namespace. This foundation is usable on its
-own, or through the opt-in [async unary dispatcher](async-dispatcher.md). Native
-transport integration follows in a later change.
+own, or through the opt-in [async unary dispatcher](async-dispatcher.md). The
+[native async gRPC service](async-grpc.md) propagates transport cancellation and deadlines.
 
 ## Availability
 

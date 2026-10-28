@@ -51,6 +51,17 @@ gRPC service object setup and unary operation path.
 
 [Source](https://github.com/MisterVVP/a2a-cpp/blob/main/examples/apps/grpc_server/main.cpp).
 
+## async-grpc-server
+
+Read-only GetTask application registered through the native gRPC callback service.
+Use the installed SDK built from a checkout containing this API; the v0.5.2
+fetch example above predates it. Select `-DA2A_EXAMPLE_APP=async_grpc_server`;
+`--smoke` starts a real server,
+performs one request and shuts it down. Without `--smoke`, press Enter to stop.
+The example requires `A2A_HAS_REQUEST_EXECUTION=1`; unsupported standard libraries
+report exit code 77. See [Native async gRPC](../server/async-grpc.md) for installed
+consumers, lifecycle ownership and graceful shutdown.
+
 ## push-notifications
 
 Push notification configuration, store, and delivery abstraction.

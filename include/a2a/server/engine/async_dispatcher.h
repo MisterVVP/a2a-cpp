@@ -46,6 +46,12 @@ class AsyncDispatcher final : private core::NonCopyableOrMovable {
       DispatchRequest request, RequestContext metadata, Completion completion,
       std::optional<RequestExecution::Clock::time_point> deadline = {});
 
+  // Queue one cancellation notification per transport call. Stop observers run
+  // on SDK workers, never inline on a network reactor. The source may already be
+  // terminal; first-terminal-transition precedence remains unchanged.
+  void Cancel(std::shared_ptr<RequestExecution> execution,
+              RequestCancellationReason reason = RequestCancellationReason::kClientCancelled);
+
   // Stops admission and requests cancellation without waiting for application I/O.
   // Destruction drains SDK work and joins workers (except the current worker when
   // destroyed from a callback). Late executor completions are harmless.

@@ -8,8 +8,8 @@ configuration. Extended agent cards use `AsyncDispatcherOptions::agent_card_prov
 with the same provider contract as synchronous dispatch.
 
 The existing `AgentExecutor`, `Dispatcher`, and transports keep their synchronous
-interfaces. Native transport registration is a subsequent integration step; this
-API can already be driven by an application or fake transport. Streaming operations
+interfaces. The [native async gRPC service](async-grpc.md) uses this dispatcher; applications
+and fake transports can also drive it directly. Streaming operations
 are rejected by the async dispatcher.
 
 ## Application execution
@@ -45,7 +45,10 @@ returns its cancellation handle. The completion context retains the ingress
 metadata snapshot.
 
 Retain the returned source to report client cancellation, deadline expiry, or
-shutdown. Do not call `TryComplete` on it: the dispatcher owns application
+shutdown. Network reactors should call `dispatcher.Cancel(source, reason)` once
+per call; this queues the signal and runs stop observers on dispatcher workers.
+Calling `source->Cancel(reason)` directly retains the standalone lifecycle's
+inline stop-observer semantics. Do not call `TryComplete` on it: the dispatcher owns application
 completion arbitration. Check the completion context's terminal `Outcome()` when mapping
 cancellation to a transport status; cancellation errors use `ErrorCode::kNetwork`,
 while normal executor/provider errors retain their original structured fields.

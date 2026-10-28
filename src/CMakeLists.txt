@@ -138,6 +138,7 @@ target_link_libraries(a2a_client
 set(A2A_SERVER_SOURCES
   server/agent_card/agent_card_serializer.cpp
   server/transport/grpc_server_transport.cpp
+  server/transport/grpc_dispatch.cpp
   server/transport/stream_cancellation_watcher.cpp
   server/transport/http_adapter.cpp
   server/transport/http_server_response_builder.cpp
@@ -167,7 +168,7 @@ set(A2A_SERVER_SOURCES
   server/stores/store_factory.cpp
 )
 if(A2A_STDLIB_HAS_STOP_TOKEN)
-  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp server/engine/async_dispatcher.cpp)
+  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp server/engine/async_dispatcher.cpp server/transport/async_grpc_server_transport.cpp)
 endif()
 add_library(a2a_server STATIC ${A2A_SERVER_SOURCES})
 target_compile_definitions(a2a_server PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)

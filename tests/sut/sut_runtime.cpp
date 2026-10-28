@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,6 +29,10 @@
 #include "sut/tck_sut.h"
 #include "sut/tck_sut_http_server.h"
 #include "sut/tck_sut_store.h"
+#if A2A_HAS_REQUEST_EXECUTION
+#include "a2a/server/async_grpc_server_transport.h"
+#include "sut/blocking_sut_executor.h"
+#endif
 
 namespace {
 
@@ -41,6 +46,50 @@ void SignalHandler(int signal_number) {
   (void)signal_number;
   kKeepRunning = 0;
 }
+
+class SutGrpcService final {
+ public:
+  SutGrpcService(a2a::server::Dispatcher& dispatcher, bool asynchronous,
+                 a2a::server::GrpcServerTransportOptions options)
+      : synchronous_(&dispatcher, options) {
+    if (asynchronous) {
+#if A2A_HAS_REQUEST_EXECUTION
+      auto executor = std::make_shared<BlockingSutExecutor>(dispatcher);
+      a2a::server::engine::AsyncDispatcherOptions execution;
+      execution.agent_card_provider = executor;
+      dispatcher_ = std::make_shared<a2a::server::engine::AsyncDispatcher>(executor, execution);
+      asynchronous_ = std::make_unique<a2a::server::AsyncGrpcServerTransport>(dispatcher_, std::move(options));
+#else
+      throw std::invalid_argument(kUnavailable);
+#endif
+    }
+  }
+  ::grpc::Service* Service() {
+#if A2A_HAS_REQUEST_EXECUTION
+    if (asynchronous_ != nullptr) {
+      return asynchronous_.get();
+    }
+#endif
+    return &synchronous_;
+  }
+  void Shutdown() {
+#if A2A_HAS_REQUEST_EXECUTION
+    if (asynchronous_ != nullptr) {
+      asynchronous_->Shutdown();
+    }
+#endif
+  }
+
+ private:
+#if !A2A_HAS_REQUEST_EXECUTION
+  static constexpr auto kUnavailable = "Async gRPC requires C++20 cancellation support";
+#endif
+  a2a::server::GrpcServerTransport synchronous_;
+#if A2A_HAS_REQUEST_EXECUTION
+  std::shared_ptr<a2a::server::engine::AsyncDispatcher> dispatcher_;
+  std::unique_ptr<a2a::server::AsyncGrpcServerTransport> asynchronous_;
+#endif
+};
 
 int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   const std::string endpoint = (argc > 1) ? argv[1] : std::string(kDefaultHost) + ":" + std::to_string(kDefaultPort);
@@ -73,7 +122,7 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
   std::signal(SIGBREAK, SignalHandler);
 #endif
 
-  const auto agent_options = ReadSutAgentOptions();
+  auto agent_options = ReadSutAgentOptions();
   if (!agent_options.ok()) {
     std::cerr << agent_options.error().message() << '\n';
     return 1;
@@ -86,11 +135,12 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
     return 1;
   }
 
+  agent_options.value().streaming = agent_options.value().streaming && !options.async_grpc;
   SutAgent agent(std::move(store_bundle.value()), endpoints, agent_options.value());
   auto& dispatcher = agent.dispatcher();
   a2a::server::GrpcServerTransportOptions grpc_options;
   grpc_options.required_extensions = {std::string(kRequiredExtensionUri)};
-  a2a::server::GrpcServerTransport grpc(&dispatcher, std::move(grpc_options));
+  SutGrpcService grpc(dispatcher, options.async_grpc, std::move(grpc_options));
 
   a2a::server::RestServerTransportOptions rest_options;
   rest_options.rest_api_base_path = std::string(kRestApiBasePath);
@@ -134,7 +184,7 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
     credentials = grpc::SslServerCredentials(ssl);
   }
   grpc_builder.AddListeningPort(host + ":" + std::to_string(grpc_port), credentials);
-  grpc_builder.RegisterService(&grpc);
+  grpc_builder.RegisterService(grpc.Service());
   std::unique_ptr<grpc::Server> grpc_server = grpc_builder.BuildAndStart();
   if (!grpc_server) {
     std::cerr << "Failed to start " << options.display_name << " gRPC server on " << host << ':' << grpc_port << '\n';
@@ -153,7 +203,9 @@ int RunSutRuntimeImpl(int argc, char** argv, const SutRuntimeOptions& options) {
     options.observer->OnShutdown();
   }
   std::cerr << options.display_name << " shutdown: stopping gRPC\n";
+  grpc.Shutdown();
   grpc_server->Shutdown();
+  grpc_server->Wait();
   return 0;
 }
 
