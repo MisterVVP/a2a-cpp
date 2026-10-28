@@ -37,7 +37,15 @@ struct RequestExecutionState final {
 RequestExecutionContext::RequestExecutionContext(std::shared_ptr<RequestExecutionState> state) noexcept
     : state_(std::move(state)) {}
 
-const RequestContext& RequestExecutionContext::Metadata() const noexcept { return state_->metadata; }
+RequestExecutionContext RequestExecutionContext::WithMetadata(RequestContext metadata) const {
+  auto view = *this;
+  view.metadata_ = std::make_shared<const RequestContext>(std::move(metadata));
+  return view;
+}
+
+const RequestContext& RequestExecutionContext::Metadata() const noexcept {
+  return metadata_ != nullptr ? *metadata_ : state_->metadata;
+}
 
 std::optional<RequestExecutionContext::Clock::time_point> RequestExecutionContext::Deadline() const noexcept {
   return state_->deadline;

@@ -25,6 +25,8 @@ class RequestExecutionContext final {
  public:
   using Clock = std::chrono::steady_clock;
 
+  // Derive an immutable interceptor-updated view sharing this lifecycle.
+  [[nodiscard]] RequestExecutionContext WithMetadata(RequestContext metadata) const;
   [[nodiscard]] const RequestContext& Metadata() const noexcept;
   [[nodiscard]] std::optional<Clock::time_point> Deadline() const noexcept;
   [[nodiscard]] RequestOutcome Outcome() const noexcept;
@@ -34,6 +36,7 @@ class RequestExecutionContext final {
   friend class RequestExecution;
   explicit RequestExecutionContext(std::shared_ptr<RequestExecutionState> state) noexcept;
   std::shared_ptr<RequestExecutionState> state_;
+  std::shared_ptr<const RequestContext> metadata_;
 };
 
 // Single owner for one operation. Concurrent terminal signals are safe while this

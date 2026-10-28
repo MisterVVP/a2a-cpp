@@ -155,6 +155,7 @@ set(A2A_SERVER_SOURCES
   server/task_subscription_service.cpp
   server/transport/transport_mux.cpp
   server/dispatcher.cpp
+  server/engine/dispatch_pipeline.cpp
   server/security_policy.cpp
   server/request_context.cpp
   server/tasks/in_memory_task_store.cpp
@@ -166,7 +167,7 @@ set(A2A_SERVER_SOURCES
   server/stores/store_factory.cpp
 )
 if(A2A_STDLIB_HAS_STOP_TOKEN)
-  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp)
+  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp server/engine/async_dispatcher.cpp)
 endif()
 add_library(a2a_server STATIC ${A2A_SERVER_SOURCES})
 target_compile_definitions(a2a_server PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
