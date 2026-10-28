@@ -34,7 +34,6 @@ struct RequestExecutionState final {
   std::stop_source stop_source;
 };
 
-
 RequestExecutionContext::RequestExecutionContext(std::shared_ptr<RequestExecutionState> state) noexcept
     : state_(std::move(state)) {}
 
