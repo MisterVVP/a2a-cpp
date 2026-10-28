@@ -32,6 +32,9 @@ def run_consumer(source, build, config):
         command = ["cmake", "-S", str(source / "examples" / "installed_package_consumer"), "-B", str(consumer),
                    "-DA2A_EXAMPLE_APP=async_grpc_server", "-DCMAKE_PREFIX_PATH=" + str(prefix) + ";" + inherited,
                    "-DCMAKE_BUILD_TYPE=" + config, "-G", values["CMAKE_GENERATOR"]]
+        if values.get("CMAKE_CONFIGURATION_TYPES"):
+            # The SDK installation contains only the configuration under test.
+            command.append("-DCMAKE_CONFIGURATION_TYPES=" + config)
         forwards = ["CMAKE_CXX_COMPILER", "CMAKE_TOOLCHAIN_FILE", "VCPKG_TARGET_TRIPLET", "VCPKG_HOST_TRIPLET",
                     "VCPKG_INSTALLED_DIR", "VCPKG_OVERLAY_TRIPLETS", "CMAKE_MAKE_PROGRAM", "CMAKE_OSX_SYSROOT",
                     "CMAKE_OSX_ARCHITECTURES", "CMAKE_OSX_DEPLOYMENT_TARGET", "CMAKE_MSVC_RUNTIME_LIBRARY",

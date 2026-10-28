@@ -2,6 +2,7 @@
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
 #pragma once
+#include <grpcpp/completion_queue.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
@@ -35,6 +36,46 @@ inline constexpr auto kLoopbackBind = "127.0.0.1:0";
 inline constexpr auto kLoopbackPrefix = "127.0.0.1:";
 inline constexpr auto kAsyncWait = std::chrono::seconds(5);
 inline constexpr int kAsyncHistory = 3;
+inline constexpr auto kUnaryCompletionFailed = "Unary client completion queue event failed";
+
+// One explicitly polled queue supports concurrent test calls on older gRPC
+// clients too. This thread is client infrastructure, independent of SDK workers.
+class UnaryGrpcClient final : private core::NonCopyableOrMovable {
+ public:
+  UnaryGrpcClient() : poller_([this] { Poll(); }) {}
+  ~UnaryGrpcClient() {
+    queue_.Shutdown();
+    poller_.join();
+  }
+  void GetTask(lf::a2a::v1::A2AService::Stub& stub, ::grpc::ClientContext& context,
+               const lf::a2a::v1::GetTaskRequest& request, lf::a2a::v1::Task& response,
+               std::function<void(::grpc::Status)> complete) {
+    auto call = std::make_unique<Call>();
+    call->complete = std::move(complete);
+    call->reader = stub.AsyncGetTask(&context, request, &queue_);
+    auto* tag = call.release();
+    tag->reader->Finish(&response, &tag->status, tag);
+  }
+
+ private:
+  struct Call final {
+    // Keep the completion's owned request/context alive until reader destruction.
+    std::function<void(::grpc::Status)> complete;
+    ::grpc::Status status;
+    std::unique_ptr<::grpc::ClientAsyncResponseReader<lf::a2a::v1::Task>> reader;
+  };
+  void Poll() {
+    void* tag = nullptr;
+    bool ok = false;
+    while (queue_.Next(&tag, &ok)) {
+      std::unique_ptr<Call> call(static_cast<Call*>(tag));
+      call->complete(ok ? std::move(call->status)
+                        : ::grpc::Status(::grpc::StatusCode::UNKNOWN, kUnaryCompletionFailed));
+    }
+  }
+  ::grpc::CompletionQueue queue_;
+  std::thread poller_;
+};
 
 inline lf::a2a::v1::Task AsyncTask() {
   lf::a2a::v1::Task task;
@@ -68,7 +109,7 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
       return;
     }
     auto observer = Observe(context);
-    bool queued = false;
+    GetCompletion immediate;
     {
       std::lock_guard lock(mutex_);
       contexts_.push_back(context);
@@ -76,12 +117,13 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
       observers_.push_back(std::move(observer));
       if (pending_ && !released_) {
         replies_.push_back(std::move(complete));
-        queued = true;
+      } else {
+        immediate = std::move(complete);
       }
     }
     changed_.notify_all();
-    if (!queued) {
-      complete(AsyncTask());
+    if (immediate) {
+      immediate(AsyncTask());
     }
   }
   core::Result<lf::a2a::v1::Task> GetSync(const lf::a2a::v1::GetTaskRequest& request) {
@@ -310,6 +352,7 @@ class UnaryGrpcServer final : private core::NonCopyableOrMovable {
     server_->Wait();
   }
   [[nodiscard]] lf::a2a::v1::A2AService::Stub& Stub() const { return *stub_; }
+  [[nodiscard]] UnaryGrpcClient& Client() { return client_; }
   [[nodiscard]] bool Ready() const { return server_ != nullptr && port_ != 0; }
 
  private:
@@ -322,6 +365,7 @@ class UnaryGrpcServer final : private core::NonCopyableOrMovable {
   std::unique_ptr<server::GrpcServerTransport> sync_service_;
   std::unique_ptr<::grpc::Server> server_;
   std::unique_ptr<lf::a2a::v1::A2AService::Stub> stub_;
+  UnaryGrpcClient client_;
 };
 
 inline void PrepareGrpcClient(::grpc::ClientContext& context) {

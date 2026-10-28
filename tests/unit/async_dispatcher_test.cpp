@@ -258,6 +258,21 @@ class FakeTransport final {
   std::future<Result<DispatchResponse>> result_;
 };
 
+void ExpectClientCancellation(FakeTransport& transport, const std::shared_ptr<RequestExecution>& execution) {
+  EXPECT_TRUE(execution->Cancel());
+  EXPECT_FALSE(transport.Receive().ok());
+  EXPECT_EQ(execution->Context().Outcome(), RequestOutcome::kClientCancelled);
+  EXPECT_EQ(transport.reply()->outcome, RequestOutcome::kClientCancelled);
+}
+
+void ExpectDrainedShutdown(FakeTransport& transport, const std::weak_ptr<FakeExecutor>& executor,
+                           const RequestExecutionContext& context) {
+  EXPECT_EQ(transport.reply()->count.load(), 1);
+  EXPECT_FALSE(transport.Receive().ok());
+  EXPECT_TRUE(executor.expired());
+  EXPECT_EQ(context.Outcome(), RequestOutcome::kServerShutdown);
+}
+
 struct OperationCase final {
   DispatchRequest request;
   std::size_t response_index;
@@ -382,10 +397,7 @@ TEST(AsyncDispatcherTest, CancellationCompletesWithoutWaitingForApplicationAndIg
   ASSERT_TRUE(accepted.ok());
   ASSERT_EQ(held.wait_for(kWait), std::future_status::ready);
   auto complete = held.get();
-  EXPECT_TRUE(accepted.value()->Cancel());
-  EXPECT_FALSE(transport.Receive().ok());
-  EXPECT_EQ(accepted.value()->Context().Outcome(), RequestOutcome::kClientCancelled);
-  EXPECT_EQ(transport.reply()->outcome, RequestOutcome::kClientCancelled);
+  ExpectClientCancellation(transport, accepted.value());
   const auto observed = executor->last_context;
   if (!observed.has_value()) {
     ADD_FAILURE() << kMissingContext;
@@ -473,10 +485,7 @@ TEST(AsyncDispatcherTest, ShutdownDrainsCallbacksAndReleasesExecutorWithoutAppli
   std::weak_ptr<FakeExecutor> weak = executor;
   executor.reset();
   dispatcher.reset();
-  EXPECT_EQ(transport.reply()->count.load(), 1);
-  EXPECT_FALSE(transport.Receive().ok());
-  EXPECT_TRUE(weak.expired());
-  EXPECT_EQ(observed->Outcome(), RequestOutcome::kServerShutdown);
+  ExpectDrainedShutdown(transport, weak, *observed);
   complete(MakeTask());
   EXPECT_EQ(transport.reply()->count.load(), 1);
 }

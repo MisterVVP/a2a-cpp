@@ -21,7 +21,7 @@ pending requests progress on a bounded worker pool.
 With tests and C++20 cancellation enabled, build `async_grpc_execution_evidence`
 and run it with a request count and backend hold in milliseconds, for example
 `./build/tests/async_grpc_execution_evidence 32 10` or `128 10`. It compares sync and
-callback services over native gRPC using the same callback client and externally
+callback services over native gRPC using the same completion-queue client and externally
 released backend fixture. JSON includes application/process thread counts and
 client p50/p95 latency. `32 0` exercises immediate completions. See the
 [guide](../book/src/server/async-grpc.md#reproducing-thread-and-latency-evidence)

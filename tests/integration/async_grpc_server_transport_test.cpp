@@ -144,9 +144,9 @@ struct ClientGet final : std::enable_shared_from_this<ClientGet> {
     request.set_id(kAsyncTaskId);
     PrepareGrpcClient(context);
   }
-  void Begin(lf::a2a::v1::A2AService::Stub& stub) {
-    stub.async()->GetTask(&context, &request, &response,
-                          [self = shared_from_this()](auto status) { self->reply.set_value(std::move(status)); });
+  void Begin(UnaryGrpcServer& server) {
+    server.Client().GetTask(server.Stub(), context, request, response,
+                            [self = shared_from_this()](auto status) { self->reply.set_value(std::move(status)); });
   }
   ::grpc::Status Await() {
     if (future.wait_for(kAsyncWait) != std::future_status::ready) {
@@ -191,7 +191,7 @@ TEST(AsyncGrpcTest, OwnsMetadataAndConvertsDeadlineAndHistory) {
   call->context.AddMetadata(kAuthorization, kAsyncAuth);
   call->context.AddMetadata(kRequestHeader, kAsyncRequestId);
   call->request.set_history_length(1);
-  call->Begin(server.Stub());
+  call->Begin(server);
   ASSERT_TRUE(call->Await().ok());
   const auto execution = backend->Context();
   EXPECT_EQ(execution.Metadata().auth_metadata.at(kAuthorization), kAsyncAuth);
@@ -253,7 +253,7 @@ TEST(AsyncGrpcTest, ManyPendingRequestsUseFixedApplicationWorkers) {
   std::vector<std::shared_ptr<ClientGet>> calls;
   for (std::size_t index = 0; index < kPendingCount; ++index) {
     auto call = std::make_shared<ClientGet>();
-    call->Begin(server.Stub());
+    call->Begin(server);
     calls.push_back(std::move(call));
   }
   ASSERT_TRUE(backend->WaitForCalls(kPendingCount));
@@ -270,7 +270,7 @@ TEST(AsyncGrpcTest, ClientCancellationSignalsApplicationAndAfterExactlyOnce) {
   options.interceptors = {after};
   UnaryGrpcServer server(backend, true, {}, options);
   auto call = std::make_shared<ClientGet>();
-  call->Begin(server.Stub());
+  call->Begin(server);
   ASSERT_TRUE(backend->WaitForCalls(1));
   call->context.TryCancel();
   EXPECT_EQ(call->Await().error_code(), ::grpc::StatusCode::CANCELLED);
@@ -288,7 +288,7 @@ TEST(AsyncGrpcTest, DeadlineExpiryIsDistinctFromClientCancellation) {
   UnaryGrpcServer server(backend, true, {}, {}, client_options);
   auto call = std::make_shared<ClientGet>();
   call->context.set_deadline(std::chrono::system_clock::now() + kShortDeadline);
-  call->Begin(server.Stub());
+  call->Begin(server);
   ASSERT_TRUE(backend->WaitForCalls(1));
   EXPECT_EQ(call->Await().error_code(), ::grpc::StatusCode::DEADLINE_EXCEEDED);
   ASSERT_TRUE(backend->WaitForStops(1));
@@ -299,14 +299,14 @@ TEST(AsyncGrpcTest, ShutdownCompletesCallsWithoutWaitingForBackendAndRejectsAdmi
   auto backend = std::make_shared<UnaryBackend>(true);
   UnaryGrpcServer server(backend);
   auto call = std::make_shared<ClientGet>();
-  call->Begin(server.Stub());
+  call->Begin(server);
   ASSERT_TRUE(backend->WaitForCalls(1));
   server.CloseAdmission();
   EXPECT_FALSE(call->Await().ok());
   ASSERT_TRUE(backend->WaitForStops(1));
   EXPECT_EQ(backend->Stopped().front(), RequestOutcome::kServerShutdown);
   auto late = std::make_shared<ClientGet>();
-  late->Begin(server.Stub());
+  late->Begin(server);
   EXPECT_EQ(late->Await().error_code(), ::grpc::StatusCode::UNAVAILABLE);
   server.Shutdown();
   backend->Release();  // Saved executor replies are safe even after gRPC OnDone.
@@ -318,7 +318,7 @@ TEST(AsyncGrpcTest, CancelVersusCompletionRaceStillRunsAfterOnce) {
   options.interceptors = {after};
   UnaryGrpcServer server(backend, true, {}, options);
   auto call = std::make_shared<ClientGet>();
-  call->Begin(server.Stub());
+  call->Begin(server);
   ASSERT_TRUE(backend->WaitForCalls(1));
   std::barrier race(kRaceParticipants);
   std::thread application([&] {
@@ -356,7 +356,7 @@ TEST(AsyncGrpcTest, ImmediateCancellationCanRaceAdmissionAndSourceBinding) {
   std::vector<std::shared_ptr<ClientGet>> calls;
   for (std::size_t index = 0; index < kPendingCount; ++index) {
     auto call = std::make_shared<ClientGet>();
-    call->Begin(server.Stub());
+    call->Begin(server);
     call->context.TryCancel();
     calls.push_back(std::move(call));
   }
@@ -394,13 +394,13 @@ TEST(AsyncGrpcTest, SecurityAuthenticatesCopiedMetadataAndProjectsAuthorizedHist
   options.task_store = &store;
   UnaryGrpcServer server(backend, true, {}, options);
   auto denied = std::make_shared<ClientGet>();
-  denied->Begin(server.Stub());
+  denied->Begin(server);
   EXPECT_EQ(denied->Await().error_code(), ::grpc::StatusCode::UNAUTHENTICATED);
   EXPECT_EQ(backend->WorkerCount(), 0);
   auto allowed = std::make_shared<ClientGet>();
   allowed->context.AddMetadata(kAuthorization, kAsyncAuth);
   allowed->request.set_history_length(1);
-  allowed->Begin(server.Stub());
+  allowed->Begin(server);
   ASSERT_TRUE(allowed->Await().ok());
   EXPECT_EQ(backend->Context().Metadata().principal, kAuthenticatedIdentity);
   EXPECT_EQ(allowed->response.history_size(), 1);
@@ -411,10 +411,10 @@ TEST(AsyncGrpcTest, CapacityExhaustionReturnsUnavailableWithoutStartingApplicati
   options.max_in_flight = 1;
   UnaryGrpcServer server(backend, true, {}, options);
   auto first = std::make_shared<ClientGet>();
-  first->Begin(server.Stub());
+  first->Begin(server);
   ASSERT_TRUE(backend->WaitForCalls(1));
   auto overflow = std::make_shared<ClientGet>();
-  overflow->Begin(server.Stub());
+  overflow->Begin(server);
   EXPECT_EQ(overflow->Await().error_code(), ::grpc::StatusCode::UNAVAILABLE);
   first->context.TryCancel();
   EXPECT_EQ(first->Await().error_code(), ::grpc::StatusCode::CANCELLED);
@@ -436,7 +436,7 @@ TEST(AsyncGrpcTest, AlreadyExpiredClientDeadlineDoesNotStartApplication) {
   UnaryGrpcServer server(backend);
   auto call = std::make_shared<ClientGet>();
   call->context.set_deadline(std::chrono::system_clock::time_point{});
-  call->Begin(server.Stub());
+  call->Begin(server);
   EXPECT_EQ(call->Await().error_code(), ::grpc::StatusCode::DEADLINE_EXCEEDED);
   EXPECT_EQ(backend->WorkerCount(), 0);
 }

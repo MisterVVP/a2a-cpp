@@ -143,7 +143,7 @@ Build `async_grpc_execution_evidence` in an optimized configuration and run:
 
 The first argument selects simultaneous requests (1–128), and the second selects
 a controller-held backend readiness delay in milliseconds (0–10). Both services
-use the same generated callback client, payload, metadata, warmed channel, and
+use the same generated completion-queue client, payload, metadata, warmed channel, and
 backend fixture. The pending workload waits until all operations have initiated,
 then releases their replies together. Only the controller sleeps; async SDK
 workers remain free while replies are pending. This models externally completed
@@ -156,6 +156,10 @@ shared pools can change process counts independently of SDK workers. The CTest
 smoke checks successful completion and the configured async worker bound without
 asserting host-dependent latency thresholds.
 
+Each fixture uses one shared client completion queue with one polling thread.
+This client infrastructure stays constant across both services and supports older
+gRPC releases without relying on their client callback queue implementation.
+
 ### Measured comparison
 
 A representative Linux run with GCC 15, gRPC 1.51.1, and RelWithDebInfo produced
@@ -164,17 +168,17 @@ same controller-held backend fixture and warmed generated gRPC client.
 
 | Requests | Backend hold | Service | Application threads | Process threads before → pending | Client p50 / p95 |
 | ---: | ---: | --- | ---: | --- | --- |
-| 32 | 10 ms | Synchronous | 32 | 10 → 43 | 15.71 / 16.06 ms |
-| 32 | 10 ms | Async callback | 2 | 12 → 12 | 11.12 / 11.40 ms |
-| 128 | 10 ms | Synchronous | 128 | 10 → 139 | 34.42 / 36.56 ms |
-| 128 | 10 ms | Async callback | 2 | 12 → 12 | 13.60 / 14.25 ms |
+| 32 | 10 ms | Synchronous | 32 | 11 → 42 | 27.00 / 27.40 ms |
+| 32 | 10 ms | Async callback | 2 | 13 → 13 | 12.53 / 12.58 ms |
+| 128 | 10 ms | Synchronous | 128 | 11 → 138 | 30.72 / 44.60 ms |
+| 128 | 10 ms | Async callback | 2 | 13 → 13 | 14.63 / 14.95 ms |
 
 Application worker counts establish the bounded scheduling property. The process
 counts include gRPC and client infrastructure, and latency samples depend on the
 host and controlled workload; these values are not throughput or latency
 promises for a real backend. The zero-delay, 32-request sample measured p50/p95
-1.30/1.52 ms for sync and 0.62/1.57 ms for async, with application thread counts
-10 and 2 respectively. Immediate work can pay scheduling overhead; pending work
+1.28/1.35 ms for sync and 0.93/1.02 ms for async, with two application threads
+in each service. Immediate work can pay scheduling overhead; pending work
 is where the bounded worker model avoids holding one server thread per call.
 
 The earlier isolated dispatcher benchmark recorded a sync cost of 0.408 µs

@@ -69,9 +69,9 @@ struct Request final : std::enable_shared_from_this<Request> {
     query.set_id(kAsyncTaskId);
     PrepareGrpcClient(context);
   }
-  void Start(lf::a2a::v1::A2AService::Stub& stub) {
+  void Start(UnaryGrpcServer& server) {
     started = Clock::now();
-    stub.async()->GetTask(&context, &query, &response, [self = shared_from_this()](auto status) {
+    server.Client().GetTask(server.Stub(), context, query, response, [self = shared_from_this()](auto status) {
       self->latency = std::chrono::duration<double, std::micro>(Clock::now() - self->started).count();
       self->done.set_value(status.ok());
     });
@@ -117,7 +117,7 @@ std::optional<google::protobuf::Struct> Measure(bool asynchronous, std::size_t c
   requests.reserve(count);
   for (std::size_t index = 0; index < count; ++index) {
     auto request = std::make_shared<Request>();
-    request->Start(server.Stub());
+    request->Start(server);
     requests.push_back(std::move(request));
   }
   const bool received = backend->WaitForCalls(count);
