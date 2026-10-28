@@ -8,11 +8,12 @@
 #include <optional>
 #include <stop_token>
 
+#include "a2a/core/non_copyable.h"
 #include "a2a/server/request_context.h"
 
 namespace a2a::server {
 
-namespace detail {
+namespace engine {
 struct RequestExecutionState;
 }
 
@@ -33,24 +34,19 @@ class RequestExecutionContext final {
 
  private:
   friend class RequestExecution;
-  explicit RequestExecutionContext(std::shared_ptr<detail::RequestExecutionState> state) noexcept;
-  std::shared_ptr<detail::RequestExecutionState> state_;
+  explicit RequestExecutionContext(std::shared_ptr<engine::RequestExecutionState> state) noexcept;
+  std::shared_ptr<engine::RequestExecutionState> state_;
 };
 
 // Single owner for one operation. Concurrent terminal signals are safe while this
 // object is alive. Destruction publishes shutdown if the operation is still pending.
 // No timer or worker is started: the caller drives ExpireDeadline from its scheduler.
-class RequestExecution final {
+class RequestExecution final : private core::NonCopyableOrMovable {
  public:
   using Clock = RequestExecutionContext::Clock;
 
   explicit RequestExecution(RequestContext metadata = {}, std::optional<Clock::time_point> deadline = {});
   ~RequestExecution();
-  RequestExecution(const RequestExecution&) = delete;
-  RequestExecution& operator=(const RequestExecution&) = delete;
-  RequestExecution(RequestExecution&&) = delete;
-  RequestExecution& operator=(RequestExecution&&) = delete;
-
   [[nodiscard]] RequestExecutionContext Context() const noexcept;
   // Returns true only for the winning application completion. At/after the
   // deadline, publishes deadline expiry instead and returns false.
@@ -60,7 +56,7 @@ class RequestExecution final {
   [[nodiscard]] bool ExpireDeadline(Clock::time_point now = Clock::now()) noexcept;
 
  private:
-  std::shared_ptr<detail::RequestExecutionState> state_;
+  std::shared_ptr<engine::RequestExecutionState> state_;
 };
 
 }  // namespace a2a::server

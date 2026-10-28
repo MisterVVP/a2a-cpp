@@ -39,7 +39,9 @@ constexpr auto kPrincipal = "test-principal";
 
 static_assert(std::is_aggregate_v<RequestContext>);
 static_assert(!std::is_copy_constructible_v<RequestExecution>);
+static_assert(!std::is_copy_assignable_v<RequestExecution>);
 static_assert(!std::is_move_constructible_v<RequestExecution>);
+static_assert(!std::is_move_assignable_v<RequestExecution>);
 
 TEST(RequestExecutionTest, ContextOwnsUnchangedMetadataAfterOwnerDestruction) {
   RequestContext metadata{.request_id = kRequestId,

@@ -3,39 +3,13 @@
 
 #include "a2a/server/request_execution.h"
 
-#include <atomic>
 #include <utility>
 
+#include "server/engine/request_execution_state.h"
+
 namespace a2a::server {
-namespace detail {
 
-struct RequestExecutionState final {
-  explicit RequestExecutionState(RequestContext request_metadata,
-                                 std::optional<RequestExecutionContext::Clock::time_point> request_deadline)
-      : metadata(std::move(request_metadata)), deadline(request_deadline) {}
-
-  [[nodiscard]] bool TryFinish(RequestOutcome terminal) noexcept {
-    auto expected = RequestOutcome::kPending;
-    if (!outcome.compare_exchange_strong(expected, terminal)) {
-      return false;
-    }
-    if (terminal != RequestOutcome::kSucceeded && terminal != RequestOutcome::kFailed) {
-      // Publish the reason before notifying observers. No SDK lock is held while
-      // callbacks run, so observers may inspect state or attempt another signal.
-      stop_source.request_stop();
-    }
-    return true;
-  }
-
-  const RequestContext metadata;
-  const std::optional<RequestExecutionContext::Clock::time_point> deadline;
-  std::atomic<RequestOutcome> outcome{RequestOutcome::kPending};
-  std::stop_source stop_source;
-};
-
-}  // namespace detail
-
-RequestExecutionContext::RequestExecutionContext(std::shared_ptr<detail::RequestExecutionState> state) noexcept
+RequestExecutionContext::RequestExecutionContext(std::shared_ptr<engine::RequestExecutionState> state) noexcept
     : state_(std::move(state)) {}
 
 const RequestContext& RequestExecutionContext::Metadata() const noexcept { return state_->metadata; }
@@ -49,7 +23,7 @@ RequestOutcome RequestExecutionContext::Outcome() const noexcept { return state_
 std::stop_token RequestExecutionContext::StopToken() const noexcept { return state_->stop_source.get_token(); }
 
 RequestExecution::RequestExecution(RequestContext metadata, std::optional<Clock::time_point> deadline)
-    : state_(std::make_shared<detail::RequestExecutionState>(std::move(metadata), deadline)) {}
+    : state_(std::make_shared<engine::RequestExecutionState>(std::move(metadata), deadline)) {}
 
 RequestExecution::~RequestExecution() { (void)Cancel(RequestCancellationReason::kServerShutdown); }
 
