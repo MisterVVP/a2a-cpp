@@ -6,6 +6,7 @@
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
+#include <grpcpp/support/channel_arguments.h>
 
 #include <chrono>
 #include <condition_variable>
@@ -260,7 +261,8 @@ class UnaryGrpcServer final : private core::NonCopyableOrMovable {
  public:
   explicit UnaryGrpcServer(std::shared_ptr<UnaryBackend> backend, bool asynchronous = true,
                            server::GrpcServerTransportOptions options = {},
-                           server::engine::AsyncDispatcherOptions execution_options = {}) {
+                           server::engine::AsyncDispatcherOptions execution_options = {},
+                           const ::grpc::ChannelArguments& client_options = {}) {
     backend_ = backend;
     if (execution_options.agent_card_provider == nullptr) {
       lf::a2a::v1::AgentCard card;
@@ -286,7 +288,8 @@ class UnaryGrpcServer final : private core::NonCopyableOrMovable {
     server_ = builder.BuildAndStart();
     std::string endpoint(kLoopbackPrefix);
     endpoint.append(std::to_string(port_));
-    stub_ = lf::a2a::v1::A2AService::NewStub(::grpc::CreateChannel(endpoint, ::grpc::InsecureChannelCredentials()));
+    stub_ = lf::a2a::v1::A2AService::NewStub(
+        ::grpc::CreateCustomChannel(endpoint, ::grpc::InsecureChannelCredentials(), client_options));
   }
   ~UnaryGrpcServer() {
     CloseAdmission();

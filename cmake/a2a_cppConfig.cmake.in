@@ -7,8 +7,10 @@ if(A2A_CPP_HAS_AGENT_CARD_SIGNING)
 endif()
 
 find_dependency(simdjson @simdjson_VERSION@ CONFIG)
-find_dependency(Protobuf)
-find_dependency(gRPC)
+find_dependency(gRPC CONFIG)
+if(NOT TARGET protobuf::libprotobuf)
+  find_dependency(Protobuf)
+endif()
 
 set(A2A_CPP_HAS_LIBCURL "@A2A_HAS_LIBCURL@")
 if(A2A_CPP_HAS_LIBCURL)

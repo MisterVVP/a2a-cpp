@@ -57,16 +57,17 @@ std::optional<::grpc::StatusCode> CancellationStatus(RequestOutcome outcome) {
 }
 
 template <typename Request>
-core::Result<DispatchRequest> MakeRequest(DispatcherOperation operation, const Request& request) {
+core::Result<void> SetRequestPayload(DispatchRequest& dispatch, const Request& request) {
   if constexpr (std::is_same_v<Request, lf::a2a::v1::ListTasksRequest>) {
     auto parsed = ParseGrpcListTasksRequest(request);
     if (!parsed.ok()) {
       return parsed.error();
     }
-    return DispatchRequest{.operation = operation, .payload = std::move(parsed.value())};
+    dispatch.payload = std::move(parsed.value());
   } else {
-    return DispatchRequest{.operation = operation, .payload = request};
+    dispatch.payload = request;
   }
+  return {};
 }
 
 template <typename Response>
@@ -186,9 +187,10 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     if (!metadata.ok()) {
       return Reject(context, GrpcErrorStatus(metadata.error(), &context));
     }
-    auto routed = MakeRequest(operation, *request);
-    if (!routed.ok()) {
-      return Reject(context, GrpcErrorStatus(routed.error(), &context, metadata.value().activated_extensions));
+    DispatchRequest routed{.operation = operation};
+    auto payload = SetRequestPayload(routed, *request);
+    if (!payload.ok()) {
+      return Reject(context, GrpcErrorStatus(payload.error(), &context, metadata.value().activated_extensions));
     }
     auto call = std::make_shared<Call>();
     call->owner = shared_from_this();
@@ -206,7 +208,7 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       reactor->Complete(std::move(result), execution);
     };
     const auto admitted = dispatcher->Dispatch(
-        std::move(routed.value()), std::move(metadata.value().request_context),
+        std::move(routed), std::move(metadata.value().request_context),
         [call](auto result, const RequestExecutionContext& execution) { call->deliver(std::move(result), execution); },
         SteadyDeadline(context.deadline()));
     if (!admitted.ok()) {

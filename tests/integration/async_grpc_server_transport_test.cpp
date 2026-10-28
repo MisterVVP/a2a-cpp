@@ -281,7 +281,11 @@ TEST(AsyncGrpcTest, ClientCancellationSignalsApplicationAndAfterExactlyOnce) {
 }
 TEST(AsyncGrpcTest, DeadlineExpiryIsDistinctFromClientCancellation) {
   auto backend = std::make_shared<UnaryBackend>(true);
-  UnaryGrpcServer server(backend);
+  // Let the server's deadline fire. A client-side timer can otherwise send a
+  // cancellation before the rounded wire deadline has expired on the server.
+  ::grpc::ChannelArguments client_options;
+  client_options.SetInt(GRPC_ARG_ENABLE_DEADLINE_CHECKS, 0);
+  UnaryGrpcServer server(backend, true, {}, {}, client_options);
   auto call = std::make_shared<ClientGet>();
   call->context.set_deadline(std::chrono::system_clock::now() + kShortDeadline);
   call->Begin(server.Stub());

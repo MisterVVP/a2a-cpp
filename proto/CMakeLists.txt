@@ -85,6 +85,12 @@ add_library(a2a_proto_generated STATIC
 add_library(a2a::proto_generated ALIAS a2a_proto_generated)
 set_target_properties(a2a_proto_generated PROPERTIES EXPORT_NAME proto_generated)
 
+# gRPC 1.33 requires this opt-in for the stable callback service/client names.
+# Export it so installed consumers see the same generated API as the SDK.
+if(gRPC_VERSION VERSION_LESS 1.38)
+  target_compile_definitions(a2a_proto_generated PUBLIC GRPC_CALLBACK_API_NONEXPERIMENTAL=1)
+endif()
+
 target_link_libraries(a2a_proto_generated
   PUBLIC
     protobuf::libprotobuf
