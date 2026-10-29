@@ -3,13 +3,7 @@
 
 #pragma once
 
-#include <boost/asio/associated_executor.hpp>
-#include <boost/asio/async_result.hpp>
-#include <boost/asio/executor_work_guard.hpp>
-#include <boost/asio/post.hpp>
-#include <boost/asio/use_awaitable.hpp>
 #include <memory>
-#include <utility>
 
 #include "a2a/server/engine/coroutine_agent_executor.h"
 #include "sut/sut_application.h"
@@ -43,42 +37,7 @@ class AsyncSutExecutor final : public server::engine::CoroutineAgentExecutor {
   template <typename Request, typename Response>
   boost::asio::awaitable<core::Result<Response>> Submit(
       Request request, server::engine::RequestExecutionContext context,
-      core::Result<Response> (server::AgentExecutor::*operation)(const Request&, server::RequestContext&)) {
-    auto initiate = [this, request = std::move(request), context = std::move(context),
-                     operation](auto handler) mutable {
-      using Handler = decltype(handler);
-      const auto completion = std::make_shared<Handler>(std::move(handler));
-      const auto scheduler = boost::asio::get_associated_executor(*completion);
-      const auto work =
-          std::make_shared<decltype(boost::asio::make_work_guard(scheduler))>(boost::asio::make_work_guard(scheduler));
-      auto deliver = [completion, scheduler, work](core::Result<Response> result) {
-        boost::asio::post(
-            scheduler, [completion, work, result = std::move(result)]() mutable { (*completion)(std::move(result)); });
-      };
-      const bool accepted = work_.Post([application = application_, request = std::move(request),
-                                        context = std::move(context), operation, deliver]() mutable {
-        if (context.StopToken().stop_requested()) {
-          deliver(core::Error::Network(kStopped));
-          return;
-        }
-        auto metadata = context.Metadata();
-        core::Result<Response> result = core::Error::Internal(kOperationFailed);
-        try {
-          result = (application->executor().*operation)(request, metadata);
-        } catch (...) {
-          result = core::Error::Internal(kOperationFailed);
-        }
-        deliver(std::move(result));
-      });
-      if (!accepted) {
-        deliver(core::Error::Network(kStopped));
-      }
-    };
-    co_return co_await boost::asio::async_initiate<decltype(boost::asio::use_awaitable), void(core::Result<Response>)>(
-        std::move(initiate), boost::asio::use_awaitable);
-  }
-  static constexpr auto kOperationFailed = "SUT application operation threw an exception";
-  static constexpr auto kStopped = "SUT operation cancelled or work queue unavailable";
+      core::Result<Response> (server::AgentExecutor::*operation)(const Request&, server::RequestContext&));
   std::shared_ptr<SutApplication> application_;
   SutWorkQueue work_;
 };

@@ -4,12 +4,16 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/use_future.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -20,6 +24,7 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/version.h"
 #include "sut/async_sut_agent.h"
+#include "sut/sut_awaitable.h"
 #include "sut/sut_work_queue.h"
 
 namespace {
@@ -229,5 +234,83 @@ TEST(SutWorkQueueTest, EnforcesQueueLimitDrainsAcceptedWorkAndRejectsAfterShutdo
   queue.Shutdown();
   EXPECT_EQ(completed.load(), kQueueWorkCount);
   EXPECT_FALSE(queue.Post([] {}));
+}
+
+template <typename Operation>
+boost::asio::awaitable<void> ObserveSutWork(SutWorkQueue& queue, Operation operation,
+                                            std::promise<core::Result<lf::a2a::v1::Task>>& reply,
+                                            std::thread::id& resumed) {
+  auto result = co_await AwaitSutWork<lf::a2a::v1::Task>(queue, std::move(operation));
+  resumed = std::this_thread::get_id();
+  reply.set_value(std::move(result));
+}
+
+TEST(SutAwaitableTest, DeliversBackendResultOnAwaitingExecutorAndKeepsItRunning) {
+  SutWorkQueue queue;
+  boost::asio::io_context loop;
+  std::thread::id backend_thread;
+  std::thread::id resumed;
+  std::promise<core::Result<lf::a2a::v1::Task>> reply;
+  auto done = boost::asio::co_spawn(loop,
+                                    ObserveSutWork(
+                                        queue,
+                                        [&]() -> core::Result<lf::a2a::v1::Task> {
+                                          backend_thread = std::this_thread::get_id();
+                                          lf::a2a::v1::Task task;
+                                          task.set_id(kTaskId);
+                                          return task;
+                                        },
+                                        reply, resumed),
+                                    boost::asio::use_future);
+  loop.run();
+  done.get();
+  const auto result = reply.get_future().get();
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().id(), kTaskId);
+  EXPECT_EQ(resumed, std::this_thread::get_id());
+  EXPECT_NE(backend_thread, std::thread::id{});
+  EXPECT_NE(backend_thread, resumed);
+}
+
+TEST(SutAwaitableTest, ConvertsBackendExceptionToInternalError) {
+  SutWorkQueue queue;
+  boost::asio::io_context loop;
+  std::thread::id resumed;
+  std::promise<core::Result<lf::a2a::v1::Task>> reply;
+  auto done = boost::asio::co_spawn(
+      loop,
+      ObserveSutWork(
+          queue, []() -> core::Result<lf::a2a::v1::Task> { throw std::runtime_error(kTaskId); }, reply, resumed),
+      boost::asio::use_future);
+  loop.run();
+  done.get();
+  const auto result = reply.get_future().get();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), core::ErrorCode::kInternal);
+  EXPECT_EQ(result.error().message(), kSutOperationFailed);
+}
+
+TEST(SutAwaitableTest, RejectedQueueReturnsErrorWithoutExecutingOperation) {
+  SutWorkQueue queue;
+  queue.Shutdown();
+  boost::asio::io_context loop;
+  std::thread::id resumed;
+  std::promise<core::Result<lf::a2a::v1::Task>> reply;
+  bool executed = false;
+  auto done = boost::asio::co_spawn(loop,
+                                    ObserveSutWork(
+                                        queue,
+                                        [&]() -> core::Result<lf::a2a::v1::Task> {
+                                          executed = true;
+                                          return lf::a2a::v1::Task{};
+                                        },
+                                        reply, resumed),
+                                    boost::asio::use_future);
+  loop.run();
+  done.get();
+  const auto result = reply.get_future().get();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), core::ErrorCode::kNetwork);
+  EXPECT_FALSE(executed);
 }
 }  // namespace

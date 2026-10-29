@@ -49,23 +49,23 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
     std::shared_lock lock(interceptor_mutex_);
     pipeline = {.security = security_, .interceptors = interceptors_, .agent_card_provider = agent_card_provider_};
   }
-  std::optional<std::string> principal;
-  const auto before = pipeline.Before(request, context, principal);
+  engine::DispatchSession session(pipeline, request, context);
+  const auto before = session.Before();
   if (!before.ok()) {
     core::Result<DispatchResponse> failure = before.error();
-    pipeline.After(request, context, principal, failure);
+    session.After(failure);
     return failure;
   }
-  auto result = pipeline.Handle(request, context);
+  auto result = session.Handle();
   if (!result.has_value()) {
-    const auto prepared = pipeline.Prepare(request);
+    const auto prepared = session.Prepare();
     result = RouteSync(*executor_, prepared.has_value() ? *prepared : request, context);
   }
   if (!result.has_value()) {
     return core::Error::Internal(engine::kUnsupportedDispatchOperation);
   }
-  pipeline.Project(request, context, principal, *result);
-  pipeline.After(request, context, principal, *result);
+  session.Project(*result);
+  session.After(*result);
   return std::move(*result);
 }
 void Dispatcher::SetSecurityPolicy(std::shared_ptr<const SecurityPolicy> policy, TaskStore* task_store) {

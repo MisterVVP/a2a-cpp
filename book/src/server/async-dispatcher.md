@@ -38,6 +38,12 @@ validation failures and cancellation. Hooks for one call never overlap.
 Interceptor-updated metadata is passed to the executor through `WithMetadata`;
 the transport result retains the original ingress snapshot.
 
+The synchronous and coroutine dispatchers share pipeline configuration and routing.
+Each invocation creates its own internal session for authentication and interceptor
+state. The session restores the authenticated principal between hooks. Synchronous
+after-hook exceptions retain their existing propagation behavior; the coroutine
+path contains them so remaining hooks and transport completion can still run.
+
 The coroutine frame retains its application and pipeline through physical backend
 cleanup. Request cancellation can finish the protocol response earlier. A late
 coroutine return cannot replace the winning outcome or invoke transport completion
@@ -71,6 +77,10 @@ cancelled at the protocol boundary but still cleaning up backend work. Both defa
 to 1024, must be nonzero, and cause immediate admission rejection when exhausted.
 Thread count is controlled by the caller's Asio runtime; there is no dispatcher
 `worker_count` or second application-adapter capacity setting.
+
+Admission reservations release the active slot before transport completion and
+retain the pending slot until physical cleanup. Construction failures and failures while
+scheduling the initial work release their reservations automatically.
 
 Application errors retain their structured fields. Exceptions become internal
 errors; Asio operation cancellation becomes a network error, while the lifecycle's

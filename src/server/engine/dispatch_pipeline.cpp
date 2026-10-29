@@ -57,19 +57,19 @@ core::Result<DispatchResponse> DispatchExtendedAgentCard(
 
 }  // namespace
 
-core::Result<void> DispatchPipeline::Before(const DispatchRequest& request, RequestContext& context,
-                                            std::optional<std::string>& principal) const {
-  const auto authorized = security != nullptr ? security->Authorize(request, context) : core::Result<void>{};
-  principal = security != nullptr ? std::optional(context.principal) : std::nullopt;
+core::Result<void> DispatchSession::Before() {
+  const auto authorized =
+      pipeline_.security != nullptr ? pipeline_.security->Authorize(request_, context_) : core::Result<void>{};
+  principal_ = pipeline_.security != nullptr ? std::optional(context_.principal) : std::nullopt;
   if (!authorized.ok()) {
     return authorized.error();
   }
-  for (const auto& interceptor : interceptors) {
+  for (const auto& interceptor : pipeline_.interceptors) {
     if (interceptor == nullptr) {
       continue;
     }
-    const auto result = interceptor->BeforeDispatch(request, context);
-    RestorePrincipal(context, principal);
+    const auto result = interceptor->BeforeDispatch(request_, context_);
+    RestorePrincipal(context_, principal_);
     if (!result.ok()) {
       return result.error();
     }
@@ -77,25 +77,25 @@ core::Result<void> DispatchPipeline::Before(const DispatchRequest& request, Requ
   return {};
 }
 
-std::optional<DispatchRequest> DispatchPipeline::Prepare(const DispatchRequest& request) const {
-  if (security == nullptr) {
+std::optional<DispatchRequest> DispatchSession::Prepare() const {
+  if (pipeline_.security == nullptr) {
     return std::nullopt;
   }
-  const auto* get = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
-  const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
+  const auto* get = std::get_if<lf::a2a::v1::GetTaskRequest>(&request_.payload);
+  const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request_.payload);
   const bool get_history =
-      request.operation == DispatcherOperation::kGetTask && get != nullptr && get->has_history_length();
-  const bool send_history = request.operation == DispatcherOperation::kSendMessage && send != nullptr &&
+      request_.operation == DispatcherOperation::kGetTask && get != nullptr && get->has_history_length();
+  const bool send_history = request_.operation == DispatcherOperation::kSendMessage && send != nullptr &&
                             send->configuration().has_history_length();
   if (!get_history && !send_history) {
     return std::nullopt;
   }
-  auto prepared = request;
-  if (request.operation == DispatcherOperation::kGetTask) {
+  auto prepared = request_;
+  if (request_.operation == DispatcherOperation::kGetTask) {
     if (auto* query = std::get_if<lf::a2a::v1::GetTaskRequest>(&prepared.payload)) {
       query->clear_history_length();
     }
-  } else if (request.operation == DispatcherOperation::kSendMessage) {
+  } else if (request_.operation == DispatcherOperation::kSendMessage) {
     if (auto* query = std::get_if<lf::a2a::v1::SendMessageRequest>(&prepared.payload)) {
       if (query->configuration().has_history_length()) {
         query->mutable_configuration()->clear_history_length();
@@ -105,57 +105,52 @@ std::optional<DispatchRequest> DispatchPipeline::Prepare(const DispatchRequest& 
   return prepared;
 }
 
-std::optional<core::Result<DispatchResponse>> DispatchPipeline::Handle(const DispatchRequest& request,
-                                                                       RequestContext& context) const {
-  const auto* list = std::get_if<ListTasksRequest>(&request.payload);
-  if (security != nullptr && request.operation == DispatcherOperation::kListTasks && list != nullptr) {
-    return security->ListTasks(*list, context);
+std::optional<core::Result<DispatchResponse>> DispatchSession::Handle() const {
+  const auto* list = std::get_if<ListTasksRequest>(&request_.payload);
+  if (pipeline_.security != nullptr && request_.operation == DispatcherOperation::kListTasks && list != nullptr) {
+    return pipeline_.security->ListTasks(*list, context_);
   }
-  if (request.operation == DispatcherOperation::kGetExtendedAgentCard) {
-    return DispatchExtendedAgentCard(request, context, agent_card_provider);
+  if (request_.operation == DispatcherOperation::kGetExtendedAgentCard) {
+    return DispatchExtendedAgentCard(request_, context_, pipeline_.agent_card_provider);
   }
   return std::nullopt;
 }
 
-void DispatchPipeline::Project(const DispatchRequest& request, RequestContext& context,
-                               const std::optional<std::string>& principal,
-                               core::Result<DispatchResponse>& result) const {
-  RestorePrincipal(context, principal);
-  if (security != nullptr && result.ok()) {
-    auto authorized = security->AuthorizeResponse(result.value(), context);
+void DispatchSession::Project(core::Result<DispatchResponse>& result) const {
+  RestorePrincipal(context_, principal_);
+  if (pipeline_.security != nullptr && result.ok()) {
+    auto authorized = pipeline_.security->AuthorizeResponse(result.value(), context_);
     if (authorized.ok()) {
-      authorized = security->ProtectStream(request, context, result.value());
+      authorized = pipeline_.security->ProtectStream(request_, context_, result.value());
     }
     if (!authorized.ok()) {
       result = authorized.error();
     }
   }
   if (result.ok()) {
-    ProjectTaskResponse(request, result.value());
+    ProjectTaskResponse(request_, result.value());
   }
 }
 
-void DispatchPipeline::After(const DispatchRequest& request, RequestContext& context,
-                             const std::optional<std::string>& principal, const core::Result<DispatchResponse>& result,
-                             bool contain_exceptions) const {
-  RestorePrincipal(context, principal);
-  for (const auto& interceptor : std::ranges::reverse_view(interceptors)) {
+void DispatchSession::After(const core::Result<DispatchResponse>& result, InterceptorExceptionPolicy exceptions) const {
+  RestorePrincipal(context_, principal_);
+  for (const auto& interceptor : std::ranges::reverse_view(pipeline_.interceptors)) {
     if (interceptor == nullptr) {
       continue;
     }
-    if (!contain_exceptions) {
-      interceptor->AfterDispatch(request, context, result);
-      RestorePrincipal(context, principal);
+    if (exceptions == InterceptorExceptionPolicy::kPropagate) {
+      interceptor->AfterDispatch(request_, context_, result);
+      RestorePrincipal(context_, principal_);
       continue;
     }
     try {
-      interceptor->AfterDispatch(request, context, result);
+      interceptor->AfterDispatch(request_, context_, result);
     } catch (...) {
       // Restore authentication even when an audit hook throws, then run the rest.
-      RestorePrincipal(context, principal);
+      RestorePrincipal(context_, principal_);
       continue;
     }
-    RestorePrincipal(context, principal);
+    RestorePrincipal(context_, principal_);
   }
 }
 }  // namespace a2a::server::engine

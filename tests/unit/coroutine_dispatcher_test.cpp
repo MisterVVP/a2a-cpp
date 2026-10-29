@@ -20,6 +20,7 @@ using namespace a2a::server;
 using namespace a2a::server::engine;
 using namespace a2a::test;
 constexpr std::size_t kOnePending = 1;
+constexpr std::size_t kTwoPending = 2;
 constexpr auto kRaceParticipants = 2;
 
 struct Reply final {
@@ -85,6 +86,15 @@ class CoroutineDispatcherTest : public testing::Test {
   }
   bool Finished(std::size_t count = 1) {
     return PumpUntil(loop, [&] { return application->completed >= count; });
+  }
+  void CancelPendingCall(std::size_t expected_started) {
+    const auto reply = std::make_shared<Reply>();
+    const auto source = Send(reply);
+    ASSERT_NE(source, nullptr);
+    ASSERT_TRUE(Started(expected_started));
+    dispatcher->Cancel(source);
+    EXPECT_FALSE(Receive(reply).ok());
+    EXPECT_EQ(reply->count, 1);
   }
   void ExpectAdmissionAfterCleanup() {
     application->Release();
@@ -228,6 +238,20 @@ TEST_F(CoroutineDispatcherTest, CapacityIncludesCancelledCoroutinesUntilCleanup)
   const auto rejected = dispatcher->Dispatch(CoroutineRequest(), {}, [](auto, auto) {});
   EXPECT_FALSE(rejected.ok());
   EXPECT_EQ(application->started, 1);
+  ExpectAdmissionAfterCleanup();
+}
+
+TEST_F(CoroutineDispatcherTest, CancellationReleasesActiveSlotButRetainsPendingReservation) {
+  application = std::make_shared<CoroutineBackend>(CoroutineBehavior::kIgnoreCancellation);
+  AsyncDispatcherOptions options;
+  options.max_in_flight = kOnePending;
+  options.max_pending = kTwoPending;
+  dispatcher = std::make_unique<AsyncDispatcher>(application, loop.get_executor(), options);
+  for (std::size_t index = 0; index < kTwoPending; ++index) {
+    CancelPendingCall(index + 1);
+  }
+  EXPECT_FALSE(dispatcher->Dispatch(CoroutineRequest(), {}, [](auto, auto) {}).ok());
+  EXPECT_EQ(application->completed, 0);
   ExpectAdmissionAfterCleanup();
 }
 

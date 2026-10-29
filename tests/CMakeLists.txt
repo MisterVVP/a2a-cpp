@@ -1242,6 +1242,11 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(installed_async_grpc_consumer_test PROPERTIES LABELS "installed;grpc_async" TIMEOUT 300 SKIP_RETURN_CODE 77)
 endif()
 
+add_executable(dispatch_pipeline_test unit/dispatch_pipeline_test.cpp)
+target_include_directories(dispatch_pipeline_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(dispatch_pipeline_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(dispatch_pipeline_test)
+
 add_executable(grpc_helpers_test unit/grpc_helpers_test.cpp)
 target_include_directories(grpc_helpers_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(grpc_helpers_test PRIVATE a2a::server GTest::gtest_main)

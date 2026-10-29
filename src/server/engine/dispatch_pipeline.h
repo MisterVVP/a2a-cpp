@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protocol_error_messages.h"
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/security_policy.h"
@@ -25,15 +26,29 @@ struct DispatchPipeline final {
   std::shared_ptr<const DispatchSecurity> security;
   std::vector<std::shared_ptr<ServerInterceptor>> interceptors;
   std::shared_ptr<core::AgentCardProvider> agent_card_provider;
+};
 
-  core::Result<void> Before(const DispatchRequest& request, RequestContext& context,
-                            std::optional<std::string>& principal) const;
-  std::optional<DispatchRequest> Prepare(const DispatchRequest& request) const;
-  std::optional<core::Result<DispatchResponse>> Handle(const DispatchRequest& request, RequestContext& context) const;
-  void Project(const DispatchRequest& request, RequestContext& context, const std::optional<std::string>& principal,
-               core::Result<DispatchResponse>& result) const;
-  void After(const DispatchRequest& request, RequestContext& context, const std::optional<std::string>& principal,
-             const core::Result<DispatchResponse>& result, bool contain_exceptions = false) const;
+enum class InterceptorExceptionPolicy { kPropagate, kContain };
+
+// One invocation's authentication state. Configuration, request and mutable context
+// belong to the dispatcher invocation and must outlive this session.
+class DispatchSession final : private core::NonCopyableOrMovable {
+ public:
+  DispatchSession(const DispatchPipeline& pipeline, const DispatchRequest& request, RequestContext& context)
+      : pipeline_(pipeline), request_(request), context_(context) {}
+
+  core::Result<void> Before();
+  std::optional<DispatchRequest> Prepare() const;
+  std::optional<core::Result<DispatchResponse>> Handle() const;
+  void Project(core::Result<DispatchResponse>& result) const;
+  void After(const core::Result<DispatchResponse>& result,
+             InterceptorExceptionPolicy exceptions = InterceptorExceptionPolicy::kPropagate) const;
+
+ private:
+  const DispatchPipeline& pipeline_;
+  const DispatchRequest& request_;
+  RequestContext& context_;
+  std::optional<std::string> principal_;
 };
 
 template <typename T>

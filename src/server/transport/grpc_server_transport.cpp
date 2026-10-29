@@ -14,7 +14,7 @@
 #include "a2a/core/protocol_error_messages.h"
 #include "server/transport/grpc_error.h"
 #include "server/transport/grpc_request_context.h"
-#include "server/transport/grpc_task_conversion.h"
+#include "server/transport/grpc_unary_conversion.h"
 #include "stream_cancellation_watcher.h"
 
 namespace a2a::server {
@@ -64,18 +64,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kSendMessage, .payload = *request},
-                                              request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kSendMessage, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
-  const auto* payload = std::get_if<lf::a2a::v1::SendMessageResponse>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendMessage);
+  auto status = WriteGrpcUnaryResponse(
+      dispatch.value(), *response, core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSendMessage.data());
+  if (!status.ok()) {
+    return status;
   }
-
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -145,18 +147,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTask, .payload = *request},
-                                              request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kGetTask, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
-  const auto* payload = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTask);
+  auto status = WriteGrpcUnaryResponse(dispatch.value(), *response,
+                                       core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTask.data());
+  if (!status.ok()) {
+    return status;
   }
-
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -173,18 +177,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto dispatch = dispatcher_->Dispatch({.operation = DispatcherOperation::kCancelTask, .payload = *request},
-                                              request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kCancelTask, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
-  const auto* payload = std::get_if<lf::a2a::v1::Task>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCancelTask);
+  auto status = WriteGrpcUnaryResponse(
+      dispatch.value(), *response, core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCancelTask.data());
+  if (!status.ok()) {
+    return status;
   }
-
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -201,24 +207,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  const auto list_request = ParseGrpcListTasksRequest(*request);
-  if (!list_request.ok()) {
-    return ToGrpcStatus(list_request.error(), context, request_context.value().activated_extensions);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kListTasks, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
   }
-
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTasks, .payload = list_request.value()},
-                            request_context.value().request_context);
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
 
-  const auto* payload = std::get_if<ListTasksResponse>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTasks);
+  auto status = WriteGrpcUnaryResponse(
+      dispatch.value(), *response, core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTasks.data());
+  if (!status.ok()) {
+    return status;
   }
-
-  WriteGrpcListTasksResponse(*payload, *response);
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -290,18 +292,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (!request_context.ok()) {
     return ToGrpcStatus(request_context.error(), context);
   }
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kCreateTaskPushNotificationConfig, .payload = *request},
-                            request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kCreateTaskPushNotificationConfig, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
-  const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(
-        core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCreateTaskPushNotificationConfig);
+  auto status = WriteGrpcUnaryResponse(
+      dispatch.value(), *response,
+      core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForCreateTaskPushNotificationConfig.data());
+  if (!status.ok()) {
+    return status;
   }
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -316,18 +320,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (!request_context.ok()) {
     return ToGrpcStatus(request_context.error(), context);
   }
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kGetTaskPushNotificationConfig, .payload = *request},
-                            request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kGetTaskPushNotificationConfig, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
-  const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(
-        core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTaskPushNotificationConfig);
+  auto status = WriteGrpcUnaryResponse(
+      dispatch.value(), *response,
+      core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForGetTaskPushNotificationConfig.data());
+  if (!status.ok()) {
+    return status;
   }
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -342,18 +348,20 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (!request_context.ok()) {
     return ToGrpcStatus(request_context.error(), context);
   }
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = *request},
-                            request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kListTaskPushNotificationConfigs, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
-  const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return InternalStatus(
-        core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTaskPushNotificationConfigs);
+  auto status = WriteGrpcUnaryResponse(
+      dispatch.value(), *response,
+      core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForListTaskPushNotificationConfigs.data());
+  if (!status.ok()) {
+    return status;
   }
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }
@@ -388,18 +396,18 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
   if (!request_context.ok()) {
     return ToGrpcStatus(request_context.error(), context);
   }
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = *request},
-                            request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kGetExtendedAgentCard, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }
-  const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return {::grpc::StatusCode::INTERNAL, kCardPayloadMismatch};
+  auto status = WriteGrpcUnaryResponse(dispatch.value(), *response, kCardPayloadMismatch);
+  if (!status.ok()) {
+    return status;
   }
-
-  *response = *payload;
   AddGrpcActivatedExtensions(context, request_context.value().activated_extensions);
   return ::grpc::Status::OK;
 }

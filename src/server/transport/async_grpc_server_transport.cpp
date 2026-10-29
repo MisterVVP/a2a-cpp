@@ -10,13 +10,12 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
 #include "server/transport/grpc_error.h"
 #include "server/transport/grpc_request_context.h"
-#include "server/transport/grpc_task_conversion.h"
+#include "server/transport/grpc_unary_conversion.h"
 
 namespace a2a::server {
 namespace {
@@ -56,40 +55,6 @@ std::optional<::grpc::StatusCode> CancellationStatus(RequestOutcome outcome) {
     default:
       return std::nullopt;
   }
-}
-
-template <typename Request>
-core::Result<void> SetRequestPayload(DispatchRequest& dispatch, const Request& request) {
-  if constexpr (std::is_same_v<Request, lf::a2a::v1::ListTasksRequest>) {
-    auto parsed = ParseGrpcListTasksRequest(request);
-    if (!parsed.ok()) {
-      return parsed.error();
-    }
-    dispatch.payload = std::move(parsed.value());
-  } else {
-    dispatch.payload = request;
-  }
-  return {};
-}
-
-template <typename Response>
-::grpc::Status WriteResponse(DispatchResponse& dispatch, Response& response) {
-  if constexpr (std::is_same_v<Response, lf::a2a::v1::ListTasksResponse>) {
-    if (const auto* list = std::get_if<ListTasksResponse>(&dispatch.payload())) {
-      WriteGrpcListTasksResponse(*list, response);
-      return ::grpc::Status::OK;
-    }
-  } else if constexpr (std::is_same_v<Response, google::protobuf::Empty>) {
-    if (std::holds_alternative<std::monostate>(dispatch.payload())) {
-      return ::grpc::Status::OK;
-    }
-  } else {
-    if (auto* payload = std::get_if<Response>(&dispatch.payload())) {
-      response = std::move(*payload);
-      return ::grpc::Status::OK;
-    }
-  }
-  return {::grpc::StatusCode::INTERNAL, kUnexpectedPayload};
 }
 
 ::grpc::ServerUnaryReactor* Reject(::grpc::CallbackServerContext& context, const ::grpc::Status& status) {
@@ -149,7 +114,7 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       if (!result.ok()) {
         status = GrpcErrorStatus(result.error(), &context_, call_->extensions, CancellationStatus(execution.Outcome()));
       } else {
-        status = WriteResponse(result.value(), response_);
+        status = WriteGrpcUnaryResponse(result.value(), response_, kUnexpectedPayload);
         AddGrpcActivatedExtensions(&context_, call_->extensions);
       }
       // OnDone can delete this immediately after Finish. No member access follows.
@@ -189,10 +154,9 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     if (!metadata.ok()) {
       return Reject(context, GrpcErrorStatus(metadata.error(), &context));
     }
-    DispatchRequest routed{.operation = operation};
-    auto payload = SetRequestPayload(routed, *request);
-    if (!payload.ok()) {
-      return Reject(context, GrpcErrorStatus(payload.error(), &context, metadata.value().activated_extensions));
+    auto routed = ParseGrpcUnaryRequest(operation, *request);
+    if (!routed.ok()) {
+      return Reject(context, GrpcErrorStatus(routed.error(), &context, metadata.value().activated_extensions));
     }
     auto call = std::make_shared<Call>();
     call->owner = shared_from_this();
@@ -210,7 +174,7 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       reactor->Complete(std::move(result), execution);
     };
     const auto admitted = dispatcher->Dispatch(
-        std::move(routed), std::move(metadata.value().request_context),
+        std::move(routed.value()), std::move(metadata.value().request_context),
         [call](auto result, const RequestExecutionContext& execution) { call->deliver(std::move(result), execution); },
         SteadyDeadline(context.deadline()));
     if (!admitted.ok()) {

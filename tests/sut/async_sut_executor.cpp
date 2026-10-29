@@ -3,7 +3,27 @@
 
 #include "sut/async_sut_executor.h"
 
+#include <utility>
+
+#include "sut/sut_awaitable.h"
+
 namespace a2a::tests::sut {
+template <typename Request, typename Response>
+boost::asio::awaitable<core::Result<Response>> AsyncSutExecutor::Submit(
+    Request request, server::engine::RequestExecutionContext context,
+    core::Result<Response> (server::AgentExecutor::*operation)(const Request&, server::RequestContext&)) {
+  co_return co_await AwaitSutWork<Response>(
+      work_,
+      [application = application_, request = std::move(request), context = std::move(context),
+       operation]() mutable -> core::Result<Response> {
+        if (context.StopToken().stop_requested()) {
+          return core::Error::Network(kSutOperationStopped);
+        }
+        auto metadata = context.Metadata();
+        return (application->executor().*operation)(request, metadata);
+      });
+}
+
 AsyncSutExecutor::AsyncSutExecutor(std::shared_ptr<SutApplication> application)
     : application_(std::move(application)) {}
 boost::asio::awaitable<core::Result<lf::a2a::v1::SendMessageResponse>> AsyncSutExecutor::SendMessage(

@@ -14,6 +14,7 @@
 #include "server/transport/grpc_error.h"
 #include "server/transport/grpc_status_details.h"
 #include "server/transport/grpc_task_conversion.h"
+#include "server/transport/grpc_unary_conversion.h"
 
 namespace {
 using namespace a2a;
@@ -34,6 +35,7 @@ constexpr int kHistoryLength = 3;
 constexpr int kTotalSize = 11;
 constexpr int kTimestampSeconds = 123;
 constexpr int kInvalidHistoryLength = -1;
+constexpr auto kPayloadMismatch = "unary conversion payload mismatch";
 
 struct ErrorCase {
   core::Error error;
@@ -179,5 +181,60 @@ TEST(GrpcTaskConversionTest, WritesTasksAndPaginationWithoutChangingPayload) {
   EXPECT_EQ(response.page_size(), kPageSize);
   EXPECT_EQ(response.total_size(), kTotalSize);
   EXPECT_EQ(response.next_page_token(), kPageToken);
+}
+
+TEST(GrpcUnaryConversionTest, OwnsOrdinaryRequestsAndValidatesListRequests) {
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(kTaskId);
+  const auto parsed = server::ParseGrpcUnaryRequest(server::DispatcherOperation::kGetTask, request);
+  request.Clear();
+  ASSERT_TRUE(parsed.ok());
+  EXPECT_EQ(parsed.value().operation, server::DispatcherOperation::kGetTask);
+  EXPECT_EQ(std::get<lf::a2a::v1::GetTaskRequest>(parsed.value().payload).id(), kTaskId);
+  lf::a2a::v1::ListTasksRequest list;
+  list.set_history_length(kInvalidHistoryLength);
+  EXPECT_FALSE(server::ParseGrpcUnaryRequest(server::DispatcherOperation::kListTasks, list).ok());
+  list.set_history_length(kHistoryLength);
+  const auto valid = server::ParseGrpcUnaryRequest(server::DispatcherOperation::kListTasks, list);
+  ASSERT_TRUE(valid.ok());
+  EXPECT_EQ(std::get<server::ListTasksRequest>(valid.value().payload).history_length, kHistoryLength);
+}
+
+TEST(GrpcUnaryConversionTest, WritesTypedAndListResponses) {
+  lf::a2a::v1::Task task;
+  task.set_id(kTaskId);
+  server::DispatchResponse dispatch(task);
+  lf::a2a::v1::Task response;
+  EXPECT_TRUE(server::WriteGrpcUnaryResponse(dispatch, response, kPayloadMismatch).ok());
+  EXPECT_EQ(response.id(), kTaskId);
+  server::ListTasksResponse list;
+  list.tasks.push_back(task);
+  list.next_page_token = kPageToken;
+  server::DispatchResponse list_dispatch(std::move(list));
+  lf::a2a::v1::ListTasksResponse list_response;
+  EXPECT_TRUE(server::WriteGrpcUnaryResponse(list_dispatch, list_response, kPayloadMismatch).ok());
+  ASSERT_EQ(list_response.tasks_size(), 1);
+  EXPECT_EQ(list_response.tasks(0).id(), kTaskId);
+  EXPECT_EQ(list_response.next_page_token(), kPageToken);
+}
+
+TEST(GrpcUnaryConversionTest, RejectsWrongPayloadsAndPreservesCallerDiagnostic) {
+  server::DispatchResponse dispatch;
+  lf::a2a::v1::Task response;
+  const auto status = server::WriteGrpcUnaryResponse(dispatch, response, kPayloadMismatch);
+  EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INTERNAL);
+  EXPECT_EQ(status.error_message(), kPayloadMismatch);
+  lf::a2a::v1::ListTasksResponse list;
+  EXPECT_EQ(server::WriteGrpcUnaryResponse(dispatch, list, kPayloadMismatch).error_code(),
+            ::grpc::StatusCode::INTERNAL);
+}
+
+TEST(GrpcUnaryConversionTest, EmptyResponseRequiresVoidPayload) {
+  google::protobuf::Empty response;
+  server::DispatchResponse empty;
+  EXPECT_TRUE(server::WriteGrpcUnaryResponse(empty, response, kPayloadMismatch).ok());
+  server::DispatchResponse task(lf::a2a::v1::Task{});
+  EXPECT_EQ(server::WriteGrpcUnaryResponse(task, response, kPayloadMismatch).error_code(),
+            ::grpc::StatusCode::INTERNAL);
 }
 }  // namespace
