@@ -12,6 +12,12 @@ endif()
 
 include(GoogleTest)
 
+if(WIN32)
+  # Discover after linking and app-local DLL deployment have finished for every
+  # target, rather than starting test processes during the parallel MSVC build.
+  set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 add_executable(generated_proto_smoke_test
   generated_proto_smoke_test.cpp
 )
@@ -776,7 +782,9 @@ target_link_libraries(json_rpc_server_transport_integration_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(json_rpc_server_transport_integration_test)
+# DLL startup/unload can exceed CMake's five-second discovery default on Windows.
+# This limit only enumerates tests; it does not change their execution timeout.
+gtest_discover_tests(json_rpc_server_transport_integration_test DISCOVERY_TIMEOUT 30)
 
 add_executable(server_dispatcher_task_store_integration_test
   integration/server_dispatcher_task_store_integration_test.cpp

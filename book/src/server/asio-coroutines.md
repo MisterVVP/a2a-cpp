@@ -15,7 +15,10 @@ are required. Default builds do not find or link Boost.
 Use clang-tidy 19 or newer when linting coroutine builds. Clang 18's static
 analyzer can incorrectly treat a suspended Asio coroutine as running before its
 frame is attached to the scheduler. CI selects clang-tidy 19 while preserving the
-existing build compiler and analyzer checks.
+existing build compiler and analyzer checks. That CI profile also installs
+simdjson 4.6.11, matching local validation: Ubuntu 24.04's older 3.0.1 header
+contains invalid template member lookup rejected by Clang 19. The SDK's minimum
+simdjson version remains 3.0 for supported compiler/dependency combinations.
 
 ```bash
 cmake -S . -B build -DA2A_ENABLE_ASIO=ON

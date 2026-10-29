@@ -71,10 +71,10 @@ jobs:
           ln -s /usr/bin/clang-tidy-19 "${RUNNER_TEMP}/a2a-lint/clang-tidy"
           echo "${RUNNER_TEMP}/a2a-lint" >> "${GITHUB_PATH}"
           python3 -m pip install --upgrade gcovr
-      - name: Install pinned Boost.Asio dependencies
-        run: >-
-          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
-          -P cmake/InstallBoost.cmake
+      - name: Install pinned coroutine build dependencies
+        run: |
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallBoost.cmake
+          cmake -DA2A_SIMDJSON_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallSimdjson.cmake
       - name: Check formatting
         run: |
           mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
@@ -89,7 +89,7 @@ jobs:
             -DA2A_ENABLE_TESTING=ON \
             -DA2A_ENABLE_POSTGRES_STORE=ON \
             -DA2A_ENABLE_ASIO=ON \
-            -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-boost
+            -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-deps
       - name: Build
         run: cmake --build build -j"$(nproc)"
       - name: Test
