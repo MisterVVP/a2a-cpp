@@ -130,7 +130,8 @@ TEST(GrpcStatusDetailsTest, EncodesStatusMessageAndTypedErrorInfoWithLongLengths
   EXPECT_EQ(status.field(1).number(), 2);
   EXPECT_EQ(status.field(1).length_delimited(), message);
   EXPECT_EQ(status.field(2).number(), 3);
-  CheckErrorInfo(status.field(2).length_delimited());
+  const auto& encoded_details = status.field(2).length_delimited();
+  CheckErrorInfo(std::string(encoded_details.data(), encoded_details.size()));
 }
 
 TEST(GrpcStatusDetailsTest, EncodesCancellationStatusIndependentlyOfErrorClassification) {
