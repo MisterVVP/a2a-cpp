@@ -64,6 +64,12 @@ jobs:
       - name: Install deps
         run: |
           ./scripts/install_build_deps.sh
+          # Clang 18 misanalyzes suspended Boost.Asio coroutine frames. Keep the
+          # analyzer enabled and use Clang 19 without changing the build compiler.
+          sudo apt-get install -y --no-install-recommends clang-tidy-19
+          mkdir -p "${RUNNER_TEMP}/a2a-lint"
+          ln -s /usr/bin/clang-tidy-19 "${RUNNER_TEMP}/a2a-lint/clang-tidy"
+          echo "${RUNNER_TEMP}/a2a-lint" >> "${GITHUB_PATH}"
           python3 -m pip install --upgrade gcovr
       - name: Install pinned Boost.Asio dependencies
         run: >-

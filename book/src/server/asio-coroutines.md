@@ -12,6 +12,11 @@ Enable `A2A_ENABLE_ASIO=ON` when building the SDK. Boost 1.92 or newer, includin
 its CMake configuration package, and C++20 standard-library cancellation support
 are required. Default builds do not find or link Boost.
 
+Use clang-tidy 19 or newer when linting coroutine builds. Clang 18's static
+analyzer can incorrectly treat a suspended Asio coroutine as running before its
+frame is attached to the scheduler. CI selects clang-tidy 19 while preserving the
+existing build compiler and analyzer checks.
+
 ```bash
 cmake -S . -B build -DA2A_ENABLE_ASIO=ON
 cmake --build build --parallel
