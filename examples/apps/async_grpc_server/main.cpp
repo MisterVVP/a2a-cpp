@@ -4,11 +4,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#if A2A_HAS_REQUEST_EXECUTION
+#if A2A_HAS_ASYNC_SERVER
 #include <grpcpp/create_channel.h>
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server_builder.h>
 
+#include <boost/asio/thread_pool.hpp>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -29,57 +30,24 @@ constexpr auto kSmokeArgument = "--smoke";
 constexpr auto kStartFailed = "Could not start async gRPC server\n";
 constexpr auto kListening = "Async unary gRPC service on 127.0.0.1:50051; press Enter to stop\n";
 constexpr auto kCancelled = "Application observed cancellation";
+constexpr std::size_t kIoWorkers = 2;
 constexpr auto kTimeout = std::chrono::seconds(5);
 
-// A minimal read-only application. Fast in-memory results can complete inline;
-// real asynchronous backends retain the owned request/context/completion instead.
-class ReadOnlyExecutor final : public AsyncAgentExecutor {
+// A read-only coroutine application. Real backends co_await their I/O here.
+class ReadOnlyExecutor final : public CoroutineAgentExecutor {
  public:
-  void SendMessage(lf::a2a::v1::SendMessageRequest /*request*/, RequestExecutionContext /*context*/,
-                   Completion<lf::a2a::v1::SendMessageResponse> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
-  }
-  void GetTask(lf::a2a::v1::GetTaskRequest request, RequestExecutionContext context,
-               Completion<lf::a2a::v1::Task> complete) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest request,
+                                                                       RequestExecutionContext context) override {
     if (context.StopToken().stop_requested()) {
-      complete(a2a::core::Error::Network(kCancelled));
-      return;
+      co_return a2a::core::Error::Network(kCancelled);
     }
     if (request.id() != kTaskId) {
-      complete(a2a::core::protocol_errors::TaskNotFound());
-      return;
+      co_return a2a::core::protocol_errors::TaskNotFound();
     }
     lf::a2a::v1::Task task;
     task.set_id(kTaskId);
     task.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
-    complete(std::move(task));
-  }
-  void ListTasks(ListTasksRequest /*request*/, RequestExecutionContext /*context*/,
-                 Completion<ListTasksResponse> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
-  }
-  void CancelTask(lf::a2a::v1::CancelTaskRequest /*request*/, RequestExecutionContext /*context*/,
-                  Completion<lf::a2a::v1::Task> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
-  }
-  void CreateTaskPushNotificationConfig(lf::a2a::v1::TaskPushNotificationConfig /*request*/,
-                                        RequestExecutionContext /*context*/,
-                                        Completion<lf::a2a::v1::TaskPushNotificationConfig> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
-  }
-  void GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest /*request*/,
-                                     RequestExecutionContext /*context*/,
-                                     Completion<lf::a2a::v1::TaskPushNotificationConfig> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
-  }
-  void ListTaskPushNotificationConfigs(
-      lf::a2a::v1::ListTaskPushNotificationConfigsRequest /*request*/, RequestExecutionContext /*context*/,
-      Completion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
-  }
-  void DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest /*request*/,
-                                        RequestExecutionContext /*context*/, Completion<void> complete) override {
-    complete(a2a::core::protocol_errors::UnsupportedOperation());
+    co_return std::move(task);
   }
 };
 
@@ -98,10 +66,11 @@ bool Smoke(int port) {
 }
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
   const bool smoke = argc > 1 && std::string_view(argv[1]) == kSmokeArgument;
+  boost::asio::thread_pool runtime(kIoWorkers);
   auto executor = std::make_shared<ReadOnlyExecutor>();
-  auto dispatcher = std::make_shared<AsyncDispatcher>(executor);
+  auto dispatcher = std::make_shared<AsyncDispatcher>(executor, runtime.get_executor());
   AsyncGrpcServerTransport transport(dispatcher);
   ::grpc::ServerBuilder builder;
   int port = 0;
@@ -125,7 +94,11 @@ int main(int argc, char** argv) {
   server->Shutdown();
   server->Wait();
   dispatcher->Shutdown();
+  runtime.join();
   return success ? EXIT_SUCCESS : EXIT_FAILURE;
+} catch (...) {
+  std::cerr << kStartFailed;
+  return EXIT_FAILURE;
 }
 #else
 namespace {

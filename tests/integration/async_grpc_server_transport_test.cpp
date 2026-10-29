@@ -26,6 +26,11 @@ using namespace a2a::server;
 using namespace a2a::server::engine;
 static_assert(!std::is_copy_constructible_v<AsyncGrpcServerTransport>);
 static_assert(!std::is_move_constructible_v<AsyncGrpcServerTransport>);
+#if defined(GRPC_ARG_ENABLE_DEADLINE_CHECKS)
+constexpr bool kCanDisableClientDeadlines = true;
+#else
+constexpr bool kCanDisableClientDeadlines = false;
+#endif
 constexpr auto kAuthorization = "authorization";
 constexpr auto kRequestHeader = "x-request-id";
 constexpr auto kVersionKey = "a2a-version";
@@ -263,7 +268,6 @@ TEST(AsyncGrpcTest, ListValidationAndProjectionUseSharedConversion) {
 TEST(AsyncGrpcTest, ManyPendingRequestsUseFixedApplicationWorkers) {
   auto backend = std::make_shared<UnaryBackend>(true);
   AsyncDispatcherOptions options;
-  options.worker_count = kWorkers;
   UnaryGrpcServer server(backend, true, {}, options);
   std::vector<std::shared_ptr<ClientGet>> calls;
   for (std::size_t index = 0; index < kPendingCount; ++index) {
@@ -294,12 +298,24 @@ TEST(AsyncGrpcTest, ClientCancellationSignalsApplicationAndAfterExactlyOnce) {
   EXPECT_TRUE(after->Wait(1));
   backend->Release();
 }
-TEST(AsyncGrpcTest, DeadlineExpiryIsDistinctFromClientCancellation) {
+::grpc::ChannelArguments DeadlineClientOptions() {
+  ::grpc::ChannelArguments options;
+#if defined(GRPC_ARG_ENABLE_DEADLINE_CHECKS)
+  options.SetInt(GRPC_ARG_ENABLE_DEADLINE_CHECKS, 0);
+#endif
+  return options;
+}
+
+bool IsDeadlineTerminal(RequestOutcome outcome) {
+  return outcome == RequestOutcome::kDeadlineExceeded ||
+         (!kCanDisableClientDeadlines && outcome == RequestOutcome::kClientCancelled);
+}
+
+TEST(AsyncGrpcTest, NativeDeadlinePublishesTheObservedTerminalSignal) {
   auto backend = std::make_shared<UnaryBackend>(true);
-  // Let the server's deadline fire. A client-side timer can otherwise send a
-  // cancellation before the rounded wire deadline has expired on the server.
-  ::grpc::ChannelArguments client_options;
-  client_options.SetInt(GRPC_ARG_ENABLE_DEADLINE_CHECKS, 0);
+  // Older gRPC can isolate the server timer. Newer releases always enforce
+  // client deadlines, which can cancel before the rounded server wire deadline.
+  const auto client_options = DeadlineClientOptions();
   UnaryGrpcServer server(backend, true, {}, {}, client_options);
   auto call = std::make_shared<ClientGet>();
   call->context.set_deadline(std::chrono::system_clock::now() + kShortDeadline);
@@ -307,7 +323,7 @@ TEST(AsyncGrpcTest, DeadlineExpiryIsDistinctFromClientCancellation) {
   ASSERT_TRUE(backend->WaitForCalls(1));
   EXPECT_EQ(call->Await().error_code(), ::grpc::StatusCode::DEADLINE_EXCEEDED);
   ASSERT_TRUE(backend->WaitForStops(1));
-  EXPECT_EQ(backend->Stopped().front(), RequestOutcome::kDeadlineExceeded);
+  EXPECT_TRUE(IsDeadlineTerminal(backend->Stopped().front()));
   backend->Release();
 }
 
@@ -324,13 +340,13 @@ bool WarmDeadlineRaceChannel(UnaryGrpcServer& server) {
 
 void ExpectDeadlineRaceOutcome(const ::grpc::Status& status, RequestOutcome outcome) {
   EXPECT_TRUE(status.ok() || status.error_code() == ::grpc::StatusCode::DEADLINE_EXCEEDED);
-  EXPECT_TRUE(outcome == RequestOutcome::kSucceeded || outcome == RequestOutcome::kDeadlineExceeded);
+  EXPECT_TRUE(outcome == RequestOutcome::kSucceeded || IsDeadlineTerminal(outcome));
   if (status.ok()) {
     EXPECT_EQ(outcome, RequestOutcome::kSucceeded);
   }
   // Wire expiry can follow an already committed server success. It cannot turn
   // a server deadline failure into a successful client response.
-  if (outcome == RequestOutcome::kDeadlineExceeded) {
+  if (IsDeadlineTerminal(outcome)) {
     EXPECT_EQ(status.error_code(), ::grpc::StatusCode::DEADLINE_EXCEEDED);
   }
 }
@@ -347,13 +363,12 @@ void RunDeadlineCompletionRace(std::chrono::milliseconds reply_offset) {
   auto after = std::make_shared<CountAfter>();
   auto call = std::make_shared<ClientGet>();
   std::optional<RequestExecutionContext> execution;
-  UnaryBackend::GetCompletion late_reply;
+  UnaryBackend::PendingResult late_reply;
   ::grpc::Status status;
   {
     AsyncDispatcherOptions options;
     options.interceptors = {after};
-    ::grpc::ChannelArguments client_options;
-    client_options.SetInt(GRPC_ARG_ENABLE_DEADLINE_CHECKS, 0);
+    const auto client_options = DeadlineClientOptions();
     UnaryGrpcServer server(backend, true, {}, options, client_options);
     ASSERT_TRUE(server.Ready());
     ASSERT_TRUE(WarmDeadlineRaceChannel(server));
@@ -365,8 +380,8 @@ void RunDeadlineCompletionRace(std::chrono::milliseconds reply_offset) {
     ASSERT_TRUE(deadline.has_value());
     const auto reply_at = deadline.value_or(RequestExecution::Clock::time_point{}) + reply_offset;
     late_reply = backend->PendingReply();
-    // Race the application reply with the native server timer, rather than
-    // cancelling the client or manually expiring the SDK lifecycle source.
+    // Race real application completion against native deadline delivery without
+    // manually cancelling the client or expiring the SDK lifecycle source.
     std::thread application([backend, reply_at] {
       std::this_thread::sleep_until(reply_at);
       backend->Release();
@@ -375,10 +390,10 @@ void RunDeadlineCompletionRace(std::chrono::milliseconds reply_offset) {
     application.join();
     ASSERT_TRUE(after->Wait(kSingleCompletion));
     server.Shutdown();
-    late_reply(AsyncTask());  // OnDone has released the reactor and its response.
-  }  // Drain SDK workers before inspecting exactly-once counts.
+    late_reply->Resolve(AsyncTask());  // OnDone has released the reactor and its response.
+  }  // Drain the Asio runtime before inspecting exactly-once counts.
   const auto outcome = execution->Outcome();
-  late_reply(AsyncTask());  // Also harmless after dispatcher/service destruction.
+  late_reply->Resolve(AsyncTask());  // Also harmless after dispatcher/service destruction.
   ExpectDeadlineRaceOutcome(status, outcome);
   ExpectDeadlineRaceFinalization(*after, *call, *execution, outcome);
 }

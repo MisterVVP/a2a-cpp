@@ -24,6 +24,7 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/version.h"
 #include "a2a/server/async_grpc_server_transport.h"
+#include "support/coroutine_reply.h"
 
 namespace a2a::test {
 inline constexpr auto kAsyncTaskId = "async-task";
@@ -39,7 +40,7 @@ inline constexpr int kAsyncHistory = 3;
 inline constexpr auto kUnaryCompletionFailed = "Unary client completion queue event failed";
 
 // One explicitly polled queue supports concurrent test calls on older gRPC
-// clients too. This thread is client infrastructure, independent of SDK workers.
+// clients too. This thread is client infrastructure, independent of application Asio workers.
 class UnaryGrpcClient final : private core::NonCopyableOrMovable {
  public:
   UnaryGrpcClient() : poller_([this] { Poll(); }) {}
@@ -89,7 +90,7 @@ inline lf::a2a::v1::Task AsyncTask() {
 
 class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
  public:
-  using GetCompletion = server::engine::AsyncAgentExecutor::Completion<lf::a2a::v1::Task>;
+  using PendingResult = std::shared_ptr<CoroutineReply<lf::a2a::v1::Task>>;
   explicit UnaryBackend(bool pending = false) : pending_(pending) {}
   void Record(const server::engine::RequestExecutionContext& context) {
     auto observer = Observe(context);
@@ -101,30 +102,30 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
     }
     changed_.notify_all();
   }
-  void Get(const lf::a2a::v1::GetTaskRequest& request, server::engine::RequestExecutionContext context,
-           GetCompletion complete) {
+  boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> Get(lf::a2a::v1::GetTaskRequest request,
+                                                              server::engine::RequestExecutionContext context) {
     if (request.id() == kMissingTaskId) {
       Record(context);
-      complete(core::protocol_errors::TaskNotFound());
-      return;
+      co_return core::protocol_errors::TaskNotFound();
     }
+    auto reply = std::make_shared<CoroutineReply<lf::a2a::v1::Task>>(true);
     auto observer = Observe(context);
-    GetCompletion immediate;
+    bool immediate = false;
     {
       std::lock_guard lock(mutex_);
       contexts_.push_back(context);
       workers_.insert(std::this_thread::get_id());
       observers_.push_back(std::move(observer));
-      if (pending_ && !released_) {
-        replies_.push_back(std::move(complete));
-      } else {
-        immediate = std::move(complete);
+      immediate = !pending_ || released_;
+      if (!immediate) {
+        replies_.push_back(reply);
       }
     }
     changed_.notify_all();
     if (immediate) {
-      immediate(AsyncTask());
+      reply->Resolve(AsyncTask());
     }
+    co_return co_await reply->Wait();
   }
   core::Result<lf::a2a::v1::Task> GetSync(const lf::a2a::v1::GetTaskRequest& request) {
     if (request.id() == kMissingTaskId) {
@@ -160,12 +161,12 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
     std::lock_guard lock(mutex_);
     return workers_.size();
   }
-  [[nodiscard]] GetCompletion PendingReply(std::size_t index = 0) const {
+  [[nodiscard]] PendingResult PendingReply(std::size_t index = 0) const {
     std::lock_guard lock(mutex_);
     return replies_.at(index);
   }
   void Release() {
-    std::vector<GetCompletion> replies;
+    std::vector<PendingResult> replies;
     {
       std::lock_guard lock(mutex_);
       released_ = true;
@@ -173,7 +174,7 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
     }
     changed_.notify_all();
     for (const auto& complete : replies) {
-      complete(AsyncTask());
+      complete->Resolve(AsyncTask());
     }
   }
 
@@ -200,69 +201,68 @@ class UnaryBackend final : public std::enable_shared_from_this<UnaryBackend> {
   std::set<std::thread::id> workers_;
   std::vector<std::unique_ptr<Observer>> observers_;
   std::vector<server::engine::RequestOutcome> stopped_;
-  std::vector<GetCompletion> replies_;
+  std::vector<PendingResult> replies_;
 };
 
-class UnaryAsyncExecutor final : public server::engine::AsyncAgentExecutor {
+class UnaryAsyncExecutor final : public server::engine::CoroutineAgentExecutor {
  public:
   explicit UnaryAsyncExecutor(std::shared_ptr<UnaryBackend> backend) : backend_(std::move(backend)) {}
-  void SendMessage(lf::a2a::v1::SendMessageRequest /*request*/, server::engine::RequestExecutionContext context,
-                   Completion<lf::a2a::v1::SendMessageResponse> complete) override {
+  boost::asio::awaitable<core::Result<lf::a2a::v1::SendMessageResponse>> SendMessage(
+      lf::a2a::v1::SendMessageRequest /*request*/, server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     lf::a2a::v1::SendMessageResponse reply;
     *reply.mutable_task() = AsyncTask();
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
-  void GetTask(lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context,
-               Completion<lf::a2a::v1::Task> complete) override {
-    backend_->Get(request, std::move(context), std::move(complete));
+  boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(
+      lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context) override {
+    co_return co_await backend_->Get(request, std::move(context));
   }
-  void ListTasks(server::ListTasksRequest /*request*/, server::engine::RequestExecutionContext context,
-                 Completion<server::ListTasksResponse> complete) override {
+  boost::asio::awaitable<core::Result<server::ListTasksResponse>> ListTasks(
+      server::ListTasksRequest /*request*/, server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     server::ListTasksResponse reply;
     reply.tasks.push_back(AsyncTask());
     reply.page_size = 1;
     reply.total_size = 1;
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
-  void CancelTask(lf::a2a::v1::CancelTaskRequest /*request*/, server::engine::RequestExecutionContext context,
-                  Completion<lf::a2a::v1::Task> complete) override {
+  boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> CancelTask(
+      lf::a2a::v1::CancelTaskRequest /*request*/, server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     auto reply = AsyncTask();
     reply.mutable_status()->set_state(lf::a2a::v1::TASK_STATE_CANCELED);
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
-  void CreateTaskPushNotificationConfig(lf::a2a::v1::TaskPushNotificationConfig /*request*/,
-                                        server::engine::RequestExecutionContext context,
-                                        Completion<lf::a2a::v1::TaskPushNotificationConfig> complete) override {
+  boost::asio::awaitable<core::Result<lf::a2a::v1::TaskPushNotificationConfig>> CreateTaskPushNotificationConfig(
+      lf::a2a::v1::TaskPushNotificationConfig /*request*/, server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     lf::a2a::v1::TaskPushNotificationConfig reply;
     reply.set_task_id(kAsyncTaskId);
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
-  void GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest /*request*/,
-                                     server::engine::RequestExecutionContext context,
-                                     Completion<lf::a2a::v1::TaskPushNotificationConfig> complete) override {
+  boost::asio::awaitable<core::Result<lf::a2a::v1::TaskPushNotificationConfig>> GetTaskPushNotificationConfig(
+      lf::a2a::v1::GetTaskPushNotificationConfigRequest /*request*/,
+      server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     lf::a2a::v1::TaskPushNotificationConfig reply;
     reply.set_task_id(kAsyncTaskId);
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
-  void ListTaskPushNotificationConfigs(
-      lf::a2a::v1::ListTaskPushNotificationConfigsRequest /*request*/, server::engine::RequestExecutionContext context,
-      Completion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> complete) override {
+  boost::asio::awaitable<core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>>
+  ListTaskPushNotificationConfigs(lf::a2a::v1::ListTaskPushNotificationConfigsRequest /*request*/,
+                                  server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     lf::a2a::v1::ListTaskPushNotificationConfigsResponse reply;
     reply.add_configs()->set_task_id(kAsyncTaskId);
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
-  void DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest /*request*/,
-                                        server::engine::RequestExecutionContext context,
-                                        Completion<void> complete) override {
+  boost::asio::awaitable<core::Result<void>> DeleteTaskPushNotificationConfig(
+      lf::a2a::v1::DeleteTaskPushNotificationConfigRequest /*request*/,
+      server::engine::RequestExecutionContext context) override {
     backend_->Record(context);
     core::Result<void> reply;
-    complete(std::move(reply));
+    co_return std::move(reply);
   }
 
  private:
@@ -304,6 +304,8 @@ class UnarySyncExecutor final : public server::AgentExecutor {
 };
 
 class UnaryGrpcServer final : private core::NonCopyableOrMovable {
+  std::unique_ptr<boost::asio::thread_pool> runtime_;
+
  public:
   explicit UnaryGrpcServer(std::shared_ptr<UnaryBackend> backend, bool asynchronous = true,
                            server::GrpcServerTransportOptions options = {},
@@ -317,8 +319,9 @@ class UnaryGrpcServer final : private core::NonCopyableOrMovable {
     }
     ::grpc::Service* service = nullptr;
     if (asynchronous) {
+      runtime_ = std::make_unique<boost::asio::thread_pool>(kAsyncIoWorkers);
       dispatcher_ = std::make_shared<server::engine::AsyncDispatcher>(std::make_shared<UnaryAsyncExecutor>(backend),
-                                                                      execution_options);
+                                                                      runtime_->get_executor(), execution_options);
       async_service_ = std::make_unique<server::AsyncGrpcServerTransport>(dispatcher_, options);
       service = async_service_.get();
     } else {
@@ -343,6 +346,9 @@ class UnaryGrpcServer final : private core::NonCopyableOrMovable {
     if (server_ != nullptr) {
       server_->Shutdown();
       server_->Wait();
+    }
+    if (runtime_ != nullptr) {
+      runtime_->join();
     }
   }
   void CloseAdmission() {

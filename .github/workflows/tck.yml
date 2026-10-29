@@ -130,11 +130,17 @@ jobs:
         if: always()
         run: ./scripts/stop_tck_sut.sh
 
+      - name: Install pinned Boost for coroutine TCK
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
+
       - name: Run unified async unary TCK across stores
         id: tck_async
         continue-on-error: true
         env:
           SUT_TARGET: tck_async_sut
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-boost
           A2A_TCK_TRANSPORTS: grpc
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}

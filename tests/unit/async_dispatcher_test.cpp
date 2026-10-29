@@ -21,6 +21,7 @@
 #include "a2a/core/extensions.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
+#include "support/coroutine_reply.h"
 
 namespace {
 using namespace a2a::server;
@@ -105,7 +106,7 @@ class RecordingInterceptor final : public ServerInterceptor {
   std::shared_ptr<Trace> trace_;
 };
 
-class FakeExecutor : public AsyncAgentExecutor {
+class FakeExecutor : public CoroutineAgentExecutor {
  public:
   void Record(const RequestExecutionContext& context) {
     if (trace != nullptr) {
@@ -115,98 +116,89 @@ class FakeExecutor : public AsyncAgentExecutor {
     last_context = context;
     ++calls;
   }
-  void SendMessage(lf::a2a::v1::SendMessageRequest request, RequestExecutionContext context,
-                   Completion<lf::a2a::v1::SendMessageResponse> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::SendMessageResponse>> SendMessage(
+      lf::a2a::v1::SendMessageRequest request, RequestExecutionContext context) override {
     Record(context);
     send_history_limit = request.configuration().has_history_length() ? request.configuration().history_length() : -1;
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     lf::a2a::v1::SendMessageResponse response;
     *response.mutable_task() = MakeTask();
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void GetTask(lf::a2a::v1::GetTaskRequest request, RequestExecutionContext context,
-               Completion<lf::a2a::v1::Task> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest request,
+                                                                       RequestExecutionContext context) override {
     Record(context);
     get_history_limit = request.has_history_length() ? request.history_length() : -1;
     if (pending) {
-      held.set_value(std::move(completion));
-      return;
+      auto reply = std::make_shared<a2a::test::CoroutineReply<lf::a2a::v1::Task>>();
+      held.set_value(reply);
+      co_return co_await reply->Wait();
     }
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     auto response = MakeTask();
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void ListTasks(ListTasksRequest /*request*/, RequestExecutionContext context,
-                 Completion<ListTasksResponse> completion) override {
+  boost::asio::awaitable<a2a::core::Result<ListTasksResponse>> ListTasks(ListTasksRequest /*request*/,
+                                                                         RequestExecutionContext context) override {
     Record(context);
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     ListTasksResponse response;
     response.tasks.push_back(MakeTask());
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void CancelTask(lf::a2a::v1::CancelTaskRequest /*request*/, RequestExecutionContext context,
-                  Completion<lf::a2a::v1::Task> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::Task>> CancelTask(lf::a2a::v1::CancelTaskRequest /*request*/,
+                                                                          RequestExecutionContext context) override {
     Record(context);
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     auto response = MakeTask();
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void CreateTaskPushNotificationConfig(lf::a2a::v1::TaskPushNotificationConfig /*request*/,
-                                        RequestExecutionContext context,
-                                        Completion<lf::a2a::v1::TaskPushNotificationConfig> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>> CreateTaskPushNotificationConfig(
+      lf::a2a::v1::TaskPushNotificationConfig /*request*/, RequestExecutionContext context) override {
     Record(context);
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     lf::a2a::v1::TaskPushNotificationConfig response;
     response.set_task_id(kTaskId);
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest /*request*/,
-                                     RequestExecutionContext context,
-                                     Completion<lf::a2a::v1::TaskPushNotificationConfig> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>> GetTaskPushNotificationConfig(
+      lf::a2a::v1::GetTaskPushNotificationConfigRequest /*request*/, RequestExecutionContext context) override {
     Record(context);
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     lf::a2a::v1::TaskPushNotificationConfig response;
     response.set_task_id(kTaskId);
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void ListTaskPushNotificationConfigs(
-      lf::a2a::v1::ListTaskPushNotificationConfigsRequest /*request*/, RequestExecutionContext context,
-      Completion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>>
+  ListTaskPushNotificationConfigs(lf::a2a::v1::ListTaskPushNotificationConfigsRequest /*request*/,
+                                  RequestExecutionContext context) override {
     Record(context);
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     lf::a2a::v1::ListTaskPushNotificationConfigsResponse response;
-    completion(std::move(response));
+    co_return std::move(response);
   }
-  void DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest /*request*/,
-                                        RequestExecutionContext context, Completion<void> completion) override {
+  boost::asio::awaitable<a2a::core::Result<void>> DeleteTaskPushNotificationConfig(
+      lf::a2a::v1::DeleteTaskPushNotificationConfigRequest /*request*/, RequestExecutionContext context) override {
     Record(context);
     if (fail) {
-      completion(Error::Validation(kFailure));
-      return;
+      co_return Error::Validation(kFailure);
     }
     Result<void> response;
-    completion(std::move(response));
+    co_return std::move(response);
   }
   std::shared_ptr<Trace> trace;
   std::atomic<int> calls{0};
@@ -216,7 +208,7 @@ class FakeExecutor : public AsyncAgentExecutor {
   int send_history_limit = 0;
   RequestContext last_metadata;
   std::optional<RequestExecutionContext> last_context;
-  std::promise<Completion<lf::a2a::v1::Task>> held;
+  std::promise<std::shared_ptr<a2a::test::CoroutineReply<lf::a2a::v1::Task>>> held;
 };
 
 // Fake transport owns the reply state independently of its stack lifetime.
@@ -312,7 +304,8 @@ TEST_P(AsyncUnaryTest, RoutesEveryOperationOffCallerThread) {
   lf::a2a::v1::AgentCard card;
   card.set_name(kCardName);
   options.agent_card_provider = std::make_shared<a2a::core::StaticAgentCardProvider>(card);
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   auto accepted = transport.Send(dispatcher, GetParam().request);
   ASSERT_TRUE(accepted.ok());
@@ -325,7 +318,8 @@ TEST_P(AsyncUnaryTest, RoutesEveryOperationOffCallerThread) {
 }
 TEST_P(AsyncUnaryTest, RejectsMismatchedPayloadBeforeExecution) {
   auto executor = std::make_shared<FakeExecutor>();
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   auto request = GetParam().request;
   // Choose a payload which is never the valid type for this operation.
   if (std::holds_alternative<ListTasksRequest>(request.payload)) {
@@ -346,7 +340,8 @@ TEST_P(AsyncUnaryTest, PreservesExecutorOrProviderErrorsAndRunsAfterOnce) {
   auto interceptor = std::make_shared<RecordingInterceptor>(std::make_shared<Trace>());
   AsyncDispatcherOptions options;
   options.interceptors = {interceptor};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   ASSERT_TRUE(transport.Send(dispatcher, GetParam().request).ok());
   EXPECT_FALSE(transport.Receive().ok());
@@ -362,7 +357,8 @@ TEST(AsyncDispatcherTest, InterceptorsObserveMutatedMetadataAndExactlyOneTermina
   auto interceptor = std::make_shared<RecordingInterceptor>(trace);
   AsyncDispatcherOptions options;
   options.interceptors = {interceptor};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   RequestContext context;
   context.request_id = kRequestId;
@@ -380,7 +376,8 @@ TEST(AsyncDispatcherTest, RejectedBeforeSkipsExecutorAndStillRunsAfter) {
   interceptor->reject = true;
   AsyncDispatcherOptions options;
   options.interceptors = {interceptor};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   ASSERT_TRUE(transport.Send(dispatcher).ok());
   EXPECT_FALSE(transport.Receive().ok());
@@ -391,7 +388,8 @@ TEST(AsyncDispatcherTest, CancellationCompletesWithoutWaitingForApplicationAndIg
   auto executor = std::make_shared<FakeExecutor>();
   executor->pending = true;
   auto held = executor->held.get_future();
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   FakeTransport transport;
   const auto accepted = transport.Send(dispatcher);
   ASSERT_TRUE(accepted.ok());
@@ -404,8 +402,8 @@ TEST(AsyncDispatcherTest, CancellationCompletesWithoutWaitingForApplicationAndIg
     return;
   }
   EXPECT_TRUE(observed->StopToken().stop_requested());
-  complete(MakeTask());
-  complete(Error::Validation(kFailure));
+  complete->Resolve(MakeTask());
+  complete->Resolve(Error::Validation(kFailure));
   EXPECT_EQ(transport.reply()->count.load(), 1);
 }
 TEST(AsyncDispatcherTest, ExpiredDeadlineSkipsExecutorAndRunsAfter) {
@@ -413,7 +411,8 @@ TEST(AsyncDispatcherTest, ExpiredDeadlineSkipsExecutorAndRunsAfter) {
   auto interceptor = std::make_shared<RecordingInterceptor>(std::make_shared<Trace>());
   AsyncDispatcherOptions options;
   options.interceptors = {interceptor};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   const auto accepted = transport.Send(dispatcher, GetTaskRequest(), {}, RequestExecution::Clock::time_point{});
   ASSERT_TRUE(accepted.ok());
@@ -426,7 +425,8 @@ TEST(AsyncDispatcherTest, ActiveDeadlineSignalWinsOverLateSuccess) {
   auto executor = std::make_shared<FakeExecutor>();
   executor->pending = true;
   auto held = executor->held.get_future();
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   FakeTransport transport;
   const auto deadline = RequestExecution::Clock::now() + kWait;
   const auto accepted = transport.Send(dispatcher, GetTaskRequest(), {}, deadline);
@@ -434,7 +434,7 @@ TEST(AsyncDispatcherTest, ActiveDeadlineSignalWinsOverLateSuccess) {
   ASSERT_EQ(held.wait_for(kWait), std::future_status::ready);
   EXPECT_TRUE(accepted.value()->ExpireDeadline(deadline));
   EXPECT_FALSE(transport.Receive().ok());
-  held.get()(MakeTask());
+  held.get()->Resolve(MakeTask());
   EXPECT_EQ(accepted.value()->Context().Outcome(), RequestOutcome::kDeadlineExceeded);
 }
 TEST(AsyncDispatcherTest, CompletionVersusCancellationDeliversOnce) {
@@ -444,7 +444,8 @@ TEST(AsyncDispatcherTest, CompletionVersusCancellationDeliversOnce) {
   auto interceptor = std::make_shared<RecordingInterceptor>(std::make_shared<Trace>());
   AsyncDispatcherOptions options;
   options.interceptors = {interceptor};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   const auto accepted = transport.Send(dispatcher);
   ASSERT_TRUE(accepted.ok());
@@ -453,7 +454,7 @@ TEST(AsyncDispatcherTest, CompletionVersusCancellationDeliversOnce) {
   std::barrier race(kRaceParties);
   std::thread application([&] {
     race.arrive_and_wait();
-    complete(MakeTask());
+    complete->Resolve(MakeTask());
   });
   std::thread transport_cancel([&] {
     race.arrive_and_wait();
@@ -467,11 +468,12 @@ TEST(AsyncDispatcherTest, CompletionVersusCancellationDeliversOnce) {
   EXPECT_EQ(transport.reply()->count.load(), 1);
   EXPECT_EQ(interceptor->after_count.load(), 1);
 }
-TEST(AsyncDispatcherTest, ShutdownDrainsCallbacksAndReleasesExecutorWithoutApplicationReply) {
+TEST(AsyncDispatcherTest, CallerDrainsCancelledCoroutinesAfterDispatcherDestruction) {
   auto executor = std::make_shared<FakeExecutor>();
   executor->pending = true;
   auto held = executor->held.get_future();
-  auto dispatcher = std::make_unique<AsyncDispatcher>(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  auto dispatcher = std::make_unique<AsyncDispatcher>(executor, runtime.get_executor());
   FakeTransport transport;
   const auto accepted = transport.Send(*dispatcher);
   ASSERT_TRUE(accepted.ok());
@@ -485,8 +487,9 @@ TEST(AsyncDispatcherTest, ShutdownDrainsCallbacksAndReleasesExecutorWithoutAppli
   std::weak_ptr<FakeExecutor> weak = executor;
   executor.reset();
   dispatcher.reset();
+  runtime.join();
   ExpectDrainedShutdown(transport, weak, *observed);
-  complete(MakeTask());
+  complete->Resolve(MakeTask());
   EXPECT_EQ(transport.reply()->count.load(), 1);
 }
 TEST(AsyncDispatcherTest, AdmissionIsBoundedAndShutdownRejectsNewRequests) {
@@ -495,7 +498,8 @@ TEST(AsyncDispatcherTest, AdmissionIsBoundedAndShutdownRejectsNewRequests) {
   auto held = executor->held.get_future();
   AsyncDispatcherOptions options;
   options.max_in_flight = 1;
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport first;
   ASSERT_TRUE(first.Send(dispatcher).ok());
   ASSERT_EQ(held.wait_for(kWait), std::future_status::ready);
@@ -511,7 +515,8 @@ TEST(AsyncDispatcherTest, RequiredExtensionsUseSharedValidator) {
   auto executor = std::make_shared<FakeExecutor>();
   AsyncDispatcherOptions options;
   options.required_extensions = {kExtension};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport missing;
   ASSERT_TRUE(missing.Send(dispatcher).ok());
   auto failure = missing.Receive();
@@ -534,7 +539,8 @@ void ExpectStreamRejected(AsyncDispatcher& dispatcher, const DispatchRequest& re
 
 TEST(AsyncDispatcherTest, StreamingIsRejectedAndHistoryProjectionMatchesSync) {
   auto executor = std::make_shared<FakeExecutor>();
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   const std::vector<DispatchRequest> streams{
       {.operation = DispatcherOperation::kSendStreamingMessage, .payload = lf::a2a::v1::SendMessageRequest{}},
       {.operation = DispatcherOperation::kSubscribeTask, .payload = lf::a2a::v1::GetTaskRequest{}},
@@ -573,7 +579,8 @@ TEST(AsyncDispatcherTest, SecuritySeesFullHistoryAndAuthenticatedPrincipalBefore
   InMemoryTaskStore store;
   ASSERT_TRUE(store.CreateOrUpdate(MakeTask()).ok());
   options.task_store = &store;
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   auto request = GetTaskRequest();
   std::get<lf::a2a::v1::GetTaskRequest>(request.payload).set_history_length(kHistoryLimit);
   FakeTransport transport;
@@ -589,26 +596,28 @@ TEST(AsyncDispatcherTest, SecuritySeesFullHistoryAndAuthenticatedPrincipalBefore
 class BatchExecutor final : public FakeExecutor {
  public:
   explicit BatchExecutor(std::size_t expected) : started(static_cast<std::ptrdiff_t>(expected)) {}
-  void GetTask(lf::a2a::v1::GetTaskRequest /*request*/, RequestExecutionContext /*context*/,
-               Completion<lf::a2a::v1::Task> completion) override {
+  boost::asio::awaitable<Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest /*request*/,
+                                                            RequestExecutionContext /*context*/) override {
+    const auto reply = std::make_shared<a2a::test::CoroutineReply<lf::a2a::v1::Task>>();
     {
       std::lock_guard lock(mutex);
       threads.insert(std::this_thread::get_id());
-      callbacks.push_back(std::move(completion));
+      replies.push_back(reply);
     }
     started.count_down();
+    co_return co_await reply->Wait();
   }
   std::latch started;
   std::mutex mutex;
   std::set<std::thread::id> threads;
-  std::vector<Completion<lf::a2a::v1::Task>> callbacks;
+  std::vector<std::shared_ptr<a2a::test::CoroutineReply<lf::a2a::v1::Task>>> replies;
 };
 TEST(AsyncDispatcherTest, PendingCallsDoNotOccupyWorkersAndQueueRemainsBounded) {
   auto executor = std::make_shared<BatchExecutor>(kConcurrency);
   AsyncDispatcherOptions options;
-  options.worker_count = kWorkerCount;
   options.max_in_flight = kConcurrency;
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   std::vector<std::unique_ptr<FakeTransport>> transports;
   for (std::size_t index = 0; index < kConcurrency; ++index) {
     transports.push_back(std::make_unique<FakeTransport>());
@@ -618,8 +627,8 @@ TEST(AsyncDispatcherTest, PendingCallsDoNotOccupyWorkersAndQueueRemainsBounded) 
   EXPECT_LE(executor->threads.size(), kWorkerCount);
   FakeTransport overflow;
   EXPECT_FALSE(overflow.Send(dispatcher).ok());
-  for (const auto& complete : executor->callbacks) {
-    complete(MakeTask());
+  for (const auto& complete : executor->replies) {
+    complete->Resolve(MakeTask());
   }
   for (const auto& transport : transports) {
     EXPECT_TRUE(transport->Receive().ok());
@@ -643,7 +652,8 @@ TEST(AsyncDispatcherTest, CancelDuringBeforeWaitsForHookBeforeAfterAndSkipsExecu
   auto recorder = std::make_shared<RecordingInterceptor>(trace);
   AsyncDispatcherOptions options;
   options.interceptors = {blocker, recorder};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   auto accepted = transport.Send(dispatcher);
   ASSERT_TRUE(accepted.ok());
@@ -660,15 +670,16 @@ TEST(AsyncDispatcherTest, DuplicateSuccessCannotChangeFinalOutcome) {
   auto executor = std::make_shared<FakeExecutor>();
   executor->pending = true;
   auto held = executor->held.get_future();
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   FakeTransport transport;
   auto accepted = transport.Send(dispatcher);
   ASSERT_TRUE(accepted.ok());
   ASSERT_EQ(held.wait_for(kWait), std::future_status::ready);
   auto complete = held.get();
-  complete(MakeTask());
+  complete->Resolve(MakeTask());
   EXPECT_TRUE(transport.Receive().ok());
-  complete(Error::Validation(kFailure));
+  complete->Resolve(Error::Validation(kFailure));
   EXPECT_FALSE(accepted.value()->Cancel());
   EXPECT_EQ(transport.reply()->count.load(), 1);
   EXPECT_EQ(accepted.value()->Context().Outcome(), RequestOutcome::kSucceeded);
@@ -677,8 +688,8 @@ TEST(AsyncDispatcherTest, DuplicateSuccessCannotChangeFinalOutcome) {
 TEST(AsyncDispatcherTest, DispatcherCanBeDestroyedFromItsOwnCompletion) {
   auto executor = std::make_shared<FakeExecutor>();
   AsyncDispatcherOptions options;
-  options.worker_count = 1;
-  auto dispatcher = std::make_unique<AsyncDispatcher>(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  auto dispatcher = std::make_unique<AsyncDispatcher>(executor, runtime.get_executor(), options);
   std::promise<void> destroyed;
   auto result = destroyed.get_future();
   // Only the completion accesses dispatcher after submission.
@@ -700,7 +711,8 @@ TEST(AsyncDispatcherTest, ThrowingAfterHookDoesNotPreventOtherHooksOrCompletion)
   throwing->throw_after = true;
   AsyncDispatcherOptions options;
   options.interceptors = {recorder, throwing};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   ASSERT_TRUE(transport.Send(dispatcher).ok());
   EXPECT_TRUE(transport.Receive().ok());
@@ -708,11 +720,13 @@ TEST(AsyncDispatcherTest, ThrowingAfterHookDoesNotPreventOtherHooksOrCompletion)
   EXPECT_EQ(throwing->after_count.load(), 1);
 }
 TEST(AsyncDispatcherTest, InvalidConfigurationAndMissingCompletionFailImmediately) {
+  boost::asio::thread_pool runtime(kWorkerCount);
   AsyncDispatcherOptions options;
-  options.worker_count = 0;
-  EXPECT_THROW(AsyncDispatcher(std::make_shared<FakeExecutor>(), options), std::invalid_argument);
-  EXPECT_THROW(AsyncDispatcher(nullptr), std::invalid_argument);
-  AsyncDispatcher dispatcher(std::make_shared<FakeExecutor>());
+  options.max_in_flight = 0;
+  EXPECT_THROW(AsyncDispatcher(std::make_shared<FakeExecutor>(), runtime.get_executor(), options),
+               std::invalid_argument);
+  EXPECT_THROW(AsyncDispatcher(nullptr, runtime.get_executor()), std::invalid_argument);
+  AsyncDispatcher dispatcher(std::make_shared<FakeExecutor>(), runtime.get_executor());
   EXPECT_FALSE(dispatcher.Dispatch(GetTaskRequest(), {}, {}).ok());
 }
 TEST(AsyncDispatcherTest, SecurityListUsesSameAuthorizedStorePath) {
@@ -722,7 +736,8 @@ TEST(AsyncDispatcherTest, SecurityListUsesSameAuthorizedStorePath) {
   InMemoryTaskStore store;
   ASSERT_TRUE(store.CreateOrUpdate(MakeTask()).ok());
   options.task_store = &store;
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   ASSERT_TRUE(
       transport.Send(dispatcher, {.operation = DispatcherOperation::kListTasks, .payload = ListTasksRequest{}}).ok());
@@ -747,7 +762,8 @@ TEST(AsyncDispatcherTest, ExtendedCardProviderReceivesTenantAndOwnedMetadata) {
   auto executor = std::make_shared<FakeExecutor>();
   AsyncDispatcherOptions options;
   options.agent_card_provider = std::make_shared<CheckingCardProvider>();
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   RequestContext context;
   context.remote_address = kRequestId;
   context.auth_metadata[kRequestId] = kInterceptedId;
@@ -764,7 +780,8 @@ TEST(AsyncDispatcherTest, ExtendedCardProviderReceivesTenantAndOwnedMetadata) {
 }
 TEST(AsyncDispatcherTest, SendMessageProjectsRequestedHistory) {
   auto executor = std::make_shared<FakeExecutor>();
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   lf::a2a::v1::SendMessageRequest request;
   request.mutable_configuration()->set_history_length(kHistoryLimit);
   FakeTransport transport;
@@ -777,8 +794,8 @@ TEST(AsyncDispatcherTest, SendMessageProjectsRequestedHistory) {
 
 class ThrowingExecutor final : public FakeExecutor {
  public:
-  void GetTask(lf::a2a::v1::GetTaskRequest /*request*/, RequestExecutionContext /*context*/,
-               Completion<lf::a2a::v1::Task> /*completion*/) override {
+  boost::asio::awaitable<Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest /*request*/,
+                                                            RequestExecutionContext /*context*/) override {
     throw std::runtime_error(kFailure);
   }
 };
@@ -787,7 +804,8 @@ TEST(AsyncDispatcherTest, ExecutorExceptionBecomesInternalFailureAndRunsAfter) {
   auto recorder = std::make_shared<RecordingInterceptor>(std::make_shared<Trace>());
   AsyncDispatcherOptions options;
   options.interceptors = {recorder};
-  AsyncDispatcher dispatcher(executor, options);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   FakeTransport transport;
   auto accepted = transport.Send(dispatcher);
   ASSERT_TRUE(accepted.ok());
@@ -801,7 +819,8 @@ TEST(AsyncDispatcherTest, CancellationObserverCanDestroyDispatcherBeforeSdkStopC
   auto executor = std::make_shared<FakeExecutor>();
   executor->pending = true;
   auto held = executor->held.get_future();
-  auto dispatcher = std::make_unique<AsyncDispatcher>(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  auto dispatcher = std::make_unique<AsyncDispatcher>(executor, runtime.get_executor());
   FakeTransport transport;
   auto accepted = transport.Send(*dispatcher);
   ASSERT_TRUE(accepted.ok());
@@ -816,7 +835,8 @@ TEST(AsyncDispatcherTest, CancellationObserverCanDestroyDispatcherBeforeSdkStopC
 TEST(AsyncDispatcherTest, TransportCancellationSchedulesObserversOffCallerThread) {
   auto executor = std::make_shared<FakeExecutor>();
   executor->pending = true;
-  AsyncDispatcher dispatcher(executor);
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
   FakeTransport transport;
   const auto accepted = transport.Send(dispatcher);
   ASSERT_TRUE(accepted.ok());

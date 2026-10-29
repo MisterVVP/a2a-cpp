@@ -99,7 +99,6 @@ void ThreadMetric(google::protobuf::Struct& row, const char* key, std::optional<
 std::optional<google::protobuf::Struct> Measure(bool asynchronous, std::size_t count, std::chrono::milliseconds hold) {
   auto backend = std::make_shared<UnaryBackend>(hold > std::chrono::milliseconds::zero());
   a2a::server::engine::AsyncDispatcherOptions options;
-  options.worker_count = kWorkers;
   UnaryGrpcServer server(backend, asynchronous, {}, options);
   if (!server.Ready()) {
     return std::nullopt;
