@@ -12,6 +12,7 @@
   - [Custom Executor](server/custom-executor.md)
   - [Request Execution Lifetime](server/request-execution.md)
   - [Async unary dispatch](server/async-dispatcher.md)
+  - [Boost.Asio coroutine executors](server/asio-coroutines.md)
   - [Native async gRPC](server/async-grpc.md)
   - [REST Server](server/rest-server.md)
   - [JSON-RPC Server](server/json-rpc-server.md)

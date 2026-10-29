@@ -108,3 +108,6 @@ workers are joined. Cancellation does not forcefully stop application code.
 Keep the dispatcher alive during calls to its public methods, as with ordinary
 C++ objects. Destruction from a worker callback is supported. A transport must keep
 its reply resources alive until completion, even if the client has disconnected.
+
+Applications preferring C++20 coroutines can use the optional
+[Boost.Asio coroutine executor](asio-coroutines.md) with this same dispatcher.

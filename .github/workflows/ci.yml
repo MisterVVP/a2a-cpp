@@ -65,6 +65,10 @@ jobs:
         run: |
           ./scripts/install_build_deps.sh
           python3 -m pip install --upgrade gcovr
+      - name: Install pinned Boost.Asio dependencies
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
       - name: Check formatting
         run: |
           mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
@@ -77,7 +81,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DA2A_ENABLE_TESTING=ON \
-            -DA2A_ENABLE_POSTGRES_STORE=ON
+            -DA2A_ENABLE_POSTGRES_STORE=ON \
+            -DA2A_ENABLE_ASIO=ON \
+            -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-boost
       - name: Build
         run: cmake --build build -j"$(nproc)"
       - name: Test
@@ -398,11 +404,15 @@ jobs:
         run: |
           ./scripts/install_build_deps.sh
           sudo apt-get install -y --no-install-recommends clang
+      - name: Install pinned Boost.Asio dependencies
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
       - name: Configure and test ASan/UBSan
         run: |
-          cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined' -DA2A_ENABLE_ASIO=ON -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-boost
           cmake --build build-asan --parallel
-          ctest --test-dir build-asan --output-on-failure --no-tests=error -R 'ExamplesInteropIntegrationTest\..*|AsyncDispatcherTest|AsyncUnaryTest|AsyncGrpc'
+          ctest --test-dir build-asan --output-on-failure --no-tests=error -R 'ExamplesInteropIntegrationTest\..*|AsyncDispatcherTest|AsyncUnaryTest|AsyncGrpc|AsioExecutor|AsioGrpc'
 
   thread-sanitizer:
     name: ThreadSanitizer focused concurrency tests
@@ -414,7 +424,14 @@ jobs:
         run: |
           ./scripts/install_build_deps.sh
           sudo apt-get install -y --no-install-recommends clang
+      - name: Install pinned Boost.Asio dependencies
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
       - name: Run focused ThreadSanitizer profile
+        env:
+          A2A_TSAN_ASIO: "ON"
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-boost
         run: ./scripts/run_thread_sanitizer.sh
 
   python-cross-sdk-interop:
@@ -484,15 +501,37 @@ jobs:
           if-no-files-found: ignore
 
   macos-build:
-    runs-on: macos-14
+    name: ${{ matrix.asio == 'OFF' && 'macos-build' || 'macos-asio-build' }}
+    runs-on: ${{ matrix.asio == 'OFF' && 'macos-14' || 'macos-15' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        asio: ['OFF', 'ON']
     steps:
       - uses: actions/checkout@v6
-      - run: |
+      - name: Install dependencies
+        run: |
           brew install cmake ninja protobuf grpc re2 abseil curl simdjson
+          if [[ "${{ matrix.asio }}" == "ON" ]]; then
+            brew install boost llvm
+          fi
+      - name: Configure and build
+        run: |
+          cmake_args=()
+          if [[ "${{ matrix.asio }}" == "ON" ]]; then
+            llvm_prefix="$(brew --prefix llvm)"
+            cmake_args+=(
+              "-DCMAKE_CXX_COMPILER=${llvm_prefix}/bin/clang++"
+              "-DCMAKE_CXX_FLAGS=-nostdinc++ -isystem ${llvm_prefix}/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY"
+              "-DCMAKE_EXE_LINKER_FLAGS=-L${llvm_prefix}/lib/c++ -L${llvm_prefix}/lib/unwind -Wl,-rpath,${llvm_prefix}/lib/c++ -Wl,-rpath,${llvm_prefix}/lib/unwind -lunwind"
+            )
+          fi
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DA2A_ENABLE_ASIO=${{ matrix.asio }} \
             -DA2A_ENABLE_TESTING=ON \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)"
+            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)" \
+            "${cmake_args[@]}"
           cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure --no-tests=error
@@ -544,7 +583,7 @@ jobs:
         shell: pwsh
         run: |
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
-          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET --x-feature=signing
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET --x-feature=signing --x-feature=asio
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -563,7 +602,7 @@ jobs:
           $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
           $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
           $hostTriplet = $env:VCPKG_HOST_TRIPLET
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_SIGNING=ON -DVCPKG_MANIFEST_FEATURES=signing
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_SIGNING=ON -DA2A_ENABLE_ASIO=ON "-DVCPKG_MANIFEST_FEATURES=signing;asio"
           cmake --build build --config RelWithDebInfo --parallel
 
       - name: Test

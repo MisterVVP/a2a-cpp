@@ -1245,3 +1245,22 @@ add_executable(grpc_request_context_test unit/grpc_request_context_test.cpp)
 target_include_directories(grpc_request_context_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(grpc_request_context_test PRIVATE a2a::server GTest::gtest_main)
 gtest_discover_tests(grpc_request_context_test)
+
+if(A2A_ENABLE_ASIO)
+  add_executable(asio_agent_executor_test unit/asio_agent_executor_test.cpp)
+  target_include_directories(asio_agent_executor_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(asio_agent_executor_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(asio_agent_executor_test PROPERTIES LABELS tsan TIMEOUT 30)
+
+  add_executable(asio_grpc_server_test integration/asio_grpc_server_test.cpp)
+  target_include_directories(asio_grpc_server_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(asio_grpc_server_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(asio_grpc_server_test PROPERTIES LABELS grpc_async TIMEOUT 30)
+endif()
+
+if(A2A_ENABLE_ASIO AND Python3_Interpreter_FOUND)
+  add_test(NAME installed_asio_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app asio_executor)
+  set_tests_properties(installed_asio_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+endif()

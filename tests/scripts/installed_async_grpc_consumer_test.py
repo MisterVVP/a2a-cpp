@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
-"""Build and run a native callback service against the installed SDK only."""
+"""Build and run an async example against the installed SDK only."""
 import argparse
 import os
 from pathlib import Path
@@ -18,7 +18,7 @@ def cache_values(build):
     return values
 
 
-def run_consumer(source, build, config):
+def run_consumer(source, build, config, app):
     values = cache_values(build)
     # Windows build tools can retain directory handles after the smoke test exits.
     with tempfile.TemporaryDirectory(prefix="installed-async-grpc-", dir=build,
@@ -32,7 +32,7 @@ def run_consumer(source, build, config):
         if "CMAKE_PREFIX_PATH" not in values and os.name != "nt":
             inherited = inherited.replace(os.pathsep, ";")
         command = ["cmake", "-S", str(source / "examples" / "installed_package_consumer"), "-B", str(consumer),
-                   "-DA2A_EXAMPLE_APP=async_grpc_server", "-DCMAKE_PREFIX_PATH=" + str(prefix) + ";" + inherited,
+                   "-DA2A_EXAMPLE_APP=" + app, "-DCMAKE_PREFIX_PATH=" + str(prefix) + ";" + inherited,
                    "-DCMAKE_BUILD_TYPE=" + config, "-G", values["CMAKE_GENERATOR"]]
         if values.get("CMAKE_CONFIGURATION_TYPES"):
             # The SDK installation contains only the configuration under test.
@@ -44,7 +44,7 @@ def run_consumer(source, build, config):
                     "CMAKE_CXX_FLAGS_DEBUG", "CMAKE_CXX_FLAGS_RELEASE", "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
                     "CMAKE_EXE_LINKER_FLAGS_DEBUG", "CMAKE_EXE_LINKER_FLAGS_RELEASE",
                     "CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO"]
-        for key in forwards:
+        for key in forwards + ["Boost_DIR"]:
             if values.get(key):
                 command.append("-D" + key + "=" + values[key])
         for key, flag in [("CMAKE_GENERATOR_PLATFORM", "-A"), ("CMAKE_GENERATOR_TOOLSET", "-T")]:
@@ -68,8 +68,9 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--config", default="Debug")
+    parser.add_argument("--app", default="async_grpc_server", choices=["async_grpc_server", "asio_executor"])
     args = parser.parse_args()
-    run_consumer(args.source, args.build, args.config)
+    run_consumer(args.source, args.build, args.config, args.app)
 
 
 if __name__ == "__main__":

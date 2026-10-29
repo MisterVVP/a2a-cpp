@@ -22,4 +22,10 @@ if(A2A_CPP_HAS_POSTGRES_STORE)
   find_dependency(PostgreSQL)
 endif()
 
+set(A2A_CPP_HAS_ASIO "@A2A_ENABLE_ASIO@")
+if(A2A_CPP_HAS_ASIO)
+  find_dependency(Boost @A2A_BOOST_VERSION@ CONFIG)
+  find_dependency(Threads)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/a2a_cppTargets.cmake")
