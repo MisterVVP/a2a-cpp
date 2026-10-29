@@ -520,9 +520,10 @@ jobs:
           cmake_args=()
           if [[ "${{ matrix.asio }}" == "ON" ]]; then
             llvm_prefix="$(brew --prefix llvm)"
+            # Imported dependencies add SDK C headers with -isystem; libc++ wrappers must precede them.
             cmake_args+=(
               "-DCMAKE_CXX_COMPILER=${llvm_prefix}/bin/clang++"
-              "-DCMAKE_CXX_FLAGS=-nostdinc++ -isystem ${llvm_prefix}/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY"
+              "-DCMAKE_CXX_FLAGS=-nostdinc++ -I${llvm_prefix}/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY"
               "-DCMAKE_EXE_LINKER_FLAGS=-L${llvm_prefix}/lib/c++ -L${llvm_prefix}/lib/unwind -Wl,-rpath,${llvm_prefix}/lib/c++ -Wl,-rpath,${llvm_prefix}/lib/unwind -lunwind"
             )
           fi

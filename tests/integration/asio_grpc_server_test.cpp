@@ -107,13 +107,17 @@ class AsioGrpcServer final {
   std::vector<std::thread> workers_;
 };
 
+void ExpectSuccessfulReply(const std::shared_ptr<GrpcReply>& reply) {
+  const auto status = AsioGrpcServer::Receive(reply);
+  EXPECT_TRUE(status.ok()) << status.error_message();
+  EXPECT_EQ(reply->response.id(), kCoroutineTaskId);
+}
+
 TEST(AsioGrpcServer, ReturnsCoroutineResultAndIngressMetadata) {
   AsioGrpcServer server;
   ASSERT_TRUE(server.Ready());
   const auto reply = server.GetTask();
-  const auto status = AsioGrpcServer::Receive(reply);
-  EXPECT_TRUE(status.ok()) << status.error_message();
-  EXPECT_EQ(reply->response.id(), kCoroutineTaskId);
+  ExpectSuccessfulReply(reply);
   EXPECT_EQ(server.application->Metadata().client_headers.at(kRequestIdHeader), kCoroutineRequestId);
 }
 
@@ -158,8 +162,7 @@ TEST(AsioGrpcServer, ConcurrentSuspendedRequestsShareFixedAsioWorkers) {
   EXPECT_EQ(server.application->completed, 0);
   server.application->Release();
   for (const auto& reply : replies) {
-    EXPECT_TRUE(AsioGrpcServer::Receive(reply).ok());
-    EXPECT_EQ(reply->response.id(), kCoroutineTaskId);
+    ExpectSuccessfulReply(reply);
   }
 }
 TEST(AsioGrpcServer, ConcurrentCompletionAndCancellationKeepFramesAlive) {
