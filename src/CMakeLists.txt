@@ -138,7 +138,10 @@ target_link_libraries(a2a_client
 set(A2A_SERVER_SOURCES
   server/agent_card/agent_card_serializer.cpp
   server/transport/grpc_server_transport.cpp
-  server/transport/grpc_dispatch.cpp
+  server/transport/grpc_error.cpp
+  server/transport/grpc_request_context.cpp
+  server/transport/grpc_status_details.cpp
+  server/transport/grpc_task_conversion.cpp
   server/transport/stream_cancellation_watcher.cpp
   server/transport/http_adapter.cpp
   server/transport/http_server_response_builder.cpp

@@ -2,12 +2,6 @@
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
 #include "sut/sut_agent.h"
-#if A2A_HAS_REQUEST_EXECUTION
-#include <chrono>
-#include <future>
-
-#include "sut/blocking_sut_executor.h"
-#endif
 
 #include <gtest/gtest.h>
 
@@ -119,27 +113,3 @@ TEST(SutAgentTest, ExistingExtendedCardProfilesShareOneProvider) {
 }
 
 }  // namespace
-
-#if A2A_HAS_REQUEST_EXECUTION
-namespace {
-constexpr auto kBlockingAdapterWait = std::chrono::seconds(5);
-TEST(SutAgentTest, BlockingAsyncFixturePreservesUnaryErrors) {
-  auto agent = MakeAgent();
-  a2a::tests::sut::BlockingSutExecutor executor(agent->dispatcher());
-  a2a::server::engine::RequestExecution execution;
-  std::promise<a2a::core::Result<lf::a2a::v1::Task>> reply;
-  auto result = reply.get_future();
-  executor.GetTask({}, execution.Context(), [&](auto response) { reply.set_value(std::move(response)); });
-  ASSERT_EQ(result.wait_for(kBlockingAdapterWait), std::future_status::ready);
-  auto response = result.get();
-  EXPECT_FALSE(response.ok());
-}
-TEST(SutAgentTest, BlockingAsyncFixtureUsesExistingExtendedCardProvider) {
-  auto agent = MakeAgent();
-  a2a::tests::sut::BlockingSutExecutor executor(agent->dispatcher());
-  const auto card = executor.GetExtendedAgentCard({});
-  ASSERT_TRUE(card.ok());
-  EXPECT_FALSE(card.value().name().empty());
-}
-}  // namespace
-#endif

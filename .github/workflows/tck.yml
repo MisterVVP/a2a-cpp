@@ -130,11 +130,12 @@ jobs:
         if: always()
         run: ./scripts/stop_tck_sut.sh
 
-      - name: Run native async unary gRPC TCK across stores
-        id: tck_async_grpc
+      - name: Run unified async unary TCK across stores
+        id: tck_async
         continue-on-error: true
         env:
-          A2A_TCK_GRPC_ASYNC: "1"
+          SUT_TARGET: tck_async_sut
+          A2A_TCK_TRANSPORTS: grpc
           TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
           TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
@@ -149,6 +150,18 @@ jobs:
             ./scripts/run_tck_sut.sh
             ./scripts/run_tck_mandatory.sh
             ./scripts/stop_tck_sut.sh
+          done
+
+      - name: Summarize async TCK report gaps
+        if: always()
+        run: |
+          for backend in inmemory postgres; do
+            report="tck-artifacts/reports/async-${backend}/compatibility.json"
+            if [[ -f "${report}" ]]; then
+              python3 scripts/summarize_tck_report.py "${report}"
+            else
+              echo "No async ${backend} compatibility report was generated."
+            fi
           done
 
       - name: Capture runner diagnostics
@@ -178,7 +191,7 @@ jobs:
         env:
           INMEMORY_TCK_OUTCOME: ${{ steps.tck_inmemory.outcome }}
           POSTGRES_TCK_OUTCOME: ${{ steps.tck_postgres.outcome }}
-          ASYNC_GRPC_TCK_OUTCOME: ${{ steps.tck_async_grpc.outcome }}
+          ASYNC_TCK_OUTCOME: ${{ steps.tck_async.outcome }}
         run: |
           failed=0
           if [[ "${INMEMORY_TCK_OUTCOME}" != "success" ]]; then
@@ -189,8 +202,8 @@ jobs:
             echo "PostgreSQL mandatory TCK outcome: ${POSTGRES_TCK_OUTCOME}"
             failed=1
           fi
-          if [[ "${ASYNC_GRPC_TCK_OUTCOME}" != "success" ]]; then
-            echo "Native async gRPC TCK outcome: ${ASYNC_GRPC_TCK_OUTCOME}"
+          if [[ "${ASYNC_TCK_OUTCOME}" != "success" ]]; then
+            echo "Unified async TCK outcome: ${ASYNC_TCK_OUTCOME}"
             failed=1
           fi
           for backend in inmemory postgres async-inmemory async-postgres; do

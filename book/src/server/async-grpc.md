@@ -188,14 +188,34 @@ the current shared sync pipeline for both application semantics and baseline.
 
 ## TCK profiles
 
-The default SUT remains synchronous with its existing capabilities and full
-three-transport suite. `A2A_TCK_GRPC_ASYNC=1` selects the callback gRPC service and
-advertises streaming as unavailable. CI additionally runs that unary-only profile
-against both stores using `TCK_TRANSPORTS=grpc`.
+The existing `tck_sut` retains synchronous execution, streaming, and all three
+protocol bindings. A separate `tck_async_sut` provides one shared async setup for
+gRPC, JSON-RPC, and HTTP+JSON integration. Currently only gRPC is implemented;
+requesting an unavailable async binding fails at startup. Streaming remains
+unavailable in this unary-only setup.
 
-The async TCK SUT intentionally adapts the existing synchronous SUT dispatcher
-on the bounded SDK workers so protocol fixtures and store behavior stay identical.
-It validates wire semantics, not non-blocking store/network I/O or performance.
-The separate network evidence above uses externally completed pending operations.
+```sh
+SUT_TARGET=tck_async_sut A2A_TCK_TRANSPORTS=grpc ./scripts/run_tck_sut.sh
+TCK_TRANSPORTS=grpc ./scripts/run_tck_mandatory.sh
+./scripts/stop_tck_sut.sh
+```
+
+The async agent uses the SDK `AsyncDispatcher` and `AsyncGrpcServerTransport`
+directly. Both setups share application behavior, stores, policies, and agent-card
+providers. The async application executor queues fixture operations on two bounded
+backend workers instead of calling the synchronous dispatcher. Existing store and
+push-delivery APIs are synchronous; this facility keeps that fixture work off SDK
+completion workers and does not provide asynchronous database or outbound network
+I/O. The separate network evidence above uses externally completed pending
+operations.
+
+The async card advertises only enabled bindings. HTTP serves SDK agent-card
+discovery and caching, without registering JSON-RPC or HTTP+JSON operation routes.
+CI runs the synchronous and async setups against both stores.
+
 Upstream registered requirements without tests remain a reported coverage gap;
 passing executable TCK tests is not a claim of complete specification coverage.
+The gRPC-only report also leaves requirements tested exclusively through other
+bindings untested. Upstream console summaries group `NOT TESTED` under “Failed”;
+use the JSON requirement statuses and executable test results to distinguish
+coverage gaps from failures.

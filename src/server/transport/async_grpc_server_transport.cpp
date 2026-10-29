@@ -14,7 +14,9 @@
 #include <unordered_map>
 #include <utility>
 
-#include "server/transport/grpc_dispatch.h"
+#include "server/transport/grpc_error.h"
+#include "server/transport/grpc_request_context.h"
+#include "server/transport/grpc_task_conversion.h"
 
 namespace a2a::server {
 namespace {

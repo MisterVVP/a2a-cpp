@@ -12,7 +12,9 @@
 
 #include "a2a/core/error.h"
 #include "a2a/core/protocol_error_messages.h"
-#include "server/transport/grpc_dispatch.h"
+#include "server/transport/grpc_error.h"
+#include "server/transport/grpc_request_context.h"
+#include "server/transport/grpc_task_conversion.h"
 #include "stream_cancellation_watcher.h"
 
 namespace a2a::server {

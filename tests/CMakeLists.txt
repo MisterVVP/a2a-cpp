@@ -865,6 +865,8 @@ target_link_libraries(cpp_grpc_interop_server
 add_library(sut_runtime STATIC
   sut/sut_runtime.cpp
   sut/sut_agent.cpp
+  sut/sut_application.cpp
+  sut/sut_server_runtime.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
@@ -881,6 +883,8 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
     sut/sut_agent.cpp
+    sut/sut_application.cpp
+    sut/sut_server_runtime.cpp
     sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
@@ -1187,6 +1191,24 @@ target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2
 gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
 
 if(A2A_STDLIB_HAS_STOP_TOKEN)
+  add_library(sut_async_runtime STATIC
+    sut/async_sut_runtime.cpp
+    sut/async_sut_agent.cpp
+    sut/async_sut_executor.cpp
+    sut/sut_work_queue.cpp
+  )
+  target_link_libraries(sut_async_runtime PUBLIC sut_runtime)
+  add_executable(async_sut_test unit/async_sut_test.cpp)
+  target_link_libraries(async_sut_test PRIVATE sut_async_runtime GTest::gtest_main)
+  gtest_discover_tests(async_sut_test PROPERTIES LABELS "tsan;grpc_async" TIMEOUT 30)
+  add_executable(tck_async_sut sut/tck_async_sut.cpp)
+  target_link_libraries(tck_async_sut PRIVATE sut_async_runtime)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME async_sut_runtime_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/async_sut_runtime_test.py
+        --sut $<TARGET_FILE:tck_async_sut>)
+    set_tests_properties(async_sut_runtime_test PROPERTIES LABELS "grpc_async" TIMEOUT 60)
+  endif()
   add_executable(request_execution_test unit/request_execution_test.cpp)
   target_link_libraries(request_execution_test PRIVATE a2a::server GTest::gtest_main)
   gtest_discover_tests(request_execution_test PROPERTIES LABELS "tsan")
@@ -1213,3 +1235,13 @@ if(Python3_Interpreter_FOUND)
       --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG>)
   set_tests_properties(installed_async_grpc_consumer_test PROPERTIES LABELS "installed;grpc_async" TIMEOUT 300 SKIP_RETURN_CODE 77)
 endif()
+
+add_executable(grpc_helpers_test unit/grpc_helpers_test.cpp)
+target_include_directories(grpc_helpers_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(grpc_helpers_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(grpc_helpers_test)
+
+add_executable(grpc_request_context_test unit/grpc_request_context_test.cpp)
+target_include_directories(grpc_request_context_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(grpc_request_context_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(grpc_request_context_test)
