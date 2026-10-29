@@ -114,8 +114,11 @@ class CurlStreamReactorPool final {
  public:
   [[nodiscard]] std::shared_ptr<CurlStreamReactor> Acquire();
   void CancelOwner(const void* owner);
-  // Returns false only when a pool-only shard is the calling reactor and its
-  // release must be retried from another thread.
+  // Process teardown joins reactors while global curl state and callback workers
+  // are still alive, even when a terminal callback retains a client owner.
+  void Shutdown();
+  // Returns false on reactor threads; cleanup must be retried off-thread to
+  // avoid self-join and cross-shard join/lock cycles.
   [[nodiscard]] bool ReleaseUnused();
   [[nodiscard]] std::size_t size() const;
 

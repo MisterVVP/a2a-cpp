@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <boost/asio/thread_pool.hpp>
 #include <memory>
 
 #include "a2a/core/non_copyable.h"
@@ -20,6 +21,8 @@ class AsyncSutAgent final : private core::NonCopyableOrMovable {
   void Shutdown();
 
  private:
+  static constexpr std::size_t kIoWorkers = 2;
+  boost::asio::thread_pool runtime_{kIoWorkers};
   std::shared_ptr<SutApplication> application_;
   std::shared_ptr<AsyncSutExecutor> executor_;
   std::shared_ptr<server::engine::AsyncDispatcher> dispatcher_;

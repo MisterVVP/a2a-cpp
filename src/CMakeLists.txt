@@ -171,7 +171,7 @@ set(A2A_SERVER_SOURCES
   server/stores/store_factory.cpp
 )
 if(A2A_STDLIB_HAS_STOP_TOKEN)
-  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp server/engine/async_dispatcher.cpp server/transport/async_grpc_server_transport.cpp)
+  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp)
 endif()
 add_library(a2a_server STATIC ${A2A_SERVER_SOURCES})
 target_compile_definitions(a2a_server PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
@@ -197,11 +197,14 @@ if(A2A_ENABLE_ASIO)
   find_package(Boost ${A2A_BOOST_VERSION} CONFIG REQUIRED)
   find_package(Threads REQUIRED)
   add_library(a2a_asio STATIC
-    server/engine/asio_agent_executor.cpp
+    server/engine/async_dispatcher.cpp
+    server/transport/async_grpc_server_transport.cpp
     server/engine/coroutine_agent_executor.cpp
   )
   add_library(a2a::asio ALIAS a2a_asio)
   set_target_properties(a2a_asio PROPERTIES EXPORT_NAME asio)
+  target_compile_definitions(a2a_asio PUBLIC A2A_HAS_ASYNC_SERVER=1)
+  target_include_directories(a2a_asio PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_link_libraries(a2a_asio PUBLIC a2a::server Boost::headers Threads::Threads)
   target_compile_features(a2a_asio PUBLIC cxx_std_20)
   install(FILES ${PROJECT_SOURCE_DIR}/LICENSES/BSL-1.0.txt

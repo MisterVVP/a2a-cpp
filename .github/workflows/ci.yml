@@ -412,7 +412,7 @@ jobs:
         run: |
           cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined' -DA2A_ENABLE_ASIO=ON -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-boost
           cmake --build build-asan --parallel
-          ctest --test-dir build-asan --output-on-failure --no-tests=error -R 'ExamplesInteropIntegrationTest\..*|AsyncDispatcherTest|AsyncUnaryTest|AsyncGrpc|AsioExecutor|AsioGrpc'
+          ctest --test-dir build-asan --output-on-failure --no-tests=error -R 'ExamplesInteropIntegrationTest\..*|AsyncDispatcherTest|AsyncUnaryTest|AsyncGrpc|CoroutineDispatcher|AsioGrpc'
 
   thread-sanitizer:
     name: ThreadSanitizer focused concurrency tests

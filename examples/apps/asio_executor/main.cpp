@@ -12,8 +12,8 @@
 #include <memory>
 #include <utility>
 
-#include "a2a/server/engine/asio_agent_executor.h"
 #include "a2a/server/engine/async_dispatcher.h"
+#include "a2a/server/engine/coroutine_agent_executor.h"
 
 namespace {
 using namespace a2a::server;
@@ -39,8 +39,7 @@ int main() {
   boost::asio::io_context loop;
   auto guard = boost::asio::make_work_guard(loop);
   const auto application = std::make_shared<TimerExecutor>();
-  const auto executor = std::make_shared<AsioAgentExecutor>(application, loop.get_executor());
-  AsyncDispatcher dispatcher(executor);
+  AsyncDispatcher dispatcher(application, loop.get_executor());
   lf::a2a::v1::GetTaskRequest payload;
   payload.set_id(kTaskId);
   DispatchRequest request{.operation = DispatcherOperation::kGetTask, .payload = std::move(payload)};

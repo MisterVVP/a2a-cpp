@@ -39,8 +39,7 @@ class AsioGrpcServer final {
   explicit AsioGrpcServer(CoroutineBehavior behavior = CoroutineBehavior::kImmediate)
       : application(std::make_shared<CoroutineBackend>(behavior)),
         guard_(asio::make_work_guard(loop_)),
-        adapter_(std::make_shared<AsioAgentExecutor>(application, loop_.get_executor())),
-        dispatcher_(std::make_shared<AsyncDispatcher>(adapter_)),
+        dispatcher_(std::make_shared<AsyncDispatcher>(application, loop_.get_executor())),
         service_(dispatcher_) {
     ::grpc::ServerBuilder builder;
     builder.AddListeningPort(kLoopbackBind, ::grpc::InsecureServerCredentials(), &port_);
@@ -97,7 +96,6 @@ class AsioGrpcServer final {
 
  private:
   asio::executor_work_guard<asio::io_context::executor_type> guard_;
-  std::shared_ptr<AsioAgentExecutor> adapter_;
   std::shared_ptr<AsyncDispatcher> dispatcher_;
   AsyncGrpcServerTransport service_;
   std::unique_ptr<::grpc::Server> server_;

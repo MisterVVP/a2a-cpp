@@ -14,9 +14,13 @@ AsyncSutAgent::AsyncSutAgent(server::stores::StoreBundle stores, const SutEndpoi
   execution.interceptors = {application_->interceptor()};
   execution.security_policy = application_->security_policy();
   execution.task_store = application_->task_store();
-  dispatcher_ = std::make_shared<server::engine::AsyncDispatcher>(executor_, std::move(execution));
+  dispatcher_ =
+      std::make_shared<server::engine::AsyncDispatcher>(executor_, runtime_.get_executor(), std::move(execution));
 }
-AsyncSutAgent::~AsyncSutAgent() { Shutdown(); }
+AsyncSutAgent::~AsyncSutAgent() {
+  Shutdown();
+  runtime_.join();
+}
 std::shared_ptr<server::engine::AsyncDispatcher> AsyncSutAgent::dispatcher() const { return dispatcher_; }
 const lf::a2a::v1::AgentCard& AsyncSutAgent::agent_card() const { return application_->agent_card(); }
 void AsyncSutAgent::Shutdown() { dispatcher_->Shutdown(); }

@@ -13,65 +13,18 @@
 namespace a2a::server {
 namespace {
 constexpr auto kExecutorNotConfigured = "Server dispatcher executor is not configured";
-class SyncInvocation final {
- public:
-  explicit SyncInvocation(AgentExecutor& executor) : executor_(executor) {}
-  template <typename Completion>
-  void SendMessage(const lf::a2a::v1::SendMessageRequest& request, RequestContext& context,
-                   const Completion& completion) {
-    completion(executor_.SendMessage(request, context));
-  }
-  template <typename Completion>
-  void SendStreamingMessage(const lf::a2a::v1::SendMessageRequest& request, RequestContext& context,
-                            const Completion& completion) {
-    completion(executor_.SendStreamingMessage(request, context));
-  }
-  template <typename Completion>
-  void GetTask(const lf::a2a::v1::GetTaskRequest& request, RequestContext& context, const Completion& completion) {
-    completion(executor_.GetTask(request, context));
-  }
-  template <typename Completion>
-  void SubscribeTask(const lf::a2a::v1::GetTaskRequest& request, RequestContext& context,
-                     const Completion& completion) {
-    completion(executor_.SubscribeTask(request, context));
-  }
-  template <typename Completion>
-  void ListTasks(const ListTasksRequest& request, RequestContext& context, const Completion& completion) {
-    completion(executor_.ListTasks(request, context));
-  }
-  template <typename Completion>
-  void CancelTask(const lf::a2a::v1::CancelTaskRequest& request, RequestContext& context,
-                  const Completion& completion) {
+core::Result<DispatchResponse> RouteSync(AgentExecutor& executor, const DispatchRequest& request,
+                                         RequestContext& context) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+  if (request.operation == DispatcherOperation::kCancelTask &&
+      std::holds_alternative<lf::a2a::v1::CancelTaskRequest>(request.payload)) {
     const core::subscription_diagnostics::ScopedTimer timer(
         core::subscription_diagnostics::Phase::kServerCancelTaskTotal);
+    return engine::RouteDispatch(executor, request, context, engine::SyncDispatchResult{});
+  }
 #endif
-    completion(executor_.CancelTask(request, context));
-  }
-  template <typename Completion>
-  void CreateTaskPushNotificationConfig(const lf::a2a::v1::TaskPushNotificationConfig& request, RequestContext& context,
-                                        const Completion& completion) {
-    completion(executor_.CreateTaskPushNotificationConfig(request, context));
-  }
-  template <typename Completion>
-  void GetTaskPushNotificationConfig(const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request,
-                                     RequestContext& context, const Completion& completion) {
-    completion(executor_.GetTaskPushNotificationConfig(request, context));
-  }
-  template <typename Completion>
-  void ListTaskPushNotificationConfigs(const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request,
-                                       RequestContext& context, const Completion& completion) {
-    completion(executor_.ListTaskPushNotificationConfigs(request, context));
-  }
-  template <typename Completion>
-  void DeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-                                        RequestContext& context, const Completion& completion) {
-    completion(executor_.DeleteTaskPushNotificationConfig(request, context));
-  }
-
- private:
-  AgentExecutor& executor_;
-};
+  return engine::RouteDispatch(executor, request, context, engine::SyncDispatchResult{});
+}
 }  // namespace
 Dispatcher::Dispatcher(AgentExecutor* executor) : executor_(executor) {}
 
@@ -105,10 +58,8 @@ core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& reque
   }
   auto result = pipeline.Handle(request, context);
   if (!result.has_value()) {
-    SyncInvocation invocation(*executor_);
     const auto prepared = pipeline.Prepare(request);
-    engine::RouteDispatch(invocation, prepared.has_value() ? *prepared : request, context,
-                          [&](auto response) { result = std::move(response); });
+    result = RouteSync(*executor_, prepared.has_value() ? *prepared : request, context);
   }
   if (!result.has_value()) {
     return core::Error::Internal(engine::kUnsupportedDispatchOperation);

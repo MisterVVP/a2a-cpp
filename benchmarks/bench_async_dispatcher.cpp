@@ -3,6 +3,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include <boost/asio/thread_pool.hpp>
 #include <future>
 #include <memory>
 #include <utility>
@@ -15,53 +16,52 @@ namespace {
 using namespace a2a::server;
 using namespace a2a::server::engine;
 constexpr auto kDispatchFailed = "Dispatch failed";
-constexpr auto kWorkerCounter = "sdk_workers";
+constexpr std::size_t kIoWorkers = 1;
+constexpr auto kWorkerCounter = "asio_workers";
 // This immediate in-memory fixture measures dispatcher/scheduling overhead only.
 // It does not simulate non-blocking application I/O or provide an SDK fallback.
-class ImmediateExecutor final : public AsyncAgentExecutor {
+class ImmediateExecutor final : public CoroutineAgentExecutor {
  public:
-  void SendMessage(lf::a2a::v1::SendMessageRequest request, RequestExecutionContext context,
-                   Completion<lf::a2a::v1::SendMessageResponse> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::SendMessageResponse>> SendMessage(
+      lf::a2a::v1::SendMessageRequest request, RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.SendMessage(request, metadata));
+    co_return executor_.SendMessage(request, metadata);
   }
-  void GetTask(lf::a2a::v1::GetTaskRequest request, RequestExecutionContext context,
-               Completion<lf::a2a::v1::Task> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest request,
+                                                                       RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.GetTask(request, metadata));
+    co_return executor_.GetTask(request, metadata);
   }
-  void ListTasks(ListTasksRequest request, RequestExecutionContext context,
-                 Completion<ListTasksResponse> completion) override {
+  boost::asio::awaitable<a2a::core::Result<ListTasksResponse>> ListTasks(ListTasksRequest request,
+                                                                         RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.ListTasks(request, metadata));
+    co_return executor_.ListTasks(request, metadata);
   }
-  void CancelTask(lf::a2a::v1::CancelTaskRequest request, RequestExecutionContext context,
-                  Completion<lf::a2a::v1::Task> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::Task>> CancelTask(lf::a2a::v1::CancelTaskRequest request,
+                                                                          RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.CancelTask(request, metadata));
+    co_return executor_.CancelTask(request, metadata);
   }
-  void CreateTaskPushNotificationConfig(lf::a2a::v1::TaskPushNotificationConfig request,
-                                        RequestExecutionContext context,
-                                        Completion<lf::a2a::v1::TaskPushNotificationConfig> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>> CreateTaskPushNotificationConfig(
+      lf::a2a::v1::TaskPushNotificationConfig request, RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.CreateTaskPushNotificationConfig(request, metadata));
+    co_return executor_.CreateTaskPushNotificationConfig(request, metadata);
   }
-  void GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest request,
-                                     RequestExecutionContext context,
-                                     Completion<lf::a2a::v1::TaskPushNotificationConfig> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::TaskPushNotificationConfig>> GetTaskPushNotificationConfig(
+      lf::a2a::v1::GetTaskPushNotificationConfigRequest request, RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.GetTaskPushNotificationConfig(request, metadata));
+    co_return executor_.GetTaskPushNotificationConfig(request, metadata);
   }
-  void ListTaskPushNotificationConfigs(
-      lf::a2a::v1::ListTaskPushNotificationConfigsRequest request, RequestExecutionContext context,
-      Completion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> completion) override {
+  boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>>
+  ListTaskPushNotificationConfigs(lf::a2a::v1::ListTaskPushNotificationConfigsRequest request,
+                                  RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.ListTaskPushNotificationConfigs(request, metadata));
+    co_return executor_.ListTaskPushNotificationConfigs(request, metadata);
   }
-  void DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request,
-                                        RequestExecutionContext context, Completion<void> completion) override {
+  boost::asio::awaitable<a2a::core::Result<void>> DeleteTaskPushNotificationConfig(
+      lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request, RequestExecutionContext context) override {
     auto metadata = context.Metadata();
-    completion(executor_.DeleteTaskPushNotificationConfig(request, metadata));
+    co_return executor_.DeleteTaskPushNotificationConfig(request, metadata);
   }
 
  private:
@@ -91,9 +91,9 @@ BENCHMARK(BM_Dispatcher_SyncImmediate)->UseRealTime();
 
 void BM_Dispatcher_AsyncImmediate(benchmark::State& state) {
   AsyncDispatcherOptions options;
-  options.worker_count = 1;
+  boost::asio::thread_pool runtime(kIoWorkers);
   auto executor = std::make_shared<ImmediateExecutor>();
-  AsyncDispatcher dispatcher(executor, options);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), options);
   const auto request = BuildRequest();
   while (state.KeepRunning()) {
     std::promise<bool> reply;
@@ -106,7 +106,7 @@ void BM_Dispatcher_AsyncImmediate(benchmark::State& state) {
       break;
     }
   }
-  state.counters[kWorkerCounter] = static_cast<double>(options.worker_count);
+  state.counters[kWorkerCounter] = static_cast<double>(kIoWorkers);
 }
 BENCHMARK(BM_Dispatcher_AsyncImmediate)->UseRealTime();
 }  // namespace

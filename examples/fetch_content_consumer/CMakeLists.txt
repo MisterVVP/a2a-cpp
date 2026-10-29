@@ -39,3 +39,7 @@ if(A2A_EXAMPLE_APP STREQUAL "asio_executor")
   endif()
   target_link_libraries(a2a_example PRIVATE a2a::asio)
 endif()
+
+if(A2A_EXAMPLE_APP STREQUAL "async_grpc_server" AND TARGET a2a::asio)
+  target_link_libraries(a2a_example PRIVATE a2a::asio)
+endif()

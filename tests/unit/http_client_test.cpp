@@ -1435,6 +1435,19 @@ TEST(SharedHttpClientTest, ReactorThreadStartupFailureDoesNotEscape) {
   EXPECT_TRUE(a2a::http::testing::CurlStreamReactorHandlesThreadStartupFailure());
 }
 
+TEST(SharedHttpClientTest, ReactorPoolShutdownJoinsReferencedReactorsAndTerminalCallbacks) {
+  a2a::http::detail::CurlStreamReactorPool pool;
+  const auto reactor = pool.Acquire();
+  ASSERT_NE(reactor, nullptr);
+  const auto transfer = std::make_shared<a2a::http::detail::CurlStreamReactor::Transfer>();
+  std::atomic_bool completed{false};
+  transfer->on_complete = [&](CURLcode) { completed.store(true); };
+  reactor->Cancel(transfer);
+  pool.Shutdown();
+  EXPECT_TRUE(completed.load());
+  EXPECT_FALSE(reactor->IsCurrentThread());
+}
+
 TEST(SharedHttpClientTest, ReactorPoolDefersReleaseFromItsOwnThread) {
   EXPECT_TRUE(a2a::http::testing::CurlStreamReactorPoolDefersSelfThreadRelease());
 }

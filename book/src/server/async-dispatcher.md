@@ -1,113 +1,88 @@
-# Async unary dispatch
+# Coroutine unary dispatch
 
-When `A2A_HAS_REQUEST_EXECUTION` is `1`, include
-`a2a/server/engine/async_dispatcher.h` and implement
-`a2a::server::engine::AsyncAgentExecutor`. This opt-in API supports `SendMessage`,
-`GetTask`, `ListTasks`, `CancelTask`, and create/get/list/delete push-notification
-configuration. Extended agent cards use `AsyncDispatcherOptions::agent_card_provider`,
-with the same provider contract as synchronous dispatch.
+Build with `A2A_ENABLE_ASIO=ON` and link `a2a::asio`. The async execution engine uses
+Boost.Asio C++20 coroutines throughout. Implement
+`a2a::server::engine::CoroutineAgentExecutor`; its eight unary methods return
+`boost::asio::awaitable<core::Result<T>>`. Extended agent cards continue to use the
+agent-card provider. Streaming is outside this unary engine.
 
-The existing `AgentExecutor`, `Dispatcher`, and transports keep their synchronous
-interfaces. The [native async gRPC service](async-grpc.md) uses this dispatcher; applications
-and fake transports can also drive it directly. Streaming operations
-are rejected by the async dispatcher.
+```cpp
+boost::asio::thread_pool runtime(2);
+auto application = std::make_shared<MyCoroutineExecutor>();
+auto dispatcher = std::make_shared<a2a::server::engine::AsyncDispatcher>(
+    application, runtime.get_executor());
+```
 
-## Application execution
+The callback-based executor and its Asio adapter have been removed. There is one
+async application API and one coroutine dispatcher. The synchronous `AgentExecutor`,
+`Dispatcher`, and synchronous transports remain available independently of Boost.
 
-Each executor method receives its request and `RequestExecutionContext` by value,
-and a typed `Completion<T>` accepting `core::Result<T>`. Move arguments into the
-application's asynchronous operation when needed after the method returns. The
-metadata view includes changes made by `BeforeDispatch`; it shares the original
-request's cancellation state and deadline. `WithMetadata` creates such an immutable
-view without changing the source's ingress snapshot.
+## Execution and ownership
 
-Initiate work and return promptly. Complete inline or later from any thread. The
-SDK never holds a worker while waiting for that completion. Duplicate or late
-completions have no effect. Application I/O and cleanup remain the application's
-responsibility; this API does not make blocking network or database operations
-non-blocking.
+Each executor method owns its request and `RequestExecutionContext` parameters.
+Use `co_await` for asynchronous backends and `co_return` for the typed result.
+Unimplemented methods return the existing protocol unsupported-operation error.
+The dispatcher directly awaits the application, with no callback executor bridge
+or separate SDK worker queue.
 
-The dispatcher owns a shared executor while it is alive and retains it through
-each initiating method. Application work continuing after dispatcher destruction
-must own its own resources; a saved completion does not keep the executor or
-dispatcher alive. Retained lifecycle contexts remain valid after shutdown.
+The application supplies and runs the Asio execution context. Each admitted call
+gets its own strand. Required-extension validation, authorization, interceptors,
+application execution, response projection and finalization run on that strand.
+Different requests may run concurrently, so shared application services must be
+thread-safe. Keep hooks and coroutine execution nonblocking. Existing synchronous
+security/store facilities still block their event-loop worker when invoked.
 
-## Transport admission and completion
+Before hooks run in registration order and after hooks in reverse order. An
+accepted request has one terminal result and one after-hook sequence, including
+validation failures and cancellation. Hooks for one call never overlap.
+Interceptor-updated metadata is passed to the executor through `WithMetadata`;
+the transport result retains the original ingress snapshot.
 
-Call `Dispatch` with an owned `DispatchRequest`, metadata, completion, and an
-optional steady-clock deadline. It returns `Result<shared_ptr<RequestExecution>>`.
-An admission error (closed dispatcher, capacity exhausted, or missing completion)
-is returned directly and does not invoke the completion. Every accepted request
-receives exactly one completion after its `AfterDispatch` hooks. The callback takes
-`(core::Result<DispatchResponse>, RequestExecutionContext)`. Use that owned context
-to map the terminal outcome: a worker may deliver completion before `Dispatch`
-returns its cancellation handle. The completion context retains the ingress
-metadata snapshot.
+The coroutine frame retains its application and pipeline through physical backend
+cleanup. Request cancellation can finish the protocol response earlier. A late
+coroutine return cannot replace the winning outcome or invoke transport completion
+again. Never destroy an application-owned Asio I/O object after its execution
+context has already been destroyed.
 
-Retain the returned source to report client cancellation, deadline expiry, or
-shutdown. Network reactors should call `dispatcher.Cancel(source, reason)` once
-per call; this queues the signal and runs stop observers on dispatcher workers.
-Calling `source->Cancel(reason)` directly retains the standalone lifecycle's
-inline stop-observer semantics. Do not call `TryComplete` on it: the dispatcher owns application
-completion arbitration. Check the completion context's terminal `Outcome()` when mapping
-cancellation to a transport status; cancellation errors use `ErrorCode::kNetwork`,
-while normal executor/provider errors retain their original structured fields.
+## Transport boundary
 
-The transport must schedule `ExpireDeadline()` or report a native deadline signal
-for prompt expiry while application work is pending. The dispatcher also checks
-the deadline before invoking the executor and when finalizing its response. It
-does not create a timer per request. A deadline cannot replace an earlier terminal
-outcome. Cancellation competes with completion after response security/projection
-and before audit hooks; completion delivery can follow the winning transition.
+`Dispatch(request, metadata, transport_completion, deadline)` admits work and
+returns `Result<shared_ptr<RequestExecution>>` immediately. It never executes user
+code inline. The completion sink is the boundary to native transport APIs such as
+gRPC reactors; application executor methods do not receive completion callbacks.
+Admission failure returns directly and invokes no transport completion. Accepted
+requests complete on their Asio strand after the after hooks.
 
-## Scheduling and limits
+Retain the returned lifecycle source to report cancellation. A network reactor
+calls `dispatcher.Cancel(source, reason)`, which posts cancellation to the supplied
+Asio executor. Calling `source->Cancel()` directly retains the standalone
+lifecycle's inline stop-observer semantics. A transport must not call `TryComplete`;
+terminal arbitration belongs to the dispatcher.
 
-`worker_count` fixes the number of SDK workers. `max_in_flight` bounds all admitted
-requests, including queued and pending application operations. Both must be nonzero;
-invalid options or a null executor throw `std::invalid_argument`. Defaults are two
-workers and 1024 in-flight requests. Capacity exhaustion returns a network error;
-the transport chooses its overload response.
+The transport drives deadlines using its native timer or `ExpireDeadline()`.
+Dispatch also checks the deadline before application execution and during
+finalization. First-terminal-transition precedence remains unchanged.
 
-Executor initiation, security policies, agent-card providers, interceptors, and
-transport completion run on these workers. No application dispatch/completion
-callback runs inline in `Dispatch`, `Cancel`, or `Shutdown`. A call's hooks and
-finalization are serialized; separate calls may run concurrently. Interceptors,
-providers, and executors shared across calls must therefore be thread-safe. Keep
-hooks and transport completions short. Cancellation observers registered through
-`std::stop_callback` retain the [inline, non-blocking contract](request-execution.md)
-and must enqueue any substantial cleanup themselves.
+## Limits, errors, and shutdown
 
-The dispatcher and synchronous path share one typed operation router and the same
-security, agent-card, interceptor, and history projection pipeline. An async
-request snapshots its configured interceptors, as does synchronous dispatch. Before hooks run in registration
-order; after hooks run in reverse order, once each, including validation,
-application failure, and cancellation. Cancellation during a before hook waits for
-that hook to return before finalization; it never starts a concurrent after hook.
-In the async path, a throwing executor, provider, policy, or before hook becomes an internal error.
-After-hook exceptions are isolated so remaining hooks still run; completion
-exceptions are contained after terminal delivery. Callbacks should not throw.
+`AsyncDispatcherOptions::max_in_flight` bounds logically active requests.
+`max_pending` additionally bounds coroutine frames, including requests already
+cancelled at the protocol boundary but still cleaning up backend work. Both default
+to 1024, must be nonzero, and cause immediate admission rejection when exhausted.
+Thread count is controlled by the caller's Asio runtime; there is no dispatcher
+`worker_count` or second application-adapter capacity setting.
 
-`required_extensions` uses the same `RequiredExtensionsValidator` as synchronous
-transports. Rejection precedes before hooks and execution; after hooks still run
-for an accepted request. Activated response headers remain the transport's concern.
+Application errors retain their structured fields. Exceptions become internal
+errors; Asio operation cancellation becomes a network error, while the lifecycle's
+winning outcome determines transport cancellation status. After-hook and transport
+completion exceptions are contained.
 
-If a `security_policy` is configured, `task_store` must outlive all completions.
-Authorization and authorized list filtering use the existing synchronous store
-facility on workers; this is blocking compatibility, not async database I/O. No
-legacy synchronous executor adapter is provided. Policies see complete task
-history before the caller's requested projection is applied.
+`Shutdown()` closes admission and schedules server cancellation without waiting
+for application I/O. Destruction also requests shutdown and does not own or join
+runtime threads. Keep the runtime alive, allow cancellation and cleanup to drain,
+and then join it. A completion can destroy its own dispatcher safely. Cancellation
+remains cooperative; a backend that disables it must supply its own bounded cleanup.
 
-## Shutdown
-
-`Shutdown()` closes admission and requests `kServerShutdown` for pending calls. It
-is idempotent and does not wait for application I/O. Destruction drains accepted
-SDK callbacks and joins workers. If a completion destroys its own dispatcher, that
-worker drains its remaining work and exits after the callback returns; other
-workers are joined. Cancellation does not forcefully stop application code.
-
-Keep the dispatcher alive during calls to its public methods, as with ordinary
-C++ objects. Destruction from a worker callback is supported. A transport must keep
-its reply resources alive until completion, even if the client has disconnected.
-
-Applications preferring C++20 coroutines can use the optional
-[Boost.Asio coroutine executor](asio-coroutines.md) with this same dispatcher.
+Configured task stores must outlive their pipeline operations. Applications must
+own any backend resources used after logical request completion. See the
+[coroutine guide](asio-coroutines.md) and [native gRPC integration](async-grpc.md).

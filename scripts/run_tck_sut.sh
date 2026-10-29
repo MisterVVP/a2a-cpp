@@ -23,6 +23,10 @@ CMAKE_ARGS=(
   -DCMAKE_BUILD_TYPE=RelWithDebInfo
 )
 
+if [[ "${SUT_TARGET}" == tck_async_sut ]]; then
+  CMAKE_ARGS+=(-DA2A_ENABLE_ASIO=ON)
+fi
+
 case "${SUT_STORE_BACKEND}" in
   inmemory)
     CMAKE_ARGS+=(

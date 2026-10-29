@@ -3,31 +3,31 @@
 `a2a::server::AsyncGrpcServerTransport` connects the
 [async dispatcher](async-dispatcher.md) to the generated native gRPC callback
 service. It supports all nine unary RPCs, including extended agent cards. Include
-`a2a/server/async_grpc_server_transport.h` when `A2A_HAS_REQUEST_EXECUTION` is `1`.
+`a2a/server/async_grpc_server_transport.h` when `A2A_HAS_ASYNC_SERVER` is `1`.
 
 Choose the service when registering an A2A endpoint:
 
 - `GrpcServerTransport` uses the existing synchronous `Dispatcher` / `AgentExecutor`
   interfaces and retains unary and streaming behavior.
 - `AsyncGrpcServerTransport` uses `engine::AsyncDispatcher` /
-  `engine::AsyncAgentExecutor`. Streaming RPCs return gRPC `UNIMPLEMENTED`;
+  `engine::CoroutineAgentExecutor`. Streaming RPCs return gRPC `UNIMPLEMENTED`;
   async stream sessions are a separate feature.
 
 Register one A2A service implementation per endpoint. Existing applications can
-keep their current registration. An async executor initiates work and returns;
-it may complete inline for fast in-memory work, or retain its owned request,
-context, and typed completion for a genuinely asynchronous backend.
+keep their current registration. Coroutine executors suspend for asynchronous
+backends and return owned typed results with `co_return`. The gRPC callback API is only the transport boundary.
 
 ```cpp
+#include <boost/asio/thread_pool.hpp>
 #include <grpcpp/server_builder.h>
 #include "a2a/server/async_grpc_server_transport.h"
 
-// executor implements engine::AsyncAgentExecutor.
+// executor implements engine::CoroutineAgentExecutor.
 a2a::server::engine::AsyncDispatcherOptions execution;
-execution.worker_count = 2;
+boost::asio::thread_pool runtime(2);
 execution.max_in_flight = 1024;
 auto dispatcher = std::make_shared<a2a::server::engine::AsyncDispatcher>(
-    executor, execution);
+    executor, runtime.get_executor(), execution);
 a2a::server::AsyncGrpcServerTransport service(dispatcher);
 
 grpc::ServerBuilder builder;
@@ -40,6 +40,7 @@ service.Shutdown();
 server->Shutdown();
 server->Wait();
 dispatcher->Shutdown();
+runtime.join();
 ```
 
 The complete [installed-consumer example](../examples/apps.md) is
@@ -55,7 +56,7 @@ The callback service shares metadata extraction, version and required-extension
 validation, gRPC status/ErrorInfo serialization, and ListTasks conversion with
 the synchronous transport. All incoming metadata is copied into the owned
 `RequestContext`; authentication metadata includes the same bearer/API-key
-extraction. Interceptors receive that metadata on dispatcher workers. Ingress
+extraction. Interceptors receive that metadata on Asio workers. Ingress
 metadata is untrusted until the configured security policy authenticates it.
 
 Set `GrpcServerTransportOptions::required_extensions` as for the synchronous
@@ -66,7 +67,7 @@ history projection, and interceptor sequencing use the shared dispatcher pipelin
 The gRPC deadline is converted at ingress to a steady-clock deadline. Native
 `OnCancel` reports a reached server deadline as `kDeadlineExceeded`, otherwise
 `kClientCancelled`. The callback only queues the signal; application stop
-observers execute on dispatcher workers. There is no SDK per-request polling
+observers execute on Asio workers. There is no SDK per-request polling
 thread or timer. As with the standalone dispatcher, completion also checks the
 deadline before selecting a terminal outcome.
 
@@ -81,13 +82,12 @@ classify the cancellation signal and deadline it observes locally.
 ## Threading and shutdown
 
 The native gRPC callback method copies and validates the protocol envelope, then
-submits to the existing bounded dispatcher. Executor initiation, policies/providers,
-interceptors, application stop observers, and response finalization use its fixed
-worker pool. Pending application operations hold no SDK worker. gRPC owns its own
+submits to the bounded coroutine dispatcher. Policies/providers, interceptors,
+application coroutines, and response finalization run on the caller's Asio runtime.
+Pending application I/O suspends without occupying an event-loop worker. gRPC owns its own
 callback/event-engine threads; the SDK does not create a worker for each RPC.
 
-Stop callbacks must still be short and non-throwing. An application callback or
-hook that blocks delays other work on that fixed pool. Synchronous security
+Stop callbacks must still be short and non-throwing. Application code or a hook that blocks delays other work on the Asio pool. Synchronous security
 stores and card providers retain their existing contracts on those workers;
 this is not asynchronous database or outbound-client I/O.
 
@@ -95,16 +95,18 @@ Call `service.Shutdown()` **before** `grpc::Server::Shutdown()`. It closes
 admission and queues `kServerShutdown` for accepted pending calls. Without that
 host notification, gRPC exposes cancellation but does not identify host shutdown
 separately from client cancellation. Keep the service alive through server
-`Wait()`; destroy the dispatcher afterwards. Late executor replies are ignored,
-and retained execution contexts stay valid. Cancellation is cooperative and does
+`Wait()`; destroy the dispatcher afterwards and drain/join the Asio runtime.
+Late coroutine results are ignored, and retained execution contexts stay valid. Cancellation is cooperative and does
 not forcefully stop or join application-owned I/O.
 
 ## Availability and installed consumers
 
-The API needs a standard library implementing C++20 `stop_token`, `stop_source`,
+Build with `A2A_ENABLE_ASIO=ON`, link `a2a::asio`, and provide Boost 1.92+.
+The API requires a standard library implementing C++20 `stop_token`, `stop_source`,
 and `stop_callback`, plus the generated gRPC callback service API. The SDK exports
-`A2A_HAS_REQUEST_EXECUTION` from `a2a::server`. Guard the header include itself on
-platforms where that definition is `0`.
+`A2A_HAS_ASYNC_SERVER=1` from `a2a::asio`; the standalone lifecycle remains available
+through `A2A_HAS_REQUEST_EXECUTION` on `a2a::server`. Guard native async header
+inclusion when the optional target is unavailable.
 
 | Platform/toolchain | Availability and validation |
 | --- | --- |
@@ -145,14 +147,14 @@ The first argument selects simultaneous requests (1–128), and the second selec
 a controller-held backend readiness delay in milliseconds (0–10). Both services
 use the same generated completion-queue client, payload, metadata, warmed channel, and
 backend fixture. The pending workload waits until all operations have initiated,
-then releases their replies together. Only the controller sleeps; async SDK
+then releases their replies together. Only the controller sleeps; Asio
 workers remain free while replies are pending. This models externally completed
 work and does not measure a particular network or database backend.
 
 The JSON records application execution threads, client-observed p50/p95 latency,
 and Linux process thread counts before/during the workload. Process counts on
 other systems are `null`; application thread counts are portable. gRPC's own
-shared pools can change process counts independently of SDK workers. The CTest
+shared pools can change process counts independently of application Asio workers. The CTest
 smoke checks successful completion and the configured async worker bound without
 asserting host-dependent latency thresholds.
 
@@ -160,31 +162,28 @@ Each fixture uses one shared client completion queue with one polling thread.
 This client infrastructure stays constant across both services and supports older
 gRPC releases without relying on their client callback queue implementation.
 
-### Measured comparison
+### Coroutine execution evidence
 
-A representative Linux run with GCC 15, gRPC 1.51.1, and RelWithDebInfo produced
-these results on loopback. The dispatcher used two workers; both paths used the
-same controller-held backend fixture and warmed generated gRPC client.
+Run the optimized evidence executable with the commands above to compare the
+current coroutine engine with synchronous execution on the same host. The
+controlled backend uses suspendable coroutine results; the same fixed Asio pool
+handles all async requests. Historical callback-engine timings do not describe
+this implementation. Portable acceptance checks cover successful completion and
+the configured worker bound; host-dependent latency is reported rather than used
+as a pass/fail threshold.
 
-| Requests | Backend hold | Service | Application threads | Process threads before → pending | Client p50 / p95 |
-| ---: | ---: | --- | ---: | --- | --- |
-| 32 | 10 ms | Synchronous | 32 | 11 → 42 | 27.00 / 27.40 ms |
-| 32 | 10 ms | Async callback | 2 | 13 → 13 | 12.53 / 12.58 ms |
-| 128 | 10 ms | Synchronous | 128 | 11 → 138 | 30.72 / 44.60 ms |
-| 128 | 10 ms | Async callback | 2 | 13 → 13 | 14.63 / 14.95 ms |
+A Linux working-tree run with GCC 15, gRPC 1.51.1, Boost 1.92.0 and
+RelWithDebInfo produced the following results with a 10 ms backend hold:
 
-Application worker counts establish the bounded scheduling property. The process
-counts include gRPC and client infrastructure, and latency samples depend on the
-host and controlled workload; these values are not throughput or latency
-promises for a real backend. The zero-delay, 32-request sample measured p50/p95
-1.28/1.35 ms for sync and 0.93/1.02 ms for async, with two application threads
-in each service. Immediate work can pay scheduling overhead; pending work
-is where the bounded worker model avoids holding one server thread per call.
+| Requests | Service | Application threads | Process threads before → pending | Client p50 / p95 |
+| ---: | --- | ---: | --- | --- |
+| 32 | Synchronous | 32 | 11 → 42 | 14.24 / 14.61 ms |
+| 32 | Coroutine | 2 | 13 → 13 | 11.27 / 11.36 ms |
+| 128 | Synchronous | 128 | 11 → 138 | 31.57 / 34.31 ms |
+| 128 | Coroutine | 2 | 13 → 13 | 14.05 / 14.58 ms |
 
-The earlier isolated dispatcher benchmark recorded a sync cost of 0.408 µs
-before the shared pipeline and 0.631 µs afterwards (about +0.22 µs). That
-microbenchmark tradeoff remains documented; the native wire comparison here uses
-the current shared sync pipeline for both application semantics and baseline.
+These measurements demonstrate bounded application-worker use for this controlled
+pending workload; they do not establish general database or network throughput.
 
 ## TCK profiles
 
@@ -204,8 +203,8 @@ The async agent uses the SDK `AsyncDispatcher` and `AsyncGrpcServerTransport`
 directly. Both setups share application behavior, stores, policies, and agent-card
 providers. The async application executor queues fixture operations on two bounded
 backend workers instead of calling the synchronous dispatcher. Existing store and
-push-delivery APIs are synchronous; this facility keeps that fixture work off SDK
-completion workers and does not provide asynchronous database or outbound network
+push-delivery APIs are synchronous; this facility keeps that fixture work off Asio
+workers and does not provide asynchronous database or outbound network
 I/O. The separate network evidence above uses externally completed pending
 operations.
 

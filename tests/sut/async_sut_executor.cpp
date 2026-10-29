@@ -6,46 +6,43 @@
 namespace a2a::tests::sut {
 AsyncSutExecutor::AsyncSutExecutor(std::shared_ptr<SutApplication> application)
     : application_(std::move(application)) {}
-void AsyncSutExecutor::SendMessage(lf::a2a::v1::SendMessageRequest request,
-                                   server::engine::RequestExecutionContext context,
-                                   Completion<lf::a2a::v1::SendMessageResponse> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete), &server::AgentExecutor::SendMessage);
+boost::asio::awaitable<core::Result<lf::a2a::v1::SendMessageResponse>> AsyncSutExecutor::SendMessage(
+    lf::a2a::v1::SendMessageRequest request, server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context), &server::AgentExecutor::SendMessage);
 }
-void AsyncSutExecutor::GetTask(lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context,
-                               Completion<lf::a2a::v1::Task> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete), &server::AgentExecutor::GetTask);
+boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> AsyncSutExecutor::GetTask(
+    lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context), &server::AgentExecutor::GetTask);
 }
-void AsyncSutExecutor::ListTasks(server::ListTasksRequest request, server::engine::RequestExecutionContext context,
-                                 Completion<server::ListTasksResponse> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete), &server::AgentExecutor::ListTasks);
+boost::asio::awaitable<core::Result<server::ListTasksResponse>> AsyncSutExecutor::ListTasks(
+    server::ListTasksRequest request, server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context), &server::AgentExecutor::ListTasks);
 }
-void AsyncSutExecutor::CancelTask(lf::a2a::v1::CancelTaskRequest request,
-                                  server::engine::RequestExecutionContext context,
-                                  Completion<lf::a2a::v1::Task> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete), &server::AgentExecutor::CancelTask);
+boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> AsyncSutExecutor::CancelTask(
+    lf::a2a::v1::CancelTaskRequest request, server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context), &server::AgentExecutor::CancelTask);
 }
-void AsyncSutExecutor::CreateTaskPushNotificationConfig(lf::a2a::v1::TaskPushNotificationConfig request,
-                                                        server::engine::RequestExecutionContext context,
-                                                        Completion<lf::a2a::v1::TaskPushNotificationConfig> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete),
-         &server::AgentExecutor::CreateTaskPushNotificationConfig);
+boost::asio::awaitable<core::Result<lf::a2a::v1::TaskPushNotificationConfig>>
+AsyncSutExecutor::CreateTaskPushNotificationConfig(lf::a2a::v1::TaskPushNotificationConfig request,
+                                                   server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context),
+                            &server::AgentExecutor::CreateTaskPushNotificationConfig);
 }
-void AsyncSutExecutor::GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest request,
-                                                     server::engine::RequestExecutionContext context,
-                                                     Completion<lf::a2a::v1::TaskPushNotificationConfig> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete),
-         &server::AgentExecutor::GetTaskPushNotificationConfig);
+boost::asio::awaitable<core::Result<lf::a2a::v1::TaskPushNotificationConfig>>
+AsyncSutExecutor::GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest request,
+                                                server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context),
+                            &server::AgentExecutor::GetTaskPushNotificationConfig);
 }
-void AsyncSutExecutor::ListTaskPushNotificationConfigs(
-    lf::a2a::v1::ListTaskPushNotificationConfigsRequest request, server::engine::RequestExecutionContext context,
-    Completion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete),
-         &server::AgentExecutor::ListTaskPushNotificationConfigs);
+boost::asio::awaitable<core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>>
+AsyncSutExecutor::ListTaskPushNotificationConfigs(lf::a2a::v1::ListTaskPushNotificationConfigsRequest request,
+                                                  server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context),
+                            &server::AgentExecutor::ListTaskPushNotificationConfigs);
 }
-void AsyncSutExecutor::DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request,
-                                                        server::engine::RequestExecutionContext context,
-                                                        Completion<void> complete) {
-  Submit(std::move(request), std::move(context), std::move(complete),
-         &server::AgentExecutor::DeleteTaskPushNotificationConfig);
+boost::asio::awaitable<core::Result<void>> AsyncSutExecutor::DeleteTaskPushNotificationConfig(
+    lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request, server::engine::RequestExecutionContext context) {
+  co_return co_await Submit(std::move(request), std::move(context),
+                            &server::AgentExecutor::DeleteTaskPushNotificationConfig);
 }
 }  // namespace a2a::tests::sut

@@ -1,8 +1,8 @@
 # Boost.Asio coroutine executors
 
-The optional `a2a::asio` target lets applications implement async unary operations
-with C++20 `co_await` and `co_return`. It connects a `CoroutineAgentExecutor` to the
-existing `AsyncDispatcher` and native `AsyncGrpcServerTransport`. The dispatcher
+The optional `a2a::asio` target provides the async engine and lets applications implement unary operations
+with C++20 `co_await` and `co_return`. The `AsyncDispatcher` directly awaits a `CoroutineAgentExecutor` and serves the
+native `AsyncGrpcServerTransport`. The dispatcher
 retains ownership of admission, security, interceptors, response projection, and
 terminal request outcomes.
 
@@ -50,7 +50,7 @@ The SDK remains Apache-2.0. Boost retains its compatible Boost Software License
 
 ## Implement operations
 
-Include `a2a/server/engine/asio_agent_executor.h`. The coroutine interface supports
+Include `a2a/server/engine/coroutine_agent_executor.h`. The coroutine interface supports
 all eight executor unary operations, including `Result<void>` for deleting push
 configuration. Unimplemented operations return the existing protocol
 `UnsupportedOperation` error. Extended agent cards continue to use the dispatcher's
@@ -72,17 +72,16 @@ class MyExecutor final : public a2a::server::engine::CoroutineAgentExecutor {
 ```
 
 `MyAsyncBackend` above is application-provided. The SDK's existing synchronous
-stores do not become awaitable through this adapter. See the runnable
+stores do not become awaitable through the coroutine engine. See the runnable
 `examples/apps/asio_executor/main.cpp` for a complete example using an Asio timer.
 
-Supply an event-loop executor when constructing the adapter:
+Supply an event-loop executor directly to the dispatcher:
 
 ```cpp
 boost::asio::io_context loop;
 auto application = std::make_shared<MyExecutor>();
-auto executor = std::make_shared<a2a::server::engine::AsioAgentExecutor>(
+auto dispatcher = std::make_shared<a2a::server::engine::AsyncDispatcher>(
     application, loop.get_executor());
-auto dispatcher = std::make_shared<a2a::server::engine::AsyncDispatcher>(executor);
 a2a::server::AsyncGrpcServerTransport transport(dispatcher);
 ```
 
@@ -92,7 +91,7 @@ posts its first operation. Each request gets a strand: its coroutine and
 cancellation emission are serialized, while different requests may execute
 concurrently. Shared application backends must remain thread-safe.
 
-Asio manages coroutine frames; the adapter never resumes raw coroutine handles.
+Asio manages coroutine frames; the dispatcher never resumes raw coroutine handles.
 Request and context parameters are owned by value. The application executor stays
 alive until the underlying coroutine finishes, even after the dispatcher or
 transport releases the request. Prefer member coroutine functions or named
@@ -100,7 +99,7 @@ functions with owned parameters over temporary capturing coroutine lambdas.
 
 ## Cancellation, capacity, and shutdown
 
-The adapter forwards the request's stop token to Asio terminal cancellation on the
+The dispatcher forwards the request's stop token to Asio terminal cancellation on the
 request's strand. Standard cancellation-aware Asio operations, such as timer waits,
 therefore wake when a client cancels, a native transport deadline expires, or the
 dispatcher shuts down. A request cancelled before coroutine initiation does not
@@ -112,25 +111,25 @@ become internal errors; Asio `operation_aborted` becomes a network cancellation
 error. The dispatcher maps the request's winning cancellation reason to transport
 status. Completion exceptions are contained to preserve the event loop.
 
-The adapter's `max_pending` constructor argument defaults to 1024 and must be
-nonzero. It bounds queued and suspended coroutine operations, including operations
+`AsyncDispatcherOptions::max_pending` defaults to 1024 and must be nonzero. It
+bounds queued and suspended coroutine operations, including operations
 whose requests already completed through cancellation but whose backend cleanup
-is still pending. Exhaustion returns a network capacity error through the normal
-dispatcher completion path. This limit complements `AsyncDispatcher::max_in_flight`.
+is still pending. Exhaustion rejects admission immediately without a transport
+completion.
+This complements `AsyncDispatcherOptions::max_in_flight`.
 
 Shut down the transport/dispatcher first, then allow the event loop to process
 cancellation and backend cleanup. Release the work guard and join the event-loop
 threads after producers can no longer post new work. Destroy application-owned
-Asio I/O objects and executor adapters before destroying their execution context.
+Asio I/O objects and dispatchers before destroying their execution context.
 Do not call `io_context::stop()`
 or destroy the execution context as a substitute for draining operations.
 Cancellation is cooperative: application code that disables cancellation must
-provide its own bounded cleanup. The adapter does not force destruction of a frame
+provide its own bounded cleanup. The dispatcher does not force destruction of a frame
 that may still be referenced by an outstanding operation.
 
-The adapter adds coroutine-frame allocation and an event-loop scheduling hop.
-Immediate in-memory operations can be cheaper through the callback API; benchmark
-the application's actual I/O workload before making throughput claims.
+Coroutine frames and scheduling have a cost. Benchmark the application's actual
+I/O workload before making throughput claims.
 
 Blocking database, security, interceptor, and outbound operations still require
 bounded backend workers or genuinely asynchronous implementations. Native async
@@ -143,3 +142,12 @@ supply the installed Boost prefix through `CMAKE_PREFIX_PATH`:
 ```bash
 A2A_TSAN_ASIO=ON CMAKE_PREFIX_PATH="$PWD/boost-prefix" ./scripts/run_thread_sanitizer.sh
 ```
+
+## Migrating callback executors
+
+Replace callback executor implementations with `CoroutineAgentExecutor` methods:
+remove their completion parameter, return a typed Asio awaitable, and replace
+completion invocation with `co_return`. Convert asynchronous backend operations to
+awaitables. Create `AsyncDispatcher` directly with the application and its Asio
+executor; no adapter is needed. Keep the runtime alive until shutdown and backend
+cleanup have drained. Callback executor headers are no longer installed.

@@ -19,8 +19,8 @@
 #include <stdexcept>
 #include <vector>
 
-#include "a2a/server/engine/asio_agent_executor.h"
 #include "a2a/server/engine/async_dispatcher.h"
+#include "a2a/server/engine/coroutine_agent_executor.h"
 
 namespace a2a::test {
 namespace asio = boost::asio;

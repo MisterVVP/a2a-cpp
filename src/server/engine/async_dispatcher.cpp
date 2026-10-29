@@ -3,12 +3,18 @@
 
 #include "a2a/server/engine/async_dispatcher.h"
 
-#include <condition_variable>
-#include <deque>
+#include <atomic>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/cancellation_signal.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/error.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/system/system_error.hpp>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <stop_token>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -17,82 +23,14 @@
 
 namespace a2a::server::engine {
 namespace {
-constexpr auto kInvalidOptions = "Async dispatcher requires an executor, workers, and nonzero capacity";
+constexpr auto kInvalidOptions = "Async dispatcher requires an executor, Asio scheduler, and nonzero capacity";
 constexpr auto kAdmissionClosed = "Async dispatcher is shut down";
 constexpr auto kAdmissionFull = "Async dispatcher capacity exceeded";
-constexpr auto kMissingCompletion = "Async dispatcher completion is required";
+constexpr auto kPendingFull = "Async dispatcher coroutine capacity exceeded";
+constexpr auto kMissingCompletion = "Transport completion is required";
 constexpr auto kClientCancelled = "Request cancelled by client";
 constexpr auto kDeadlineExceeded = "Request deadline exceeded";
 constexpr auto kServerShutdown = "Request cancelled by server shutdown";
-
-// Queue ownership is separate from thread ownership so destroying the dispatcher
-// in its own completion can detach that worker and safely drain its remaining work.
-struct WorkQueue final {
-  void Post(std::function<void()> work) {
-    {
-      std::lock_guard lock(mutex);
-      pending.push_back(std::move(work));
-    }
-    ready.notify_one();
-  }
-  void Run() {
-    for (;;) {
-      std::function<void()> work;
-      {
-        std::unique_lock lock(mutex);
-        ready.wait(lock, [&] { return stopping || !pending.empty(); });
-        if (pending.empty()) {
-          return;
-        }
-        work = std::move(pending.front());
-        pending.pop_front();
-      }
-      work();
-    }
-  }
-  std::mutex mutex;
-  std::condition_variable ready;
-  std::deque<std::function<void()>> pending;
-  bool stopping = false;
-};
-
-class Workers final : private core::NonCopyableOrMovable {
- public:
-  explicit Workers(std::size_t count) : queue(std::make_shared<WorkQueue>()) {
-    threads_.reserve(count);
-    try {
-      for (std::size_t index = 0; index < count; ++index) {
-        threads_.emplace_back([work = queue] { work->Run(); });
-      }
-    } catch (...) {
-      Stop();
-      throw;
-    }
-  }
-  ~Workers() { Stop(); }
-  void Drain() { Stop(); }
-  const std::shared_ptr<WorkQueue> queue;
-
- private:
-  void Stop() {
-    {
-      std::lock_guard lock(queue->mutex);
-      queue->stopping = true;
-    }
-    queue->ready.notify_all();
-    for (auto& thread : threads_) {
-      if (!thread.joinable()) {
-        continue;
-      }
-      if (thread.get_id() == std::this_thread::get_id()) {
-        thread.detach();
-      } else {
-        thread.join();
-      }
-    }
-  }
-  std::vector<std::thread> threads_;
-};
 
 core::Error CancellationError(RequestOutcome outcome) {
   switch (outcome) {
@@ -105,223 +43,253 @@ core::Error CancellationError(RequestOutcome outcome) {
   }
 }
 
+core::Error CoroutineError(const std::exception_ptr& exception) {
+  try {
+    std::rethrow_exception(exception);
+  } catch (const boost::system::system_error& error) {
+    return error.code() == boost::asio::error::operation_aborted ? core::Error::Network(kClientCancelled)
+                                                                 : core::Error::Internal(kDispatchException);
+  } catch (...) {
+    return core::Error::Internal(kDispatchException);
+  }
+}
+
+struct CoroutineDispatchResult final {
+  using ReturnType = boost::asio::awaitable<core::Result<DispatchResponse>>;
+  template <typename T>
+  ReturnType operator()(boost::asio::awaitable<core::Result<T>> operation) const {
+    auto result = co_await std::move(operation);
+    co_return ToDispatchResponse(std::move(result));
+  }
+  ReturnType operator()(core::Result<DispatchResponse> result) const { co_return std::move(result); }
+};
 }  // namespace
 
 struct AsyncDispatcher::State final {
   struct Call final : std::enable_shared_from_this<Call> {
-    void ScheduleFinish() {
-      std::lock_guard lock(mutex);
-      if (!started || finish_queued || (!result.has_value() && !source->Context().StopToken().stop_requested())) {
-        return;
-      }
-      finish_queued = true;
-      queue->Post([self = shared_from_this()] { self->Finish(); });
-    }
-    void Submit(core::Result<DispatchResponse> response) {
-      {
-        std::lock_guard lock(mutex);
-        if (result.has_value() || finish_queued) {
-          return;
-        }
-        result = std::move(response);
-      }
-      ScheduleFinish();
-    }
-    void Execute() {
-      const auto before = pipeline.Before(request, context, principal);
-      if (!before.ok()) {
-        Submit(before.error());
-        return;
-      }
-      (void)source->ExpireDeadline();
-      if (source->Context().Outcome() != RequestOutcome::kPending) {
-        return;
-      }
-      if (auto handled = pipeline.Handle(request, context)) {
-        Submit(std::move(*handled));
-        return;
-      }
-      auto view = source->Context().WithMetadata(context);
-      const auto prepared = pipeline.Prepare(request);
+    Call(const boost::asio::any_io_executor& scheduler, std::shared_ptr<std::atomic_size_t> pending,
+         DispatchRequest request, RequestContext metadata, TransportCompletion completion,
+         std::optional<RequestExecution::Clock::time_point> deadline)
+        : strand(boost::asio::make_strand(scheduler)),
+          pending(std::move(pending)),
+          request(std::move(request)),
+          context(metadata),
+          source(std::make_shared<RequestExecution>(std::move(metadata), deadline)),
+          completion(std::move(completion)) {}
+    ~Call() { pending->fetch_sub(1); }
+
+    void ObserveStop() {
       const auto weak = weak_from_this();
-      RouteDispatch(*executor, prepared.has_value() ? *prepared : request, view, [weak](auto response) {
+      observer = std::make_unique<std::stop_callback<std::function<void()>>>(source->Context().StopToken(), [weak] {
         if (const auto call = weak.lock()) {
-          call->Submit(std::move(response));
+          boost::asio::post(call->strand, [call] { call->Stopped(); });
         }
       });
     }
-    void Start() {
-      try {
-        Execute();
-      } catch (...) {
-        Submit(core::Error::Internal(kDispatchCallbackException));
+
+    void Stopped() {
+      if (finished) {
+        return;
       }
-      executor.reset();
-      {
-        std::lock_guard lock(mutex);
-        started = true;
+      cancellation.emit(boost::asio::cancellation_type::terminal);
+      // Before/After hooks are serialized on this strand. Run observes cancellation
+      // before entering application code even if this notification precedes startup.
+      if (started) {
+        Finish(CancellationError(source->Context().Outcome()));
       }
-      ScheduleFinish();
     }
-    void Finish() {
-      core::Result<DispatchResponse> response = CancellationError(source->Context().Outcome());
-      {
-        std::lock_guard lock(mutex);
-        if (result.has_value()) {
-          response = std::move(*result);
+
+    static boost::asio::awaitable<void> Run(std::shared_ptr<State> state, std::shared_ptr<Call> call) {
+      call->started = true;
+      core::Result<DispatchResponse> response = core::Error::Internal(kDispatchException);
+      try {
+        const auto valid = state->extensions.Validate(call->context.client_headers);
+        if (!valid.ok()) {
+          response = valid.error();
+        } else {
+          const auto before = call->pipeline.Before(call->request, call->context, call->principal);
+          (void)call->source->ExpireDeadline();
+          call->ObserveShutdown(*state);
+          if (!before.ok()) {
+            response = before.error();
+          } else if (call->source->Context().StopToken().stop_requested()) {
+            response = CancellationError(call->source->Context().Outcome());
+          } else if (auto handled = call->pipeline.Handle(call->request, call->context)) {
+            response = std::move(*handled);
+          } else {
+            auto view = call->source->Context().WithMetadata(call->context);
+            const auto prepared = call->pipeline.Prepare(call->request);
+            response = co_await RouteDispatch(*state->executor, prepared.has_value() ? *prepared : call->request, view,
+                                              CoroutineDispatchResult{});
+          }
         }
+      } catch (...) {
+        response = CoroutineError(std::current_exception());
       }
+      call->Finish(std::move(response));
+    }
+
+    void ObserveShutdown(State& state) {
+      bool closed = false;
+      {
+        std::lock_guard lock(state.mutex);
+        closed = state.closed;
+      }
+      if (closed) {
+        (void)source->Cancel(RequestCancellationReason::kServerShutdown);
+      }
+    }
+
+    void Finish(core::Result<DispatchResponse> response) {
+      if (finished) {
+        return;
+      }
+      finished = true;
       try {
         if (!source->Context().StopToken().stop_requested()) {
           pipeline.Project(request, context, principal, response);
         }
       } catch (...) {
-        response = core::Error::Internal(kDispatchCallbackException);
+        response = CoroutineError(std::current_exception());
       }
-      const auto completed =
-          source->TryComplete(response.ok() ? RequestCompletion::kSucceeded : RequestCompletion::kFailed);
-      if (!completed) {
+      if (!source->TryComplete(response.ok() ? RequestCompletion::kSucceeded : RequestCompletion::kFailed)) {
         response = CancellationError(source->Context().Outcome());
       }
       pipeline.After(request, context, principal, response, /*contain_exceptions=*/true);
-      // Release admission before invoking user completion, allowing reentrant dispatch.
       if (const auto state = owner.lock()) {
         std::lock_guard lock(state->mutex);
         state->calls.erase(this);
       }
+      auto deliver = std::move(completion);
       try {
-        completion(std::move(response), source->Context());
+        deliver(std::move(response), source->Context());
       } catch (...) {
-        // The result is already terminal; preserve the worker for other requests.
         return;
       }
     }
+
+    boost::asio::strand<boost::asio::any_io_executor> strand;
+    const std::shared_ptr<std::atomic_size_t> pending;
     DispatchRequest request;
     RequestContext context;
+    std::shared_ptr<RequestExecution> source;
+    TransportCompletion completion;
     DispatchPipeline pipeline;
     std::optional<std::string> principal;
-    std::shared_ptr<RequestExecution> source;
-    std::shared_ptr<AsyncAgentExecutor> executor;
-    Completion completion;
-    std::shared_ptr<WorkQueue> queue;
     std::weak_ptr<State> owner;
-    std::unique_ptr<std::stop_callback<std::function<void()>>> stop_callback;
-    std::mutex mutex;
-    std::optional<core::Result<DispatchResponse>> result;
+    boost::asio::cancellation_signal cancellation;
+    std::unique_ptr<std::stop_callback<std::function<void()>>> observer;
     bool started = false;
-    bool finish_queued = false;
+    bool finished = false;
   };
 
-  State(std::shared_ptr<AsyncAgentExecutor> application, AsyncDispatcherOptions options)
+  State(std::shared_ptr<CoroutineAgentExecutor> application, boost::asio::any_io_executor scheduler,
+        AsyncDispatcherOptions options)
       : executor(std::move(application)),
+        scheduler(std::move(scheduler)),
         capacity(options.max_in_flight),
+        max_pending(options.max_pending),
         pipeline{
             .security = options.security_policy != nullptr
                             ? std::make_shared<DispatchSecurity>(std::move(options.security_policy), options.task_store)
                             : nullptr,
             .interceptors = std::move(options.interceptors),
             .agent_card_provider = std::move(options.agent_card_provider)},
-        extensions(std::move(options.required_extensions)),
-        workers(options.worker_count) {}
+        extensions(std::move(options.required_extensions)) {}
 
   void Shutdown() {
-    std::vector<std::shared_ptr<Call>> pending;
+    std::vector<std::shared_ptr<Call>> active;
     {
       std::lock_guard lock(mutex);
       if (closed) {
         return;
       }
       closed = true;
-      pending.reserve(calls.size());
+      active.reserve(calls.size());
       for (const auto& [key, call] : calls) {
-        pending.push_back(call);
+        active.push_back(call);
       }
     }
-    for (const auto& call : pending) {
-      (void)call->source->Cancel(RequestCancellationReason::kServerShutdown);
-      // A cancellation observer can reenter shutdown before our stop callback
-      // has run. Queue finalization even when another terminal signal won.
-      call->ScheduleFinish();
+    for (const auto& call : active) {
+      boost::asio::post(call->strand,
+                        [call] { (void)call->source->Cancel(RequestCancellationReason::kServerShutdown); });
     }
   }
-  std::shared_ptr<AsyncAgentExecutor> executor;
+
+  const std::shared_ptr<CoroutineAgentExecutor> executor;
+  const boost::asio::any_io_executor scheduler;
   const std::size_t capacity;
-  // Workers are declared last so they drain before other state is destroyed.
-  std::mutex mutex;
-  std::unordered_map<Call*, std::shared_ptr<Call>> calls;
+  const std::size_t max_pending;
+  const std::shared_ptr<std::atomic_size_t> pending = std::make_shared<std::atomic_size_t>(0);
   DispatchPipeline pipeline;
   RequiredExtensionsValidator extensions;
+  std::mutex mutex;
+  std::unordered_map<Call*, std::shared_ptr<Call>> calls;
   bool closed = false;
-  Workers workers;
 };
 
-AsyncDispatcher::AsyncDispatcher(std::shared_ptr<AsyncAgentExecutor> executor, AsyncDispatcherOptions options) {
-  if (executor == nullptr || options.worker_count == 0 || options.max_in_flight == 0) {
+AsyncDispatcher::AsyncDispatcher(std::shared_ptr<CoroutineAgentExecutor> executor,
+                                 boost::asio::any_io_executor scheduler, AsyncDispatcherOptions options) {
+  if (executor == nullptr || !scheduler || options.max_in_flight == 0 || options.max_pending == 0) {
     throw std::invalid_argument(kInvalidOptions);
   }
-  state_ = std::make_shared<State>(std::move(executor), std::move(options));
+  state_ = std::make_shared<State>(std::move(executor), std::move(scheduler), std::move(options));
 }
 AsyncDispatcher::~AsyncDispatcher() {
-  Shutdown();
-  state_->workers.Drain();
-}
-void AsyncDispatcher::Cancel(std::shared_ptr<RequestExecution> execution, RequestCancellationReason reason) {
-  if (execution == nullptr) {
-    return;
+  try {
+    Shutdown();
+  } catch (...) {
+    std::terminate();
   }
-  state_->workers.queue->Post([execution = std::move(execution), reason] { (void)execution->Cancel(reason); });
 }
 void AsyncDispatcher::Shutdown() { state_->Shutdown(); }
+void AsyncDispatcher::Cancel(std::shared_ptr<RequestExecution> execution, RequestCancellationReason reason) {
+  if (execution != nullptr) {
+    boost::asio::post(state_->scheduler,
+                      [execution = std::move(execution), reason] { (void)execution->Cancel(reason); });
+  }
+}
 
 core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::Dispatch(
-    DispatchRequest request, RequestContext metadata, Completion completion,
+    DispatchRequest request, RequestContext metadata, TransportCompletion completion,
     std::optional<RequestExecution::Clock::time_point> deadline) {
   if (!completion) {
     return core::Error::Validation(kMissingCompletion);
   }
   const auto state = state_;
-  auto call = std::make_shared<State::Call>();
-  call->request = std::move(request);
-  call->context = metadata;
-  call->source = std::make_shared<RequestExecution>(std::move(metadata), deadline);
-  call->pipeline = state->pipeline;
-  call->executor = state->executor;
-  call->completion = std::move(completion);
-  call->owner = state;
-  call->queue = state->workers.queue;
-  const auto weak = std::weak_ptr(call);
-  call->stop_callback =
-      std::make_unique<std::stop_callback<std::function<void()>>>(call->source->Context().StopToken(), [weak] {
-        if (const auto active = weak.lock()) {
-          active->ScheduleFinish();
-        }
-      });
-  {
-    std::lock_guard lock(state->mutex);
-    if (state->closed) {
-      return core::Error::Network(kAdmissionClosed);
-    }
-    if (state->calls.size() >= state->capacity) {
-      return core::Error::Network(kAdmissionFull);
-    }
-    state->calls.emplace(call.get(), call);
-    call->queue->Post([call, extensions = state->extensions] {
-      const auto valid = extensions.Validate(call->context.client_headers);
-      if (!valid.ok()) {
-        call->Submit(valid.error());
-      }
-      // Extension rejection precedes application hooks, matching transport validation.
-      if (valid.ok()) {
-        call->Start();
-      } else {
-        {
-          std::lock_guard lock(call->mutex);
-          call->started = true;
-        }
-        call->ScheduleFinish();
-      }
-    });
+  std::lock_guard lock(state->mutex);
+  if (state->closed) {
+    return core::Error::Network(kAdmissionClosed);
   }
+  if (state->calls.size() >= state->capacity) {
+    return core::Error::Network(kAdmissionFull);
+  }
+  if (state->pending->load() >= state->max_pending) {
+    return core::Error::Network(kPendingFull);
+  }
+  state->pending->fetch_add(1);
+  std::shared_ptr<State::Call> call;
+  try {
+    call = std::make_shared<State::Call>(state->scheduler, state->pending, std::move(request), std::move(metadata),
+                                         std::move(completion), deadline);
+  } catch (...) {
+    state->pending->fetch_sub(1);
+    throw;
+  }
+  call->pipeline = state->pipeline;
+  call->owner = state;
+  call->ObserveStop();
+  state->calls.emplace(call.get(), call);
+  boost::asio::post(call->strand, [state, call] {
+    boost::asio::co_spawn(
+        call->strand, State::Call::Run(state, call),
+        boost::asio::bind_cancellation_slot(call->cancellation.slot(), [call](const std::exception_ptr& exception) {
+          if (exception) {
+            call->Finish(CoroutineError(exception));
+          }
+          call->observer.reset();
+        }));
+  });
   return call->source;
 }
 }  // namespace a2a::server::engine
