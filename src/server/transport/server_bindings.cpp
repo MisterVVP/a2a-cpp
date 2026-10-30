@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+#include "a2a/core/http_utils.h"
 #include "server_bindings_internal.h"
 
 namespace a2a::server {
@@ -17,11 +18,11 @@ ServerBindings::ServerBindings(Dispatcher& dispatcher, lf::a2a::v1::AgentCard ca
   }
   state_->grpc = std::make_unique<GrpcServerTransport>(&dispatcher, std::move(options.grpc));
   TransportMux::JsonRpcRouteOptions rpc_route;
-  rpc_route.rpc_path = options.jsonrpc.rpc_path;
+  rpc_route.rpc_path = core::http::NormalizeRoutePath(options.jsonrpc.rpc_path);
   state_->jsonrpc = std::make_unique<JsonRpcServerTransport>(&dispatcher, std::move(options.jsonrpc));
   state_->mux.RegisterJsonRpcRoute(*state_->jsonrpc, std::move(rpc_route));
   TransportMux::RestRouteOptions rest_route;
-  rest_route.rest_api_prefix = options.rest.rest_api_base_path;
+  rest_route.rest_api_prefix = core::http::NormalizeRoutePath(options.rest.rest_api_base_path);
   state_->mux.RegisterRestRoute(state_->rest, std::move(rest_route));
 }
 ServerBindings::~ServerBindings() { Shutdown(); }

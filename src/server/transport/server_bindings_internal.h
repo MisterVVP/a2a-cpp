@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "a2a/core/http_utils.h"
 #include "a2a/server/server_bindings.h"
 
 namespace a2a::server {
@@ -18,7 +19,7 @@ struct ServerBindings::State final {
       return {.normalization_policy = TransportMux::PathNormalizationPolicy::kTrimTrailingSlash, .default_path = {}};
     }
     return {.normalization_policy = TransportMux::PathNormalizationPolicy::kRootToDefaultPath,
-            .default_path = options.jsonrpc.rpc_path};
+            .default_path = core::http::NormalizeRoutePath(options.jsonrpc.rpc_path)};
   }
   static RestServerTransportOptions RestOptions(const ServerBindingsOptions& options) {
     auto rest = options.rest;

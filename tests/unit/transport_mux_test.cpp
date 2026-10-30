@@ -32,6 +32,13 @@ constexpr std::string_view kHistoryQueryTarget = "/a2a/tasks/task-1?historyLengt
 constexpr std::string_view kPushTaskId = "push-task";
 constexpr std::string_view kPushConfigId = "push-config";
 constexpr std::string_view kWebhookUrl = "https://example.test/push";
+constexpr auto kPushRequest =
+    R"({"jsonrpc":"2.0","id":"req-push-create","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":{"url":"https://example.test/push"}}})";
+
+struct ConfiguredPathCase {
+  std::string_view configured;
+  std::string_view normalized;
+};
 
 class JsonRpcPushConfigRecordingExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -252,8 +259,6 @@ TEST(ServerBindingsTest, OwnsSynchronousRoutesAndUsesConfiguredPrefixes) {
   const auto rest = bindings.http_mux().RouteRequest(task);
   ASSERT_TRUE(rest.ok());
   EXPECT_EQ(rest.value().status_code, a2a::core::http::kStatusOk);
-  constexpr auto kPushRequest =
-      R"({"jsonrpc":"2.0","id":"req-push-create","method":"a2a.setTaskPushNotificationConfig","params":{"taskId":"push-task","pushNotificationConfig":{"url":"https://example.test/push"}}})";
   task.method = a2a::core::http::kMethodPost;
   task.target = kCustomRpc;
   task.body = kPushRequest;
@@ -265,6 +270,66 @@ TEST(ServerBindingsTest, OwnsSynchronousRoutesAndUsesConfiguredPrefixes) {
   bindings.Shutdown();
   bindings.Shutdown();
 }
+
+class JsonRpcBindingsPathTest : public testing::TestWithParam<ConfiguredPathCase> {};
+
+TEST_P(JsonRpcBindingsPathTest, RoutesConfiguredPathAndRootAliasToExecutor) {
+  JsonRpcPushConfigRecordingExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::ServerBindingsOptions options;
+  options.jsonrpc.rpc_path = GetParam().configured;
+  a2a::server::ServerBindings bindings(dispatcher, {}, options);
+  for (const auto target : {GetParam().configured, GetParam().normalized, std::string_view("/")}) {
+    SCOPED_TRACE(target);
+    executor.last_push_task_id.clear();
+    HttpServerRequest request;
+    request.method = a2a::core::http::kMethodPost;
+    request.target = target;
+    request.body = kPushRequest;
+    request.headers[std::string(a2a::core::Version::kHeaderName)] = a2a::core::Version::kProtocolVersion;
+    const auto result = bindings.http_mux().RouteRequest(request);
+    ASSERT_TRUE(result.ok());
+    EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusOk);
+    EXPECT_EQ(executor.last_push_task_id, kPushTaskId);
+    EXPECT_EQ(executor.last_push_url, kWebhookUrl);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(PathVariants, JsonRpcBindingsPathTest,
+                         testing::Values(ConfiguredPathCase{"/custom/rpc/", "/custom/rpc"},
+                                         ConfiguredPathCase{"custom/rpc", "/custom/rpc"},
+                                         ConfiguredPathCase{"custom/rpc///", "/custom/rpc"},
+                                         ConfiguredPathCase{"/", "/"}, ConfiguredPathCase{"", "/"},
+                                         ConfiguredPathCase{"///", "/"}));
+
+class RestBindingsPathTest : public testing::TestWithParam<ConfiguredPathCase> {};
+
+TEST_P(RestBindingsPathTest, RoutesTaskRequestUsingNormalizedBasePath) {
+  constexpr auto kTaskSuffix = "tasks/recorded?historyLength=0";
+  JsonRpcPushConfigRecordingExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::ServerBindingsOptions options;
+  options.rest.rest_api_base_path = GetParam().configured;
+  a2a::server::ServerBindings bindings(dispatcher, {}, options);
+  HttpServerRequest request;
+  request.method = a2a::core::http::kMethodGet;
+  request.target = GetParam().normalized;
+  if (!request.target.ends_with('/')) {
+    request.target.push_back('/');
+  }
+  request.target.append(kTaskSuffix);
+  request.headers[std::string(a2a::core::Version::kHeaderName)] = a2a::core::Version::kProtocolVersion;
+  const auto result = bindings.http_mux().RouteRequest(request);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().status_code, a2a::core::http::kStatusOk);
+}
+
+INSTANTIATE_TEST_SUITE_P(PathVariants, RestBindingsPathTest,
+                         testing::Values(ConfiguredPathCase{"/custom/api/", "/custom/api"},
+                                         ConfiguredPathCase{"custom/api", "/custom/api"},
+                                         ConfiguredPathCase{"custom/api///", "/custom/api"},
+                                         ConfiguredPathCase{"/", "/"}, ConfiguredPathCase{"", "/"},
+                                         ConfiguredPathCase{"///", "/"}));
 
 TEST(ServerBindingsTest, PreservesIndividualRequiredExtensionsByDefault) {
   constexpr auto kExtension = "urn:a2a:binding-required";
