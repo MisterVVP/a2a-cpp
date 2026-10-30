@@ -14,6 +14,12 @@
 #include <stdexcept>
 #include <utility>
 
+// Windows headers can define SendMessage as an ANSI/Unicode macro alias.
+// Keep the protocol method name stable regardless of dependency include order.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+
 namespace a2a::server::engine {
 namespace {
 constexpr auto kInvalidOptions = "Blocking executor requires an application and positive worker/pending limits";

@@ -508,7 +508,8 @@ jobs:
 
   macos-build:
     name: ${{ matrix.asio == 'OFF' && 'macos-build' || 'macos-asio-build' }}
-    runs-on: ${{ matrix.asio == 'OFF' && 'macos-14' || 'macos-15' }}
+    # Keep non-Asio coverage on Intel, separate from the constrained ARM runner pool.
+    runs-on: ${{ matrix.asio == 'OFF' && 'macos-15-intel' || 'macos-15' }}
     strategy:
       fail-fast: false
       matrix:

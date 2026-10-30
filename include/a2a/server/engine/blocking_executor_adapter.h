@@ -10,6 +10,12 @@
 #include "a2a/server/agent_executor.h"
 #include "a2a/server/engine/coroutine_agent_executor.h"
 
+// Windows headers can define SendMessage as an ANSI/Unicode macro alias.
+// Keep the protocol method name stable regardless of dependency include order.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+
 namespace a2a::server::engine {
 struct BlockingExecutorOptions final {
   static constexpr std::size_t kDefaultWorkers = 2;

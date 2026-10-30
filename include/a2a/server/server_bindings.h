@@ -13,6 +13,12 @@
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/transport_mux.h"
 
+// Windows headers can define SendMessage as an ANSI/Unicode macro alias.
+// Keep the protocol method name stable regardless of dependency include order.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+
 namespace a2a::server {
 namespace engine {
 class AsyncDispatcher;

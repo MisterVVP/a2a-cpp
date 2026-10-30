@@ -30,6 +30,13 @@ target_link_libraries(generated_proto_smoke_test
 
 gtest_discover_tests(generated_proto_smoke_test)
 
+add_executable(server_windows_macro_test server_windows_macro_test.cpp)
+target_link_libraries(server_windows_macro_test PRIVATE a2a::server)
+if(A2A_ENABLE_ASIO)
+  target_link_libraries(server_windows_macro_test PRIVATE a2a::asio)
+endif()
+add_test(NAME server_windows_macro_test COMMAND server_windows_macro_test)
+
 add_executable(agent_card_builder_test
   unit/agent_card_builder_test.cpp
 )
