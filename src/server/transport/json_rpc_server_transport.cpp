@@ -858,7 +858,7 @@ JsonRpcServerTransport::JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcSe
       options_(std::move(options)),
       required_extensions_validator_(options_.required_extensions),
       version_header_validator_(options_.require_version_header) {
-  options_.rpc_path = NormalizePath(std::move(options_.rpc_path));
+  options_.rpc_path = core::http::NormalizeRoutePath(std::move(options_.rpc_path));
 }
 
 core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServerRequest& request) const {
@@ -866,7 +866,7 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Handle(const HttpServer
     return core::Error::Internal("JSON-RPC server dispatcher is not configured");
   }
 
-  const std::string normalized_target = NormalizePath(request.target);
+  const std::string normalized_target = core::http::NormalizeRoutePath(request.target);
   if (request.method != core::http::kMethodPost || normalized_target != options_.rpc_path) {
     return BuildErrorResponse(kJsonRpcInvalidRequest, "No matching JSON-RPC route", ResponseId{}, std::nullopt,
                               core::http::kStatusOk);
@@ -1168,19 +1168,6 @@ HttpServerResponse JsonRpcServerTransport::BuildErrorResponse(int json_rpc_code,
   }
 
   return response;
-}
-
-std::string JsonRpcServerTransport::NormalizePath(std::string path) {
-  if (path.empty()) {
-    path = "/";
-  }
-  if (path.front() != '/') {
-    path.insert(path.begin(), '/');
-  }
-  while (path.size() > 1 && path.back() == '/') {
-    path.pop_back();
-  }
-  return path;
 }
 
 }  // namespace a2a::server

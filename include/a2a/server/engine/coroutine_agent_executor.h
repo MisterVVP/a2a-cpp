@@ -10,6 +10,12 @@
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/engine/request_execution.h"
 
+// Windows headers can define SendMessage as an ANSI/Unicode macro alias.
+// Keep the protocol method name stable regardless of dependency include order.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+
 namespace a2a::server::engine {
 // Arguments are owned by the coroutine frame. Operations must suspend for I/O,
 // propagate Asio cancellation, and never block the event-loop threads.

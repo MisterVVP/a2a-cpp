@@ -363,7 +363,7 @@ RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::Ag
       options_(std::move(options)),
       required_extensions_validator_(options_.required_extensions),
       version_header_validator_(options_.require_version_header) {
-  options_.rest_api_base_path = NormalizeBasePath(options_.rest_api_base_path);
+  options_.rest_api_base_path = core::http::NormalizeRoutePath(std::move(options_.rest_api_base_path));
   for (auto& iface : *agent_card_.mutable_supported_interfaces()) {
     if (iface.protocol_version().empty()) {
       iface.set_protocol_version(core::Version::HeaderValue());
@@ -565,20 +565,6 @@ HttpServerResponse internal::BuildRestHttpResponse(const RestResponse& response,
       .WithA2aVersion()
       .WithActivatedExtensions(activated_extensions)
       .Build();
-}
-
-std::string RestServerTransport::NormalizeBasePath(std::string_view path) {
-  std::string normalized(path);
-  if (normalized.empty()) {
-    return "/";
-  }
-  if (normalized.front() != '/') {
-    normalized.insert(normalized.begin(), '/');
-  }
-  while (normalized.size() > 1 && normalized.back() == '/') {
-    normalized.pop_back();
-  }
-  return normalized;
 }
 
 }  // namespace a2a::server

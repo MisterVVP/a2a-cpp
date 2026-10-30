@@ -32,10 +32,12 @@ class AsyncSutRuntimeTest(unittest.TestCase):
     sut: str
 
     def test_rejects_unimplemented_async_bindings(self):
-        env = dict(os.environ, A2A_TCK_STORE_BACKEND="inmemory", A2A_TCK_TRANSPORTS="grpc,http_json")
-        result = subprocess.run([self.sut], env=env, capture_output=True, text=True, timeout=10)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Only grpc is implemented", result.stderr)
+        for selection in ("grpc,http_json", "grpc,jsonrpc,http_json", "unknown", "", "grpc,"):
+            with self.subTest(transports=selection):
+                env = dict(os.environ, A2A_TCK_STORE_BACKEND="inmemory", A2A_TCK_TRANSPORTS=selection)
+                result = subprocess.run([self.sut], env=env, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Only grpc is implemented", result.stderr)
 
     def test_serves_sdk_discovery_without_synchronous_protocol_routes(self):
         port = listener_port()

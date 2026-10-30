@@ -65,8 +65,13 @@ add_custom_command(
     --grpc_out=${A2A_GENERATED_DIR}
     --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
     ${A2A_PROTO_FILE}
+  COMMAND ${CMAKE_COMMAND}
+    "-DA2A_GRPC_SOURCE=${A2A_GRPC_SRCS}"
+    "-DA2A_GRPC_HEADER=${A2A_GRPC_HDRS}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/NormalizeGrpcWindowsMacros.cmake"
   DEPENDS
     ${A2A_PROTO_FILE}
+    "${PROJECT_SOURCE_DIR}/cmake/NormalizeGrpcWindowsMacros.cmake"
     protobuf::protoc
     gRPC::grpc_cpp_plugin
     ${A2A_PROTO_SRCS}

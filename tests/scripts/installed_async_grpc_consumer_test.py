@@ -68,7 +68,7 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--config", default="Debug")
-    parser.add_argument("--app", default="async_grpc_server", choices=["async_grpc_server", "asio_executor"])
+    parser.add_argument("--app", default="async_grpc_server", choices=["async_grpc_server", "asio_executor", "blocking_executor"])
     args = parser.parse_args()
     run_consumer(args.source, args.build, args.config, args.app)
 

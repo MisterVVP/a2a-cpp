@@ -106,8 +106,10 @@ class CoroutineBackend final : public server::engine::CoroutineAgentExecutor {
   void Release() {
     std::lock_guard lock(mutex_);
     released_ = true;
-    for (const auto& timer : timers_) {
-      asio::post(timer->get_executor(), [timer] { timer->cancel(); });
+    for (const auto& pending : timers_) {
+      if (const auto timer = pending.lock()) {
+        asio::post(timer->get_executor(), [timer] { timer->cancel(); });
+      }
     }
   }
   bool WaitStarted(std::size_t count = 1) {
@@ -140,7 +142,7 @@ class CoroutineBackend final : public server::engine::CoroutineAgentExecutor {
   const CoroutineBehavior behavior_;
   std::mutex mutex_;
   std::condition_variable changed_;
-  std::vector<std::shared_ptr<asio::steady_timer>> timers_;
+  std::vector<std::weak_ptr<asio::steady_timer>> timers_;
   server::RequestContext metadata_;
   bool released_ = false;
 };

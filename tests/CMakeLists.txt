@@ -30,6 +30,13 @@ target_link_libraries(generated_proto_smoke_test
 
 gtest_discover_tests(generated_proto_smoke_test)
 
+add_executable(server_windows_macro_test server_windows_macro_test.cpp)
+target_link_libraries(server_windows_macro_test PRIVATE a2a::server)
+if(A2A_ENABLE_ASIO)
+  target_link_libraries(server_windows_macro_test PRIVATE a2a::asio)
+endif()
+add_test(NAME server_windows_macro_test COMMAND server_windows_macro_test)
+
 add_executable(agent_card_builder_test
   unit/agent_card_builder_test.cpp
 )
@@ -873,8 +880,6 @@ target_link_libraries(cpp_grpc_interop_server
 add_library(sut_runtime STATIC
   sut/sut_runtime.cpp
   sut/sut_agent.cpp
-  sut/sut_application.cpp
-  sut/sut_server_runtime.cpp
   sut/tck_sut_http_server.cpp
   sut/tck_sut_store.cpp
 )
@@ -891,9 +896,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
     sut/sut_agent.cpp
-    sut/sut_application.cpp
-    sut/sut_server_runtime.cpp
-    sut/tck_sut_http_server.cpp
+        sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
   if(A2A_ENABLE_SIGNING)
@@ -1199,18 +1202,13 @@ target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2
 gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
 
 if(A2A_ENABLE_ASIO)
-  add_library(sut_async_runtime STATIC
-    sut/async_sut_runtime.cpp
-    sut/async_sut_agent.cpp
-    sut/async_sut_executor.cpp
-    sut/sut_work_queue.cpp
-  )
-  target_link_libraries(sut_async_runtime PUBLIC sut_runtime a2a::asio)
+  target_link_libraries(sut_runtime PUBLIC a2a::asio)
+  target_compile_definitions(sut_runtime PRIVATE A2A_SUT_ASYNC=1)
   add_executable(async_sut_test unit/async_sut_test.cpp)
-  target_link_libraries(async_sut_test PRIVATE sut_async_runtime GTest::gtest_main)
+  target_link_libraries(async_sut_test PRIVATE sut_runtime GTest::gtest_main)
   gtest_discover_tests(async_sut_test PROPERTIES LABELS tsan TIMEOUT 30)
   add_executable(tck_async_sut sut/tck_async_sut.cpp)
-  target_link_libraries(tck_async_sut PRIVATE sut_async_runtime)
+  target_link_libraries(tck_async_sut PRIVATE sut_runtime)
   if(Python3_Interpreter_FOUND)
     add_test(NAME async_sut_runtime_test
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/async_sut_runtime_test.py
@@ -1258,6 +1256,15 @@ target_link_libraries(grpc_request_context_test PRIVATE a2a::server GTest::gtest
 gtest_discover_tests(grpc_request_context_test)
 
 if(A2A_ENABLE_ASIO)
+  add_executable(blocking_executor_example_smoke ${PROJECT_SOURCE_DIR}/examples/apps/blocking_executor/main.cpp)
+  target_link_libraries(blocking_executor_example_smoke PRIVATE a2a::asio)
+  add_test(NAME blocking_executor_example_smoke COMMAND blocking_executor_example_smoke)
+
+  add_executable(async_runtime_test unit/async_runtime_test.cpp)
+  target_include_directories(async_runtime_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(async_runtime_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(async_runtime_test PROPERTIES LABELS tsan TIMEOUT 30)
+
   add_executable(coroutine_dispatcher_test unit/coroutine_dispatcher_test.cpp)
   target_include_directories(coroutine_dispatcher_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(coroutine_dispatcher_test PRIVATE a2a::asio GTest::gtest_main)
@@ -1274,6 +1281,11 @@ if(A2A_ENABLE_ASIO AND Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
       --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app asio_executor)
   set_tests_properties(installed_asio_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+  add_test(NAME installed_blocking_executor_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app blocking_executor)
+  set_tests_properties(installed_blocking_executor_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+
 endif()
 
 if(A2A_STDLIB_HAS_STOP_TOKEN)
