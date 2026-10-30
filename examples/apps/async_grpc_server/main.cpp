@@ -9,7 +9,6 @@
 #include <grpcpp/security/server_credentials.h>
 #include <grpcpp/server_builder.h>
 
-#include <boost/asio/thread_pool.hpp>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -17,7 +16,8 @@
 
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/version.h"
-#include "a2a/server/async_grpc_server_transport.h"
+#include "a2a/server/engine/async_runtime.h"
+#include "a2a/server/server_bindings.h"
 
 namespace {
 using namespace a2a::server;
@@ -30,7 +30,6 @@ constexpr auto kSmokeArgument = "--smoke";
 constexpr auto kStartFailed = "Could not start async gRPC server\n";
 constexpr auto kListening = "Async unary gRPC service on 127.0.0.1:50051; press Enter to stop\n";
 constexpr auto kCancelled = "Application observed cancellation";
-constexpr std::size_t kIoWorkers = 2;
 constexpr auto kTimeout = std::chrono::seconds(5);
 
 // A read-only coroutine application. Real backends co_await their I/O here.
@@ -68,14 +67,12 @@ bool Smoke(int port) {
 
 int main(int argc, char** argv) try {
   const bool smoke = argc > 1 && std::string_view(argv[1]) == kSmokeArgument;
-  boost::asio::thread_pool runtime(kIoWorkers);
-  auto executor = std::make_shared<ReadOnlyExecutor>();
-  auto dispatcher = std::make_shared<AsyncDispatcher>(executor, runtime.get_executor());
-  AsyncGrpcServerTransport transport(dispatcher);
+  AsyncRuntime runtime(std::make_shared<ReadOnlyExecutor>());
+  ServerBindings bindings(runtime.dispatcher(), {});
   ::grpc::ServerBuilder builder;
   int port = 0;
   builder.AddListeningPort(smoke ? kSmokeBind : kBind, ::grpc::InsecureServerCredentials(), &port);
-  builder.RegisterService(&transport);
+  builder.RegisterService(&bindings.grpc_service());
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
     std::cerr << kStartFailed;
@@ -90,11 +87,10 @@ int main(int argc, char** argv) try {
     std::getline(std::cin, line);
   }
   // Close service admission first so applications observe kServerShutdown.
-  transport.Shutdown();
+  bindings.Shutdown();
   server->Shutdown();
   server->Wait();
-  dispatcher->Shutdown();
-  runtime.join();
+  runtime.Join();
   return success ? EXIT_SUCCESS : EXIT_FAILURE;
 } catch (...) {
   std::cerr << kStartFailed;

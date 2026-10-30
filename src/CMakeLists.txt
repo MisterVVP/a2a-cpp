@@ -158,6 +158,7 @@ set(A2A_SERVER_SOURCES
   server/task_id_generator.cpp
   server/task_subscription_service.cpp
   server/transport/transport_mux.cpp
+  server/transport/server_bindings.cpp
   server/dispatcher.cpp
   server/engine/dispatch_pipeline.cpp
   server/security_policy.cpp
@@ -200,6 +201,9 @@ if(A2A_ENABLE_ASIO)
     server/engine/async_dispatcher.cpp
     server/transport/async_grpc_server_transport.cpp
     server/engine/coroutine_agent_executor.cpp
+    server/engine/blocking_executor_adapter.cpp
+    server/engine/async_runtime.cpp
+    server/transport/async_server_bindings.cpp
   )
   add_library(a2a::asio ALIAS a2a_asio)
   set_target_properties(a2a_asio PROPERTIES EXPORT_NAME asio)

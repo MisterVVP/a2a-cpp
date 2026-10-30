@@ -59,6 +59,17 @@ void TransportMux::RegisterRestRoute(RestServerTransport& transport) {
   RegisterRestRoute(transport, RestRouteOptions{});
 }
 
+void TransportMux::RegisterAgentCardRoute(RestServerTransport& transport) {
+  constexpr auto kDiscoveryRoute = "agent-card-discovery";
+  RegisterRoute({.name = kDiscoveryRoute,
+                 .matcher =
+                     [](std::string_view, std::string_view path) {
+                       return path == RestServerTransport::kAgentCardPath ||
+                              path == RestServerTransport::kLegacyAgentCardPath;
+                     },
+                 .handler = [&transport](const HttpServerRequest& request) { return transport.Handle(request); }});
+}
+
 void TransportMux::RegisterRestRoute(RestServerTransport& transport, RestRouteOptions options) {
   RegisterRoute({
       .name = std::move(options.route_name),

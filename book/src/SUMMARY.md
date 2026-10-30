@@ -13,6 +13,7 @@
   - [Request Execution Lifetime](server/request-execution.md)
   - [Async unary dispatch](server/async-dispatcher.md)
   - [Boost.Asio coroutine executors](server/asio-coroutines.md)
+    - [Runtime and transport helpers](server/runtime-helpers.md)
   - [Native async gRPC](server/async-grpc.md)
   - [REST Server](server/rest-server.md)
   - [JSON-RPC Server](server/json-rpc-server.md)

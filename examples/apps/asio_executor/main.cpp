@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
-#include <boost/asio/executor_work_guard.hpp>
-#include <boost/asio/io_context.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
@@ -12,7 +10,7 @@
 #include <memory>
 #include <utility>
 
-#include "a2a/server/engine/async_dispatcher.h"
+#include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/engine/coroutine_agent_executor.h"
 
 namespace {
@@ -20,6 +18,7 @@ using namespace a2a::server;
 using namespace a2a::server::engine;
 constexpr auto kTaskId = "coroutine-example-task";
 constexpr auto kDelay = std::chrono::milliseconds(1);
+constexpr auto kTimeout = std::chrono::seconds(5);
 
 class TimerExecutor final : public CoroutineAgentExecutor {
  public:
@@ -36,23 +35,19 @@ class TimerExecutor final : public CoroutineAgentExecutor {
 }  // namespace
 
 int main() {
-  boost::asio::io_context loop;
-  auto guard = boost::asio::make_work_guard(loop);
-  const auto application = std::make_shared<TimerExecutor>();
-  AsyncDispatcher dispatcher(application, loop.get_executor());
+  AsyncRuntime runtime(std::make_shared<TimerExecutor>());
   lf::a2a::v1::GetTaskRequest payload;
   payload.set_id(kTaskId);
   DispatchRequest request{.operation = DispatcherOperation::kGetTask, .payload = std::move(payload)};
   std::promise<bool> completion;
   auto result = completion.get_future();
-  const auto accepted = dispatcher.Dispatch(std::move(request), {}, [&](auto response, auto /*context*/) {
+  const auto accepted = runtime.dispatcher()->Dispatch(std::move(request), {}, [&](auto response, auto /*context*/) {
     completion.set_value(response.ok() && std::get<lf::a2a::v1::Task>(response.value().payload()).id() == kTaskId);
-    guard.reset();
   });
   if (!accepted.ok()) {
     return EXIT_FAILURE;
   }
-  loop.run();
-  dispatcher.Shutdown();
-  return result.get() ? EXIT_SUCCESS : EXIT_FAILURE;
+  const bool ready = result.wait_for(kTimeout) == std::future_status::ready;
+  runtime.Join();
+  return ready && result.get() ? EXIT_SUCCESS : EXIT_FAILURE;
 }

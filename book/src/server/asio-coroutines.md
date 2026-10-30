@@ -6,6 +6,9 @@ native `AsyncGrpcServerTransport`. The dispatcher
 retains ownership of admission, security, interceptors, response projection, and
 terminal request outcomes.
 
+Applications can use the optional [runtime and transport helpers](runtime-helpers.md)
+to own the event loop and registrations, or retain the explicit setup below.
+
 ## Build and consume
 
 Enable `A2A_ENABLE_ASIO=ON` when building the SDK. Boost 1.92 or newer, including
