@@ -4,6 +4,17 @@
 #include <type_traits>
 
 // Exercise the object-like Win32 alias on every platform, including Linux CI.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+#define SendMessage A2aWindowsSendMessage
+#include "a2a/v1/a2a.grpc.pb.h"
+#ifdef SendMessage
+#error Generated gRPC declarations must preserve the protocol method name
+#endif
+static_assert(std::is_member_function_pointer_v<decltype(&lf::a2a::v1::A2AService::Stub::SendMessage)>);
+static_assert(std::is_member_function_pointer_v<decltype(&lf::a2a::v1::A2AService::Service::SendMessage)>);
+
 #define SendMessage A2aWindowsSendMessage
 #include "a2a/server/agent_executor.h"
 #ifdef SendMessage
@@ -14,6 +25,9 @@ static_assert(std::is_member_function_pointer_v<decltype(&a2a::server::AgentExec
 // Dependencies may have been included earlier, before a Windows header.
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/transport_mux.h"
+#ifdef SendMessage
+#undef SendMessage
+#endif
 #define SendMessage A2aWindowsSendMessage
 #include "a2a/server/server_bindings.h"
 #ifdef SendMessage
@@ -37,4 +51,9 @@ static_assert(std::is_member_function_pointer_v<decltype(&a2a::server::engine::C
 static_assert(std::is_member_function_pointer_v<decltype(&a2a::server::engine::BlockingExecutorAdapter::SendMessage)>);
 #endif
 
-int main() {}
+int main() {
+  // Construct both service types so the linker checks the generated vtables.
+  lf::a2a::v1::A2AService::Service service;
+  lf::a2a::v1::A2AService::CallbackService callback_service;
+  return 0;
+}
