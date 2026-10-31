@@ -17,7 +17,7 @@
 #include "a2a/server/server_interceptor.h"
 
 namespace a2a::server::engine {
-inline constexpr auto kUnaryOnly = "Async dispatcher supports unary operations only";
+inline constexpr auto kUnaryOnly = "Streaming requires a streaming executor and transport sink";
 inline constexpr auto kUnsupportedDispatchOperation = "Unsupported dispatcher operation";
 inline constexpr auto kExtendedCardPayloadMismatch = "Dispatch payload type mismatch for GetExtendedAgentCard";
 inline constexpr auto kDispatchException = "Server dispatch operation threw an exception";

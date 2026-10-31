@@ -13,7 +13,7 @@
 #include "a2a/v1/a2a.grpc.pb.h"
 namespace a2a::server {
 // Register separately from GrpcServerTransport. Keep the service and dispatcher
-// alive through server Wait(). Streaming remains unsupported on this service.
+// alive through server Wait(). Streaming uses one acknowledged write at a time.
 class AsyncGrpcServerTransport final : public lf::a2a::v1::A2AService::CallbackService,
                                        private core::NonCopyableOrMovable {
  public:
@@ -23,6 +23,10 @@ class AsyncGrpcServerTransport final : public lf::a2a::v1::A2AService::CallbackS
   // Call before grpc::Server::Shutdown() to distinguish server shutdown from
   // client cancellation. Closes admission and queues cancellation without waiting.
   void Shutdown();
+  ::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse>* SendStreamingMessage(
+      ::grpc::CallbackServerContext* context, const lf::a2a::v1::SendMessageRequest* request) override;
+  ::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse>* SubscribeToTask(
+      ::grpc::CallbackServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request) override;
   ::grpc::ServerUnaryReactor* SendMessage(::grpc::CallbackServerContext* context,
                                           const lf::a2a::v1::SendMessageRequest* request,
                                           lf::a2a::v1::SendMessageResponse* response) override;

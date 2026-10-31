@@ -40,6 +40,8 @@ class DispatchSecurity final {
                                                      const RequestContext& context) const;
   [[nodiscard]] core::Result<DispatchResponse> ListTasks(const ListTasksRequest& request,
                                                          const RequestContext& context) const;
+  [[nodiscard]] core::Result<void> AuthorizeStreamEvent(const lf::a2a::v1::StreamResponse& event,
+                                                        const RequestContext& context, std::string& task_id) const;
   [[nodiscard]] core::Result<void> ProtectStream(const DispatchRequest& request, const RequestContext& context,
                                                  DispatchResponse& response) const;
 

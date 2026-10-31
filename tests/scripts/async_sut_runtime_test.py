@@ -77,7 +77,7 @@ class AsyncSutRuntimeTest(unittest.TestCase):
         interface = card["supportedInterfaces"][0]
         self.assertEqual(interface["protocolBinding"], "GRPC")
         self.assertEqual(interface["url"], f"127.0.0.1:{port + 1}")
-        self.assertFalse(card["capabilities"].get("streaming", False))
+        self.assertTrue(card["capabilities"].get("streaming", False))
         for path in ("/rpc", "/a2a/tasks/absent"):
             with self.assertRaises(urllib.error.HTTPError) as raised:
                 urllib.request.urlopen(base + path, timeout=1)

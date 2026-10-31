@@ -144,8 +144,9 @@ I/O workload before making throughput claims.
 
 Blocking database, security, interceptor, and outbound operations still require
 bounded backend workers or genuinely asynchronous implementations. Native async
-JSON-RPC/HTTP+JSON listeners, asynchronous PostgreSQL stores, and coroutine
-streaming are separate follow-up work.
+JSON-RPC/HTTP+JSON listeners and asynchronous PostgreSQL stores remain separate
+work. [Coroutine streaming](async-streaming.md) is available through the same
+executor and native gRPC service.
 
 For the focused ThreadSanitizer profile, enable the optional target explicitly and
 supply the installed Boost prefix through `CMAKE_PREFIX_PATH`:

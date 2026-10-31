@@ -6,6 +6,16 @@
 #include "a2a/core/protocol_errors.h"
 
 namespace a2a::server::engine {
+boost::asio::awaitable<core::Result<void>> CoroutineAgentExecutor::SendStreamingMessage(
+    lf::a2a::v1::SendMessageRequest /*request*/, RequestExecutionContext /*context*/,
+    std::shared_ptr<AsyncServerStreamSession> /*stream*/) {
+  co_return core::protocol_errors::UnsupportedOperation();
+}
+boost::asio::awaitable<core::Result<void>> CoroutineAgentExecutor::SubscribeTask(
+    lf::a2a::v1::GetTaskRequest /*request*/, RequestExecutionContext /*context*/,
+    std::shared_ptr<AsyncServerStreamSession> /*stream*/) {
+  co_return core::protocol_errors::UnsupportedOperation();
+}
 boost::asio::awaitable<core::Result<lf::a2a::v1::SendMessageResponse>> CoroutineAgentExecutor::SendMessage(
     lf::a2a::v1::SendMessageRequest /*request*/, RequestExecutionContext /*context*/) {
   co_return core::protocol_errors::UnsupportedOperation();

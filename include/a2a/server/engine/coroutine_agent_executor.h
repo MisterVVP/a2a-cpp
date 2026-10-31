@@ -4,10 +4,12 @@
 #pragma once
 
 #include <boost/asio/awaitable.hpp>
+#include <memory>
 #include <utility>
 
 #include "a2a/core/result.h"
 #include "a2a/server/dispatch_types.h"
+#include "a2a/server/engine/async_server_stream_session.h"
 #include "a2a/server/engine/request_execution.h"
 
 // Windows headers can define SendMessage as an ANSI/Unicode macro alias.
@@ -22,6 +24,12 @@ namespace a2a::server::engine {
 class CoroutineAgentExecutor {
  public:
   virtual ~CoroutineAgentExecutor() = default;
+  virtual boost::asio::awaitable<core::Result<void>> SendStreamingMessage(
+      lf::a2a::v1::SendMessageRequest request, RequestExecutionContext context,
+      std::shared_ptr<AsyncServerStreamSession> stream);
+  virtual boost::asio::awaitable<core::Result<void>> SubscribeTask(lf::a2a::v1::GetTaskRequest request,
+                                                                   RequestExecutionContext context,
+                                                                   std::shared_ptr<AsyncServerStreamSession> stream);
   virtual boost::asio::awaitable<core::Result<lf::a2a::v1::SendMessageResponse>> SendMessage(
       lf::a2a::v1::SendMessageRequest request, RequestExecutionContext context);
   virtual boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest request,
