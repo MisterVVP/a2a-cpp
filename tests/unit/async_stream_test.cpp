@@ -9,6 +9,7 @@
 #include <future>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "a2a/server/engine/async_dispatcher.h"
 #include "a2a/server/engine/async_runtime.h"
@@ -78,6 +79,26 @@ class AsyncStreamTest : public testing::Test {
   bool Events(std::size_t count) {
     return PumpUntil(loop, [&] { return sink->events.size() >= count; });
   }
+  void ExpectPendingDemand() {
+    ASSERT_TRUE(Events(1));
+    EXPECT_EQ(application->acknowledged, 0);
+    EXPECT_EQ(after->count, 0);
+  }
+  void AcknowledgeAllEvents() {
+    for (std::size_t index = 0; index < kStreamEvents; ++index) {
+      ASSERT_TRUE(Events(index + 1));
+      EXPECT_EQ(sink->events.size(), index + 1);
+      sink->Acknowledge();
+    }
+  }
+  void EnableTaskSecurity() {
+    ASSERT_TRUE(protected_store.CreateOrUpdate(StreamTask()).ok());
+    AsyncDispatcherOptions options;
+    options.security_policy = std::make_shared<StreamSecurity>();
+    options.task_store = &protected_store;
+    options.interceptors = {after};
+    dispatcher = std::make_unique<AsyncDispatcher>(application, loop.get_executor(), options);
+  }
   boost::asio::io_context loop;
   InMemoryTaskStore protected_store;
   std::shared_ptr<StreamBackend> application = std::make_shared<StreamBackend>();
@@ -89,27 +110,24 @@ class AsyncStreamTest : public testing::Test {
   std::size_t deliveries = 0;
   RequestOutcome outcome = RequestOutcome::kPending;
 };
+void ExpectOrderedMessages(const std::vector<lf::a2a::v1::StreamResponse>& events) {
+  ASSERT_EQ(events.size(), kStreamEvents);
+  for (std::size_t index = 0; index < kStreamEvents; ++index) {
+    EXPECT_EQ(events[index].message().message_id(), std::to_string(index));
+  }
+}
 TEST_F(AsyncStreamTest, FiniteProducerOwnsEventsAndPreservesOrder) {
   ASSERT_NE(Send(), nullptr);
   EXPECT_TRUE(Receive());
-  ASSERT_EQ(sink->events.size(), kStreamEvents);
-  for (std::size_t index = 0; index < kStreamEvents; ++index) {
-    EXPECT_EQ(sink->events[index].message().message_id(), std::to_string(index));
-  }
+  ExpectOrderedMessages(sink->events);
   EXPECT_EQ(outcome, RequestOutcome::kSucceeded);
   EXPECT_EQ(after->count, 1);
 }
 TEST_F(AsyncStreamTest, DemandAcknowledgementPrecedesNextEventAndAfter) {
   sink->automatic = false;
   ASSERT_NE(Send(), nullptr);
-  ASSERT_TRUE(Events(1));
-  EXPECT_EQ(application->acknowledged, 0);
-  EXPECT_EQ(after->count, 0);
-  for (std::size_t index = 0; index < kStreamEvents; ++index) {
-    ASSERT_TRUE(Events(index + 1));
-    EXPECT_EQ(sink->events.size(), index + 1);
-    sink->Acknowledge();
-  }
+  ExpectPendingDemand();
+  AcknowledgeAllEvents();
   EXPECT_TRUE(Receive());
   EXPECT_EQ(application->acknowledged, kStreamEvents);
   EXPECT_EQ(after->count, 1);
@@ -180,6 +198,11 @@ lf::a2a::v1::StreamResponse ReadSynchronousEvent(ServerStreamSession& stream) {
   EXPECT_TRUE(event.has_value());
   return event.value_or(lf::a2a::v1::StreamResponse{});
 }
+void ExpectSynchronousTerminal(ServerStreamSession& stream, const lf::a2a::v1::StreamResponse& expected) {
+  const auto terminal = ReadSynchronousEvent(stream);
+  EXPECT_EQ(terminal.SerializeAsString(), expected.SerializeAsString());
+  EXPECT_FALSE(stream.Next().value().has_value());
+}
 TEST_F(AsyncStreamTest, MixedSyncAndAsyncSubscriptionsShareOrderedPublication) {
   auto synchronous = application->publications.Subscribe(StreamTask());
   ASSERT_TRUE(synchronous.ok());
@@ -190,9 +213,7 @@ TEST_F(AsyncStreamTest, MixedSyncAndAsyncSubscriptionsShareOrderedPublication) {
   application->publications.PublishTaskUpdated(completed);
   EXPECT_TRUE(Receive());
   ASSERT_EQ(sink->events.size(), 2);
-  const auto sync_terminal = ReadSynchronousEvent(*synchronous.value());
-  EXPECT_EQ(sync_terminal.SerializeAsString(), sink->events.back().SerializeAsString());
-  EXPECT_FALSE(synchronous.value()->Next().value().has_value());
+  ExpectSynchronousTerminal(*synchronous.value(), sink->events.back());
 }
 TEST_F(AsyncStreamTest, SlowSubscriberOverflowFailsWithoutHoldingPublisher) {
   sink->automatic = false;
@@ -231,12 +252,7 @@ TEST_F(AsyncStreamTest, MismatchedPayloadSkipsApplication) {
 }
 TEST_F(AsyncStreamTest, RechecksTaskAuthorizationBeforeEachEvent) {
   auto& store = protected_store;
-  ASSERT_TRUE(store.CreateOrUpdate(StreamTask()).ok());
-  AsyncDispatcherOptions options;
-  options.security_policy = std::make_shared<StreamSecurity>();
-  options.task_store = &store;
-  options.interceptors = {after};
-  dispatcher = std::make_unique<AsyncDispatcher>(application, loop.get_executor(), options);
+  EnableTaskSecurity();
   sink->automatic = false;
   ASSERT_NE(Send(), nullptr);
   ASSERT_TRUE(Events(1));

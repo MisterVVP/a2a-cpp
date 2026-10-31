@@ -25,6 +25,7 @@ using namespace a2a::server::engine;
 using namespace a2a::test;
 constexpr auto kShortStreamDeadline = std::chrono::milliseconds(500);
 constexpr auto kStreamRaceParticipants = 2;
+constexpr auto kMinimumStreamLookaheadBytes = 5;
 class NativeStreamAfter final : public ServerInterceptor {
  public:
   void AfterDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/,
@@ -33,14 +34,22 @@ class NativeStreamAfter final : public ServerInterceptor {
   }
   std::atomic_size_t count = 0;
 };
+void ExpectOrderedNativeEvents(NativeStream& call) {
+  for (std::size_t index = 0; index < kStreamEvents; ++index) {
+    ASSERT_TRUE(call.Read());
+    EXPECT_EQ(call.event.message().message_id(), std::to_string(index));
+  }
+}
+void ExpectSubscriptionMetadata(StreamBackend& application) {
+  std::lock_guard lock(application.mutex);
+  EXPECT_EQ(application.tenant, kStreamTenant);
+  EXPECT_EQ(application.metadata.client_headers.at(kStreamHeader), kStreamMetadata);
+}
 TEST(AsyncStreamGrpc, SendsOrderedFiniteEventsAndExtensionTrailers) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());
   const auto call = server.Start();
-  for (std::size_t index = 0; index < kStreamEvents; ++index) {
-    ASSERT_TRUE(call->Read());
-    EXPECT_EQ(call->event.message().message_id(), std::to_string(index));
-  }
+  ExpectOrderedNativeEvents(*call);
   EXPECT_FALSE(call->Read());
   EXPECT_TRUE(call->Finish().ok());
   const auto& trailers = call->context.GetServerTrailingMetadata();
@@ -52,11 +61,7 @@ TEST(AsyncStreamGrpc, SubscriptionConvertsTenantAndPropagatesOwnedMetadata) {
   const auto call = server.Start(true);
   ASSERT_TRUE(call->Read());
   EXPECT_TRUE(call->event.has_task());
-  {
-    std::lock_guard lock(server.application->mutex);
-    EXPECT_EQ(server.application->tenant, kStreamTenant);
-    EXPECT_EQ(server.application->metadata.client_headers.at(kStreamHeader), kStreamMetadata);
-  }
+  ExpectSubscriptionMetadata(*server.application);
   server.application->publications.PublishTaskUpdated(StreamTask(lf::a2a::v1::TASK_STATE_COMPLETED));
   ASSERT_TRUE(call->Read());
   EXPECT_EQ(call->event.status_update().status().state(), lf::a2a::v1::TASK_STATE_COMPLETED);
@@ -163,6 +168,9 @@ TEST(AsyncStreamGrpc, CancelsSlowReaderWhileLargeWriteIsOutstanding) {
     server.application->event_count = kStreamConcurrency;
     server.application->payload_bytes = kLargeEventBytes;
     const auto call = server.Start();
+    // Poll the synchronous client's CQ so Windows can progress the RPC, without
+    // consuming event data or releasing the stream's receive demand.
+    call->reader->WaitForInitialMetadata();
     ASSERT_TRUE(server.application->WaitStarted());
     ASSERT_TRUE(call->Read());
     call->context.TryCancel();
@@ -206,6 +214,13 @@ class SdkStreamObserver final : public client::StreamObserver {
   std::promise<bool> result;
   std::future<bool> completion = result.get_future();
 };
+void ExpectSdkMessageStream(client::A2AClient& sdk, const client::CallOptions& options) {
+  SdkStreamObserver messages;
+  auto send = sdk.SendStreamingMessage(lf::a2a::v1::SendMessageRequest{}, messages, options);
+  ASSERT_TRUE(send.ok()) << send.error().message();
+  ASSERT_TRUE(messages.Finished());
+  EXPECT_EQ(messages.Count(), kStreamEvents);
+}
 TEST(AsyncStreamGrpc, ExistingSdkClientConsumesBothCoroutineStreamOperations) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());
@@ -217,11 +232,7 @@ TEST(AsyncStreamGrpc, ExistingSdkClientConsumesBothCoroutineStreamOperations) {
                                               server.Channel()));
   client::CallOptions options;
   options.extensions = {kStreamExtension};
-  SdkStreamObserver messages;
-  auto send = sdk.SendStreamingMessage(lf::a2a::v1::SendMessageRequest{}, messages, options);
-  ASSERT_TRUE(send.ok()) << send.error().message();
-  ASSERT_TRUE(messages.Finished());
-  EXPECT_EQ(messages.Count(), kStreamEvents);
+  ExpectSdkMessageStream(sdk, options);
   SdkStreamObserver updates;
   lf::a2a::v1::GetTaskRequest query;
   query.set_id(kStreamTask);
@@ -268,7 +279,7 @@ TEST(AsyncStreamGrpc, ShutdownDrainsHostWithAnUnreadFlowControlledWrite) {
   std::string endpoint(kStreamEndpoint);
   endpoint.append(std::to_string(port));
   ::grpc::ChannelArguments arguments;
-  arguments.SetInt(GRPC_ARG_HTTP2_STREAM_LOOKAHEAD_BYTES, 0);
+  arguments.SetInt(GRPC_ARG_HTTP2_STREAM_LOOKAHEAD_BYTES, kMinimumStreamLookaheadBytes);
   arguments.SetInt(GRPC_ARG_HTTP2_BDP_PROBE, 0);
   auto stub = lf::a2a::v1::A2AService::NewStub(
       ::grpc::CreateCustomChannel(endpoint, ::grpc::InsecureChannelCredentials(), arguments));
@@ -277,6 +288,8 @@ TEST(AsyncStreamGrpc, ShutdownDrainsHostWithAnUnreadFlowControlledWrite) {
                       std::string(core::Version::kProtocolVersion));
   context.set_deadline(std::chrono::system_clock::now() + kStreamClientTimeout);
   auto reader = stub->SendStreamingMessage(&context, lf::a2a::v1::SendMessageRequest{});
+  // Drive client I/O on Windows while leaving the flow-controlled message unread.
+  reader->WaitForInitialMetadata();
   const bool write_started = pending.wait_for(kCoroutineWait) == std::future_status::ready;
   service.Shutdown();
   auto stopped = std::async(std::launch::async, [&] {
