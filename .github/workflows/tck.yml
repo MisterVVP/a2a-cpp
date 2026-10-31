@@ -130,6 +130,46 @@ jobs:
         if: always()
         run: ./scripts/stop_tck_sut.sh
 
+      - name: Install pinned Boost for coroutine TCK
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
+
+      - name: Run unified async unary TCK across stores
+        id: tck_async
+        continue-on-error: true
+        env:
+          SUT_TARGET: tck_async_sut
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-boost
+          A2A_TCK_TRANSPORTS: grpc
+          TCK_SUT_ENDPOINT: ${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_SUT_URL: http://${{ env.SUT_HOST }}:${{ env.SUT_PORT }}
+          TCK_RUN_CMD: ${{ vars.TCK_RUN_CMD }}
+          TCK_TRANSPORTS: grpc
+        run: |
+          trap './scripts/stop_tck_sut.sh' EXIT
+          for backend in inmemory postgres; do
+            export A2A_TCK_STORE_BACKEND="${backend}"
+            export SUT_LOG_FILE="build-tck/tck-sut-async-${backend}.log"
+            export TCK_REPORT_DIR="tck-artifacts/reports/async-${backend}"
+            export TCK_LOG_DIR="tck-artifacts/logs/async-${backend}"
+            ./scripts/run_tck_sut.sh
+            ./scripts/run_tck_mandatory.sh
+            ./scripts/stop_tck_sut.sh
+          done
+
+      - name: Summarize async TCK report gaps
+        if: always()
+        run: |
+          for backend in inmemory postgres; do
+            report="tck-artifacts/reports/async-${backend}/compatibility.json"
+            if [[ -f "${report}" ]]; then
+              python3 scripts/summarize_tck_report.py "${report}"
+            else
+              echo "No async ${backend} compatibility report was generated."
+            fi
+          done
+
       - name: Capture runner diagnostics
         if: always()
         run: |
@@ -149,6 +189,7 @@ jobs:
             ${{ env.TCK_LOG_DIR }}
             build-tck/tck-sut-inmemory.log
             build-tck/tck-sut-postgres.log
+            build-tck/tck-sut-async-*.log
           if-no-files-found: warn
 
       - name: Verify mandatory TCK results and reports
@@ -156,6 +197,7 @@ jobs:
         env:
           INMEMORY_TCK_OUTCOME: ${{ steps.tck_inmemory.outcome }}
           POSTGRES_TCK_OUTCOME: ${{ steps.tck_postgres.outcome }}
+          ASYNC_TCK_OUTCOME: ${{ steps.tck_async.outcome }}
         run: |
           failed=0
           if [[ "${INMEMORY_TCK_OUTCOME}" != "success" ]]; then
@@ -166,7 +208,11 @@ jobs:
             echo "PostgreSQL mandatory TCK outcome: ${POSTGRES_TCK_OUTCOME}"
             failed=1
           fi
-          for backend in inmemory postgres; do
+          if [[ "${ASYNC_TCK_OUTCOME}" != "success" ]]; then
+            echo "Unified async TCK outcome: ${ASYNC_TCK_OUTCOME}"
+            failed=1
+          fi
+          for backend in inmemory postgres async-inmemory async-postgres; do
             report="tck-artifacts/reports/${backend}/compatibility.json"
             if [[ ! -f "${report}" ]]; then
               echo "Missing required TCK report: ${report}"

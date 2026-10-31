@@ -12,6 +12,12 @@ endif()
 
 include(GoogleTest)
 
+if(WIN32)
+  # Discover after linking and app-local DLL deployment have finished for every
+  # target, rather than starting test processes during the parallel MSVC build.
+  set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 add_executable(generated_proto_smoke_test
   generated_proto_smoke_test.cpp
 )
@@ -23,6 +29,13 @@ target_link_libraries(generated_proto_smoke_test
 )
 
 gtest_discover_tests(generated_proto_smoke_test)
+
+add_executable(server_windows_macro_test server_windows_macro_test.cpp)
+target_link_libraries(server_windows_macro_test PRIVATE a2a::server)
+if(A2A_ENABLE_ASIO)
+  target_link_libraries(server_windows_macro_test PRIVATE a2a::asio)
+endif()
+add_test(NAME server_windows_macro_test COMMAND server_windows_macro_test)
 
 add_executable(agent_card_builder_test
   unit/agent_card_builder_test.cpp
@@ -776,7 +789,9 @@ target_link_libraries(json_rpc_server_transport_integration_test
     GTest::gtest_main
 )
 
-gtest_discover_tests(json_rpc_server_transport_integration_test)
+# DLL startup/unload can exceed CMake's five-second discovery default on Windows.
+# This limit only enumerates tests; it does not change their execution timeout.
+gtest_discover_tests(json_rpc_server_transport_integration_test DISCOVERY_TIMEOUT 30)
 
 add_executable(server_dispatcher_task_store_integration_test
   integration/server_dispatcher_task_store_integration_test.cpp
@@ -881,7 +896,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(sut_runtime_diagnostics STATIC
     sut/sut_runtime.cpp
     sut/sut_agent.cpp
-    sut/tck_sut_http_server.cpp
+        sut/tck_sut_http_server.cpp
     sut/tck_sut_store.cpp
   )
   if(A2A_ENABLE_SIGNING)
@@ -1185,3 +1200,96 @@ add_executable(security_transport_integration_test integration/security_transpor
 target_include_directories(security_transport_integration_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/support/example_support)
 target_link_libraries(security_transport_integration_test PRIVATE a2a::client a2a::server GTest::gtest_main)
 gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "security")
+
+if(A2A_ENABLE_ASIO)
+  target_link_libraries(sut_runtime PUBLIC a2a::asio)
+  target_compile_definitions(sut_runtime PRIVATE A2A_SUT_ASYNC=1)
+  add_executable(async_sut_test unit/async_sut_test.cpp)
+  target_link_libraries(async_sut_test PRIVATE sut_runtime GTest::gtest_main)
+  gtest_discover_tests(async_sut_test PROPERTIES LABELS tsan TIMEOUT 30)
+  add_executable(tck_async_sut sut/tck_async_sut.cpp)
+  target_link_libraries(tck_async_sut PRIVATE sut_runtime)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME async_sut_runtime_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/async_sut_runtime_test.py
+        --sut $<TARGET_FILE:tck_async_sut>)
+    set_tests_properties(async_sut_runtime_test PROPERTIES LABELS "grpc_async" TIMEOUT 60)
+  endif()
+  add_executable(async_dispatcher_test unit/async_dispatcher_test.cpp)
+  target_include_directories(async_dispatcher_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(async_dispatcher_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(async_dispatcher_test PROPERTIES LABELS "tsan")
+  add_executable(async_grpc_server_transport_test integration/async_grpc_server_transport_test.cpp)
+  target_include_directories(async_grpc_server_transport_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(async_grpc_server_transport_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(async_grpc_server_transport_test PROPERTIES LABELS "grpc_async" TIMEOUT 30)
+  add_executable(async_grpc_example_smoke ${PROJECT_SOURCE_DIR}/examples/apps/async_grpc_server/main.cpp)
+  target_link_libraries(async_grpc_example_smoke PRIVATE a2a::asio)
+  add_test(NAME async_grpc_example_smoke COMMAND async_grpc_example_smoke --smoke)
+  add_executable(async_grpc_execution_evidence async_grpc_execution_evidence.cpp)
+  target_include_directories(async_grpc_execution_evidence PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(async_grpc_execution_evidence PRIVATE a2a::asio)
+  add_test(NAME async_grpc_execution_evidence COMMAND async_grpc_execution_evidence)
+  set_tests_properties(async_grpc_execution_evidence PROPERTIES LABELS "grpc_async" TIMEOUT 60)
+endif()
+
+if(Python3_Interpreter_FOUND)
+  add_test(NAME installed_async_grpc_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG>)
+  set_tests_properties(installed_async_grpc_consumer_test PROPERTIES LABELS "installed;grpc_async" TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
+
+add_executable(dispatch_pipeline_test unit/dispatch_pipeline_test.cpp)
+target_include_directories(dispatch_pipeline_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(dispatch_pipeline_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(dispatch_pipeline_test)
+
+add_executable(grpc_helpers_test unit/grpc_helpers_test.cpp)
+target_include_directories(grpc_helpers_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(grpc_helpers_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(grpc_helpers_test)
+
+add_executable(grpc_request_context_test unit/grpc_request_context_test.cpp)
+target_include_directories(grpc_request_context_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(grpc_request_context_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(grpc_request_context_test)
+
+if(A2A_ENABLE_ASIO)
+  add_executable(blocking_executor_example_smoke ${PROJECT_SOURCE_DIR}/examples/apps/blocking_executor/main.cpp)
+  target_link_libraries(blocking_executor_example_smoke PRIVATE a2a::asio)
+  add_test(NAME blocking_executor_example_smoke COMMAND blocking_executor_example_smoke)
+
+  add_executable(async_runtime_test unit/async_runtime_test.cpp)
+  target_include_directories(async_runtime_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(async_runtime_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(async_runtime_test PROPERTIES LABELS tsan TIMEOUT 30)
+
+  add_executable(coroutine_dispatcher_test unit/coroutine_dispatcher_test.cpp)
+  target_include_directories(coroutine_dispatcher_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(coroutine_dispatcher_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(coroutine_dispatcher_test PROPERTIES LABELS tsan TIMEOUT 30)
+
+  add_executable(asio_grpc_server_test integration/asio_grpc_server_test.cpp)
+  target_include_directories(asio_grpc_server_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(asio_grpc_server_test PRIVATE a2a::asio GTest::gtest_main)
+  gtest_discover_tests(asio_grpc_server_test PROPERTIES LABELS grpc_async TIMEOUT 30)
+endif()
+
+if(A2A_ENABLE_ASIO AND Python3_Interpreter_FOUND)
+  add_test(NAME installed_asio_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app asio_executor)
+  set_tests_properties(installed_asio_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+  add_test(NAME installed_blocking_executor_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app blocking_executor)
+  set_tests_properties(installed_blocking_executor_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+
+endif()
+
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  add_executable(request_execution_test unit/request_execution_test.cpp)
+  target_link_libraries(request_execution_test PRIVATE a2a::server GTest::gtest_main)
+  gtest_discover_tests(request_execution_test PROPERTIES LABELS tsan)
+endif()

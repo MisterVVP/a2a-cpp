@@ -28,6 +28,7 @@ namespace {
 
 std::atomic_size_t g_curl_stream_reactors_created{0U};
 std::atomic_size_t g_curl_stream_reactors_destroyed{0U};
+thread_local bool g_in_reactor_loop = false;
 
 #if defined(__linux__)
 constexpr std::size_t kMaximumReactorEvents = 64U;
@@ -135,6 +136,7 @@ void CurlStreamReactor::Wake() const noexcept {
 }
 
 void CurlStreamReactor::Run() {
+  g_in_reactor_loop = true;
   while (!shutting_down_) {
     ProcessCommands();
     if (shutting_down_) {
@@ -152,6 +154,7 @@ void CurlStreamReactor::Run() {
     Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
   }
   transfers_.clear();
+  g_in_reactor_loop = false;
 }
 
 void CurlStreamReactor::ProcessCommands() {
@@ -422,22 +425,35 @@ void CurlStreamReactorPool::CancelOwner(const void* owner) {
 }
 
 bool CurlStreamReactorPool::ReleaseUnused() {
-  bool released_all_unused = true;
+  // A reactor must never wait for pool locks or join another shard: an off-thread
+  // cleanup may already hold such a lock while joining this reactor.
+  if (g_in_reactor_loop) {
+    return false;
+  }
   for (std::size_t index = 0; index < kPoolSize; ++index) {
     std::lock_guard lock(reactor_mutexes_[index]);
     auto& reactor = reactors_[index];
     if (reactor == nullptr || reactor.use_count() != 1) {
       continue;
     }
-    if (reactor->IsCurrentThread()) {
-      released_all_unused = false;
-      continue;
-    }
     // Keep replacement acquisition serialized with reactor shutdown so the
     // bounded shard does not temporarily own two reactor threads.
     reactor.reset();
   }
-  return released_all_unused;
+  return true;
+}
+
+void CurlStreamReactorPool::Shutdown() {
+  for (std::size_t index = 0; index < kPoolSize; ++index) {
+    std::shared_ptr<CurlStreamReactor> reactor;
+    {
+      std::lock_guard lock(reactor_mutexes_[index]);
+      reactor = reactors_[index];
+    }
+    if (reactor != nullptr) {
+      reactor->Shutdown();
+    }
+  }
 }
 
 std::size_t CurlStreamReactorPool::size() const {

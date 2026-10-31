@@ -33,3 +33,11 @@ The server transport recognizes A2A metadata such as `a2a-version` and can valid
 ## Example
 
 See `examples/apps/grpc_server/main.cpp`.
+
+## Opt-in native async unary server
+
+Register `AsyncGrpcServerTransport` with an `engine::AsyncDispatcher` to use gRPC
+unary callbacks. The existing `GrpcServerTransport` registration remains
+synchronous. See [Native async gRPC](../server/async-grpc.md) for application
+contracts, metadata/deadline mapping, graceful shutdown, installed consumers,
+supported standard libraries, and thread/latency evidence.

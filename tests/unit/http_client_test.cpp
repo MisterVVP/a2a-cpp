@@ -622,7 +622,7 @@ class ConcurrentSseLoopbackServer final : private a2a::core::NonCopyable {
 
 class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
  public:
-  OpenSseLoopbackServer() {
+  explicit OpenSseLoopbackServer(std::string initial_body = {}) : initial_body_(std::move(initial_body)) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     EXPECT_NE(fd_, kSocketError);
     int reuse = 1;
@@ -666,7 +666,10 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
 
  private:
   void Release() {
-    released_.store(true);
+    {
+      std::lock_guard lock(mutex_);
+      released_.store(true);
+    }
     cv_.notify_all();
   }
 
@@ -678,6 +681,9 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
     std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
     (void)::recv(client, buffer.data(), buffer.size(), 0);
     (void)::send(client, kSseHeaders.data(), kSseHeaders.size(), 0);
+    if (!initial_body_.empty()) {
+      (void)::send(client, initial_body_.data(), initial_body_.size(), 0);
+    }
     {
       std::lock_guard lock(mutex_);
       stream_open_ = true;
@@ -690,6 +696,7 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
     ::close(client);
   }
 
+  const std::string initial_body_;
   int fd_ = kSocketError;
   int port_ = 0;
   mutable std::mutex mutex_;
@@ -1318,12 +1325,23 @@ TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResp
   EXPECT_NE(server.request().find(R"({"hello":"world"})"), std::string::npos);
 }
 
+void ExpectShutdownCancellation(std::future<a2a::core::Result<a2a::http::Response>>& completed,
+                                const std::atomic_bool& shutdown_returned, const OpenSseLoopbackServer& server) {
+  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
+  EXPECT_TRUE(shutdown_returned.load());
+  const auto response = completed.get();
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kNetwork);
+  EXPECT_FALSE(server.released());
+}
+
 TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
-  LoopbackHttpServer server{std::string(kSseHeaders) + std::string(kFirstSseChunk)};
+  // Keep EOF from racing the callback: Shutdown must cancel this active stream.
+  OpenSseLoopbackServer server{std::string(kFirstSseChunk)};
   a2a::http::Client client;
   a2a::http::Request request;
   request.method = std::string(a2a::core::http::kMethodGet);
-  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
   request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
   request.http_version = std::string(kHttpVersion11);
   std::promise<a2a::core::Result<a2a::http::Response>> completion;
@@ -1341,9 +1359,8 @@ TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
       [&completion](a2a::core::Result<a2a::http::Response> response) { completion.set_value(std::move(response)); });
 
   ASSERT_TRUE(started.ok()) << started.error().message();
-  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
-  EXPECT_TRUE(shutdown_returned.load());
-  EXPECT_TRUE(completed.get().ok());
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  ExpectShutdownCancellation(completed, shutdown_returned, server);
 }
 
 TEST(SharedHttpClientTest, SynchronousStreamRequestFromChunkCallbackIsRejected) {
@@ -1433,6 +1450,19 @@ TEST(SharedHttpClientTest, DispatchExecutorLifetimeIsOwnedByProcessState) {
 
 TEST(SharedHttpClientTest, ReactorThreadStartupFailureDoesNotEscape) {
   EXPECT_TRUE(a2a::http::testing::CurlStreamReactorHandlesThreadStartupFailure());
+}
+
+TEST(SharedHttpClientTest, ReactorPoolShutdownJoinsReferencedReactorsAndTerminalCallbacks) {
+  a2a::http::detail::CurlStreamReactorPool pool;
+  const auto reactor = pool.Acquire();
+  ASSERT_NE(reactor, nullptr);
+  const auto transfer = std::make_shared<a2a::http::detail::CurlStreamReactor::Transfer>();
+  std::atomic_bool completed{false};
+  transfer->on_complete = [&](CURLcode) { completed.store(true); };
+  reactor->Cancel(transfer);
+  pool.Shutdown();
+  EXPECT_TRUE(completed.load());
+  EXPECT_FALSE(reactor->IsCurrentThread());
 }
 
 TEST(SharedHttpClientTest, ReactorPoolDefersReleaseFromItsOwnThread) {

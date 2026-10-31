@@ -15,6 +15,22 @@ else()
   message(STATUS "StreamCancellationWatcher: interruptible std::thread fallback selected for native build")
 endif()
 
+# Keep synchronous SDK builds usable with standard libraries that do not yet
+# provide C++20 cancellation (for example older Apple libc++ installations).
+check_cxx_source_compiles("
+#include <stop_token>
+int main() {
+  std::stop_source source;
+  std::stop_callback observer(source.get_token(), [] {});
+  return source.request_stop() ? 0 : 1;
+}
+" A2A_STDLIB_HAS_STOP_TOKEN)
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  message(STATUS "RequestExecution: C++20 cancellation is available")
+else()
+  message(STATUS "RequestExecution: unavailable; standard library lacks C++20 cancellation")
+endif()
+
 set(A2A_CORE_SOURCES
   core/agent_card/agent_card_builder.cpp
   core/agent_card/agent_card_provider.cpp
@@ -122,6 +138,10 @@ target_link_libraries(a2a_client
 set(A2A_SERVER_SOURCES
   server/agent_card/agent_card_serializer.cpp
   server/transport/grpc_server_transport.cpp
+  server/transport/grpc_error.cpp
+  server/transport/grpc_request_context.cpp
+  server/transport/grpc_status_details.cpp
+  server/transport/grpc_task_conversion.cpp
   server/transport/stream_cancellation_watcher.cpp
   server/transport/http_adapter.cpp
   server/transport/http_server_response_builder.cpp
@@ -138,7 +158,9 @@ set(A2A_SERVER_SOURCES
   server/task_id_generator.cpp
   server/task_subscription_service.cpp
   server/transport/transport_mux.cpp
+  server/transport/server_bindings.cpp
   server/dispatcher.cpp
+  server/engine/dispatch_pipeline.cpp
   server/security_policy.cpp
   server/request_context.cpp
   server/tasks/in_memory_task_store.cpp
@@ -149,7 +171,11 @@ set(A2A_SERVER_SOURCES
   server/tasks/task_ordering.cpp
   server/stores/store_factory.cpp
 )
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp)
+endif()
 add_library(a2a_server STATIC ${A2A_SERVER_SOURCES})
+target_compile_definitions(a2a_server PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
 add_library(a2a::server ALIAS a2a_server)
 set_target_properties(a2a_server PROPERTIES EXPORT_NAME server)
 
@@ -165,6 +191,30 @@ target_link_libraries(a2a_server
     a2a::http
 )
 
+if(A2A_ENABLE_ASIO)
+  if(NOT A2A_STDLIB_HAS_STOP_TOKEN)
+    message(FATAL_ERROR "A2A_ENABLE_ASIO requires C++20 standard-library cancellation support")
+  endif()
+  find_package(Boost ${A2A_BOOST_VERSION} CONFIG REQUIRED)
+  find_package(Threads REQUIRED)
+  add_library(a2a_asio STATIC
+    server/engine/async_dispatcher.cpp
+    server/transport/async_grpc_server_transport.cpp
+    server/engine/coroutine_agent_executor.cpp
+    server/engine/blocking_executor_adapter.cpp
+    server/engine/async_runtime.cpp
+    server/transport/async_server_bindings.cpp
+  )
+  add_library(a2a::asio ALIAS a2a_asio)
+  set_target_properties(a2a_asio PROPERTIES EXPORT_NAME asio)
+  target_compile_definitions(a2a_asio PUBLIC A2A_HAS_ASYNC_SERVER=1)
+  target_include_directories(a2a_asio PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(a2a_asio PUBLIC a2a::server Boost::headers Threads::Threads)
+  target_compile_features(a2a_asio PUBLIC cxx_std_20)
+  install(FILES ${PROJECT_SOURCE_DIR}/LICENSES/BSL-1.0.txt
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/a2a_cpp)
+endif()
+
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(a2a_core_diagnostics STATIC ${A2A_CORE_SOURCES} core/subscription_diagnostics.cpp)
   target_include_directories(a2a_core_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
@@ -175,6 +225,7 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
 
   add_library(a2a_server_diagnostics STATIC ${A2A_SERVER_SOURCES})
+  target_compile_definitions(a2a_server_diagnostics PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
   target_include_directories(a2a_server_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
   target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
 
@@ -233,6 +284,9 @@ if(A2A_ENABLE_POSTGRES_STORE)
 endif()
 
 set(A2A_INSTALL_TARGETS a2a_core a2a_http a2a_client a2a_server)
+if(A2A_ENABLE_ASIO)
+  list(APPEND A2A_INSTALL_TARGETS a2a_asio)
+endif()
 if(A2A_ENABLE_SIGNING)
   list(APPEND A2A_INSTALL_TARGETS a2a_signing)
 endif()

@@ -7,14 +7,16 @@
 #include <string>
 #include <string_view>
 
-#include "a2a/core/result.h"
+#include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/non_copyable.h"
+#include "a2a/server/agent_executor.h"
 #include "a2a/server/dispatcher.h"
+#include "a2a/server/security_policy.h"
+#include "a2a/server/server_interceptor.h"
 #include "a2a/server/stores/store_factory.h"
-#include "a2a/v1/a2a.pb.h"
 #include "sut/tck_sut.h"
 
 namespace a2a::tests::sut {
-
 inline constexpr std::string_view kAuthorizationTrigger = "request-authorization";
 inline constexpr std::string_view kAuthorizationExplanation =
     "Supply the task credential using the out-of-band fixture directory.";
@@ -38,7 +40,11 @@ inline constexpr std::string_view kBobIdentity = "bob";
 inline constexpr std::string_view kDefaultProfile = "default";
 inline constexpr std::string_view kCapabilityNegativeProfile = "capability_negative";
 
+inline constexpr char kSutTransportsEnv[] = "A2A_TCK_TRANSPORTS";
+inline constexpr std::string_view kGrpcTransport = "grpc";
+
 struct SutAgentOptions final {
+  bool asynchronous = false;
   bool streaming = true;
   bool push_notifications = true;
   std::string auth_token;
@@ -52,26 +58,22 @@ struct SutAgentOptions final {
   std::string extended_card_mode = std::string(kExtendedCardModeConfigured);
 };
 
-[[nodiscard]] core::Result<SutAgentOptions> ReadSutAgentOptions();
+[[nodiscard]] core::Result<SutAgentOptions> ReadSutAgentOptions(bool asynchronous = false);
 
-// All bindings share this executor, dispatcher, card provider and policy.
-// Protocol validation and wire/error conversion remain in SDK adapters.
-class SutAgent final {
+class SutAgent final : private core::NonCopyableOrMovable {
  public:
   SutAgent(server::stores::StoreBundle stores, const SutEndpoints& endpoints, SutAgentOptions options = {});
-  ~SutAgent();
-  SutAgent(const SutAgent&) = delete;
-  SutAgent& operator=(const SutAgent&) = delete;
-  SutAgent(SutAgent&&) = delete;
-  SutAgent& operator=(SutAgent&&) = delete;
-
-  [[nodiscard]] server::Dispatcher& dispatcher() noexcept;
+  [[nodiscard]] std::shared_ptr<server::AgentExecutor> executor() const;
   [[nodiscard]] const lf::a2a::v1::AgentCard& agent_card() const noexcept;
+  [[nodiscard]] std::shared_ptr<core::AgentCardProvider> card_provider() const;
+  [[nodiscard]] std::shared_ptr<server::ServerInterceptor> interceptor() const;
+  [[nodiscard]] std::shared_ptr<const server::SecurityPolicy> security_policy() const;
+  [[nodiscard]] server::TaskStore* task_store() const;
+  [[nodiscard]] server::Dispatcher& dispatcher() noexcept;
   void ShutdownSubscriptions();
 
  private:
   class Impl;
-  std::unique_ptr<Impl> impl_;
+  std::shared_ptr<Impl> impl_;
 };
-
 }  // namespace a2a::tests::sut

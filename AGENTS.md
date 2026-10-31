@@ -38,6 +38,7 @@ AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assiste
   - Use standard synchronization primitives and document threading contracts.
 - API and design:
   - Keep functions focused and small.
+  - Follow the single-responsibility principle within reasonable constraints: keep functions, classes, and source/header files cohesive, and separate unrelated responsibilities without unnecessary fragmentation.
   - Prefer composition over inheritance.
   - Separate interface from implementation to reduce coupling.
   - Prefer the simplest correct solution when it is equally efficient; do not add indirection, helper namespaces,

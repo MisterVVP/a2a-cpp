@@ -65,8 +65,13 @@ add_custom_command(
     --grpc_out=${A2A_GENERATED_DIR}
     --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
     ${A2A_PROTO_FILE}
+  COMMAND ${CMAKE_COMMAND}
+    "-DA2A_GRPC_SOURCE=${A2A_GRPC_SRCS}"
+    "-DA2A_GRPC_HEADER=${A2A_GRPC_HDRS}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/NormalizeGrpcWindowsMacros.cmake"
   DEPENDS
     ${A2A_PROTO_FILE}
+    "${PROJECT_SOURCE_DIR}/cmake/NormalizeGrpcWindowsMacros.cmake"
     protobuf::protoc
     gRPC::grpc_cpp_plugin
     ${A2A_PROTO_SRCS}
@@ -84,6 +89,12 @@ add_library(a2a_proto_generated STATIC
 )
 add_library(a2a::proto_generated ALIAS a2a_proto_generated)
 set_target_properties(a2a_proto_generated PROPERTIES EXPORT_NAME proto_generated)
+
+# gRPC 1.33 requires this opt-in for the stable callback service/client names.
+# Export it so installed consumers see the same generated API as the SDK.
+if(gRPC_VERSION VERSION_LESS 1.38)
+  target_compile_definitions(a2a_proto_generated PUBLIC GRPC_CALLBACK_API_NONEXPERIMENTAL=1)
+endif()
 
 target_link_libraries(a2a_proto_generated
   PUBLIC
