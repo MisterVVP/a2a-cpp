@@ -4,7 +4,8 @@ Build with `A2A_ENABLE_ASIO=ON` and link `a2a::asio`. The async execution engine
 Boost.Asio C++20 coroutines throughout. Implement
 `a2a::server::engine::CoroutineAgentExecutor`; its eight unary methods return
 `boost::asio::awaitable<core::Result<T>>`. Extended agent cards continue to use the
-agent-card provider. Streaming is outside this unary engine.
+agent-card provider. [Streaming methods](async-streaming.md) use the same engine
+through `DispatchStream` and an owned, demand-driven session.
 
 ```cpp
 boost::asio::thread_pool runtime(2);

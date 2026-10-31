@@ -199,6 +199,7 @@ if(A2A_ENABLE_ASIO)
   find_package(Threads REQUIRED)
   add_library(a2a_asio STATIC
     server/engine/async_dispatcher.cpp
+    server/engine/async_task_subscription.cpp
     server/transport/async_grpc_server_transport.cpp
     server/engine/coroutine_agent_executor.cpp
     server/engine/blocking_executor_adapter.cpp

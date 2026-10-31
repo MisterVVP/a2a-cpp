@@ -27,6 +27,11 @@ template <typename Request>
       return parsed.error();
     }
     dispatch.payload = std::move(parsed.value());
+  } else if constexpr (std::is_same_v<Request, lf::a2a::v1::SubscribeToTaskRequest>) {
+    lf::a2a::v1::GetTaskRequest get;
+    get.set_id(request.id());
+    get.set_tenant(request.tenant());
+    dispatch.payload = std::move(get);
   } else {
     dispatch.payload = request;
   }
