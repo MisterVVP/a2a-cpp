@@ -28,6 +28,7 @@
   - [JSON-RPC](transports/json-rpc.md)
   - [gRPC](transports/grpc.md)
 - [Streaming](streaming/overview.md)
+  - [Windows outbound HTTP reactor](streaming/windows-reactor.md)
 - [Authentication](auth/overview.md)
   - [Security Integration](auth/security.md)
 - [Conformance and Compatibility](compatibility/conformance.md)

@@ -5,6 +5,10 @@
 
 #if defined(A2A_HAS_LIBCURL)
 
+#if defined(_WIN32)
+#include "curl_windows_readiness.h"
+#endif
+
 #if defined(__linux__)
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -20,6 +24,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <new>
 #include <system_error>
 #include <utility>
 
@@ -101,6 +106,14 @@ CurlStreamReactor::CurlStreamReactor() : multi_handle_(curl_multi_init()) {
   timer_descriptor_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
   valid_ = epoll_descriptor_ >= 0 && wakeup_descriptor_ >= 0 && timer_descriptor_ >= 0 &&
            AddInternalDescriptor(wakeup_descriptor_) && AddInternalDescriptor(timer_descriptor_);
+#elif defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+  try {
+    windows_readiness_ = std::make_unique<CurlWindowsReadiness>();
+  } catch (const std::bad_alloc&) {
+    // Finish construction so the invalid reactor's destructor releases CURLM.
+    return;
+  }
+  valid_ = windows_readiness_->valid();
 #else
   valid_ = true;
 #endif
@@ -130,6 +143,8 @@ void CurlStreamReactor::Wake() const noexcept {
   do {
     result = write(wakeup_descriptor_, &kWakeValue, sizeof(kWakeValue));
   } while (result < 0 && errno == EINTR);
+#elif defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+  windows_readiness_->Wake();
 #else
   (void)curl_multi_wakeup(multi_handle_);
 #endif
@@ -144,6 +159,8 @@ void CurlStreamReactor::Run() {
     }
 #if defined(__linux__)
     WaitForLinuxEvents();
+#elif defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+    WaitForWindowsEvents();
 #else
     WaitForPortableEvents();
 #endif
@@ -376,6 +393,77 @@ int CurlStreamReactor::HandleTimer(CURLM* multi_handle, long timeout_ms, void* u
   return 0;
 }
 #else
+#if defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+void CurlStreamReactor::WaitForWindowsEvents() {
+  if (!windows_readiness_->Wait() || !windows_readiness_->DrainWake()) {
+    shutting_down_ = true;
+    {
+      std::lock_guard lock(command_mutex_);
+      shutdown_enqueued_ = true;
+    }
+    ProcessCommands();
+    FailAll(CURLE_RECV_ERROR);
+    return;
+  }
+  // Commands take priority over a readiness snapshot. Cancellation may remove
+  // sockets or reuse their numeric handles; generation checks discard both.
+  ProcessCommands();
+  if (shutting_down_) {
+    return;
+  }
+  if (windows_readiness_->deadline().TakeExpired()) {
+    int running_handles = 0;
+    if (curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles) != CURLM_OK) {
+      FailAll(CURLE_RECV_ERROR);
+    }
+  }
+  for (const auto& event : windows_readiness_->events()) {
+    if (windows_readiness_->IsCurrent(event)) {
+      ProcessWindowsSocket(event.socket, event.events);
+    }
+  }
+}
+
+void CurlStreamReactor::ProcessWindowsSocket(curl_socket_t socket, short events) {
+  int action = 0;
+  action |= (events & (POLLRDNORM | POLLRDBAND)) != 0 ? CURL_CSELECT_IN : 0;
+  action |= (events & POLLWRNORM) != 0 ? CURL_CSELECT_OUT : 0;
+  action |= (events & (POLLERR | POLLHUP | POLLNVAL)) != 0 ? CURL_CSELECT_ERR : 0;
+  int running_handles = 0;
+  const CURLMcode code = curl_multi_socket_action(multi_handle_, socket, action, &running_handles);
+  if (code != CURLM_OK && code != CURLM_BAD_SOCKET) {
+    FailAll(CURLE_RECV_ERROR);
+  }
+}
+
+int CurlStreamReactor::HandleSocket(CURL* easy_handle, curl_socket_t socket, int action, void* user_data,
+                                    void* socket_data) {
+  (void)easy_handle;
+  (void)socket_data;
+  auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+  try {
+    return reactor->windows_readiness_->Update(socket, action) ? 0 : -1;
+  } catch (const std::bad_alloc&) {
+    // Never unwind through libcurl or mutate CURLM recursively in a callback.
+    return -1;
+  }
+}
+
+int CurlStreamReactor::HandleTimer(CURLM* multi_handle, long timeout_ms, void* user_data) {
+  (void)multi_handle;
+  auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+  reactor->windows_readiness_->deadline().Update(timeout_ms);
+  return 0;
+}
+#else
+int CurlStreamReactor::HandleSocket(CURL*, curl_socket_t, int, void*, void*) { return 0; }
+int CurlStreamReactor::HandleTimer(CURLM*, long timeout_ms, void* user_data) {
+  auto* reactor = static_cast<CurlStreamReactor*>(user_data);
+  reactor->portable_poll_timeout_ms_ = timeout_ms >= 0 ? timeout_ms : kDefaultPortablePollTimeoutMs;
+  return 0;
+}
+#endif
+
 void CurlStreamReactor::WaitForPortableEvents() {
   int ready = 0;
   const long bounded_timeout =
@@ -392,12 +480,6 @@ void CurlStreamReactor::WaitForPortableEvents() {
   }
 }
 
-int CurlStreamReactor::HandleSocket(CURL*, curl_socket_t, int, void*, void*) { return 0; }
-int CurlStreamReactor::HandleTimer(CURLM*, long timeout_ms, void* user_data) {
-  auto* reactor = static_cast<CurlStreamReactor*>(user_data);
-  reactor->portable_poll_timeout_ms_ = timeout_ms >= 0 ? timeout_ms : kDefaultPortablePollTimeoutMs;
-  return 0;
-}
 #endif
 
 std::shared_ptr<CurlStreamReactor> CurlStreamReactorPool::Acquire() {

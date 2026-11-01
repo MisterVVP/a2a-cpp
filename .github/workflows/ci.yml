@@ -623,6 +623,49 @@ jobs:
           ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
           -E "^(sut_entrypoints_test|performance_runner_script_test|run_examples_script_test)$"
 
+      - name: Measure native and fallback Windows libcurl reactors
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force reactor-evidence | Out-Null
+          & ./build/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 reactor-evidence/native.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./build/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 reactor-evidence/fallback.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config RelWithDebInfo --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/compare_curl_reactor_evidence.py reactor-evidence/fallback.json reactor-evidence/native.json --output reactor-evidence/summary.md
+          $comparisonExit = $LASTEXITCODE
+          Get-Content reactor-evidence/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          exit $comparisonExit
+
+      - name: Windows transport performance smoke
+        shell: pwsh
+        env:
+          A2A_PERF_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_performance_driver.exe
+          A2A_PERF_WIRE_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_wire_performance_driver.exe
+          A2A_PERF_SUT: ${{ github.workspace }}/build/tests/RelWithDebInfo/performance_sut.exe
+        run: |
+          python scripts/performance_runner.py --transports grpc,http_json --store-backends inmemory --requests 2 --concurrency 1 --warmup-seconds 0 --duration-seconds 0 --report-dir perf-artifacts-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import json; rows=json.load(open('perf-artifacts-smoke/results.json', encoding='utf-8'))['results']; assert rows and not sum(int(row.get('errors', 0)) for row in rows)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows reactor evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-curl-reactor-evidence
+          path: |
+            reactor-evidence
+            perf-artifacts-smoke
+          if-no-files-found: warn
+
       - name: Publish Windows stage timings
         shell: pwsh
         run: |

@@ -77,6 +77,7 @@ endif()
 
 add_library(a2a_http STATIC
   http/curl_stream_reactor.cpp
+  http/curl_windows_readiness.cpp
   http/http_client.cpp
   http/http_client_curl.cpp
   http/http_client_streaming.cpp
@@ -96,6 +97,12 @@ target_link_libraries(a2a_http
 )
 
 if(A2A_HAS_LIBCURL)
+  if(WIN32)
+    target_link_libraries(a2a_http PRIVATE ws2_32)
+  endif()
+  if(A2A_TEST_CURL_PORTABLE_REACTOR)
+    target_compile_definitions(a2a_http PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
+  endif()
   target_link_libraries(a2a_http
     PRIVATE
       CURL::libcurl
