@@ -64,6 +64,72 @@ struct CoroutineDispatchResult final {
   ReturnType operator()(core::Result<DispatchResponse> result) const { co_return std::move(result); }
 };
 
+constexpr auto kMissingStream = "Streaming dispatch requires a stream operation and sink";
+constexpr auto kConcurrentWrite = "Only one stream write may be outstanding";
+
+class CheckedStream final : public AsyncServerStreamSession {
+ public:
+  CheckedStream(std::shared_ptr<AsyncServerStreamSession> sink, std::shared_ptr<RequestExecution> source,
+                std::shared_ptr<const DispatchSecurity> security, RequestContext context,
+                const DispatchRequest& request)
+      : sink_(std::move(sink)),
+        source_(std::move(source)),
+        security_(std::move(security)),
+        context_(std::move(context)) {
+    if (const auto* get = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload)) {
+      task_id_ = get->id();
+    } else if (const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload)) {
+      task_id_ = send->message().task_id();
+    }
+  }
+  boost::asio::awaitable<core::Result<void>> Write(lf::a2a::v1::StreamResponse event) override {
+    if (writing_.exchange(true)) {
+      co_return Reject(core::Error::Validation(kConcurrentWrite));
+    }
+    struct Reservation final {
+      std::atomic_bool& writing;
+      ~Reservation() { writing.store(false); }
+    } reservation{.writing = writing_};
+    if (auto failed = Failure(); failed.has_value()) {
+      co_return failed.value();
+    }
+    (void)source_->ExpireDeadline();
+    if (source_->Context().Outcome() != RequestOutcome::kPending) {
+      co_return Reject(CancellationError(source_->Context().Outcome()));
+    }
+    if (security_ != nullptr) {
+      auto authorized = security_->AuthorizeStreamEvent(event, context_, task_id_);
+      if (!authorized.ok()) {
+        co_return Reject(authorized.error());
+      }
+    }
+    auto result = co_await sink_->Write(std::move(event));
+    co_return result.ok() ? result : Reject(result.error());
+  }
+  std::optional<core::Error> Failure() {
+    std::lock_guard lock(mutex_);
+    return failure_;
+  }
+
+ private:
+  core::Result<void> Reject(const core::Error& error) {
+    std::lock_guard lock(mutex_);
+    if (failure_.has_value()) {
+      return failure_.value();
+    }
+    failure_ = error;
+    return error;
+  }
+  std::mutex mutex_;
+  std::optional<core::Error> failure_;
+  const std::shared_ptr<AsyncServerStreamSession> sink_;
+  const std::shared_ptr<RequestExecution> source_;
+  const std::shared_ptr<const DispatchSecurity> security_;
+  const RequestContext context_;
+  std::string task_id_;
+  std::atomic_bool writing_ = false;
+};
+
 struct AdmissionCounts final {
   std::atomic_size_t active = 0;
   std::atomic_size_t pending = 0;
@@ -98,7 +164,8 @@ struct AsyncDispatcher::State final {
   struct Call final : std::enable_shared_from_this<Call> {
     Call(const boost::asio::any_io_executor& scheduler, std::shared_ptr<AdmissionCounts> counts,
          DispatchRequest request, RequestContext metadata, TransportCompletion completion,
-         std::optional<RequestExecution::Clock::time_point> deadline, DispatchPipeline pipeline)
+         std::optional<RequestExecution::Clock::time_point> deadline, DispatchPipeline pipeline,
+         std::shared_ptr<AsyncServerStreamSession> stream)
         : strand(boost::asio::make_strand(scheduler)),
           admission(std::move(counts)),
           request(std::move(request)),
@@ -106,7 +173,8 @@ struct AsyncDispatcher::State final {
           source(std::make_shared<RequestExecution>(std::move(metadata), deadline)),
           completion(std::move(completion)),
           pipeline(std::move(pipeline)),
-          session(this->pipeline, this->request, context) {}
+          session(this->pipeline, this->request, context),
+          stream(std::move(stream)) {}
 
     void ObserveStop() {
       const auto weak = weak_from_this();
@@ -149,14 +217,41 @@ struct AsyncDispatcher::State final {
           } else {
             auto view = call->source->Context().WithMetadata(call->context);
             const auto prepared = call->session.Prepare();
-            response = co_await RouteDispatch(*state->executor, prepared.has_value() ? *prepared : call->request, view,
-                                              CoroutineDispatchResult{});
+            if (call->stream != nullptr) {
+              response = co_await call->RunStream(*state->executor, view);
+            } else {
+              response = co_await RouteDispatch(*state->executor, prepared.has_value() ? *prepared : call->request,
+                                                view, CoroutineDispatchResult{});
+            }
           }
         }
       } catch (...) {
         response = CoroutineError(std::current_exception());
       }
       call->Finish(std::move(response));
+    }
+
+    boost::asio::awaitable<core::Result<DispatchResponse>> RunStream(CoroutineAgentExecutor& application,
+                                                                     RequestExecutionContext view) {
+      auto checked = std::make_shared<CheckedStream>(stream, source, pipeline.security, context, request);
+      core::Result<DispatchResponse> result = core::Error::Validation(kMissingStream);
+      if (request.operation == DispatcherOperation::kSendStreamingMessage) {
+        result = co_await RoutePayload<lf::a2a::v1::SendMessageRequest>(
+            request, core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendStreamingMessage.data(),
+            CoroutineDispatchResult{}, [&](const auto& payload) {
+              return CoroutineDispatchResult{}(application.SendStreamingMessage(payload, view, checked));
+            });
+      } else {
+        result = co_await RoutePayload<lf::a2a::v1::GetTaskRequest>(
+            request, core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask.data(),
+            CoroutineDispatchResult{}, [&](const auto& payload) {
+              return CoroutineDispatchResult{}(application.SubscribeTask(payload, view, checked));
+            });
+      }
+      if (auto failed = checked->Failure(); failed.has_value()) {
+        result = failed.value();
+      }
+      co_return result;
     }
 
     void ObserveShutdown(State& state) {
@@ -207,6 +302,7 @@ struct AsyncDispatcher::State final {
     TransportCompletion completion;
     DispatchPipeline pipeline;
     DispatchSession session;
+    const std::shared_ptr<AsyncServerStreamSession> stream;
     std::weak_ptr<State> owner;
     boost::asio::cancellation_signal cancellation;
     std::unique_ptr<std::stop_callback<std::function<void()>>> observer;
@@ -284,6 +380,22 @@ void AsyncDispatcher::Cancel(std::shared_ptr<RequestExecution> execution, Reques
 core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::Dispatch(
     DispatchRequest request, RequestContext metadata, TransportCompletion completion,
     std::optional<RequestExecution::Clock::time_point> deadline) {
+  return DispatchImpl(std::move(request), std::move(metadata), std::move(completion), deadline, nullptr);
+}
+
+core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchStream(
+    DispatchRequest request, RequestContext metadata, std::shared_ptr<AsyncServerStreamSession> stream,
+    TransportCompletion completion, std::optional<RequestExecution::Clock::time_point> deadline) {
+  if (stream == nullptr || (request.operation != DispatcherOperation::kSendStreamingMessage &&
+                            request.operation != DispatcherOperation::kSubscribeTask)) {
+    return core::Error::Validation(kMissingStream);
+  }
+  return DispatchImpl(std::move(request), std::move(metadata), std::move(completion), deadline, std::move(stream));
+}
+
+core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchImpl(
+    DispatchRequest request, RequestContext metadata, TransportCompletion completion,
+    std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream) {
   if (!completion) {
     return core::Error::Validation(kMissingCompletion);
   }
@@ -299,7 +411,7 @@ core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::Dispatch(
     return core::Error::Network(kPendingFull);
   }
   auto call = std::make_shared<State::Call>(state->scheduler, state->admission, std::move(request), std::move(metadata),
-                                            std::move(completion), deadline, state->pipeline);
+                                            std::move(completion), deadline, state->pipeline, std::move(stream));
   call->owner = state;
   call->ObserveStop();
   state->calls.emplace(call.get(), call);

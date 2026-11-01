@@ -1,8 +1,9 @@
-# Native async gRPC unary service
+# Native async gRPC service
 
 `a2a::server::AsyncGrpcServerTransport` connects the
 [async dispatcher](async-dispatcher.md) to the generated native gRPC callback
-service. It supports all nine unary RPCs, including extended agent cards. Include
+service. It supports all nine unary RPCs, including extended agent cards, and
+[coroutine streaming](async-streaming.md) for both streaming RPCs. Include
 `a2a/server/async_grpc_server_transport.h` when `A2A_HAS_ASYNC_SERVER` is `1`.
 
 Choose the service when registering an A2A endpoint:
@@ -10,8 +11,8 @@ Choose the service when registering an A2A endpoint:
 - `GrpcServerTransport` uses the existing synchronous `Dispatcher` / `AgentExecutor`
   interfaces and retains unary and streaming behavior.
 - `AsyncGrpcServerTransport` uses `engine::AsyncDispatcher` /
-  `engine::CoroutineAgentExecutor`. Streaming RPCs return gRPC `UNIMPLEMENTED`;
-  async stream sessions are a separate feature.
+  `engine::CoroutineAgentExecutor`. Streaming methods await owned session writes;
+  unimplemented application methods return unsupported-operation errors.
 
 Register one A2A service implementation per endpoint. Existing applications can
 keep their current registration. Coroutine executors suspend for asynchronous
@@ -190,8 +191,8 @@ pending workload; they do not establish general database or network throughput.
 The existing `tck_sut` retains synchronous execution, streaming, and all three
 protocol bindings. A separate `tck_async_sut` provides one shared async setup for
 gRPC, JSON-RPC, and HTTP+JSON integration. Currently only gRPC is implemented;
-requesting an unavailable async binding fails at startup. Streaming remains
-unavailable in this unary-only setup.
+requesting an unavailable async binding fails at startup. The setup enables
+coroutine streaming and shared task subscriptions over gRPC.
 
 ```sh
 SUT_TARGET=tck_async_sut A2A_TCK_TRANSPORTS=grpc ./scripts/run_tck_sut.sh
@@ -201,8 +202,9 @@ TCK_TRANSPORTS=grpc ./scripts/run_tck_mandatory.sh
 
 The async agent uses the SDK `AsyncDispatcher` and `AsyncGrpcServerTransport`
 directly. Both setups share application behavior, stores, policies, and agent-card
-providers. The async application executor queues fixture operations on two bounded
-backend workers instead of calling the synchronous dispatcher. Existing store and
+providers. The async application executor queues blocking fixture operations on
+fixed backend workers instead of calling the synchronous dispatcher. Live stream
+subscriptions suspend on shared publication notifications. Existing store and
 push-delivery APIs are synchronous; this facility keeps that fixture work off Asio
 workers and does not provide asynchronous database or outbound network
 I/O. The separate network evidence above uses externally completed pending

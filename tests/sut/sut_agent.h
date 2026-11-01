@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/non_copyable.h"
@@ -14,6 +15,7 @@
 #include "a2a/server/security_policy.h"
 #include "a2a/server/server_interceptor.h"
 #include "a2a/server/stores/store_factory.h"
+#include "a2a/server/task_subscription_service.h"
 #include "sut/tck_sut.h"
 
 namespace a2a::tests::sut {
@@ -70,6 +72,9 @@ class SutAgent final : private core::NonCopyableOrMovable {
   [[nodiscard]] std::shared_ptr<const server::SecurityPolicy> security_policy() const;
   [[nodiscard]] server::TaskStore* task_store() const;
   [[nodiscard]] server::Dispatcher& dispatcher() noexcept;
+  core::Result<std::vector<lf::a2a::v1::StreamResponse>> BuildStreamingEvents(
+      const lf::a2a::v1::SendMessageRequest& request, server::RequestContext context);
+  server::TaskSubscriptionService& TaskSubscriptions();
   void ShutdownSubscriptions();
 
  private:

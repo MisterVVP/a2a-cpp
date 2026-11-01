@@ -49,6 +49,12 @@ class AsyncDispatcher final : private core::NonCopyableOrMovable {
       DispatchRequest request, RequestContext metadata, TransportCompletion completion,
       std::optional<RequestExecution::Clock::time_point> deadline = {});
 
+  // Streams retain admission and run AfterDispatch only at terminal completion.
+  // Each awaited write consumes one unit of transport demand.
+  [[nodiscard]] core::Result<std::shared_ptr<RequestExecution>> DispatchStream(
+      DispatchRequest request, RequestContext metadata, std::shared_ptr<AsyncServerStreamSession> stream,
+      TransportCompletion completion, std::optional<RequestExecution::Clock::time_point> deadline = {});
+
   // Queue one cancellation notification per transport call. Stop observers run
   // on Asio workers, never inline on a network reactor. The source may already be
   // terminal; first-terminal-transition precedence remains unchanged.
@@ -61,6 +67,9 @@ class AsyncDispatcher final : private core::NonCopyableOrMovable {
   void Shutdown();
 
  private:
+  [[nodiscard]] core::Result<std::shared_ptr<RequestExecution>> DispatchImpl(
+      DispatchRequest request, RequestContext metadata, TransportCompletion completion,
+      std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream);
   struct State;
   std::shared_ptr<State> state_;
 };

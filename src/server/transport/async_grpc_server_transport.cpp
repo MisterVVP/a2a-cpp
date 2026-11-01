@@ -5,6 +5,9 @@
 
 #include <grpc/support/time.h>
 
+#include <boost/asio/experimental/concurrent_channel.hpp>
+#include <boost/asio/this_coro.hpp>
+#include <boost/asio/use_awaitable.hpp>
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -141,6 +144,147 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     Response& response_;
   };
 
+  class StreamingReactor final : public ::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse> {
+   public:
+    using Acknowledgement = boost::asio::experimental::concurrent_channel<void(boost::system::error_code, bool)>;
+    struct Session final : engine::AsyncServerStreamSession, std::enable_shared_from_this<Session> {
+      boost::asio::awaitable<core::Result<void>> Write(lf::a2a::v1::StreamResponse event) override {
+        return WriteOwned(shared_from_this(), std::move(event));
+      }
+      static boost::asio::awaitable<core::Result<void>> WriteOwned(std::shared_ptr<Session> session,
+                                                                   lf::a2a::v1::StreamResponse event) {
+        const auto scheduler = co_await boost::asio::this_coro::executor;
+        auto ack = std::make_shared<Acknowledgement>(scheduler, 1);
+        {
+          std::lock_guard lock(session->mutex);
+          if (session->reactor == nullptr || session->terminal.has_value() || session->writing) {
+            co_return core::Error::Network(kStreamClosed);
+          }
+          session->writing = true;
+          session->current = std::move(event);
+          session->acknowledgement = ack;
+          session->reactor->StartWrite(&session->current);
+        }
+        const bool ok = co_await ack->async_receive(boost::asio::use_awaitable);
+        co_return ok ? core::Result<void>{} : core::Error::Network(kStreamWriteFailed);
+      }
+      std::mutex mutex;
+      StreamingReactor* reactor = nullptr;
+      lf::a2a::v1::StreamResponse current;
+      std::shared_ptr<Acknowledgement> acknowledgement;
+      std::optional<::grpc::Status> terminal;
+      bool writing = false;
+    };
+
+    StreamingReactor(std::shared_ptr<Call> call, ::grpc::CallbackServerContext& context)
+        : call_(std::move(call)), context_(context), session_(std::make_shared<Session>()) {
+      session_->reactor = this;
+    }
+    [[nodiscard]] std::shared_ptr<Session> session() const { return session_; }
+    void Complete(core::Result<DispatchResponse> result, const RequestExecutionContext& execution) {
+      auto status = result.ok()
+                        ? ::grpc::Status::OK
+                        : GrpcErrorStatus(result.error(), &context_, {}, CancellationStatus(execution.Outcome()));
+      FinishOnce(status);
+    }
+    void FinishOnce(const ::grpc::Status& status) {
+      const auto session = session_;
+      std::lock_guard lock(session->mutex);
+      if (session->terminal.has_value()) {
+        return;
+      }
+      AddGrpcActivatedExtensions(&context_, call_->extensions);
+      session->terminal = status;
+      if (session->writing) {
+        // A stalled HTTP/2 write must not hold host shutdown waiting for demand.
+        // gRPC cancellation releases its write callback; OnDone still owns cleanup.
+        session->terminal = ::grpc::Status(::grpc::StatusCode::CANCELLED, status.error_message());
+        context_.TryCancel();
+      } else {
+        Finish(status);
+      }
+    }
+    void OnWriteDone(bool ok) override {
+      const auto session = session_;
+      std::lock_guard lock(session->mutex);
+      session->writing = false;
+      auto ack = std::exchange(session->acknowledgement, nullptr);
+      if (ack != nullptr) {
+        (void)ack->try_send(boost::system::error_code{}, ok);
+      }
+      const auto terminal = session->terminal;
+      if (terminal.has_value()) {
+        Finish(terminal.value());
+      }
+    }
+    void OnCancel() override {
+      const auto deadline = context_.raw_deadline();
+      call_->Cancel(gpr_time_cmp(deadline, gpr_now(deadline.clock_type)) <= 0
+                        ? RequestCancellationReason::kDeadlineExceeded
+                        : RequestCancellationReason::kClientCancelled);
+    }
+    void OnDone() override {
+      {
+        std::lock_guard lock(session_->mutex);
+        session_->reactor = nullptr;
+      }
+      if (const auto state = call_->owner.lock()) {
+        std::lock_guard lock(state->mutex);
+        state->calls.erase(call_.get());
+      }
+      delete this;
+    }
+
+   private:
+    static constexpr auto kStreamClosed = "Async gRPC stream is closed or already writing";
+    static constexpr auto kStreamWriteFailed = "Async gRPC stream write failed";
+    const std::shared_ptr<Call> call_;
+    ::grpc::CallbackServerContext& context_;
+    const std::shared_ptr<Session> session_;
+  };
+
+  template <typename Request>
+  ::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse>* StartStream(::grpc::CallbackServerContext& context,
+                                                                       const Request* request,
+                                                                       DispatcherOperation operation) {
+    auto call = std::make_shared<Call>();
+    call->owner = shared_from_this();
+    call->dispatcher = dispatcher;
+    auto* reactor = new StreamingReactor(call, context);
+    auto metadata = BuildGrpcRequestContext(context, extensions);
+    if (request == nullptr || !metadata.ok()) {
+      reactor->FinishOnce(request == nullptr ? ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, kMissingArguments)
+                                             : GrpcErrorStatus(metadata.error(), &context));
+      return reactor;
+    }
+    call->extensions = std::move(metadata.value().activated_extensions);
+    auto routed = ParseGrpcUnaryRequest(operation, *request);
+    if (!routed.ok()) {
+      reactor->FinishOnce(GrpcErrorStatus(routed.error(), &context));
+      return reactor;
+    }
+    {
+      std::lock_guard lock(mutex);
+      if (closed) {
+        reactor->FinishOnce(GrpcErrorStatus(core::Error::Network(kServiceClosed), &context));
+        return reactor;
+      }
+      calls.emplace(call.get(), call);
+    }
+    const auto admitted = dispatcher->DispatchStream(
+        std::move(routed.value()), std::move(metadata.value().request_context), reactor->session(),
+        [call, reactor](auto result, const RequestExecutionContext& execution) {
+          reactor->Complete(std::move(result), execution);
+        },
+        SteadyDeadline(context.deadline()));
+    if (!admitted.ok()) {
+      reactor->FinishOnce(GrpcErrorStatus(admitted.error(), &context));
+    } else {
+      call->Bind(admitted.value());
+    }
+    return reactor;
+  }
+
   State(std::shared_ptr<engine::AsyncDispatcher> target, GrpcServerTransportOptions options)
       : dispatcher(std::move(target)), extensions(std::move(options.required_extensions)) {}
 
@@ -271,6 +415,15 @@ void AsyncGrpcServerTransport::Shutdown() { state_->Shutdown(); }
     ::grpc::CallbackServerContext* context, const lf::a2a::v1::GetExtendedAgentCardRequest* request,
     lf::a2a::v1::AgentCard* response) {
   return state_->Start(*context, request, response, DispatcherOperation::kGetExtendedAgentCard);
+}
+
+::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse>* AsyncGrpcServerTransport::SendStreamingMessage(
+    ::grpc::CallbackServerContext* context, const lf::a2a::v1::SendMessageRequest* request) {
+  return state_->StartStream(*context, request, DispatcherOperation::kSendStreamingMessage);
+}
+::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse>* AsyncGrpcServerTransport::SubscribeToTask(
+    ::grpc::CallbackServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request) {
+  return state_->StartStream(*context, request, DispatcherOperation::kSubscribeTask);
 }
 
 }  // namespace a2a::server

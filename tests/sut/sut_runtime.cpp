@@ -22,7 +22,7 @@
 #include "sut/tck_sut_store.h"
 #ifdef A2A_SUT_ASYNC
 #include "a2a/server/engine/async_runtime.h"
-#include "a2a/server/engine/blocking_executor_adapter.h"
+#include "sut/sut_coroutine_executor.h"
 #endif
 
 namespace a2a::tests::sut {
@@ -142,8 +142,7 @@ int RunAsync(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOpt
   execution.interceptors = {agent.interceptor()};
   execution.security_policy = agent.security_policy();
   execution.task_store = agent.task_store();
-  server::engine::AsyncRuntime engine(std::make_shared<server::engine::BlockingExecutorAdapter>(agent.executor()),
-                                      std::move(execution));
+  server::engine::AsyncRuntime engine(std::make_shared<SutCoroutineExecutor>(agent), std::move(execution));
   server::ServerBindings bindings(engine.dispatcher(), agent.agent_card(), BindingOptions());
   return Serve(agent, config, options, bindings);
 }

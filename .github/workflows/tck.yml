@@ -135,7 +135,7 @@ jobs:
           cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
           -P cmake/InstallBoost.cmake
 
-      - name: Run unified async unary TCK across stores
+      - name: Run unified coroutine unary and streaming TCK across stores
         id: tck_async
         continue-on-error: true
         env:

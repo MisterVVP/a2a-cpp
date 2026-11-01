@@ -24,8 +24,8 @@
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/version.h"
 #include "a2a/server/engine/async_runtime.h"
-#include "a2a/server/engine/blocking_executor_adapter.h"
 #include "sut/sut_agent.h"
+#include "sut/sut_coroutine_executor.h"
 
 namespace {
 using namespace a2a;
@@ -44,7 +44,7 @@ constexpr std::size_t kSingleBinding = 1;
 SutAgentOptions GrpcOptions() {
   SutAgentOptions options;
   options.asynchronous = true;
-  options.streaming = false;
+  options.streaming = true;
   return options;
 }
 server::stores::StoreBundle Stores() {
@@ -56,12 +56,11 @@ class AsyncFixture final {
  public:
   AsyncFixture(stores::StoreBundle stores, const SutEndpoints& endpoints, SutAgentOptions options)
       : agent_(std::move(stores), endpoints, std::move(options)),
-        runtime_(std::make_shared<BlockingExecutorAdapter>(agent_.executor()),
-                 {.interceptors = {agent_.interceptor()},
-                  .agent_card_provider = agent_.card_provider(),
-                  .security_policy = agent_.security_policy(),
-                  .task_store = agent_.task_store(),
-                  .required_extensions = {}}) {}
+        runtime_(std::make_shared<SutCoroutineExecutor>(agent_), {.interceptors = {agent_.interceptor()},
+                                                                  .agent_card_provider = agent_.card_provider(),
+                                                                  .security_policy = agent_.security_policy(),
+                                                                  .task_store = agent_.task_store(),
+                                                                  .required_extensions = {}}) {}
   [[nodiscard]] auto dispatcher() const { return runtime_.dispatcher(); }
   [[nodiscard]] const auto& agent_card() const { return agent_.agent_card(); }
   void Shutdown() { runtime_.Shutdown(); }
@@ -100,13 +99,13 @@ core::Result<DispatchResponse> Invoke(AsyncFixture& agent, DispatchRequest reque
   return future.get();
 }
 
-TEST(AsyncSutTest, AdvertisesOnlyEnabledBindingsAndUnaryCapabilities) {
+TEST(AsyncSutTest, AdvertisesEnabledBindingsAndCoroutineStreaming) {
   const auto agent = Agent();
   const auto& card = agent->agent_card();
   ASSERT_EQ(card.supported_interfaces_size(), kSingleBinding);
   EXPECT_EQ(card.supported_interfaces(0).protocol_binding(), core::protocol_bindings::kGrpc);
   EXPECT_EQ(card.supported_interfaces(0).url(), kEndpoint);
-  EXPECT_FALSE(card.capabilities().streaming());
+  EXPECT_TRUE(card.capabilities().streaming());
   EXPECT_TRUE(card.capabilities().push_notifications());
 }
 

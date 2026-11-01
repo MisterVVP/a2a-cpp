@@ -351,7 +351,7 @@ core::Result<SutAgentOptions> ReadSutAgentOptions(bool asynchronous) {
   }
   options.asynchronous = asynchronous;
   options.push_notifications = profile != kCapabilityNegativeProfile;
-  options.streaming = options.push_notifications && !asynchronous;
+  options.streaming = options.push_notifications;
   options.auth_token = EnvironmentValue(kAuthTokenEnv);
   options.security = profile == kSecurityProfile;
   options.alice_token = EnvironmentValue(kAliceTokenEnv);
@@ -424,6 +424,11 @@ std::shared_ptr<core::AgentCardProvider> SutAgent::card_provider() const { retur
 std::shared_ptr<server::ServerInterceptor> SutAgent::interceptor() const { return impl_->interceptor_; }
 std::shared_ptr<const server::SecurityPolicy> SutAgent::security_policy() const { return impl_->security_; }
 server::TaskStore* SutAgent::task_store() const { return impl_->stores_.task_store.get(); }
+core::Result<std::vector<lf::a2a::v1::StreamResponse>> SutAgent::BuildStreamingEvents(
+    const lf::a2a::v1::SendMessageRequest& request, server::RequestContext context) {
+  return impl_->executor_.BuildStreamingEvents(request, context);
+}
+server::TaskSubscriptionService& SutAgent::TaskSubscriptions() { return impl_->executor_.TaskSubscriptions(); }
 void SutAgent::ShutdownSubscriptions() { impl_->executor_.ShutdownSubscriptions(); }
 
 }  // namespace a2a::tests::sut

@@ -237,11 +237,11 @@ core::Result<GrpcServerTransport::ValidatedRequestContext> GrpcServerTransport::
     return ToGrpcStatus(request_context.error(), context);
   }
 
-  lf::a2a::v1::GetTaskRequest get_task_request;
-  get_task_request.set_id(request->id());
-  const auto dispatch =
-      dispatcher_->Dispatch({.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request},
-                            request_context.value().request_context);
+  auto routed = ParseGrpcUnaryRequest(DispatcherOperation::kSubscribeTask, *request);
+  if (!routed.ok()) {
+    return ToGrpcStatus(routed.error(), context, request_context.value().activated_extensions);
+  }
+  const auto dispatch = dispatcher_->Dispatch(routed.value(), request_context.value().request_context);
   if (!dispatch.ok()) {
     return ToGrpcStatus(dispatch.error(), context, request_context.value().activated_extensions);
   }

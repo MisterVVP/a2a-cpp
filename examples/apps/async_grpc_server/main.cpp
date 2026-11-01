@@ -28,13 +28,27 @@ constexpr auto kSmokeBind = "127.0.0.1:0";
 constexpr auto kEndpointPrefix = "127.0.0.1:";
 constexpr auto kSmokeArgument = "--smoke";
 constexpr auto kStartFailed = "Could not start async gRPC server\n";
-constexpr auto kListening = "Async unary gRPC service on 127.0.0.1:50051; press Enter to stop\n";
+constexpr auto kListening = "Async unary/streaming gRPC service on 127.0.0.1:50051; press Enter to stop\n";
 constexpr auto kCancelled = "Application observed cancellation";
 constexpr auto kTimeout = std::chrono::seconds(5);
 
 // A read-only coroutine application. Real backends co_await their I/O here.
 class ReadOnlyExecutor final : public CoroutineAgentExecutor {
  public:
+  boost::asio::awaitable<a2a::core::Result<void>> SendStreamingMessage(
+      lf::a2a::v1::SendMessageRequest /*request*/, RequestExecutionContext /*context*/,
+      std::shared_ptr<AsyncServerStreamSession> stream) override {
+    for (const auto state : {lf::a2a::v1::TASK_STATE_WORKING, lf::a2a::v1::TASK_STATE_COMPLETED}) {
+      lf::a2a::v1::StreamResponse event;
+      event.mutable_status_update()->set_task_id(kTaskId);
+      event.mutable_status_update()->mutable_status()->set_state(state);
+      auto written = co_await stream->Write(std::move(event));
+      if (!written.ok()) {
+        co_return written.error();
+      }
+    }
+    co_return a2a::core::Result<void>{};
+  }
   boost::asio::awaitable<a2a::core::Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest request,
                                                                        RequestExecutionContext context) override {
     if (context.StopToken().stop_requested()) {
@@ -61,7 +75,22 @@ bool Smoke(int port) {
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(kTaskId);
   lf::a2a::v1::Task response;
-  return stub->GetTask(&context, request, &response).ok() && response.id() == kTaskId;
+  if (!stub->GetTask(&context, request, &response).ok() || response.id() != kTaskId) {
+    return false;
+  }
+  ::grpc::ClientContext streaming;
+  streaming.AddMetadata(std::string(GrpcServerTransport::kVersionMetadataKey),
+                        std::string(a2a::core::Version::kProtocolVersion));
+  streaming.set_deadline(std::chrono::system_clock::now() + kTimeout);
+  auto reader = stub->SendStreamingMessage(&streaming, lf::a2a::v1::SendMessageRequest{});
+  lf::a2a::v1::StreamResponse event;
+  for (const auto state : {lf::a2a::v1::TASK_STATE_WORKING, lf::a2a::v1::TASK_STATE_COMPLETED}) {
+    if (!reader->Read(&event) || event.status_update().status().state() != state) {
+      streaming.TryCancel();
+      return false;
+    }
+  }
+  return !reader->Read(&event) && reader->Finish().ok();
 }
 }  // namespace
 
@@ -98,7 +127,7 @@ int main(int argc, char** argv) try {
 }
 #else
 namespace {
-constexpr auto kUnavailable = "Async unary execution is unavailable in this SDK/standard-library configuration\n";
+constexpr auto kUnavailable = "Async server execution is unavailable in this SDK/standard-library configuration\n";
 constexpr int kUnavailableExit = 77;
 }  // namespace
 int main() {
