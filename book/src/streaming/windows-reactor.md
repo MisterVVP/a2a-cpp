@@ -54,6 +54,11 @@ after unwinding. A generation accompanies every readiness snapshot, so commands,
 timeout processing or another socket action can remove, change or reuse a socket
 without delivering an obsolete event later in that batch.
 
+An orderly Winsock `POLLHUP` is readable EOF, including any buffered final bytes.
+It maps to `CURL_CSELECT_IN`; only `POLLERR` and `POLLNVAL` map to
+`CURL_CSELECT_ERR`. Treating an ordinary FIN as an error can abort a successful
+finite response before libcurl drains it.
+
 The steady-clock deadline follows `CURLMOPT_TIMERFUNCTION`: negative cancels it,
 zero schedules an immediate action after the callback returns, and positive
 values replace the prior deadline. Wait durations round upward to milliseconds.
@@ -71,16 +76,68 @@ lifetime and completion arbitration remain shared across platforms. Linux's
 
 ## Validation and reproduction
 
-Build with libcurl and testing enabled, then run:
+### Build and test on Windows
+
+Install Visual Studio 2022 with **Desktop development with C++**, CMake, Git,
+and Python 3. Run these commands from the repository in Developer PowerShell for
+VS 2022. PowerShell 7 is recommended. Fetch the PR branch and select your vcpkg
+installation; the first CMake configure installs its pinned manifest dependencies.
 
 ```powershell
-ctest --test-dir build -C RelWithDebInfo --output-on-failure -R 'CurlReactor|CurlWindowsReadiness|CurlStreamingTransport'
-./build/tests/RelWithDebInfo/curl_reactor_evidence.exe > native.json
-cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=ON
-cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
-./build/tests/RelWithDebInfo/curl_reactor_evidence.exe > fallback.json
-cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
-cmake --build build --config RelWithDebInfo --parallel
+git fetch origin
+git switch perf/windows-curl-readiness-232
+git pull --ff-only
+
+$env:VCPKG_ROOT = 'C:/vcpkg' # Adjust if vcpkg is installed elsewhere.
+if (-not (Test-Path "$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake")) {
+    git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+}
+& "$env:VCPKG_ROOT/bootstrap-vcpkg.bat"
+
+cmake -S . -B build-windows -G 'Visual Studio 17 2022' -A x64 `
+    "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+    "-DVCPKG_OVERLAY_TRIPLETS=$PWD/triplets" `
+    -DVCPKG_TARGET_TRIPLET=ci-x64-windows-release `
+    -DVCPKG_HOST_TRIPLET=ci-x64-windows-release `
+    '-DVCPKG_MANIFEST_FEATURES=signing;asio' `
+    -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_LIBCURL=ON `
+    -DA2A_ENABLE_SIGNING=ON -DA2A_ENABLE_ASIO=ON
+
+cmake --build build-windows --config RelWithDebInfo `
+    --target curl_reactor_test curl_reactor_evidence --parallel
+ctest --test-dir build-windows -C RelWithDebInfo --output-on-failure `
+    --no-tests=error -R 'CurlReactor|CurlWindowsReadiness|CurlStreamingTransport'
+```
+
+This focused run includes the EOF/hangup mapping, timer, cancellation, shutdown,
+scale, synchronous unary, and real HTTP+JSON/JSON-RPC streaming checks. Winsock
+can return from a timed wait before the steady-clock deadline; the timer test
+waits for the actual deadline, as the reactor does, without assuming one system
+call has millisecond-exact timing.
+
+To run the complete SDK suite with the same platform exclusions as Windows CI:
+
+```powershell
+cmake --build build-windows --config RelWithDebInfo --parallel
+ctest --test-dir build-windows -C RelWithDebInfo --output-on-failure --no-tests=error `
+    -E '^(sut_entrypoints_test|performance_runner_script_test|run_examples_script_test)$'
+```
+
+The excluded script fixtures require POSIX tooling or `compile_commands.json`,
+which the Visual Studio generator does not produce. TCK compliance is separate.
+
+### Compare the native and fallback reactors
+
+Keep the machine otherwise idle during latency measurements. Use explicit UTF-8
+output so the reports also work in Windows PowerShell 5.1:
+
+```powershell
+./build-windows/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 native.json
+cmake -S . -B build-windows -DA2A_TEST_CURL_PORTABLE_REACTOR=ON
+cmake --build build-windows --config RelWithDebInfo --target curl_reactor_evidence --parallel
+./build-windows/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 fallback.json
+cmake -S . -B build-windows -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
+cmake --build build-windows --config RelWithDebInfo --parallel
 python scripts/compare_curl_reactor_evidence.py fallback.json native.json --output reactor-summary.md
 ```
 
@@ -114,7 +171,9 @@ protocol conformance by itself.
 
 The Linux-hosted Windows check used MinGW GCC 14, libcurl 8.17.0 with
 Schannel, and Wine 10.0. All 27 applicable deadline, readiness and transfer tests
-passed, with zero workload errors and bounded thread growth. With competing lint
+passed in the initial implementation, with zero workload errors and bounded
+thread growth. Wine did not reproduce native Winsock's EOF flag combination;
+the regression tests now cover those flags directly. With competing lint
 and build processes paused, the native backend's cancellation p95/p99 were 0.507/0.507 ms
 at one stream, 0.524/1.225 ms at 16, 0.567/0.744 ms at 64, and 0.527/0.712 ms at
 96. Under concurrent compiler/analyzer load, Wine exhibited cancellation tails

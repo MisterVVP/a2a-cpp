@@ -33,6 +33,7 @@ class CurlWindowsReadiness final {
   CurlWindowsReadiness& operator=(const CurlWindowsReadiness&) = delete;
 
   [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] static int CurlAction(short events) noexcept;
   [[nodiscard]] bool Update(SOCKET socket, int curl_action);
   void Wake() const noexcept;
   [[nodiscard]] bool Wait();

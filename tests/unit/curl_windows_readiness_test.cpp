@@ -21,6 +21,40 @@ constexpr long kImmediateWaitMs = 0L;
 constexpr std::size_t kBeyondWaitHandleLimit = 96U;
 constexpr std::size_t kWakeBurstCount = 10000U;
 
+TEST(CurlWindowsReadinessTest, OrderlyHangupDrainsReadableDataAndEof) {
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLHUP), CURL_CSELECT_IN);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLRDNORM | POLLHUP), CURL_CSELECT_IN);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLWRNORM | POLLHUP), CURL_CSELECT_IN | CURL_CSELECT_OUT);
+}
+
+TEST(CurlWindowsReadinessTest, ReadAndWriteReadiness) {
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(0), 0);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLRDNORM), CURL_CSELECT_IN);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLRDBAND), CURL_CSELECT_IN);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLWRNORM), CURL_CSELECT_OUT);
+}
+
+TEST(CurlWindowsReadinessTest, SocketErrorsArePreservedAlongsideHangup) {
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLERR), CURL_CSELECT_ERR);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLNVAL), CURL_CSELECT_ERR);
+  EXPECT_EQ(CurlWindowsReadiness::CurlAction(POLLHUP | POLLERR), CURL_CSELECT_IN | CURL_CSELECT_ERR);
+}
+
+bool WaitForTimerExpiry(CurlWindowsReadiness& backend) {
+  const auto limit = std::chrono::steady_clock::now() + kReactorTestTimeout;
+  do {
+    if (!backend.Wait() || !backend.events().empty()) {
+      return false;
+    }
+    if (backend.deadline().TakeExpired()) {
+      return true;
+    }
+    // A Winsock timeout may return before steady_clock reaches the deadline.
+    // The reactor also rechecks the deadline rather than firing it early.
+  } while (std::chrono::steady_clock::now() < limit);
+  return false;
+}
+
 void ExpectSocketInterest(CurlWindowsReadiness& backend, SOCKET socket, int action) {
   ASSERT_TRUE(backend.Update(socket, action));
 }
@@ -105,9 +139,7 @@ TEST(CurlWindowsReadinessTest, ImmediateAndPositiveTimersExpireWithoutSockets) {
   constexpr long kShortTimerMs = 10L;
   for (const long timeout : {kImmediateWaitMs, kShortTimerMs}) {
     backend.deadline().Update(timeout);
-    ASSERT_TRUE(backend.Wait());
-    EXPECT_TRUE(backend.deadline().TakeExpired());
-    EXPECT_TRUE(backend.events().empty());
+    EXPECT_TRUE(WaitForTimerExpiry(backend));
   }
 }
 

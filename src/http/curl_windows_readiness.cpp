@@ -100,6 +100,16 @@ bool CurlWindowsReadiness::CreateWakeSockets() {
 
 bool CurlWindowsReadiness::valid() const noexcept { return !sockets_.empty(); }
 
+int CurlWindowsReadiness::CurlAction(short events) noexcept {
+  int action = 0;
+  // Winsock reports an orderly FIN as POLLHUP, possibly alongside buffered
+  // data. Let libcurl recv those bytes and EOF; CSELECT_ERR aborts first.
+  action |= (events & (POLLRDNORM | POLLRDBAND | POLLHUP)) != 0 ? CURL_CSELECT_IN : 0;
+  action |= (events & POLLWRNORM) != 0 ? CURL_CSELECT_OUT : 0;
+  action |= (events & (POLLERR | POLLNVAL)) != 0 ? CURL_CSELECT_ERR : 0;
+  return action;
+}
+
 bool CurlWindowsReadiness::Update(SOCKET socket, int curl_action) {
   if (curl_action == CURL_POLL_REMOVE || curl_action == CURL_POLL_NONE) {
     Remove(socket);

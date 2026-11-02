@@ -35,7 +35,8 @@ constexpr int kSuccessfulHttpStatus = 200;
 
 void ExpectTerminal(const std::shared_ptr<CurlStreamProbe>& probe, bool success) {
   ASSERT_EQ(probe->result.wait_for(kReactorTestTimeout), std::future_status::ready);
-  EXPECT_EQ(probe->result.get().ok(), success);
+  const auto response = probe->result.get();
+  EXPECT_EQ(response.ok(), success) << (response.ok() ? std::string_view{} : response.error().message());
   std::lock_guard lock(probe->mutex);
   EXPECT_FALSE(probe->chunk_before_metadata);
 }

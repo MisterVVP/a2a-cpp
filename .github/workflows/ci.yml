@@ -611,7 +611,18 @@ jobs:
           $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
           $hostTriplet = $env:VCPKG_HOST_TRIPLET
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_SIGNING=ON -DA2A_ENABLE_ASIO=ON "-DVCPKG_MANIFEST_FEATURES=signing;asio"
-          cmake --build build --config RelWithDebInfo --parallel
+          cmake --build build --config RelWithDebInfo --target curl_reactor_test curl_reactor_evidence --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test Windows libcurl reactor
+        shell: pwsh
+        run: >-
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
+          -R "CurlReactor|CurlWindowsReadiness|CurlStreamingTransport"
+
+      - name: Build remaining Windows targets
+        shell: pwsh
+        run: cmake --build build --config RelWithDebInfo --parallel
 
       - name: Test
         shell: pwsh

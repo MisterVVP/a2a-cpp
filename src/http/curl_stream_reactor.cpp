@@ -425,10 +425,7 @@ void CurlStreamReactor::WaitForWindowsEvents() {
 }
 
 void CurlStreamReactor::ProcessWindowsSocket(curl_socket_t socket, short events) {
-  int action = 0;
-  action |= (events & (POLLRDNORM | POLLRDBAND)) != 0 ? CURL_CSELECT_IN : 0;
-  action |= (events & POLLWRNORM) != 0 ? CURL_CSELECT_OUT : 0;
-  action |= (events & (POLLERR | POLLHUP | POLLNVAL)) != 0 ? CURL_CSELECT_ERR : 0;
+  const int action = CurlWindowsReadiness::CurlAction(events);
   int running_handles = 0;
   const CURLMcode code = curl_multi_socket_action(multi_handle_, socket, action, &running_handles);
   if (code != CURLM_OK && code != CURLM_BAD_SOCKET) {
