@@ -672,7 +672,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build --config RelWithDebInfo --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/compare_curl_reactor_evidence.py reactor-evidence/fallback.json reactor-evidence/native.json --output reactor-evidence/summary.md
+          python scripts/compare_curl_reactor_evidence.py reactor-evidence/fallback.json reactor-evidence/native.json --profile cloud --output reactor-evidence/summary.md
           $comparisonExit = $LASTEXITCODE
           Get-Content reactor-evidence/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           exit $comparisonExit

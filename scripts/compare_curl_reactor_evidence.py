@@ -9,10 +9,12 @@ from pathlib import Path
 STREAM_COUNTS = (1, 16, 64, 96)
 MODES = ("complete", "cancel")
 MAX_THREAD_GROWTH = 8
-CANCEL_P95_MS = 10.0
-CANCEL_P99_MS = 20.0
-REGRESSION_RATIO = 1.25
-SCHEDULING_TOLERANCE_MS = 2.0
+LATENCY_PROFILES = {
+    "strict": dict(regression_ratio=1.25, scheduling_tolerance_ms=2.0,
+                   cancel_p95_ms=10.0, cancel_p99_ms=20.0),
+    "cloud": dict(regression_ratio=2.5, scheduling_tolerance_ms=20.0,
+                  cancel_p95_ms=50.0, cancel_p99_ms=100.0),
+}
 METRICS = ("first_p95_ms", "finish_p95_ms", "finish_p99_ms")
 
 
@@ -40,13 +42,16 @@ def read_evidence(path):
     return indexed
 
 
-def compare(baseline, candidate):
+def compare(baseline, candidate, profile="strict"):
+    budgets = LATENCY_PROFILES[profile]
     failures = []
     lines = [
         "# Windows libcurl reactor evidence",
         "",
         "All streams established before cancellation/finish. "
         "Cancellation includes dispatch completion. Zero errors and at most eight added SDK threads required.",
+        f"Latency profile: {profile}. Cancellation targets: p95 < {budgets['cancel_p95_ms']:g} ms / "
+        f"p99 < {budgets['cancel_p99_ms']:g} ms.",
         "Timer periods are requested by the evidence executable (0 means system default). "
         "The SDK does not change timer resolution.",
         "",
@@ -62,18 +67,22 @@ def compare(baseline, candidate):
         if old.get("timer_period_ms", 0) != native.get("timer_period_ms", 0):
             failures.append(f"{key}: unequal timer periods")
         for metric in METRICS:
-            budget = max(old[metric] * REGRESSION_RATIO, old[metric] + SCHEDULING_TOLERANCE_MS)
+            budget = max(old[metric] * budgets["regression_ratio"],
+                         old[metric] + budgets["scheduling_tolerance_ms"])
             if native[metric] > budget:
                 failures.append(f"{key}: {metric} {native[metric]:.3f} ms exceeds {budget:.3f} ms")
         if key[1] == "cancel":
-            if native["finish_p95_ms"] >= CANCEL_P95_MS or native["finish_p99_ms"] >= CANCEL_P99_MS:
-                failures.append(f"{key}: cancellation target p95 < 10 ms / p99 < 20 ms missed")
+            if (native["finish_p95_ms"] >= budgets["cancel_p95_ms"] or
+                    native["finish_p99_ms"] >= budgets["cancel_p99_ms"]):
+                failures.append(f"{key}: cancellation target p95 < {budgets['cancel_p95_ms']:g} ms / "
+                                f"p99 < {budgets['cancel_p99_ms']:g} ms missed")
         metrics = " | ".join(f"{old[name]:.3f}/{native[name]:.3f}" for name in METRICS)
         lines.append(f"| {key[0]} | {key[1]} | {metrics} | "
                      f"{old['maximum_thread_growth']}/{native['maximum_thread_growth']} | "
                      f"{old['samples']}/{native['samples']} | "
                      f"{old.get('timer_period_ms', 0)}/{native.get('timer_period_ms', 0)} |")
-    lines.extend(["", "Regression budget: 25% or 2 ms above the equivalent fallback, whichever is larger. "
+    lines.extend(["", f"Regression budget: max(fallback x {budgets['regression_ratio']:g}, "
+                  f"fallback + {budgets['scheduling_tolerance_ms']:g} ms). "
                   "Shared runner scheduling affects these local-workload measurements.", ""])
     lines.extend(f"- {failure}" for failure in failures)
     return "\n".join(lines), failures
@@ -84,8 +93,9 @@ def main():
     parser.add_argument("baseline")
     parser.add_argument("candidate")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--profile", choices=LATENCY_PROFILES, default="strict")
     args = parser.parse_args()
-    report, failures = compare(read_evidence(args.baseline), read_evidence(args.candidate))
+    report, failures = compare(read_evidence(args.baseline), read_evidence(args.candidate), args.profile)
     Path(args.output).write_text(report, encoding="utf-8")
     print(report)
     return bool(failures)

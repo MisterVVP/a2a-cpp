@@ -161,11 +161,20 @@ resolution change. Default Windows timer granularity can dominate startup
 measurements (about 16 ms at one stream on both backends in a native CI run).
 Twenty repetitions reduce dependence on a single cold or descheduled sample.
 
-The comparison requires zero errors, at most eight added SDK threads, cancellation
-p95 below 10 ms and p99 below 20 ms. Its regression budget is 25% or 2 ms above
-the equivalent fallback, whichever is larger, to accommodate local scheduler
-noise. A failure requires investigation and retains the raw evidence. Shared CI
-runners and Wine are not substitutes for measurements on deployment hardware.
+Both comparison profiles require zero errors, complete/equal sample counts,
+matching timer periods, and at most eight added SDK threads. The default
+`--profile strict` is intended for local measurements: cancellation p95 below
+10 ms and p99 below 20 ms, with a regression budget of 25% or 2 ms above the
+equivalent fallback, whichever is larger.
+
+Windows CI uses `--profile cloud` to accommodate shared-runner scheduling:
+cancellation p95 below 50 ms and p99 below 100 ms, with a relative budget of
+2.5 times the fallback or 20 ms above it, whichever is larger. The report names
+the selected profile and its thresholds. To reproduce CI's acceptance locally,
+append `--profile cloud` to the comparison command above. Large regressions,
+errors, incomplete workloads and thread-budget violations still fail CI.
+A failure retains the raw evidence. Cloud budgets are a coarse regression
+guard; deployment-hardware measurements establish local performance parity.
 
 Deterministic tests cover disarm/rearm/immediate timers, retained and concurrent
 wakeups, readiness-interest changes, stale registrations, closure, idle Add and
@@ -194,5 +203,6 @@ regressions, including cold one-stream startup (fallback/native first-event p95
 contention reduced cancellation tails but did not establish full latency parity.
 These measurements include Wine's Winsock translation and the fixture's sequential
 accept/release work. They are diagnostic evidence, not a passing native Windows
-performance claim. The Windows CI comparison retains and enforces the same
-regression budgets so remaining differences are visible on a native runner.
+performance claim. The Windows CI comparison publishes native-runner evidence
+with the documented cloud budgets; local comparisons retain the stricter
+default thresholds.

@@ -74,6 +74,30 @@ class EvidenceTest(unittest.TestCase):
         _, failures = EVIDENCE.compare(baseline, candidate)
         self.assertTrue(any("unequal timer periods" in failure for failure in failures))
 
+    def test_cloud_profile_tolerates_shared_runner_startup_variance(self):
+        baseline = self.read(rows())
+        baseline[(64, "complete")]["first_p95_ms"] = 27
+        candidate = copy.deepcopy(baseline)
+        candidate[(64, "complete")]["first_p95_ms"] = 57
+        _, strict_failures = EVIDENCE.compare(baseline, candidate)
+        report, cloud_failures = EVIDENCE.compare(baseline, candidate, "cloud")
+        self.assertTrue(strict_failures)
+        self.assertFalse(cloud_failures)
+        self.assertIn("Latency profile: cloud", report)
+
+    def test_cloud_profile_still_rejects_large_regressions(self):
+        baseline = self.read(rows())
+        candidate = copy.deepcopy(baseline)
+        candidate[(64, "complete")]["first_p95_ms"] = 100
+        _, failures = EVIDENCE.compare(baseline, candidate, "cloud")
+        self.assertTrue(failures)
+
+    def test_cloud_cancellation_limits_remain_enforced(self):
+        baseline = self.read(rows())
+        baseline[(64, "cancel")].update(finish_p95_ms=50, finish_p99_ms=100)
+        _, failures = EVIDENCE.compare(baseline, baseline, "cloud")
+        self.assertTrue(any("cancellation target" in failure for failure in failures))
+
 
 if __name__ == "__main__":
     unittest.main()
