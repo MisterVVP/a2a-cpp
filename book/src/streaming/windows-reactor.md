@@ -145,7 +145,7 @@ Windows CI runs these equivalent workloads and the mandatory gRPC and HTTP+JSON
 performance smoke. It publishes raw JSON and a Markdown comparison in
 `windows-curl-reactor-evidence`. The report records first-event p95,
 finite-completion/cancellation p95 and p99, samples, errors and added process
-threads for 1/16/64/96 streams over five repetitions. One server worker serves
+threads for 1/16/64/96 streams over twenty repetitions. One server worker serves
 all sockets. Cancellation timing starts after the first event establishes each
 stream and ends at dispatch completion, while peers remain idle. Finite timing
 starts before releasing all established server connections. First-event timing
@@ -153,6 +153,13 @@ includes submission and cold shard startup. Record compiler, libcurl version,
 OS and build configuration when comparing results outside CI.
 The fixture sends the headers and first SSE chunk in one write so TCP
 Nagle/delayed-ACK behavior cannot hold the tiny chunk behind the headers.
+The evidence executable requests a 1 ms Windows process timer period with
+`timeBeginPeriod`, balances it with `timeEndPeriod` on exit, and records
+`timer_period_ms` in each row. Both backends use this same setting; the
+comparison rejects mismatched periods. The SDK itself does not request a timer
+resolution change. Default Windows timer granularity can dominate startup
+measurements (about 16 ms at one stream on both backends in a native CI run).
+Twenty repetitions reduce dependence on a single cold or descheduled sample.
 
 The comparison requires zero errors, at most eight added SDK threads, cancellation
 p95 below 10 ms and p99 below 20 ms. Its regression budget is 25% or 2 ms above

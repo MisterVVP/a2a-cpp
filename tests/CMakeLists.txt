@@ -167,7 +167,7 @@ if(A2A_HAS_LIBCURL)
   target_include_directories(curl_reactor_evidence PRIVATE ${PROJECT_SOURCE_DIR}/src/http)
   target_link_libraries(curl_reactor_evidence PRIVATE a2a::http CURL::libcurl)
   if(WIN32)
-    target_link_libraries(curl_reactor_evidence PRIVATE ws2_32)
+    target_link_libraries(curl_reactor_evidence PRIVATE ws2_32 winmm)
   endif()
 endif()
 

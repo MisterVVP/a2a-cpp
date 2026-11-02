@@ -17,7 +17,7 @@ SPEC.loader.exec_module(EVIDENCE)
 
 
 def rows():
-    return [dict(streams=count, mode=mode, samples=count * 5, errors=0,
+    return [dict(streams=count, mode=mode, samples=count * 20, errors=0, timer_period_ms=1,
                  maximum_thread_growth=8, first_p95_ms=1.0, finish_p95_ms=1.0, finish_p99_ms=2.0)
             for count in EVIDENCE.STREAM_COUNTS for mode in EVIDENCE.MODES]
 
@@ -41,7 +41,7 @@ class EvidenceTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.read(invalid)
         for field, value in (("errors", 1), ("samples", 0), ("maximum_thread_growth", 96),
-                             ("finish_p95_ms", -1), ("finish_p99_ms", float("nan"))):
+                             ("finish_p95_ms", -1), ("finish_p99_ms", float("nan")), ("timer_period_ms", -1)):
             invalid = copy.deepcopy(valid)
             invalid[0][field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -66,6 +66,13 @@ class EvidenceTest(unittest.TestCase):
         candidate[(16, "complete")]["samples"] += 1
         _, failures = EVIDENCE.compare(baseline, candidate)
         self.assertTrue(failures)
+
+    def test_unequal_timer_periods_fail(self):
+        baseline = self.read(rows())
+        candidate = copy.deepcopy(baseline)
+        candidate[(16, "complete")]["timer_period_ms"] = 0
+        _, failures = EVIDENCE.compare(baseline, candidate)
+        self.assertTrue(any("unequal timer periods" in failure for failure in failures))
 
 
 if __name__ == "__main__":

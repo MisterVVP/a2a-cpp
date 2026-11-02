@@ -16,15 +16,40 @@
 
 #include "support/curl_reactor_test_support.h"
 
+#ifdef _WIN32
+#include <mmsystem.h>
+#endif
+
 namespace {
 
 using namespace a2a::http::testing;
 constexpr std::array<std::size_t, 4> kStreamCounts{1U, 16U, 64U, 96U};
-constexpr std::size_t kRepetitions = 5U;
+constexpr std::size_t kRepetitions = 20U;
 constexpr double kP95 = 0.95;
 constexpr double kP99 = 0.99;
 constexpr std::size_t kMaximumThreadGrowth = 8U;
 constexpr std::string_view kEvidenceFailure = "reactor evidence workload failed";
+
+#ifdef _WIN32
+constexpr UINT kEvidenceTimerPeriodMs = 1U;
+constexpr std::string_view kTimerPeriodFailure = "cannot set Windows evidence timer period";
+
+// Control the Windows timer quantum in both executables. Default ~16 ms ticks
+// can dominate first-event timing even when cancellation itself is sub-ms.
+class EvidenceTimerPeriod final {
+ public:
+  EvidenceTimerPeriod() {
+    if (timeBeginPeriod(kEvidenceTimerPeriodMs) != TIMERR_NOERROR) {
+      throw std::runtime_error(std::string(kTimerPeriodFailure));
+    }
+  }
+  ~EvidenceTimerPeriod() { (void)timeEndPeriod(kEvidenceTimerPeriodMs); }
+  EvidenceTimerPeriod(const EvidenceTimerPeriod&) = delete;
+  EvidenceTimerPeriod& operator=(const EvidenceTimerPeriod&) = delete;
+};
+#else
+constexpr unsigned int kEvidenceTimerPeriodMs = 0U;
+#endif
 
 struct Samples final {
   std::vector<double> first_ms;
@@ -112,13 +137,16 @@ void PrintSamples(std::size_t count, bool cancel, const Samples& samples) {
             << samples.finish_ms.size() << R"(,"first_p95_ms":)" << Percentile(samples.first_ms, kP95)
             << R"(,"finish_p95_ms":)" << Percentile(samples.finish_ms, kP95) << R"(,"finish_p99_ms":)"
             << Percentile(samples.finish_ms, kP99) << R"(,"maximum_thread_growth":)" << samples.maximum_thread_growth
-            << R"(,"errors":0})";
+            << R"(,"timer_period_ms":)" << kEvidenceTimerPeriodMs << R"(,"errors":0})";
 }
 
 }  // namespace
 
 int main() {
   try {
+#ifdef _WIN32
+    const EvidenceTimerPeriod timer_period;
+#endif
     std::cout << std::fixed << std::setprecision(3) << "[\n";
     bool first = true;
     for (const auto count : kStreamCounts) {

@@ -31,6 +31,8 @@ def read_evidence(path):
             raise ValueError(f"invalid latency: {key}")
         if row["finish_p95_ms"] > row["finish_p99_ms"]:
             raise ValueError(f"invalid percentiles: {key}")
+        if row.get("timer_period_ms", 0) not in (0, 1):
+            raise ValueError(f"invalid timer period: {key}")
         indexed[key] = row
     expected = {(count, mode) for count in STREAM_COUNTS for mode in MODES}
     if set(indexed) != expected:
@@ -43,17 +45,22 @@ def compare(baseline, candidate):
     lines = [
         "# Windows libcurl reactor evidence",
         "",
-        "Five repetitions per workload; all streams established before cancellation/finish. "
+        "All streams established before cancellation/finish. "
         "Cancellation includes dispatch completion. Zero errors and at most eight added SDK threads required.",
+        "Timer periods are requested by the evidence executable (0 means system default). "
+        "The SDK does not change timer resolution.",
         "",
         "| Streams | Mode | First p95, fallback/native ms | Finish p95, fallback/native ms | "
-        "Finish p99, fallback/native ms | Added threads, fallback/native |",
-        "| ---: | --- | ---: | ---: | ---: | ---: |",
+        "Finish p99, fallback/native ms | Added threads, fallback/native | Samples, fallback/native | "
+        "Timer period, fallback/native ms |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for key, native in candidate.items():
         old = baseline[key]
         if old["samples"] != native["samples"]:
             failures.append(f"{key}: unequal sample counts")
+        if old.get("timer_period_ms", 0) != native.get("timer_period_ms", 0):
+            failures.append(f"{key}: unequal timer periods")
         for metric in METRICS:
             budget = max(old[metric] * REGRESSION_RATIO, old[metric] + SCHEDULING_TOLERANCE_MS)
             if native[metric] > budget:
@@ -63,7 +70,9 @@ def compare(baseline, candidate):
                 failures.append(f"{key}: cancellation target p95 < 10 ms / p99 < 20 ms missed")
         metrics = " | ".join(f"{old[name]:.3f}/{native[name]:.3f}" for name in METRICS)
         lines.append(f"| {key[0]} | {key[1]} | {metrics} | "
-                     f"{old['maximum_thread_growth']}/{native['maximum_thread_growth']} |")
+                     f"{old['maximum_thread_growth']}/{native['maximum_thread_growth']} | "
+                     f"{old['samples']}/{native['samples']} | "
+                     f"{old.get('timer_period_ms', 0)}/{native.get('timer_period_ms', 0)} |")
     lines.extend(["", "Regression budget: 25% or 2 ms above the equivalent fallback, whichever is larger. "
                   "Shared runner scheduling affects these local-workload measurements.", ""])
     lines.extend(f"- {failure}" for failure in failures)
