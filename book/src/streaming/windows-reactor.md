@@ -151,6 +151,8 @@ stream and ends at dispatch completion, while peers remain idle. Finite timing
 starts before releasing all established server connections. First-event timing
 includes submission and cold shard startup. Record compiler, libcurl version,
 OS and build configuration when comparing results outside CI.
+The fixture sends the headers and first SSE chunk in one write so TCP
+Nagle/delayed-ACK behavior cannot hold the tiny chunk behind the headers.
 
 The comparison requires zero errors, at most eight added SDK threads, cancellation
 p95 below 10 ms and p99 below 20 ms. Its regression budget is 25% or 2 ms above

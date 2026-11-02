@@ -580,7 +580,8 @@ jobs:
             ${{ runner.os }}-vcpkg-downloads-
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v5
+        id: windows-vcpkg-cache
+        uses: actions/cache/restore@v5
         with:
           path: C:/vcpkg-binary-cache
           key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
@@ -592,11 +593,20 @@ jobs:
         run: |
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET --x-feature=signing --x-feature=asio
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_host_triplet=$env:VCPKG_HOST_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: deps
+
+      # Preserve expensive successful dependency builds even if a later test fails.
+      - name: Save installed vcpkg binaries
+        if: steps.windows-vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: C:/vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
 
       - name: Setup MSVC build environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -634,6 +644,18 @@ jobs:
           ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
           -E "^(sut_entrypoints_test|performance_runner_script_test|run_examples_script_test)$"
 
+      - name: Windows transport performance smoke
+        shell: pwsh
+        env:
+          A2A_PERF_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_performance_driver.exe
+          A2A_PERF_WIRE_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_wire_performance_driver.exe
+          A2A_PERF_SUT: ${{ github.workspace }}/build/tests/RelWithDebInfo/performance_sut.exe
+        run: |
+          python scripts/performance_runner.py --transports grpc,http_json --store-backends inmemory --requests 2 --concurrency 1 --warmup-seconds 0 --duration-seconds 0 --report-dir perf-artifacts-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import json; rows=json.load(open('perf-artifacts-smoke/results.json', encoding='utf-8'))['results']; assert rows and not sum(int(row.get('errors', 0)) for row in rows)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Measure native and fallback Windows libcurl reactors
         shell: pwsh
         run: |
@@ -654,18 +676,6 @@ jobs:
           $comparisonExit = $LASTEXITCODE
           Get-Content reactor-evidence/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           exit $comparisonExit
-
-      - name: Windows transport performance smoke
-        shell: pwsh
-        env:
-          A2A_PERF_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_performance_driver.exe
-          A2A_PERF_WIRE_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_wire_performance_driver.exe
-          A2A_PERF_SUT: ${{ github.workspace }}/build/tests/RelWithDebInfo/performance_sut.exe
-        run: |
-          python scripts/performance_runner.py --transports grpc,http_json --store-backends inmemory --requests 2 --concurrency 1 --warmup-seconds 0 --duration-seconds 0 --report-dir perf-artifacts-smoke
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -c "import json; rows=json.load(open('perf-artifacts-smoke/results.json', encoding='utf-8'))['results']; assert rows and not sum(int(row.get('errors', 0)) for row in rows)"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows reactor evidence
         if: always()

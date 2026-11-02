@@ -204,7 +204,7 @@ class CurlLoopbackServer final {
   explicit CurlLoopbackServer(std::size_t expected, std::string_view initial = kTestFirstChunk)
       : global_(detail::EnsureCurlGlobalInit()),
         expected_(expected),
-        initial_(initial),
+        initial_response_(std::string(kTestSseHeaders).append(initial)),
         listener_(MakeTestListener(&port_)),
         worker_([this, listener = listener_.get()] { AcceptStreams(listener); }) {}
   ~CurlLoopbackServer() {
@@ -242,7 +242,9 @@ class CurlLoopbackServer final {
         std::lock_guard lock(mutex_);
         // Publish the connection before a fast first-event callback can call
         // Finish(). Hold the same lock across the send and registration.
-        if (!SendTestBytes(client.get(), kTestSseHeaders) || !SendTestBytes(client.get(), initial_)) {
+        // Send headers and the first chunk together: two tiny writes can put
+        // the chunk behind Nagle/delayed ACK instead of measuring the reactor.
+        if (!SendTestBytes(client.get(), initial_response_)) {
           return;
         }
         clients_.push_back(std::move(client));
@@ -253,7 +255,7 @@ class CurlLoopbackServer final {
 
   std::shared_ptr<const detail::ClientGlobalState> global_;
   const std::size_t expected_;
-  const std::string initial_;
+  const std::string initial_response_;
   unsigned short port_ = 0;
   TestSocket listener_;
   std::mutex mutex_;
