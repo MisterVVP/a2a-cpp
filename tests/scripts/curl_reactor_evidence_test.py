@@ -98,6 +98,21 @@ class EvidenceTest(unittest.TestCase):
         _, failures = EVIDENCE.compare(baseline, baseline, "cloud")
         self.assertTrue(any("cancellation target" in failure for failure in failures))
 
+    def test_unmatched_client_lifetime_and_warmup_rejected(self):
+        baseline = self.read(rows())
+        for field, value in (("client_lifetime", "reused"), ("warmup_repetitions", 1)):
+            candidate = copy.deepcopy(baseline)
+            candidate[(96, "complete")][field] = value
+            with self.subTest(field=field):
+                _, failures = EVIDENCE.compare(baseline, candidate)
+                self.assertTrue(any(f"unequal {field}" in failure for failure in failures))
+
+    def test_reported_repetition_count_must_be_complete(self):
+        invalid = rows()
+        invalid[0]["repetitions"] = 21
+        with self.assertRaisesRegex(ValueError, "incomplete repetitions"):
+            self.read(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()

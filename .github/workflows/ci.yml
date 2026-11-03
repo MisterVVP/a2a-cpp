@@ -660,18 +660,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force reactor-evidence | Out-Null
-          & ./build/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 reactor-evidence/native.json
+          python scripts/investigate_curl_reactor.py --build-dir build --configuration RelWithDebInfo --output-dir reactor-evidence/investigation
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./build/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 reactor-evidence/fallback.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build --config RelWithDebInfo --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item reactor-evidence/investigation/native-first/fresh/native.json reactor-evidence/native.json
+          Copy-Item reactor-evidence/investigation/native-first/fresh/fallback.json reactor-evidence/fallback.json
           python scripts/compare_curl_reactor_evidence.py reactor-evidence/fallback.json reactor-evidence/native.json --profile cloud --output reactor-evidence/summary.md
           $comparisonExit = $LASTEXITCODE
           Get-Content reactor-evidence/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

@@ -166,6 +166,9 @@ if(A2A_HAS_LIBCURL)
   add_executable(curl_reactor_evidence curl_reactor_evidence.cpp)
   target_include_directories(curl_reactor_evidence PRIVATE ${PROJECT_SOURCE_DIR}/src/http)
   target_link_libraries(curl_reactor_evidence PRIVATE a2a::http CURL::libcurl)
+  if(A2A_TEST_CURL_PORTABLE_REACTOR)
+    target_compile_definitions(curl_reactor_evidence PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
+  endif()
   if(WIN32)
     target_link_libraries(curl_reactor_evidence PRIVATE ws2_32 winmm)
   endif()
@@ -1030,6 +1033,8 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL)
   add_test(NAME curl_reactor_evidence_comparison_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/curl_reactor_evidence_test.py)
+  add_test(NAME curl_reactor_investigation_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/curl_reactor_investigation_test.py)
 endif()
 if(Python3_Interpreter_FOUND)
   add_test(

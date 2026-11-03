@@ -10,10 +10,12 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
 
+#include "support/curl_reactor_evidence_support.h"
 #include "support/curl_reactor_test_support.h"
 
 #ifdef _WIN32
@@ -24,7 +26,6 @@ namespace {
 
 using namespace a2a::http::testing;
 constexpr std::array<std::size_t, 4> kStreamCounts{1U, 16U, 64U, 96U};
-constexpr std::size_t kRepetitions = 20U;
 constexpr double kP95 = 0.95;
 constexpr double kP99 = 0.99;
 constexpr std::size_t kMaximumThreadGrowth = 8U;
@@ -100,21 +101,53 @@ void CompleteWorkload(CurlLoopbackServer& server, const std::vector<std::shared_
   }
 }
 
-Samples Measure(std::size_t count, bool cancel) {
-  Samples samples;
-  for (std::size_t repetition = 0; repetition < kRepetitions; ++repetition) {
-    CurlLoopbackServer server(count);
-    a2a::http::Client client;
+std::string EvidenceUrl(const CurlLoopbackServer& server, std::size_t index, bool diagnostics) {
+  auto url = server.url();
+  if (diagnostics) {
+    url.append(kEvidenceIdQuery);
+    url.append(std::to_string(index));
+  }
+  return url;
+}
+
+void RunRepetition(std::size_t count, bool cancel, a2a::http::Client* reused_client, Samples& samples,
+                   std::optional<CurlEvidenceBatch>& diagnostic) {
+  {
+    const CurlLoopbackServer::TimingObserver observer =
+        diagnostic ? CurlLoopbackServer::TimingObserver{[&diagnostic](const auto& timing, auto request) {
+          diagnostic->RecordServer(timing, request);
+        }}
+                   : CurlLoopbackServer::TimingObserver{};
+    CurlLoopbackServer server(count, kTestFirstChunk, observer);
+    std::unique_ptr<a2a::http::Client> fresh_client;
+    if (reused_client == nullptr) {
+      fresh_client = std::make_unique<a2a::http::Client>();
+      reused_client = fresh_client.get();
+    }
+    const auto& client = *reused_client;
     const auto baseline_threads = ReactorTestThreadCount();
     std::vector<std::shared_ptr<CurlStreamProbe>> streams;
     streams.reserve(count);
+    if (diagnostic) {
+      diagnostic->reactors_before = a2a::http::detail::GetCurlStreamReactorLifecycleCounts();
+      diagnostic->cpu_before = EvidenceProcessCpuMilliseconds();
+      diagnostic->origin = CurlStreamProbe::Clock::now();
+    }
     for (std::size_t index = 0; index < count; ++index) {
-      streams.push_back(StartTestStream(client, server.url()));
+      streams.push_back(StartTestStream(client, EvidenceUrl(server, index, diagnostic.has_value()), kIdleRequestTimeout,
+                                        diagnostic.has_value()));
+    }
+    if (diagnostic) {
+      diagnostic->reactors_after_submit = a2a::http::detail::GetCurlStreamReactorLifecycleCounts();
     }
     if (!server.WaitForStreams(count)) {
       throw std::runtime_error(std::string(kEvidenceFailure));
     }
     CollectFirstEvents(streams, samples);
+    if (diagnostic) {
+      diagnostic->reactors_after_first = a2a::http::detail::GetCurlStreamReactorLifecycleCounts();
+      diagnostic->cpu_after_first = EvidenceProcessCpuMilliseconds();
+    }
     const auto threads = ReactorTestThreadCount();
     const auto growth = threads > baseline_threads ? threads - baseline_threads : 0U;
     samples.maximum_thread_growth = (std::max)(samples.maximum_thread_growth, growth);
@@ -122,6 +155,34 @@ Samples Measure(std::size_t count, bool cancel) {
       throw std::runtime_error(std::string(kEvidenceFailure));
     }
     CompleteWorkload(server, streams, cancel, samples);
+    if (diagnostic) {
+      diagnostic->RecordClients(streams);
+    }
+  }
+  if (diagnostic) {
+    diagnostic->reactors_after_teardown = a2a::http::detail::GetCurlStreamReactorLifecycleCounts();
+  }
+}
+
+Samples Measure(std::size_t count, bool cancel, const CurlEvidenceOptions& options,
+                std::vector<CurlEvidenceBatch>& diagnostics) {
+  Samples samples;
+  std::optional<a2a::http::Client> reused_client;
+  if (options.reuse_client) {
+    reused_client.emplace();
+  }
+  const std::size_t warmups = options.warmup ? 1U : 0U;
+  for (std::size_t repetition = 0; repetition < options.repetitions + warmups; ++repetition) {
+    std::optional<CurlEvidenceBatch> diagnostic;
+    if (!options.diagnostics_path.empty()) {
+      diagnostic.emplace(count, repetition, cancel, repetition < warmups);
+    }
+    Samples warming;
+    RunRepetition(count, cancel, reused_client ? &reused_client.value() : nullptr,
+                  repetition < warmups ? warming : samples, diagnostic);
+    if (diagnostic) {
+      diagnostics.push_back(std::move(diagnostic.value()));
+    }
   }
   return samples;
 }
@@ -132,18 +193,22 @@ double Percentile(std::vector<double> values, double quantile) {
   return values.at(index);
 }
 
-void PrintSamples(std::size_t count, bool cancel, const Samples& samples) {
+void PrintSamples(std::size_t count, bool cancel, const Samples& samples, const CurlEvidenceOptions& options) {
   std::cout << R"({"streams":)" << count << R"(,"mode":")" << (cancel ? "cancel" : "complete") << R"(","samples":)"
             << samples.finish_ms.size() << R"(,"first_p95_ms":)" << Percentile(samples.first_ms, kP95)
             << R"(,"finish_p95_ms":)" << Percentile(samples.finish_ms, kP95) << R"(,"finish_p99_ms":)"
             << Percentile(samples.finish_ms, kP99) << R"(,"maximum_thread_growth":)" << samples.maximum_thread_growth
-            << R"(,"timer_period_ms":)" << kEvidenceTimerPeriodMs << R"(,"errors":0})";
+            << R"(,"timer_period_ms":)" << kEvidenceTimerPeriodMs << R"(,"client_lifetime":)"
+            << std::quoted(options.client_lifetime()) << R"(,"warmup_repetitions":)" << (options.warmup ? 1U : 0U)
+            << R"(,"repetitions":)" << options.repetitions << R"(,"errors":0})";
 }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    const auto options = ParseCurlEvidenceOptions(argc, argv);
+    std::vector<CurlEvidenceBatch> diagnostics;
 #ifdef _WIN32
     const EvidenceTimerPeriod timer_period;
 #endif
@@ -151,14 +216,18 @@ int main() {
     bool first = true;
     for (const auto count : kStreamCounts) {
       for (const bool cancel : {false, true}) {
+        if (options.complete_only && cancel) {
+          continue;
+        }
         if (!first) {
           std::cout << ",\n";
         }
         first = false;
-        PrintSamples(count, cancel, Measure(count, cancel));
+        PrintSamples(count, cancel, Measure(count, cancel, options, diagnostics), options);
       }
     }
     std::cout << "\n]\n";
+    WriteCurlDiagnostics(options, kEvidenceTimerPeriodMs, diagnostics);
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

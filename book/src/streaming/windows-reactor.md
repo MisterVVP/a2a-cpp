@@ -128,18 +128,47 @@ which the Visual Studio generator does not produce. TCK compliance is separate.
 
 ### Compare the native and fallback reactors
 
-Keep the machine otherwise idle during latency measurements. Use explicit UTF-8
-output so the reports also work in Windows PowerShell 5.1:
+Keep the machine otherwise idle during latency measurements. From the configured
+build above, run this in Developer PowerShell (the VS environment supplies
+`dumpbin` for the symbol tests):
 
 ```powershell
-./build-windows/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 native.json
-cmake -S . -B build-windows -DA2A_TEST_CURL_PORTABLE_REACTOR=ON
-cmake --build build-windows --config RelWithDebInfo --target curl_reactor_evidence --parallel
-./build-windows/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 fallback.json
-cmake -S . -B build-windows -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
-cmake --build build-windows --config RelWithDebInfo --parallel
-python scripts/compare_curl_reactor_evidence.py fallback.json native.json --output reactor-summary.md
+python scripts/investigate_curl_reactor.py --build-dir build-windows `
+    --configuration RelWithDebInfo --output-dir reactor-investigation
+if ($LASTEXITCODE -ne 0) { throw 'Evidence collection failed' }
+Get-Content reactor-investigation/summary.md
 ```
+
+The runner builds and snapshots **both** executables before measuring either,
+restores the native build even if baseline preparation fails, and measures both
+native-first and fallback-first. It retains the commands, CPU/OS, common CMake
+options, executable/DLL hashes, compiler/libcurl versions, timer period, and
+loopback TIME_WAIT counts. Each order has three matched scenarios:
+
+- `fresh`: the unchanged acceptance workload, twenty repetitions, all stream
+  counts and both completion/cancellation modes, without diagnostic timestamps.
+- `traced-fresh`: five repetitions of finite workloads with per-request timing.
+- `traced-reused`: the same diagnostic workload with one client reused at each
+  stream count and one excluded warmup repetition retained in the raw trace.
+
+`summary.md` includes every strict failure and diagnostic latency distributions.
+A zero runner exit code means collection and data validation succeeded; it does
+**not** mean strict performance acceptance passed. Check each `strict.md`, or
+run the comparator directly (a failing strict comparison returns nonzero):
+
+```powershell
+python scripts/compare_curl_reactor_evidence.py `
+    reactor-investigation/native-first/fresh/fallback.json `
+    reactor-investigation/native-first/fresh/native.json --output strict.md
+python scripts/compare_curl_reactor_evidence.py `
+    reactor-investigation/fallback-first/fresh/fallback.json `
+    reactor-investigation/fallback-first/fresh/native.json --output strict-reversed.md
+```
+
+The portable flag is the only backend build difference. Both snapshots use the
+same configured dependencies and compiler options. Diagnostic runs also verify
+matching compiler/libcurl, timer period, hardware thread count and client lifetime.
+Do not compare traced results with untraced ones as acceptance evidence.
 
 Windows CI runs these equivalent workloads and the mandatory gRPC and HTTP+JSON
 performance smoke. It publishes raw JSON and a Markdown comparison in
@@ -149,17 +178,21 @@ threads for 1/16/64/96 streams over twenty repetitions. One server worker serves
 all sockets. Cancellation timing starts after the first event establishes each
 stream and ends at dispatch completion, while peers remain idle. Finite timing
 starts before releasing all established server connections. First-event timing
-includes submission and cold shard startup. Record compiler, libcurl version,
+includes submission, shard startup, TCP setup, server scheduling and callback
+dispatch. A fresh client does not guarantee a uniformly cold pool: asynchronous
+cleanup and idle-slot retention can overlap the next repetition. Record compiler, libcurl version,
 OS and build configuration when comparing results outside CI.
-The fixture sends the headers and first SSE chunk in one write so TCP
-Nagle/delayed-ACK behavior cannot hold the tiny chunk behind the headers.
+The fixture sends the headers and first SSE chunk in one write, avoiding a
+separate tiny body write behind the headers. This does not isolate TCP from
+other startup or scheduling effects.
 The evidence executable requests a 1 ms Windows process timer period with
 `timeBeginPeriod`, balances it with `timeEndPeriod` on exit, and records
 `timer_period_ms` in each row. Both backends use this same setting; the
 comparison rejects mismatched periods. The SDK itself does not request a timer
-resolution change. Default Windows timer granularity can dominate startup
-measurements (about 16 ms at one stream on both backends in a native CI run).
-Twenty repetitions reduce dependence on a single cold or descheduled sample.
+resolution change. An earlier native CI run observed about 16 ms at one stream on both backends
+with the default timer period; that observation alone does not establish the
+cause of higher-concurrency tails. Requesting 1 ms did not establish strict
+latency parity. Twenty repetitions reduce dependence on a single sample.
 
 Both comparison profiles require zero errors, complete/equal sample counts,
 matching timer periods, and at most eight added SDK threads. The default
@@ -185,24 +218,58 @@ of the pool's sharding. Existing HTTP SSE interoperability scripts also apply.
 TCK compliance is a separate validation step; this backend does not establish
 protocol conformance by itself.
 
-### Local comparison limits
+### Diagnostic boundaries and limits
 
-The Linux-hosted Windows check used MinGW GCC 14, libcurl 8.17.0 with
-Schannel, and Wine 10.0. All 27 applicable deadline, readiness and transfer tests
-passed in the initial implementation, with zero workload errors and bounded
-thread growth. Wine did not reproduce native Winsock's EOF flag combination;
-the regression tests now cover those flags directly. With competing lint
-and build processes paused, the native backend's cancellation p95/p99 were 0.507/0.507 ms
-at one stream, 0.524/1.225 ms at 16, 0.567/0.744 ms at 64, and 0.527/0.712 ms at
-96. Under concurrent compiler/analyzer load, Wine exhibited cancellation tails
-above 20 ms for both implementations.
+The measured first event is the first raw HTTP body chunk delivered to
+`StartStreamRequest`'s callback, **not** a parsed A2A observer event. The serial
+server accepts a connection, reads its complete request, then sends the initial
+response before accepting another connection. A slow request can therefore
+hold later connections behind it. Finite completion also includes the test
+thread's sequential release of server connections.
 
-The unloaded Wine comparison still flagged some first-event and finite-completion
-regressions, including cold one-stream startup (fallback/native first-event p95
-4.010/9.076 ms) and 16-stream completion p99 (5.455/9.851 ms). Removing analyzer
-contention reduced cancellation tails but did not establish full latency parity.
-These measurements include Wine's Winsock translation and the fixture's sequential
-accept/release work. They are diagnostic evidence, not a passing native Windows
-performance claim. The Windows CI comparison publishes native-runner evidence
-with the documented cloud budgets; local comparisons retain the stricter
-default thresholds.
+Opt-in `--diagnostics FILE` adds explicit request IDs, server accept/read/send
+timestamps and client API-return/metadata/body timestamps in the **test harness**.
+IDs join server and client samples independently of socket arrival order. The
+sidecar retains every repetition and reports p50/p90/p95/p99/max, process CPU
+through first delivery, and reactor creation/destruction counters. Pre-send
+(submission to server send) plus post-send (server send to body callback) equals
+first latency per sample; their percentiles cannot be added. The server-read
+interval can expose request head-of-line blocking. Process CPU includes the
+fixture server and client; it cannot identify an individual busy SDK thread.
+
+The pre-send interval aggregates client setup, command enqueue, coalesced wake,
+owner scheduling, `curl_multi_add_handle`, registration, readiness processing,
+connection establishment and server admission. Post-send aggregates Winsock
+readiness, `curl_multi_socket_action` and ordered dispatch. These timestamps do
+not separately measure queue residence, time inside `WSAPoll`, wake-to-owner
+latency or individual socket actions. A phase difference alone cannot identify
+which of those stages caused it. No production hot-path logging is added.
+
+The source audit found four reactor shards (24 new transfers per shard at 96),
+an O(1) average registration map, generation checks for stale snapshots, and an
+O(socket count) `WSAPoll` scan without a 64-socket ceiling. The client retains
+up to 64 idle stream slots; teardown beyond that boundary is another reason to
+compare fresh and reused clients, not evidence of a proven bottleneck. Linux's
+epoll backend is unchanged.
+
+If native raw traces leave a material post-send regression, capture Windows
+CPU/scheduling evidence on the affected machine before changing the reactor:
+
+```powershell
+# Elevated Developer PowerShell; inspect locally before sharing the ETL.
+wpr -start GeneralProfile -filemode
+python scripts/investigate_curl_reactor.py --build-dir build-windows `
+    --configuration RelWithDebInfo --output-dir reactor-investigation-wpr
+wpr -stop reactor-investigation.etl
+```
+
+Building under WPR perturbs the capture. For targeted follow-up, use the runner's
+`--native PATH --fallback PATH --configuration RelWithDebInfo` form with the
+prebuilt snapshots in `build-windows/reactor-investigation-binaries/`, and an
+optional `--cmake-cache build-windows/CMakeCache.txt`. Inspect network-owner and
+dispatch stacks and scheduling in Windows Performance Analyzer. This trace is
+separate diagnostic evidence and must not replace an untraced acceptance run.
+
+Linux/MinGW/Wine checks validate portability and correctness but cannot establish
+native Windows latency parity. Native Windows CI artifacts and measurements on
+the affected Windows machine are the relevant performance evidence.
