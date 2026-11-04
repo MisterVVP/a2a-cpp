@@ -630,6 +630,22 @@ jobs:
           ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
           -R "CurlReactor|CurlWindowsReadiness|CurlStreamingTransport"
 
+      - name: Trace Windows reactor stages
+        shell: pwsh
+        run: |
+          python tests/scripts/curl_reactor_stage_trace_test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/trace_curl_reactor.py --build-dir build --configuration RelWithDebInfo --output-dir reactor-stage-trace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows reactor stage trace
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-reactor-stage-trace
+          path: reactor-stage-trace
+          if-no-files-found: warn
+
       - name: Build remaining Windows targets
         shell: pwsh
         run: cmake --build build --config RelWithDebInfo --parallel

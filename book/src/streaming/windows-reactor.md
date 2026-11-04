@@ -252,8 +252,25 @@ up to 64 idle stream slots; teardown beyond that boundary is another reason to
 compare fresh and reused clients, not evidence of a proven bottleneck. Linux's
 epoll backend is unchanged.
 
-If native raw traces leave a material post-send regression, capture Windows
-CPU/scheduling evidence on the affected machine before changing the reactor:
+If native raw traces leave a material post-send regression, use deeper timing
+and Windows CPU/scheduling evidence before changing the reactor.
+
+The temporary `scripts/trace_curl_reactor.py` investigation tool adds a deeper
+source overlay while building the evidence executable. It restores the original
+source bytes on exit, including failures, and refuses to overwrite concurrent
+edits. Its per-thread buffers record waits, commands, socket actions, libcurl
+receipt and dispatch with request IDs and Windows thread cycle counts. CI uploads
+these files as `windows-reactor-stage-trace`. These instrumented runs are
+diagnostic controls, not acceptance measurements. After running the tool locally,
+rebuild the ordinary targets before running untraced acceptance benchmarks:
+
+```powershell
+python scripts/trace_curl_reactor.py --build-dir build-windows `
+    --configuration RelWithDebInfo --output-dir reactor-stage-trace
+cmake --build build-windows --config RelWithDebInfo --parallel
+```
+
+For a separate Windows CPU/scheduling trace:
 
 ```powershell
 # Elevated Developer PowerShell; inspect locally before sharing the ETL.
