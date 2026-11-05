@@ -100,9 +100,11 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
 #endif
 
 #if defined(_WIN32)
+  void StartPendingWindowsTransfer();
   void WaitForWindowsEvents();
   void ProcessWindowsSocket(curl_socket_t socket, short events);
   std::unique_ptr<CurlWindowsReadiness> windows_readiness_;
+  std::deque<std::shared_ptr<Transfer>> pending_windows_transfers_;
 #endif
 
   CURLM* multi_handle_ = nullptr;

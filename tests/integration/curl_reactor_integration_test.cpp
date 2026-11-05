@@ -8,6 +8,7 @@
 #include <barrier>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <memory>
@@ -276,7 +277,10 @@ void ExpectReactorCancelled(ReactorTransfer& stream) {
 }
 
 #if defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
-TEST(CurlReactorIntegrationTest, CancellationInAddBatchPreventsConnectionAttempt) {
+enum class QueuedCancelScope : std::uint8_t { kTransfer, kOwner };
+class CurlReactorQueuedCancellationTest : public ::testing::TestWithParam<QueuedCancelScope> {};
+
+TEST_P(CurlReactorQueuedCancellationTest, CancellationInAddBatchPreventsConnectionAttempt) {
   CurlLoopbackServer server(1U);
   ReactorTransfer stream(server.url());
   std::atomic_size_t attempts{0U};
@@ -295,13 +299,21 @@ TEST(CurlReactorIntegrationTest, CancellationInAddBatchPreventsConnectionAttempt
     });
   });
   ASSERT_NE(reactor, nullptr);
+  stream.transfer->owner = &attempts;
   reactor->Add(stream.transfer);
-  reactor->Cancel(stream.transfer);
+  if (GetParam() == QueuedCancelScope::kOwner) {
+    reactor->CancelOwner(&attempts);
+  } else {
+    reactor->Cancel(stream.transfer);
+  }
   start.set_value();
   ExpectReactorCancelled(stream);
   reactor->Shutdown();
   EXPECT_EQ(attempts.load(std::memory_order_relaxed), 0U);
 }
+
+INSTANTIATE_TEST_SUITE_P(Scopes, CurlReactorQueuedCancellationTest,
+                         ::testing::Values(QueuedCancelScope::kTransfer, QueuedCancelScope::kOwner));
 #endif
 
 TEST(CurlReactorIntegrationTest, OneReactorOwnsMoreThanSixtyFourEstablishedTransfers) {

@@ -67,11 +67,13 @@ An unarmed deadline waits indefinitely. There is no recurring polling interval;
 The consumed deadline is cleared before that action, allowing libcurl to arm its
 successor safely.
 
-Adding a handle schedules libcurl's zero-timeout callback; it does not run a
-socket action inside the command batch. The owner finishes queued commands,
-including cancellation, before servicing that deadline. This avoids repeatedly
-pumping existing connections for each new Add. Native Windows traces found
-10–11 ms waits in libcurl's `SO_ERROR` and `getpeername()` connection checks;
+Add commands queue handles for activation without running socket actions. The
+owner finishes queued commands, including cancellation, then activates one new
+transfer per event-loop turn. Libcurl's zero-timeout callback drives its start;
+ready sockets run before the timer. This gives readiness and cancellation a turn
+between new connection starts, without a polling interval or another worker.
+Native Windows traces found 10–11 ms waits in libcurl's `SO_ERROR` and
+`getpeername()` connection checks;
 running those checks while draining commands delayed queued cancellation and
 already-readable responses. Connection setup can still depend on the installed
 libcurl and Winsock versions. First-event measurements include new TCP connects,

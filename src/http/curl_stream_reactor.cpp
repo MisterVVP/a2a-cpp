@@ -160,6 +160,7 @@ void CurlStreamReactor::Run() {
 #if defined(__linux__)
     WaitForLinuxEvents();
 #elif defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+    StartPendingWindowsTransfer();
     WaitForWindowsEvents();
 #else
     WaitForPortableEvents();
@@ -171,6 +172,9 @@ void CurlStreamReactor::Run() {
     Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
   }
   transfers_.clear();
+#if defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+  pending_windows_transfers_.clear();
+#endif
   g_in_reactor_loop = false;
 }
 
@@ -203,24 +207,22 @@ void CurlStreamReactor::AddOnReactor(std::shared_ptr<Transfer> transfer) {
     Complete(transfer, CURLE_ABORTED_BY_CALLBACK);
     return;
   }
+#if defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+  transfers_.emplace(transfer->easy_handle, transfer);
+  pending_windows_transfers_.push_back(std::move(transfer));
+#else
   const CURLMcode code = curl_multi_add_handle(multi_handle_, transfer->easy_handle);
   if (code != CURLM_OK) {
     Complete(transfer, CURLE_FAILED_INIT);
     return;
   }
   transfers_.emplace(transfer->easy_handle, std::move(transfer));
-#if !defined(_WIN32) || defined(A2A_TEST_CURL_PORTABLE_REACTOR)
   int running_handles = 0;
   const CURLMcode action_code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
   if (action_code != CURLM_OK) {
     FailAll(CURLE_RECV_ERROR);
   }
   ReadCompletions();
-#else
-  // Adding a handle arms libcurl's zero-timeout callback. Let the event loop
-  // service that deadline after draining commands, rather than pumping every
-  // existing connection again for each Add. Winsock connect verification can
-  // block, delaying both queued cancellations and already-readable responses.
 #endif
 }
 
@@ -401,6 +403,27 @@ int CurlStreamReactor::HandleTimer(CURLM* multi_handle, long timeout_ms, void* u
 }
 #else
 #if defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+void CurlStreamReactor::StartPendingWindowsTransfer() {
+  auto& pending = pending_windows_transfers_;
+  while (!pending.empty()) {
+    auto transfer = std::move(pending.front());
+    pending.pop_front();
+    const auto found = transfers_.find(transfer->easy_handle);
+    if (found == transfers_.end() || found->second != transfer) {
+      continue;  // Cancel or CancelOwner already completed this queued transfer.
+    }
+    if (curl_multi_add_handle(multi_handle_, transfer->easy_handle) != CURLM_OK) {
+      transfers_.erase(found);
+      Complete(transfer, CURLE_FAILED_INIT);
+      continue;
+    }
+    // One new connection per turn lets readiness and cancellation run between
+    // Winsock connect checks. The zero-timeout callback drives the next turn;
+    // pending work needs neither a polling interval nor another worker.
+    return;
+  }
+}
+
 void CurlStreamReactor::WaitForWindowsEvents() {
   if (!windows_readiness_->Wait() || !windows_readiness_->DrainWake()) {
     shutting_down_ = true;
@@ -418,15 +441,15 @@ void CurlStreamReactor::WaitForWindowsEvents() {
   if (shutting_down_) {
     return;
   }
+  for (const auto& event : windows_readiness_->events()) {
+    if (windows_readiness_->IsCurrent(event)) {
+      ProcessWindowsSocket(event.socket, event.events);
+    }
+  }
   if (windows_readiness_->deadline().TakeExpired()) {
     int running_handles = 0;
     if (curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles) != CURLM_OK) {
       FailAll(CURLE_RECV_ERROR);
-    }
-  }
-  for (const auto& event : windows_readiness_->events()) {
-    if (windows_readiness_->IsCurrent(event)) {
-      ProcessWindowsSocket(event.socket, event.events);
     }
   }
 }

@@ -630,6 +630,65 @@ jobs:
           ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
           -R "CurlReactor|CurlWindowsReadiness|CurlStreamingTransport"
 
+      - name: Measure native and fallback Windows libcurl reactors
+        id: reactor_comparison
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:CI_VCPKG_ROOT
+          New-Item -ItemType Directory -Force reactor-evidence | Out-Null
+          $snapshotRoot = Join-Path (Resolve-Path build) "reactor-comparison-binaries"
+          try {
+            foreach ($backend in @('native', 'fallback')) {
+              $portable = if ($backend -eq 'fallback') { 'ON' } else { 'OFF' }
+              cmake -S . -B build "-DA2A_TEST_CURL_PORTABLE_REACTOR=$portable"
+              if ($LASTEXITCODE -ne 0) { throw "Configure failed: $backend" }
+              cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
+              if ($LASTEXITCODE -ne 0) { throw "Build failed: $backend" }
+              $destination = Join-Path $snapshotRoot $backend
+              New-Item -ItemType Directory -Force $destination | Out-Null
+              Copy-Item build/tests/RelWithDebInfo/curl_reactor_evidence.exe $destination -ErrorAction Stop
+              Copy-Item build/tests/RelWithDebInfo/*.dll $destination -ErrorAction Stop
+              Get-ChildItem $destination -File | Get-FileHash -Algorithm SHA256 |
+                Select-Object @{Name='File';Expression={Split-Path $_.Path -Leaf}}, Hash |
+                ConvertTo-Json | Out-File -Encoding utf8 "reactor-evidence/$backend-sha256.json"
+            }
+          } finally {
+            cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
+            if ($LASTEXITCODE -ne 0) { throw 'Native configure restoration failed' }
+            cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
+            if ($LASTEXITCODE -ne 0) { throw 'Native build restoration failed' }
+          }
+          @{
+            cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)
+            windows = [Environment]::OSVersion.VersionString
+            logical_cpus = [Environment]::ProcessorCount
+            configuration = 'RelWithDebInfo'
+          } | ConvertTo-Json | Out-File -Encoding utf8 reactor-evidence/environment.json
+          $comparisonExit = 0
+          foreach ($order in @('native-first', 'fallback-first')) {
+            $directory = "reactor-evidence/$order"
+            New-Item -ItemType Directory -Force $directory | Out-Null
+            $backends = if ($order -eq 'native-first') { @('native', 'fallback') } else { @('fallback', 'native') }
+            foreach ($backend in $backends) {
+              & "$snapshotRoot/$backend/curl_reactor_evidence.exe" | Out-File -Encoding utf8 "$directory/$backend.json"
+              if ($LASTEXITCODE -ne 0) { throw "Evidence failed: $order/$backend" }
+            }
+            python scripts/compare_curl_reactor_evidence.py "$directory/fallback.json" "$directory/native.json" --profile cloud --output "$directory/summary.md"
+            if ($LASTEXITCODE -ne 0) { $comparisonExit = 1 }
+            python scripts/compare_curl_reactor_evidence.py "$directory/fallback.json" "$directory/native.json" --profile strict --output "$directory/strict.md"
+            Get-Content "$directory/summary.md", "$directory/strict.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+          exit $comparisonExit
+
+      - name: Upload Windows reactor comparison
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-reactor-comparison
+          path: reactor-evidence
+          if-no-files-found: warn
+
       - name: Build remaining Windows targets
         shell: pwsh
         run: cmake --build build --config RelWithDebInfo --parallel
@@ -656,27 +715,6 @@ jobs:
           python -c "import json; rows=json.load(open('perf-artifacts-smoke/results.json', encoding='utf-8'))['results']; assert rows and not sum(int(row.get('errors', 0)) for row in rows)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Measure native and fallback Windows libcurl reactors
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force reactor-evidence | Out-Null
-          & ./build/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 reactor-evidence/native.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./build/tests/RelWithDebInfo/curl_reactor_evidence.exe | Out-File -Encoding utf8 reactor-evidence/fallback.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build --config RelWithDebInfo --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/compare_curl_reactor_evidence.py reactor-evidence/fallback.json reactor-evidence/native.json --profile cloud --output reactor-evidence/summary.md
-          $comparisonExit = $LASTEXITCODE
-          Get-Content reactor-evidence/summary.md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          exit $comparisonExit
-
       - name: Upload Windows reactor evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -686,6 +724,11 @@ jobs:
             reactor-evidence
             perf-artifacts-smoke
           if-no-files-found: warn
+
+      - name: Require Windows reactor comparison
+        if: always() && steps.reactor_comparison.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
 
       - name: Publish Windows stage timings
         shell: pwsh
