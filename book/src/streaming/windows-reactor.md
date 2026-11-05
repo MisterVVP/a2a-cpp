@@ -197,6 +197,40 @@ of the pool's sharding. Existing HTTP SSE interoperability scripts also apply.
 TCK compliance is a separate validation step; this backend does not establish
 protocol conformance by itself.
 
+### Native Windows startup results
+
+Two native Windows job attempts for `221bfe6` measured both execution orders
+using prebuilt binaries, 20 repetitions and a requested 1 ms timer period.
+The runners used Windows Server 2022 build 20348, Intel Xeon Platinum 8573C
+with four exposed logical CPUs, MSVC 19.44.35229 and RelWithDebInfo. Runtime
+libcurl was 7.74.0-DEV with Schannel and zlib 1.2.11; dependency DLL hashes
+matched between the two backends.
+
+At 96 streams, first-event p95 values were milliseconds, fallback/native:
+
+| Attempt | Order | Complete startup | Cancellation-workload startup |
+| ---: | --- | ---: | ---: |
+| 1 | native-first | 160.305/110.278 | 151.488/118.112 |
+| 1 | fallback-first | 149.108/138.259 | 170.325/125.165 |
+| 2 | native-first | 159.102/126.864 | 138.240/147.240 |
+| 2 | fallback-first | 151.103/99.605 | 162.961/118.419 |
+
+All four 96-stream comparisons passed the unchanged strict budgets. Every
+completion and actual cancellation check passed at 1/16/64/96 streams, with
+zero errors, equal complete samples and at most five added SDK threads.
+Cancellation-workload startup above is separate from actual cancellation time.
+
+Strict startup parity across every workload is not established. At 16 streams,
+native first-event p95 was sometimes 8–9 ms slower than fallback; four startup
+checks exceeded their strict budgets by 0.190–0.857 ms. Connection setup still
+depends on libcurl and Winsock. The scheduling correction removes repeated
+connection starts ahead of ready work, but does not eliminate platform connect
+waits. The cloud gate and strict thresholds remain unchanged.
+
+The [first attempt's raw reports](https://github.com/MisterVVP/a2a-cpp/actions/runs/42108738541/artifacts/13453307322)
+and [independent attempt's raw reports](https://github.com/MisterVVP/a2a-cpp/actions/runs/42108738541/artifacts/13457933707)
+include both execution orders, DLL/executable hashes and runner metadata.
+
 ### Local comparison limits
 
 The Linux-hosted Windows check used MinGW GCC 14, libcurl 8.17.0 with
