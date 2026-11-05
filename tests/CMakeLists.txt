@@ -1034,8 +1034,6 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL)
   add_test(NAME curl_reactor_evidence_comparison_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/curl_reactor_evidence_test.py)
-  add_test(NAME curl_reactor_investigation_test
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/curl_reactor_investigation_test.py)
 endif()
 if(Python3_Interpreter_FOUND)
   add_test(

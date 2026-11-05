@@ -171,7 +171,7 @@ inline bool HasCompleteTestRequest(std::string_view request) {
          request.size() >= headers_end + kRequestHeadersEnd.size() + body_size;
 }
 
-inline bool ReadTestRequest(TestSocketHandle socket, std::string* captured = nullptr) {
+inline bool ReadTestRequest(TestSocketHandle socket) {
 #ifdef _WIN32
   constexpr DWORD kReceiveTimeoutMs = 5000;
   (void)setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&kReceiveTimeoutMs),
@@ -191,36 +191,20 @@ inline bool ReadTestRequest(TestSocketHandle socket, std::string* captured = nul
     // Consume POST bodies before closing later, so fragmented JSON-RPC writes
     // cannot turn a successful finite response into a TCP reset.
     if (HasCompleteTestRequest(request)) {
-      if (captured != nullptr) {
-        captured->swap(request);
-      }
       return true;
     }
   }
   return false;
 }
 
-struct CurlServerTiming final {
-  using Clock = std::chrono::steady_clock;
-  Clock::time_point accept_begin;
-  Clock::time_point accepted;
-  Clock::time_point request_ready;
-  Clock::time_point send_begin;
-  Clock::time_point send_end;
-};
-
 // One server worker for every stream count. Responses are explicitly released
 // by the test; no per-connection thread or timing-based response scheduling.
 class CurlLoopbackServer final {
  public:
-  using TimingObserver = std::function<void(const CurlServerTiming&, std::string_view)>;
-
-  explicit CurlLoopbackServer(std::size_t expected, std::string_view initial = kTestFirstChunk,
-                              TimingObserver timing_observer = {})
+  explicit CurlLoopbackServer(std::size_t expected, std::string_view initial = kTestFirstChunk)
       : global_(detail::EnsureCurlGlobalInit()),
         expected_(expected),
         initial_response_(std::string(kTestSseHeaders).append(initial)),
-        timing_observer_(std::move(timing_observer)),
         listener_(MakeTestListener(&port_)),
         worker_([this, listener = listener_.get()] { AcceptStreams(listener); }) {}
   ~CurlLoopbackServer() {
@@ -250,28 +234,18 @@ class CurlLoopbackServer final {
  private:
   void AcceptStreams(TestSocketHandle listener) {
     for (std::size_t index = 0; index < expected_; ++index) {
-      CurlServerTiming timing;
-      Stamp(timing.accept_begin);
       TestSocket client(::accept(listener, nullptr, nullptr));
-      Stamp(timing.accepted);
-      std::string request;
-      if (!client.valid() || !ReadTestRequest(client.get(), timing_observer_ ? &request : nullptr)) {
+      if (!client.valid() || !ReadTestRequest(client.get())) {
         return;
       }
-      Stamp(timing.request_ready);
       {
         std::lock_guard lock(mutex_);
         // Publish the connection before a fast first-event callback can call
         // Finish(). Hold the same lock across the send and registration.
         // Send headers and the first chunk together: two tiny writes can put
         // the chunk behind Nagle/delayed ACK instead of measuring the reactor.
-        Stamp(timing.send_begin);
         if (!SendTestBytes(client.get(), initial_response_)) {
           return;
-        }
-        Stamp(timing.send_end);
-        if (timing_observer_) {
-          timing_observer_(timing, request);
         }
         clients_.push_back(std::move(client));
       }
@@ -279,16 +253,9 @@ class CurlLoopbackServer final {
     }
   }
 
-  void Stamp(CurlServerTiming::Clock::time_point& value) const {
-    if (timing_observer_) {
-      value = CurlServerTiming::Clock::now();
-    }
-  }
-
   std::shared_ptr<const detail::ClientGlobalState> global_;
   const std::size_t expected_;
   const std::string initial_response_;
-  const TimingObserver timing_observer_;
   unsigned short port_ = 0;
   TestSocket listener_;
   std::mutex mutex_;
@@ -307,12 +274,9 @@ struct CurlStreamProbe final {
   std::string bytes;
   bool metadata = false;
   bool chunk_before_metadata = false;
-  bool collect_timing = false;
   Clock::time_point started = Clock::now();
-  Clock::time_point api_return;
-  Clock::time_point metadata_observed;
-  Clock::time_point first_event;
-  Clock::time_point finished;
+  Clock::time_point first_event{};
+  Clock::time_point finished{};
 
   [[nodiscard]] bool WaitForChunk() {
     std::unique_lock lock(mutex);
@@ -321,19 +285,14 @@ struct CurlStreamProbe final {
 };
 
 inline std::shared_ptr<CurlStreamProbe> StartTestStream(const Client& client, std::string url,
-                                                        std::chrono::milliseconds timeout = kIdleRequestTimeout,
-                                                        bool collect_timing = false) {
+                                                        std::chrono::milliseconds timeout = kIdleRequestTimeout) {
   auto probe = std::make_shared<CurlStreamProbe>();
-  probe->collect_timing = collect_timing;
   Request request{
       .method = std::string(kTestGetMethod), .url = std::move(url), .headers = {}, .body = {}, .timeout = timeout};
   const auto started = client.StartStreamRequest(
       std::move(request),
       [probe](const Response&) -> core::Result<void> {
         std::lock_guard lock(probe->mutex);
-        if (probe->collect_timing) {
-          probe->metadata_observed = CurlStreamProbe::Clock::now();
-        }
         probe->metadata = true;
         return {};
       },
@@ -356,9 +315,6 @@ inline std::shared_ptr<CurlStreamProbe> StartTestStream(const Client& client, st
       });
   if (!started.ok()) {
     throw std::runtime_error(std::string(started.error().message()));
-  }
-  if (collect_timing) {
-    probe->api_return = CurlStreamProbe::Clock::now();
   }
   return probe;
 }

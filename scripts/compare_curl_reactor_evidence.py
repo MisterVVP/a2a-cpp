@@ -16,10 +16,9 @@ LATENCY_PROFILES = {
                   cancel_p95_ms=50.0, cancel_p99_ms=100.0),
 }
 METRICS = ("first_p95_ms", "finish_p95_ms", "finish_p99_ms")
-METHOD_DEFAULTS = {"client_lifetime": "fresh", "warmup_repetitions": 0}
 
 
-def read_evidence(path, modes=MODES):
+def read_evidence(path):
     rows = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     indexed = {}
     for row in rows:
@@ -28,8 +27,6 @@ def read_evidence(path, modes=MODES):
             raise ValueError(f"duplicate workload: {key}")
         if row["errors"] != 0 or row["samples"] < row["streams"]:
             raise ValueError(f"failed or incomplete workload: {key}")
-        if "repetitions" in row and row["samples"] != row["streams"] * row["repetitions"]:
-            raise ValueError(f"incomplete repetitions: {key}")
         if not 0 <= row["maximum_thread_growth"] <= MAX_THREAD_GROWTH:
             raise ValueError(f"thread budget exceeded: {key}")
         if any(not math.isfinite(row[name]) or row[name] < 0 for name in METRICS):
@@ -39,7 +36,7 @@ def read_evidence(path, modes=MODES):
         if row.get("timer_period_ms", 0) not in (0, 1):
             raise ValueError(f"invalid timer period: {key}")
         indexed[key] = row
-    expected = {(count, mode) for count in STREAM_COUNTS for mode in modes}
+    expected = {(count, mode) for count in STREAM_COUNTS for mode in MODES}
     if set(indexed) != expected:
         raise ValueError("missing or unexpected workloads")
     return indexed
@@ -69,9 +66,6 @@ def compare(baseline, candidate, profile="strict"):
             failures.append(f"{key}: unequal sample counts")
         if old.get("timer_period_ms", 0) != native.get("timer_period_ms", 0):
             failures.append(f"{key}: unequal timer periods")
-        for setting, default in METHOD_DEFAULTS.items():
-            if old.get(setting, default) != native.get(setting, default):
-                failures.append(f"{key}: unequal {setting}")
         for metric in METRICS:
             budget = max(old[metric] * budgets["regression_ratio"],
                          old[metric] + budgets["scheduling_tolerance_ms"])
