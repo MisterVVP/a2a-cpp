@@ -8,10 +8,12 @@
 #include <barrier>
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <future>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "support/curl_reactor_test_support.h"
@@ -272,6 +274,35 @@ void ExpectReactorCancelled(ReactorTransfer& stream) {
   ASSERT_EQ(stream.result.wait_for(kReactorTestTimeout), std::future_status::ready);
   EXPECT_EQ(stream.result.get(), CURLE_ABORTED_BY_CALLBACK);
 }
+
+#if defined(_WIN32) && !defined(A2A_TEST_CURL_PORTABLE_REACTOR)
+TEST(CurlReactorIntegrationTest, CancellationInAddBatchPreventsConnectionAttempt) {
+  CurlLoopbackServer server(1U);
+  ReactorTransfer stream(server.url());
+  std::atomic_size_t attempts{0U};
+  const auto reject_socket = +[](void* data, curlsocktype, curl_sockaddr*) -> curl_socket_t {
+    static_cast<std::atomic_size_t*>(data)->fetch_add(1U, std::memory_order_relaxed);
+    return CURL_SOCKET_BAD;
+  };
+  ASSERT_EQ(curl_easy_setopt(stream.easy.get(), CURLOPT_OPENSOCKETFUNCTION, reject_socket), CURLE_OK);
+  ASSERT_EQ(curl_easy_setopt(stream.easy.get(), CURLOPT_OPENSOCKETDATA, &attempts), CURLE_OK);
+  std::promise<void> start;
+  auto ready = start.get_future().share();
+  auto reactor = CurlStreamReactor::Create([ready](std::function<void()> task) {
+    return std::thread([ready, task = std::move(task)] {
+      ready.wait();
+      task();
+    });
+  });
+  ASSERT_NE(reactor, nullptr);
+  reactor->Add(stream.transfer);
+  reactor->Cancel(stream.transfer);
+  start.set_value();
+  ExpectReactorCancelled(stream);
+  reactor->Shutdown();
+  EXPECT_EQ(attempts.load(std::memory_order_relaxed), 0U);
+}
+#endif
 
 TEST(CurlReactorIntegrationTest, OneReactorOwnsMoreThanSixtyFourEstablishedTransfers) {
   CurlLoopbackServer server(kBeyondHandleLimit);

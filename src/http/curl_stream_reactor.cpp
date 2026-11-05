@@ -209,12 +209,19 @@ void CurlStreamReactor::AddOnReactor(std::shared_ptr<Transfer> transfer) {
     return;
   }
   transfers_.emplace(transfer->easy_handle, std::move(transfer));
+#if !defined(_WIN32) || defined(A2A_TEST_CURL_PORTABLE_REACTOR)
   int running_handles = 0;
   const CURLMcode action_code = curl_multi_socket_action(multi_handle_, CURL_SOCKET_TIMEOUT, 0, &running_handles);
   if (action_code != CURLM_OK) {
     FailAll(CURLE_RECV_ERROR);
   }
   ReadCompletions();
+#else
+  // Adding a handle arms libcurl's zero-timeout callback. Let the event loop
+  // service that deadline after draining commands, rather than pumping every
+  // existing connection again for each Add. Winsock connect verification can
+  // block, delaying both queued cancellations and already-readable responses.
+#endif
 }
 
 void CurlStreamReactor::Remove(const std::shared_ptr<Transfer>& transfer, CURLcode result) {
