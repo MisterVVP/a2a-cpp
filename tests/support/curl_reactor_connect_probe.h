@@ -20,6 +20,9 @@ inline constexpr const char* kKernelModule = "kernel32.dll";
 inline constexpr const char* kSocketModule = "ws2_32.dll";
 inline constexpr const char* kYieldFunction = "SleepEx";
 inline constexpr const char* kSocketErrorFunction = "getsockopt";
+inline constexpr const char* kPeerFunction = "getpeername";
+inline constexpr const char* kLocalFunction = "getsockname";
+inline constexpr const char* kSendFunction = "send";
 inline constexpr const char* kSkipYieldVariable = "A2A_STAGE_SKIP_CONNECT_YIELD";
 inline constexpr const char* kFastCheckVariable = "A2A_STAGE_FAST_CONNECT_CHECK";
 inline constexpr const char* kProbeFailure = "cannot install process-local curl connection probe";
@@ -27,8 +30,13 @@ inline constexpr std::size_t kFlagBufferSize = 2U;
 
 using YieldFunction = DWORD(WINAPI*)(DWORD, BOOL);
 using SocketErrorFunction = int(WSAAPI*)(SOCKET, int, int, char*, int*);
+using SocketNameFunction = int(WSAAPI*)(SOCKET, sockaddr*, int*);
+using SocketSendFunction = int(WSAAPI*)(SOCKET, const char*, int, int);
 inline YieldFunction original_yield = nullptr;
 inline SocketErrorFunction original_socket_error = nullptr;
+inline SocketNameFunction original_peer = nullptr;
+inline SocketNameFunction original_local = nullptr;
+inline SocketSendFunction original_send = nullptr;
 inline bool skip_connect_yield = false;
 inline bool fast_connect_check = false;
 inline std::atomic_size_t confirmed_failure_checks{0U};
@@ -51,6 +59,21 @@ inline DWORD WINAPI ProbeYield(DWORD milliseconds, BOOL alertable) {
     return 0U;
   }
   return original_yield(milliseconds, alertable);
+}
+
+inline int WSAAPI ProbePeer(SOCKET socket, sockaddr* address, int* length) {
+  const Span span(Kind::kPeerBegin, Kind::kPeerEnd, nullptr, static_cast<std::int64_t>(socket));
+  return original_peer(socket, address, length);
+}
+
+inline int WSAAPI ProbeLocal(SOCKET socket, sockaddr* address, int* length) {
+  const Span span(Kind::kLocalBegin, Kind::kLocalEnd, nullptr, static_cast<std::int64_t>(socket));
+  return original_local(socket, address, length);
+}
+
+inline int WSAAPI ProbeSend(SOCKET socket, const char* bytes, int length, int flags) {
+  const Span span(Kind::kSendBegin, Kind::kSendEnd, nullptr, static_cast<std::int64_t>(socket));
+  return original_send(socket, bytes, length, flags);
 }
 
 inline int WSAAPI ProbeSocketError(SOCKET socket, int level, int option, char* value, int* length) {
@@ -140,6 +163,16 @@ class ImportHook final {
   ULONG_PTR original_ = 0U;
 };
 
+template <typename Function>
+void InstallObservation(ImportHook& hook, HMODULE module, const char* name, Function replacement, Function& original) {
+  const auto address = GetProcAddress(GetModuleHandleA(kSocketModule), name);
+  if (address == nullptr) {
+    throw std::runtime_error(kProbeFailure);
+  }
+  original = std::bit_cast<Function>(address);
+  hook.Install(module, address, std::bit_cast<FARPROC>(replacement));
+}
+
 class ConnectProbe final {
  public:
   ConnectProbe() {
@@ -165,11 +198,17 @@ class ConnectProbe final {
         flag.front() == '1';
     yield_.Install(module, yield, std::bit_cast<FARPROC>(&ProbeYield));
     socket_error_.Install(module, socket_error, std::bit_cast<FARPROC>(&ProbeSocketError));
+    InstallObservation(peer_, module, kPeerFunction, &ProbePeer, original_peer);
+    InstallObservation(local_, module, kLocalFunction, &ProbeLocal, original_local);
+    InstallObservation(send_, module, kSendFunction, &ProbeSend, original_send);
   }
 
  private:
   ImportHook yield_;
   ImportHook socket_error_;
+  ImportHook peer_;
+  ImportHook local_;
+  ImportHook send_;
 };
 
 }  // namespace a2a::http::stage_trace

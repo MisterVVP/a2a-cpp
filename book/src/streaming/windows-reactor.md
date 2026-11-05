@@ -263,7 +263,8 @@ receipt and dispatch with request IDs and Windows thread cycle counts. CI upload
 these files as `windows-reactor-stage-trace`. These instrumented runs are
 diagnostic controls, not acceptance measurements.
 
-The connection probe records libcurl's `SleepEx` and `SO_ERROR` checks. Its earlier
+The connection probe records libcurl's `SleepEx` and `SO_ERROR` checks, peer/local
+address queries, and sends. Its earlier
 skipped-yield control did not remove the pauses: they occur in `SO_ERROR`.
 The current control uses writable-without-exception readiness to identify a
 successful connect, preserving the original error query on failures. It compares
