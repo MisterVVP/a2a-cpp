@@ -80,6 +80,10 @@ def instrument(path, text, header):
                  '  (void)curl_easy_setopt(handle, CURLOPT_VERBOSE, 1L);\n')
         text = replace(text, anchor, setup + anchor)
     elif path.name == 'curl_reactor_evidence.cpp':
+        probe = header.with_name('curl_reactor_connect_probe.h')
+        text = f'#include "{probe.as_posix()}"\n' + text
+        anchor = 'int main(int argc, char** argv) {\n  try {'
+        text = replace(text, anchor, anchor + f'\n    const {PREFIX}ConnectProbe connect_probe;')
         anchor = '      diagnostic->origin = CurlStreamProbe::Clock::now();'
         text = replace(text, anchor, anchor + f'\n      {PREFIX}EmitAt(diagnostic->origin, {PREFIX}Kind::kOrigin, count, '
                        'static_cast<std::int64_t>(diagnostic->repetition));')
@@ -128,24 +132,27 @@ def main():
     with source_overlay(repository):
         binaries, manifest['build_commands'] = prepare_binaries(args.build_dir.resolve(), args.configuration)
         for order_name, order in (('native-first', ('native', 'fallback')), ('fallback-first', ('fallback', 'native'))):
-            for name in order:
-                directory = output / order_name
-                directory.mkdir(exist_ok=True)
-                environment = os.environ.copy()
-                environment['A2A_STAGE_TRACE_FILE'] = str(directory / f'{name}-stages.csv')
-                command = [str(binaries[name]), '--diagnostics', str(directory / f'{name}-timing.json'),
-                           '--complete-only', '--repetitions', '5', '--reuse-client', '--warmup']
-                manifest['commands'].append(command)
-                print(f'Tracing {order_name}/{name}', flush=True)
-                result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
-                (directory / f'{name}.json').write_text(result.stdout, encoding='utf-8')
-                (directory / f'{name}.stderr').write_text(result.stderr, encoding='utf-8')
-                (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
-                if result.returncode:
-                    raise RuntimeError(f'trace run failed ({result.returncode}): {result.stderr}')
-                evidence = read_evidence(directory / f'{name}.json', ('complete',))
-                timing = json.loads((directory / f'{name}-timing.json').read_text(encoding='utf-8-sig'))
-                diagnostic_statistics(timing, evidence)
+            variants = ('original-yield', 'skip-yield') if order_name == 'native-first' else ('skip-yield', 'original-yield')
+            for variant in variants:
+                for name in order:
+                    directory = output / order_name / variant
+                    directory.mkdir(parents=True, exist_ok=True)
+                    environment = os.environ.copy()
+                    environment['A2A_STAGE_TRACE_FILE'] = str(directory / f'{name}-stages.csv')
+                    environment['A2A_STAGE_SKIP_CONNECT_YIELD'] = '1' if variant == 'skip-yield' else '0'
+                    command = [str(binaries[name]), '--diagnostics', str(directory / f'{name}-timing.json'),
+                               '--complete-only', '--repetitions', '5', '--reuse-client', '--warmup']
+                    manifest['commands'].append(dict(order=order_name, variant=variant, backend=name, command=command))
+                    print(f'Tracing {order_name}/{variant}/{name}', flush=True)
+                    result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+                    (directory / f'{name}.json').write_text(result.stdout, encoding='utf-8')
+                    (directory / f'{name}.stderr').write_text(result.stderr, encoding='utf-8')
+                    (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+                    if result.returncode:
+                        raise RuntimeError(f'trace run failed ({result.returncode}): {result.stderr}')
+                    evidence = read_evidence(directory / f'{name}.json', ('complete',))
+                    timing = json.loads((directory / f'{name}-timing.json').read_text(encoding='utf-8-sig'))
+                    diagnostic_statistics(timing, evidence)
 
 
 if __name__ == '__main__':

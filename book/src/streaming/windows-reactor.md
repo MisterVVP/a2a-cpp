@@ -261,8 +261,17 @@ source bytes on exit, including failures, and refuses to overwrite concurrent
 edits. Its per-thread buffers record waits, commands, socket actions, libcurl
 receipt and dispatch with request IDs and Windows thread cycle counts. CI uploads
 these files as `windows-reactor-stage-trace`. These instrumented runs are
-diagnostic controls, not acceptance measurements. After running the tool locally,
-rebuild the ordinary targets before running untraced acceptance benchmarks:
+diagnostic controls, not acceptance measurements.
+
+The connection probe records libcurl's `SleepEx` and `SO_ERROR` checks. It compares
+the original zero-duration yield with a skipped-yield control using the same
+binaries, and reverses both backend and control order. Only the benchmark process's
+libcurl import entries are temporarily redirected; they are restored on exit,
+and the DLL on disk is unchanged. Skipping that call is an experiment, not an SDK
+fix. The output paths and manifest identify each control explicitly.
+
+After running the tool locally, rebuild the ordinary targets before running
+untraced acceptance benchmarks:
 
 ```powershell
 python scripts/trace_curl_reactor.py --build-dir build-windows `

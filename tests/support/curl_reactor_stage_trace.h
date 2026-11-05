@@ -66,13 +66,38 @@ enum class Kind : std::uint8_t {
   kDispatchMetadata,
   kQueueBody,
   kDispatchBody,
+  kYieldBegin,
+  kYieldEnd,
+  kSocketErrorBegin,
+  kSocketErrorEnd,
 };
 
-inline constexpr std::array kNames{
-    "origin",         "enqueue",           "commands_begin", "commands_end", "add_begin",   "add_end",
-    "action_begin",   "action_end",        "wait_begin",     "wait_end",     "wake",        "drain_begin",
-    "drain_end",      "interest",          "stale",          "request",      "curl_header", "curl_body",
-    "queue_metadata", "dispatch_metadata", "queue_body",     "dispatch_body"};
+inline constexpr std::array kNames{"origin",
+                                   "enqueue",
+                                   "commands_begin",
+                                   "commands_end",
+                                   "add_begin",
+                                   "add_end",
+                                   "action_begin",
+                                   "action_end",
+                                   "wait_begin",
+                                   "wait_end",
+                                   "wake",
+                                   "drain_begin",
+                                   "drain_end",
+                                   "interest",
+                                   "stale",
+                                   "request",
+                                   "curl_header",
+                                   "curl_body",
+                                   "queue_metadata",
+                                   "dispatch_metadata",
+                                   "queue_body",
+                                   "dispatch_body",
+                                   "yield_begin",
+                                   "yield_end",
+                                   "socket_error_begin",
+                                   "socket_error_end"};
 
 struct Record final {
   Clock::time_point when;
@@ -128,8 +153,14 @@ inline void EmitAt(Clock::time_point when, Kind kind, std::uintptr_t key, std::i
 }
 
 inline void Emit(Kind kind, const void* key = nullptr, std::int64_t argument = 0) {
+#ifdef _WIN32
+  const DWORD saved_error = GetLastError();
+#endif
   // Opaque correlation identity only; this integer is never dereferenced.
   EmitAt(Clock::now(), kind, reinterpret_cast<std::uintptr_t>(key), argument);
+#ifdef _WIN32
+  SetLastError(saved_error);
+#endif
 }
 
 class Span final {
