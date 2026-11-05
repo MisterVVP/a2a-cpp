@@ -9,11 +9,12 @@ import argparse
 from contextlib import contextmanager
 import json
 import os
+import platform
 from pathlib import Path
 import subprocess
 
 from compare_curl_reactor_evidence import read_evidence
-from investigate_curl_reactor import diagnostic_statistics, prepare_binaries
+from investigate_curl_reactor import binary_fingerprint, cpu_name, diagnostic_statistics, prepare_binaries
 
 PREFIX = 'a2a::http::stage_trace::'
 
@@ -89,6 +90,11 @@ def instrument(path, text, header):
                        'static_cast<std::int64_t>(diagnostic->repetition));')
         anchor = '    WriteCurlDiagnostics(options, kEvidenceTimerPeriodMs, diagnostics);'
         text = replace(text, anchor, anchor + f'\n    {PREFIX}Dump();')
+    elif path.name == 'curl_windows_readiness_test.cpp':
+        anchor = '#include <gtest/gtest.h>'
+        text = replace(text, anchor, anchor)
+        test_main = header.with_name('curl_reactor_connect_probe_main.h')
+        text += f'\n#include "{test_main.as_posix()}"\n'
     else:
         raise ValueError(f'unexpected overlay source: {path}')
     return f'#include "{header.as_posix()}"\n' + text
@@ -99,7 +105,8 @@ def source_overlay(repository):
     header = repository / 'tests/support/curl_reactor_stage_trace.h'
     paths = [repository / name for name in (
         'src/http/curl_stream_reactor.cpp', 'src/http/curl_windows_readiness.cpp',
-        'src/http/http_client_streaming.cpp', 'tests/curl_reactor_evidence.cpp')]
+        'src/http/http_client_streaming.cpp', 'tests/curl_reactor_evidence.cpp',
+        'tests/unit/curl_windows_readiness_test.cpp')]
     original = {path: path.read_bytes() for path in paths}
     patched = {path: instrument(path, data.decode().replace('\r\n', '\n'), header).encode()
                for path, data in original.items()}
@@ -128,18 +135,46 @@ def main():
     repository = Path(__file__).resolve().parents[1]
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    manifest = {'commands': []}
+    manifest = dict(platform=platform.platform(), cpu=cpu_name(), logical_cpus=os.cpu_count(),
+                    configuration=args.configuration, commands=[], focused_tests=[])
     with source_overlay(repository):
         binaries, manifest['build_commands'] = prepare_binaries(args.build_dir.resolve(), args.configuration)
+        manifest['binary_sha256'] = {name: binary_fingerprint(path) for name, path in binaries.items()}
+        build_tests = ['cmake', '--build', str(args.build_dir.resolve()), '--config', args.configuration,
+                       '--target', 'curl_reactor_test', '--parallel']
+        build_environment = os.environ.copy()
+        if 'CI_VCPKG_ROOT' in build_environment:
+            build_environment['VCPKG_ROOT'] = build_environment['CI_VCPKG_ROOT']
+        subprocess.run(build_tests, env=build_environment, check=True)
+        candidates = (args.build_dir.resolve() / 'tests' / args.configuration / 'curl_reactor_test.exe',
+                      args.build_dir.resolve() / 'tests' / 'curl_reactor_test.exe')
+        test_binary = next((path for path in candidates if path.is_file()), None)
+        if test_binary is None:
+            raise RuntimeError('focused Windows test executable was not produced')
+        for variant in ('original-check', 'readiness-success'):
+            directory = output / 'focused-tests' / variant
+            directory.mkdir(parents=True, exist_ok=True)
+            environment = os.environ.copy()
+            environment['A2A_STAGE_TRACE_FILE'] = str(directory / 'marker.csv')
+            environment['A2A_STAGE_FAST_CONNECT_CHECK'] = '1' if variant == 'readiness-success' else '0'
+            environment['A2A_STAGE_SKIP_CONNECT_YIELD'] = '0'
+            result = subprocess.run([str(test_binary)], env=environment, capture_output=True, text=True, check=False)
+            (directory / 'stdout.txt').write_text(result.stdout, encoding='utf-8')
+            (directory / 'stderr.txt').write_text(result.stderr, encoding='utf-8')
+            manifest['focused_tests'].append(dict(variant=variant, command=[str(test_binary)], returncode=result.returncode))
+            (output / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+            if result.returncode:
+                raise RuntimeError(f'focused tests failed ({variant}): {result.stdout}\n{result.stderr}')
         for order_name, order in (('native-first', ('native', 'fallback')), ('fallback-first', ('fallback', 'native'))):
-            variants = ('original-yield', 'skip-yield') if order_name == 'native-first' else ('skip-yield', 'original-yield')
+            variants = ('original-check', 'readiness-success') if order_name == 'native-first' else ('readiness-success', 'original-check')
             for variant in variants:
                 for name in order:
                     directory = output / order_name / variant
                     directory.mkdir(parents=True, exist_ok=True)
                     environment = os.environ.copy()
                     environment['A2A_STAGE_TRACE_FILE'] = str(directory / f'{name}-stages.csv')
-                    environment['A2A_STAGE_SKIP_CONNECT_YIELD'] = '1' if variant == 'skip-yield' else '0'
+                    environment['A2A_STAGE_SKIP_CONNECT_YIELD'] = '0'
+                    environment['A2A_STAGE_FAST_CONNECT_CHECK'] = '1' if variant == 'readiness-success' else '0'
                     command = [str(binaries[name]), '--diagnostics', str(directory / f'{name}-timing.json'),
                                '--complete-only', '--repetitions', '5', '--reuse-client', '--warmup']
                     manifest['commands'].append(dict(order=order_name, variant=variant, backend=name, command=command))

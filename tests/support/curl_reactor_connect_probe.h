@@ -10,6 +10,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 
 namespace a2a::http::stage_trace {
@@ -20,6 +21,7 @@ inline constexpr const char* kSocketModule = "ws2_32.dll";
 inline constexpr const char* kYieldFunction = "SleepEx";
 inline constexpr const char* kSocketErrorFunction = "getsockopt";
 inline constexpr const char* kSkipYieldVariable = "A2A_STAGE_SKIP_CONNECT_YIELD";
+inline constexpr const char* kFastCheckVariable = "A2A_STAGE_FAST_CONNECT_CHECK";
 inline constexpr const char* kProbeFailure = "cannot install process-local curl connection probe";
 inline constexpr std::size_t kFlagBufferSize = 2U;
 
@@ -28,6 +30,20 @@ using SocketErrorFunction = int(WSAAPI*)(SOCKET, int, int, char*, int*);
 inline YieldFunction original_yield = nullptr;
 inline SocketErrorFunction original_socket_error = nullptr;
 inline bool skip_connect_yield = false;
+inline bool fast_connect_check = false;
+inline std::atomic_size_t confirmed_failure_checks{0U};
+
+inline bool WritableWithoutException(SOCKET socket) {
+  fd_set writable{};
+  fd_set failed{};
+  FD_ZERO(&writable);
+  FD_ZERO(&failed);
+  FD_SET(socket, &writable);
+  FD_SET(socket, &failed);
+  timeval immediate{};
+  return select(0, nullptr, &writable, &failed, &immediate) > 0 && FD_ISSET(socket, &writable) != 0 &&
+         FD_ISSET(socket, &failed) == 0;
+}
 
 inline DWORD WINAPI ProbeYield(DWORD milliseconds, BOOL alertable) {
   const Span span(Kind::kYieldBegin, Kind::kYieldEnd, nullptr, milliseconds);
@@ -40,7 +56,23 @@ inline DWORD WINAPI ProbeYield(DWORD milliseconds, BOOL alertable) {
 inline int WSAAPI ProbeSocketError(SOCKET socket, int level, int option, char* value, int* length) {
   if (level == SOL_SOCKET && option == SO_ERROR) {
     const Span span(Kind::kSocketErrorBegin, Kind::kSocketErrorEnd, nullptr, static_cast<std::int64_t>(socket));
-    return original_socket_error(socket, level, option, value, length);
+    const bool valid_output = value != nullptr && length != nullptr && *length >= static_cast<int>(sizeof(int));
+    if (fast_connect_check && valid_output && WritableWithoutException(socket)) {
+      constexpr int kNoSocketError = 0;
+      std::memcpy(value, &kNoSocketError, sizeof(kNoSocketError));
+      *length = sizeof(kNoSocketError);
+      Emit(Kind::kFastConnected, nullptr, static_cast<std::int64_t>(socket));
+      return 0;
+    }
+    const int result = original_socket_error(socket, level, option, value, length);
+    int socket_error = 0;
+    if (result == 0 && valid_output) {
+      std::memcpy(&socket_error, value, sizeof(socket_error));
+    }
+    if (result != 0 || socket_error != 0) {
+      confirmed_failure_checks.fetch_add(1U, std::memory_order_relaxed);
+    }
+    return result;
   }
   return original_socket_error(socket, level, option, value, length);
 }
@@ -126,6 +158,10 @@ class ConnectProbe final {
     std::array<char, kFlagBufferSize> flag{};
     skip_connect_yield =
         GetEnvironmentVariableA(kSkipYieldVariable, flag.data(), static_cast<DWORD>(flag.size())) == 1U &&
+        flag.front() == '1';
+    flag.fill('\0');
+    fast_connect_check =
+        GetEnvironmentVariableA(kFastCheckVariable, flag.data(), static_cast<DWORD>(flag.size())) == 1U &&
         flag.front() == '1';
     yield_.Install(module, yield, std::bit_cast<FARPROC>(&ProbeYield));
     socket_error_.Install(module, socket_error, std::bit_cast<FARPROC>(&ProbeSocketError));

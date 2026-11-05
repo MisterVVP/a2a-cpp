@@ -13,7 +13,8 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from trace_curl_reactor import source_overlay
 
 SOURCES = ('src/http/curl_stream_reactor.cpp', 'src/http/curl_windows_readiness.cpp',
-           'src/http/http_client_streaming.cpp', 'tests/curl_reactor_evidence.cpp')
+           'src/http/http_client_streaming.cpp', 'tests/curl_reactor_evidence.cpp',
+           'tests/unit/curl_windows_readiness_test.cpp')
 
 
 class OverlayTest(unittest.TestCase):

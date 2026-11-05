@@ -70,6 +70,7 @@ enum class Kind : std::uint8_t {
   kYieldEnd,
   kSocketErrorBegin,
   kSocketErrorEnd,
+  kFastConnected,
 };
 
 inline constexpr std::array kNames{"origin",
@@ -97,7 +98,8 @@ inline constexpr std::array kNames{"origin",
                                    "yield_begin",
                                    "yield_end",
                                    "socket_error_begin",
-                                   "socket_error_end"};
+                                   "socket_error_end",
+                                   "fast_connected"};
 
 struct Record final {
   Clock::time_point when;
