@@ -4,6 +4,10 @@ The SDK implements A2A protocol `1.0` across HTTP+JSON, JSON-RPC and gRPC.
 [Binding compatibility](bindings.md), [version negotiation](protocol-versions.md)
 and [security integration](../auth/security.md) describe the public contracts.
 
+HTTP+JSON servers accept `application/a2a+json` and legacy `application/json`
+request envelopes, and use `application/a2a+json` in responses. Domain errors
+follow the A2A 1.0.1 HTTP and gRPC error bindings.
+
 ## Release validation snapshot
 
 For v0.5.2 release preparation, unmodified upstream TCK
@@ -23,14 +27,26 @@ full TCK compliance. Review reports for the specific commit you deploy.
 ## Reproduce the upstream suite
 
 
-Use the same deterministic workflow as `.github/workflows/tck.yml`:
+Use the same workflow as `.github/workflows/tck.yml`. CI checks out upstream
+`main` and runs its assertions without local TCK patches. Upstream requires
+Python 3.15 or newer; CI installs that runtime independently of the SDK tools.
+
+At upstream revision `104a7b4ae0d83f65c075e3793e322953a830eaba`, two assertion
+defects remain: [CORE-SEND-003 lacks its expected error](https://github.com/a2aproject/a2a-tck/issues/202),
+and the [mandatory AIP-193 structure test](https://github.com/a2aproject/a2a-tck/blob/70f6f73c30208e80c889141907e094899e6e9f05/tests/compatibility/core_operations/test_error_handling.py#L777)
+requires legacy `application/json` while the separate media-type test expects
+`application/a2a+json`. These failures remain visible in the upstream results;
+the SDK does not alter their assertions, skip them, or override their exit status.
+Registered requirements without upstream tests remain `NOT TESTED`.
 
 ```bash
 # Check out the TCK and prepare Python dependencies.
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
 TCK_REF=${TCK_REF:-main}
-git clone --depth 1 --branch "${TCK_REF}" "https://github.com/${TCK_REPO}.git" tck-repo
-python3 -m venv tck-repo/.venv
+git clone --filter=blob:none --no-checkout "https://github.com/${TCK_REPO}.git" tck-repo
+git -C tck-repo fetch --depth 1 origin "${TCK_REF}"
+git -C tck-repo checkout --detach FETCH_HEAD
+python3.15 -m venv tck-repo/.venv
 source tck-repo/.venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -e ./tck-repo python-dotenv pyopenssl

@@ -146,7 +146,8 @@ TEST_P(AsyncGrpcUnaryTest, VersionValidationPrecedesExecution) {
   context.AddMetadata(kVersionKey, kBadVersion);
   context.set_deadline(std::chrono::system_clock::now() + kAsyncWait);
   const auto status = GetParam().invoke(server.Stub(), context);
-  EXPECT_EQ(status.error_code(), ::grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(status.error_code(), ::grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(Trailing(context, kProtocolCodeKey), a2a::core::protocol_codes::kVersionNotSupported);
   EXPECT_EQ(backend->WorkerCount(), 0);
 }
 INSTANTIATE_TEST_SUITE_P(AllUnaryOperations, AsyncGrpcUnaryTest, testing::ValuesIn(AllUnaryCases()));
@@ -335,7 +336,9 @@ bool WarmDeadlineRaceChannel(UnaryGrpcServer& server) {
   context.set_deadline(std::chrono::system_clock::now() + kAsyncWait);
   lf::a2a::v1::GetTaskRequest request;
   lf::a2a::v1::Task response;
-  return server.Stub().GetTask(&context, request, &response).error_code() == ::grpc::StatusCode::UNIMPLEMENTED;
+  const auto status = server.Stub().GetTask(&context, request, &response);
+  return status.error_code() == ::grpc::StatusCode::FAILED_PRECONDITION &&
+         Trailing(context, kProtocolCodeKey) == a2a::core::protocol_codes::kVersionNotSupported;
 }
 
 void ExpectDeadlineRaceOutcome(const ::grpc::Status& status, RequestOutcome outcome) {
@@ -446,7 +449,7 @@ TEST(AsyncGrpcTest, CancelVersusCompletionRaceStillRunsAfterOnce) {
   EXPECT_TRUE(status.ok() || status.error_code() == ::grpc::StatusCode::CANCELLED);
   EXPECT_TRUE(after->Wait(1));
 }
-TEST(AsyncGrpcTest, StreamsAreExplicitlyUnimplementedOnCallbackService) {
+TEST(AsyncGrpcTest, StreamsReturnUnsupportedOperationOnCallbackService) {
   UnaryGrpcServer server(std::make_shared<UnaryBackend>());
   ::grpc::ClientContext context;
   PrepareGrpcClient(context);
@@ -454,7 +457,8 @@ TEST(AsyncGrpcTest, StreamsAreExplicitlyUnimplementedOnCallbackService) {
   auto stream = server.Stub().SendStreamingMessage(&context, request);
   lf::a2a::v1::StreamResponse response;
   EXPECT_FALSE(stream->Read(&response));
-  EXPECT_EQ(stream->Finish().error_code(), ::grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(stream->Finish().error_code(), ::grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(Trailing(context, kProtocolCodeKey), a2a::core::protocol_codes::kUnsupportedOperation);
 }
 TEST(AsyncGrpcTest, NullDispatcherIsRejectedAtConfiguration) {
   EXPECT_THROW(AsyncGrpcServerTransport(nullptr), std::invalid_argument);

@@ -29,6 +29,13 @@
 
 namespace {
 
+constexpr char kHttpJsonBindingLabel[] = "HttpJson";
+constexpr char kJsonRpcBindingLabel[] = "JsonRpc";
+constexpr char kGrpcBindingLabel[] = "Grpc";
+constexpr char kMissingSutInstruction[] = "Run through tests/scripts/run_binding_scenarios.py";
+constexpr char kHostPortSeparator[] = ":";
+constexpr char kBindingPairSeparator[] = "To";
+
 using Binding = a2a::client::PreferredTransport;
 constexpr std::array kBindings{Binding::kRest, Binding::kJsonRpc, Binding::kGrpc};
 constexpr char kHostEnv[] = "A2A_BINDING_SUT_HOST";
@@ -56,7 +63,7 @@ constexpr char kAuthorization[] = "Authorization";
 constexpr char kBearerPrefix[] = "Bearer ";
 constexpr auto kStreamTimeout = std::chrono::seconds(5);
 constexpr int kGrpcNotFound = 5;
-constexpr int kGrpcUnimplemented = 12;
+constexpr int kGrpcFailedPrecondition = 9;
 constexpr int kGrpcUnauthenticated = 16;
 constexpr int kGrpcPermissionDenied = 7;
 constexpr std::size_t kArtifactCount = 4;
@@ -69,11 +76,11 @@ std::string EnvironmentValue(std::string_view name) {
 std::string BindingName(Binding binding) {
   switch (binding) {
     case Binding::kRest:
-      return "HttpJson";
+      return kHttpJsonBindingLabel;
     case Binding::kJsonRpc:
-      return "JsonRpc";
+      return kJsonRpcBindingLabel;
     case Binding::kGrpc:
-      return "Grpc";
+      return kGrpcBindingLabel;
   }
   return {};
 }
@@ -141,15 +148,17 @@ class SharedBindingTest : public testing::TestWithParam<BindingPair> {
  protected:
   void SetUp() override {
     const auto host = EnvironmentValue(kHostEnv);
-    ASSERT_FALSE(host.empty()) << "Run through tests/scripts/run_binding_scenarios.py";
+    ASSERT_FALSE(host.empty()) << kMissingSutInstruction;
     const auto port = EnvironmentValue(kPortEnv);
     std::string base;
-    base.append("http://").append(host).append(":").append(port);
+    base.append(a2a::core::http::kHttpScheme).append(host).append(kHostPortSeparator).append(port);
     rest_url_ = base;
     rest_url_.append(a2a::tests::sut::kRestApiBasePath);
     rpc_url_ = base;
     rpc_url_.append(a2a::tests::sut::kJsonRpcPath);
-    grpc_url_.append(host).append(":").append(std::to_string(std::stoi(port) + a2a::tests::sut::kGrpcPortOffset));
+    grpc_url_.append(host)
+        .append(kHostPortSeparator)
+        .append(std::to_string(std::stoi(port) + a2a::tests::sut::kGrpcPortOffset));
     options_.extensions = {std::string(a2a::tests::sut::kRequiredExtensionUri)};
     const auto token = EnvironmentValue(a2a::tests::sut::kAuthTokenEnv);
     if (!token.empty()) {
@@ -240,7 +249,7 @@ class SharedBindingTest : public testing::TestWithParam<BindingPair> {
       const auto rejected = target_->GetTask(get, options);
       ASSERT_FALSE(rejected.ok());
       ExpectProtocolFailure(rejected.error(), std::get<1>(GetParam()), a2a::core::protocol_codes::kVersionNotSupported,
-                            kGrpcUnimplemented, a2a::core::http::kStatusBadRequest);
+                            kGrpcFailedPrecondition, a2a::core::http::kStatusBadRequest);
     }
   }
 
@@ -439,7 +448,7 @@ TEST_P(SharedBindingTest, TerminalTaskSubscriptionUsesEquivalentError) {
   }
   ASSERT_TRUE(error.has_value());
   ExpectProtocolFailure(error.value_or(a2a::core::Error::Internal(std::string(kText))), std::get<1>(GetParam()),
-                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcUnimplemented,
+                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcFailedPrecondition,
                         a2a::core::http::kStatusBadRequest);
 }
 
@@ -463,7 +472,7 @@ TEST_P(SharedBindingTest, NegativePushProfileHasPrescribedBindingError) {
   const auto result = target_->ListTaskPushNotificationConfigs(request, options_);
   ASSERT_FALSE(result.ok());
   ExpectProtocolFailure(result.error(), binding, a2a::core::protocol_codes::kPushNotificationNotSupported,
-                        kGrpcUnimplemented, a2a::core::http::kStatusBadRequest);
+                        kGrpcFailedPrecondition, a2a::core::http::kStatusBadRequest);
 }
 
 TEST_P(SharedBindingTest, NegativeStreamingProfileHasPrescribedBindingError) {
@@ -478,7 +487,7 @@ TEST_P(SharedBindingTest, NegativeStreamingProfileHasPrescribedBindingError) {
   }
   ASSERT_TRUE(error.has_value());
   ExpectProtocolFailure(error.value_or(a2a::core::Error::Internal(std::string(kText))), std::get<1>(GetParam()),
-                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcUnimplemented,
+                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcFailedPrecondition,
                         a2a::core::http::kStatusBadRequest);
 }
 
@@ -511,10 +520,12 @@ TEST_P(SharedBindingTest, RequestedVersionsUseSdkNegotiation) {
   CheckRejectedVersions(get, kUnsupportedVersion);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    AllBindingPairs, SharedBindingTest, testing::Combine(testing::ValuesIn(kBindings), testing::ValuesIn(kBindings)),
-    [](const testing::TestParamInfo<BindingPair>& info) {
-      return BindingName(std::get<0>(info.param)).append("To").append(BindingName(std::get<1>(info.param)));
-    });
+INSTANTIATE_TEST_SUITE_P(AllBindingPairs, SharedBindingTest,
+                         testing::Combine(testing::ValuesIn(kBindings), testing::ValuesIn(kBindings)),
+                         [](const testing::TestParamInfo<BindingPair>& info) {
+                           return BindingName(std::get<0>(info.param))
+                               .append(kBindingPairSeparator)
+                               .append(BindingName(std::get<1>(info.param)));
+                         });
 
 }  // namespace

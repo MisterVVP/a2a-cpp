@@ -149,6 +149,30 @@ gtest_discover_tests(http_client_test PROPERTIES LABELS "tsan")
 if(A2A_HAS_LIBCURL)
   target_include_directories(http_client_test PRIVATE ${PROJECT_SOURCE_DIR}/src/http)
   target_link_libraries(http_client_test PRIVATE CURL::libcurl)
+
+  add_executable(curl_reactor_test
+    unit/curl_reactor_deadline_test.cpp
+    integration/curl_reactor_integration_test.cpp
+    integration/curl_streaming_transport_test.cpp
+  )
+  target_include_directories(curl_reactor_test PRIVATE ${PROJECT_SOURCE_DIR}/src/http ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(curl_reactor_test PRIVATE a2a::client CURL::libcurl GTest::gtest_main)
+  if(WIN32)
+    target_sources(curl_reactor_test PRIVATE unit/curl_windows_readiness_test.cpp)
+    target_link_libraries(curl_reactor_test PRIVATE ws2_32)
+  endif()
+  gtest_discover_tests(curl_reactor_test PROPERTIES LABELS tsan TIMEOUT 60)
+
+  add_executable(curl_reactor_evidence curl_reactor_evidence.cpp)
+  target_include_directories(curl_reactor_evidence PRIVATE ${PROJECT_SOURCE_DIR}/src/http)
+  target_link_libraries(curl_reactor_evidence PRIVATE a2a::http CURL::libcurl)
+  if(A2A_TEST_CURL_PORTABLE_REACTOR)
+    target_compile_definitions(curl_reactor_test PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
+    target_compile_definitions(curl_reactor_evidence PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
+  endif()
+  if(WIN32)
+    target_link_libraries(curl_reactor_evidence PRIVATE ws2_32 winmm)
+  endif()
 endif()
 
 add_executable(mcp_client_test
@@ -1007,6 +1031,10 @@ endif()
 gtest_discover_tests(a2a_performance_driver_test)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND A2A_HAS_LIBCURL)
+  add_test(NAME curl_reactor_evidence_comparison_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/curl_reactor_evidence_test.py)
+endif()
 if(Python3_Interpreter_FOUND)
   add_test(
     NAME subscription_diagnostics_symbol_command_test

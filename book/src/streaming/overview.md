@@ -1,5 +1,9 @@
 # Streaming usage
 
+The default Windows HTTP client uses a [shared readiness reactor](windows-reactor.md)
+with explicit command wakeups and libcurl timer deadlines for HTTP+JSON and JSON-RPC
+streams. The backend guide documents lifecycle ownership and validation workloads.
+
 Streaming is exposed through `A2AClient::SendStreamingMessage` and `A2AClient::SubscribeTask` for all production client transports:
 
 - gRPC uses native server streaming;

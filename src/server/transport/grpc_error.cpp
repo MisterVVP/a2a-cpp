@@ -7,6 +7,7 @@
 
 #include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_error_reasons.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "server/transport/grpc_request_context.h"
 #include "server/transport/grpc_status_details.h"
@@ -19,18 +20,6 @@ constexpr auto kNetworkCode = "network";
 constexpr auto kRemoteProtocolCode = "remote_protocol";
 constexpr auto kSerializationCode = "serialization";
 constexpr auto kInternalCode = "internal";
-constexpr auto kTaskNotFoundReason = "TASK_NOT_FOUND";
-constexpr auto kTaskNotCancelableReason = "TASK_NOT_CANCELABLE";
-constexpr auto kPushNotSupportedReason = "PUSH_NOTIFICATION_NOT_SUPPORTED";
-constexpr auto kUnsupportedOperationReason = "UNSUPPORTED_OPERATION";
-constexpr auto kExtendedCardNotConfiguredReason = "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
-constexpr auto kExtensionRequiredReason = "EXTENSION_SUPPORT_REQUIRED";
-constexpr auto kValidationReason = "VALIDATION_ERROR";
-constexpr auto kVersionReason = "VERSION_NOT_SUPPORTED";
-constexpr auto kNetworkReason = "NETWORK_ERROR";
-constexpr auto kRemoteProtocolReason = "REMOTE_PROTOCOL_ERROR";
-constexpr auto kSerializationReason = "SERIALIZATION_ERROR";
-constexpr auto kInternalReason = "INTERNAL_ERROR";
 constexpr auto kErrorCodeMetadata = "a2a-error-code";
 constexpr auto kStatusDetailsMetadata = "grpc-status-details-bin";
 ::grpc::StatusCode RemoteProtocolStatusCode(const core::Error& error);
@@ -41,7 +30,7 @@ constexpr auto kStatusDetailsMetadata = "grpc-status-details-bin";
     case core::ErrorCode::kValidation:
       return ::grpc::StatusCode::INVALID_ARGUMENT;
     case core::ErrorCode::kUnsupportedVersion:
-      return ::grpc::StatusCode::UNIMPLEMENTED;
+      return ::grpc::StatusCode::FAILED_PRECONDITION;
     case core::ErrorCode::kNetwork:
       return ::grpc::StatusCode::UNAVAILABLE;
     case core::ErrorCode::kRemoteProtocol:
@@ -65,9 +54,11 @@ namespace {
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
   }
-  if (protocol_code.has_value() && (*protocol_code == core::protocol_codes::kPushNotificationNotSupported ||
-                                    *protocol_code == core::protocol_codes::kUnsupportedOperation)) {
-    return ::grpc::StatusCode::UNIMPLEMENTED;
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+    return ::grpc::StatusCode::INVALID_ARGUMENT;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+    return ::grpc::StatusCode::INTERNAL;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
 }
@@ -94,38 +85,44 @@ std::string GrpcErrorCodeName(core::ErrorCode code) {
 std::string GrpcErrorInfoReason(const core::Error& error) {
   const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
-    return kTaskNotFoundReason;
+    return core::protocol_error_reasons::kTaskNotFound;
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotCancelable) {
-    return kTaskNotCancelableReason;
+    return core::protocol_error_reasons::kTaskNotCancelable;
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
-    return kPushNotSupportedReason;
+    return core::protocol_error_reasons::kPushNotificationNotSupported;
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kUnsupportedOperation) {
-    return kUnsupportedOperationReason;
+    return core::protocol_error_reasons::kUnsupportedOperation;
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
-    return kExtendedCardNotConfiguredReason;
+    return core::protocol_error_reasons::kExtendedAgentCardNotConfigured;
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
-    return kExtensionRequiredReason;
+    return core::protocol_error_reasons::kExtensionSupportRequired;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+    return core::protocol_error_reasons::kContentTypeNotSupported;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+    return core::protocol_error_reasons::kInvalidAgentResponse;
   }
   switch (error.code()) {
     case core::ErrorCode::kValidation:
-      return kValidationReason;
+      return core::protocol_error_reasons::kValidation;
     case core::ErrorCode::kUnsupportedVersion:
-      return kVersionReason;
+      return core::protocol_error_reasons::kVersionNotSupported;
     case core::ErrorCode::kNetwork:
-      return kNetworkReason;
+      return core::protocol_error_reasons::kNetwork;
     case core::ErrorCode::kRemoteProtocol:
-      return kRemoteProtocolReason;
+      return core::protocol_error_reasons::kRemoteProtocol;
     case core::ErrorCode::kSerialization:
-      return kSerializationReason;
+      return core::protocol_error_reasons::kSerialization;
     case core::ErrorCode::kInternal:
-      return kInternalReason;
+      return core::protocol_error_reasons::kInternal;
   }
-  return kInternalReason;
+  return core::protocol_error_reasons::kInternal;
 }
 
 ::grpc::Status GrpcErrorStatus(const core::Error& error, ::grpc::ServerContextBase* context,

@@ -18,6 +18,19 @@
 
 namespace {
 using namespace a2a;
+constexpr char kValidationCode[] = "validation";
+constexpr char kVersionCode[] = "unsupported_version";
+constexpr char kNetworkCode[] = "network";
+constexpr char kRemoteProtocolCode[] = "remote_protocol";
+constexpr char kSerializationCode[] = "serialization";
+constexpr char kInternalCode[] = "internal";
+constexpr char kValidationReason[] = "VALIDATION_ERROR";
+constexpr char kVersionReason[] = "VERSION_NOT_SUPPORTED";
+constexpr char kNetworkReason[] = "NETWORK_ERROR";
+constexpr char kRemoteProtocolReason[] = "REMOTE_PROTOCOL_ERROR";
+constexpr char kContentTypeNotSupportedReason[] = "CONTENT_TYPE_NOT_SUPPORTED";
+constexpr char kInvalidAgentResponseReason[] = "INVALID_AGENT_RESPONSE";
+constexpr char kSerializationReason[] = "SERIALIZATION_ERROR";
 constexpr auto kMessage = "test error";
 constexpr auto kTaskId = "task-grpc-helpers";
 constexpr auto kPageToken = "page-grpc-helpers";
@@ -25,7 +38,7 @@ constexpr auto kContextId = "context-grpc-helpers";
 constexpr auto kErrorInfoType = "type.googleapis.com/google.rpc.ErrorInfo";
 constexpr auto kErrorDomain = "a2a-protocol.org";
 constexpr auto kTaskNotFoundReason = "TASK_NOT_FOUND";
-constexpr auto kCancelledReason = "INTERNAL_ERROR";
+constexpr auto kInternalReason = "INTERNAL_ERROR";
 constexpr std::size_t kLongMessageLength = 512;
 constexpr int kStatusFieldCount = 3;
 constexpr int kErrorInfoFieldCount = 2;
@@ -45,28 +58,36 @@ struct ErrorCase {
 };
 const std::array kErrorCases{ErrorCase{.error = core::Error::Validation(kMessage),
                                        .status = ::grpc::StatusCode::INVALID_ARGUMENT,
-                                       .name = "validation",
-                                       .reason = "VALIDATION_ERROR"},
+                                       .name = kValidationCode,
+                                       .reason = kValidationReason},
                              ErrorCase{.error = core::Error::UnsupportedVersion(kMessage),
-                                       .status = ::grpc::StatusCode::UNIMPLEMENTED,
-                                       .name = "unsupported_version",
-                                       .reason = "VERSION_NOT_SUPPORTED"},
+                                       .status = ::grpc::StatusCode::FAILED_PRECONDITION,
+                                       .name = kVersionCode,
+                                       .reason = kVersionReason},
                              ErrorCase{.error = core::Error::Network(kMessage),
                                        .status = ::grpc::StatusCode::UNAVAILABLE,
-                                       .name = "network",
-                                       .reason = "NETWORK_ERROR"},
+                                       .name = kNetworkCode,
+                                       .reason = kNetworkReason},
                              ErrorCase{.error = core::Error::RemoteProtocol(kMessage),
                                        .status = ::grpc::StatusCode::FAILED_PRECONDITION,
-                                       .name = "remote_protocol",
-                                       .reason = "REMOTE_PROTOCOL_ERROR"},
+                                       .name = kRemoteProtocolCode,
+                                       .reason = kRemoteProtocolReason},
+                             ErrorCase{.error = core::protocol_errors::ContentTypeNotSupported(kMessage),
+                                       .status = ::grpc::StatusCode::INVALID_ARGUMENT,
+                                       .name = kRemoteProtocolCode,
+                                       .reason = kContentTypeNotSupportedReason},
+                             ErrorCase{.error = core::protocol_errors::InvalidAgentResponse(kMessage),
+                                       .status = ::grpc::StatusCode::INTERNAL,
+                                       .name = kRemoteProtocolCode,
+                                       .reason = kInvalidAgentResponseReason},
                              ErrorCase{.error = core::Error::Serialization(kMessage),
                                        .status = ::grpc::StatusCode::INTERNAL,
-                                       .name = "serialization",
-                                       .reason = "SERIALIZATION_ERROR"},
+                                       .name = kSerializationCode,
+                                       .reason = kSerializationReason},
                              ErrorCase{.error = core::Error::Internal(kMessage),
                                        .status = ::grpc::StatusCode::INTERNAL,
-                                       .name = "internal",
-                                       .reason = "INTERNAL_ERROR"}};
+                                       .name = kInternalCode,
+                                       .reason = kInternalReason}};
 
 void CheckErrorClassification(const ErrorCase& entry) {
   EXPECT_EQ(server::GrpcStatusCode(entry.error), entry.status);
@@ -88,8 +109,15 @@ TEST(GrpcErrorTest, PreservesProtocolAndAuthenticationStatusMapping) {
   EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::TaskNotCancelable()),
             ::grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::PushNotificationNotSupported()),
-            ::grpc::StatusCode::UNIMPLEMENTED);
-  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::UnsupportedOperation()), ::grpc::StatusCode::UNIMPLEMENTED);
+            ::grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::UnsupportedOperation()),
+            ::grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::ContentTypeNotSupported()),
+            ::grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::InvalidAgentResponse()), ::grpc::StatusCode::INTERNAL);
+  EXPECT_EQ(core::protocol_errors::TaskNotCancelable().http_status(), core::http::kStatusBadRequest);
+  EXPECT_EQ(core::protocol_errors::ContentTypeNotSupported().http_status(), core::http::kStatusBadRequest);
+  EXPECT_EQ(core::protocol_errors::InvalidAgentResponse().http_status(), core::http::kStatusInternalServerError);
 }
 
 TEST(GrpcErrorTest, PreservesAuthenticationStatusMapping) {
@@ -137,7 +165,7 @@ TEST(GrpcStatusDetailsTest, EncodesStatusMessageAndTypedErrorInfoWithLongLengths
 }
 
 TEST(GrpcStatusDetailsTest, EncodesCancellationStatusIndependentlyOfErrorClassification) {
-  const auto encoded = server::SerializeGrpcStatusDetails(::grpc::StatusCode::CANCELLED, kMessage, kCancelledReason);
+  const auto encoded = server::SerializeGrpcStatusDetails(::grpc::StatusCode::CANCELLED, kMessage, kInternalReason);
   google::protobuf::UnknownFieldSet status;
   ASSERT_TRUE(status.ParseFromString(encoded));
   ASSERT_EQ(status.field_count(), kStatusFieldCount);

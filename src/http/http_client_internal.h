@@ -28,6 +28,10 @@
 
 namespace a2a::http::detail {
 
+#if defined(_WIN32)
+class CurlWindowsReadiness;
+#endif
+
 class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamReactor> {
  public:
   using ThreadFactory = std::function<std::thread(std::function<void()>)>;
@@ -93,6 +97,14 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   static int HandleTimer(CURLM* multi_handle, long timeout_ms, void* user_data);
   static constexpr long kDefaultPortablePollTimeoutMs = 1000L;
   long portable_poll_timeout_ms_ = kDefaultPortablePollTimeoutMs;
+#endif
+
+#if defined(_WIN32)
+  void StartPendingWindowsTransfer();
+  void WaitForWindowsEvents();
+  void ProcessWindowsSocket(curl_socket_t socket, short events);
+  std::unique_ptr<CurlWindowsReadiness> windows_readiness_;
+  std::deque<std::shared_ptr<Transfer>> pending_windows_transfers_;
 #endif
 
   CURLM* multi_handle_ = nullptr;
