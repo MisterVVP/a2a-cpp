@@ -630,6 +630,15 @@ jobs:
           ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
           -R "CurlReactor|CurlWindowsReadiness|CurlStreamingTransport"
 
+      # Four fresh-process runs open 28,320 streams plus listener/wake sockets.
+      # TIME_WAIT survives process exit; provide capacity for both execution orders.
+      - name: Provision TCP ports for paired reactor measurements
+        shell: pwsh
+        run: |
+          netsh int ipv4 set dynamicport tcp start=1025 num=64511
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to provision benchmark TCP ports' }
+          netsh int ipv4 show dynamicport tcp
+
       - name: Measure native and fallback Windows libcurl reactors
         id: reactor_comparison
         continue-on-error: true
@@ -680,6 +689,16 @@ jobs:
             Get-Content "$directory/summary.md", "$directory/strict.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
           exit $comparisonExit
+
+      - name: Capture Windows TCP allocation diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force reactor-evidence | Out-Null
+          netsh int ipv4 show dynamicport tcp | Out-File -Encoding utf8 reactor-evidence/tcp-port-range.txt
+          Get-NetTCPConnection -ErrorAction SilentlyContinue | Group-Object State |
+            Select-Object Name, Count | ConvertTo-Json |
+            Out-File -Encoding utf8 reactor-evidence/tcp-states.json
 
       - name: Upload Windows reactor comparison
         if: always()

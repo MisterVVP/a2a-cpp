@@ -140,6 +140,12 @@ which the Visual Studio generator does not produce. TCK compliance is separate.
 
 ### Compare the native and fallback reactors
 
+The CI comparison opens 28,320 loopback streams across four processes. Windows
+retains TCP `TIME_WAIT` entries after a process exits, so CI expands its disposable
+runner's IPv4 dynamic TCP port range to 1025–65535 before measuring both orders.
+The artifacts include the configured range and TCP state counts. This provisions
+the fixture without changing latency budgets or retrying failed measurements.
+
 Keep the machine otherwise idle during latency measurements. Use explicit UTF-8
 output so the reports also work in Windows PowerShell 5.1:
 
