@@ -28,6 +28,7 @@
 #endif
 #include "a2a/core/task_states.h"
 #include "a2a/server/http_adapter.h"
+#include "transport_components.h"
 
 namespace a2a::server {
 namespace {
@@ -167,7 +168,8 @@ std::optional<core::Error> ValidateJsonRequestContentType(const RestRequest& req
     return std::nullopt;
   }
   const auto content_type = core::http::FindHeaderValue(request.headers, core::http::kContentTypeHeaderName);
-  if (!content_type.has_value() || core::http::IsJsonContentType(*content_type)) {
+  if (!content_type.has_value() || core::http::IsJsonContentType(*content_type) ||
+      core::http::IsMediaType(*content_type, core::http::kContentTypeApplicationA2aJson)) {
     return std::nullopt;
   }
   return core::protocol_errors::ContentTypeNotSupported().WithTransport("rest");
@@ -249,6 +251,9 @@ std::string ErrorInfoReason(const core::Error& error) {
     if (*protocol_code == core::protocol_codes::kContentTypeNotSupported) {
       return "CONTENT_TYPE_NOT_SUPPORTED";
     }
+    if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+      return "INVALID_AGENT_RESPONSE";
+    }
   }
 
   if (error.code() == core::ErrorCode::kUnsupportedVersion) {
@@ -286,7 +291,7 @@ core::Result<RestResponse> BuildJsonResponse(const google::protobuf::Message& me
   RestResponse response;
   response.http_status = core::http::kStatusOk;
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
+      std::string(core::http::kContentTypeApplicationA2aJson);
   response.body = body.value();
   return response;
 }
@@ -682,7 +687,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       RestResponse rest_response;
       rest_response.http_status = core::http::kStatusOk;
       rest_response.headers[std::string(core::http::kContentTypeHeaderName)] =
-          std::string(core::http::kContentTypeApplicationJson);
+          std::string(core::http::kContentTypeApplicationA2aJson);
       rest_response.body = body.value();
       return rest_response;
     }
@@ -719,7 +724,9 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   google::protobuf::Value error_node;
   auto* error_fields = error_node.mutable_struct_value()->mutable_fields();
   (*error_fields)["code"].set_number_value(http_status);
-  (*error_fields)["status"].set_string_value(ErrorStatusName(http_status));
+  const auto protocol_reason = error.protocol_code().has_value() ? ErrorInfoReason(error) : std::string{};
+  (*error_fields)["status"].set_string_value(
+      std::string(internal::A2aErrorStatus(protocol_reason, ErrorStatusName(http_status))));
   (*error_fields)["message"].set_string_value(std::string(error.message()));
 
   google::protobuf::Value details;
@@ -734,7 +741,7 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   RestResponse response;
   response.http_status = http_status;
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
+      std::string(core::http::kContentTypeApplicationA2aJson);
 
   const auto serialized = core::MessageToJson(envelope);
   if (serialized.ok()) {

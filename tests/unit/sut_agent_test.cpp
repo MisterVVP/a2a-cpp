@@ -25,6 +25,9 @@ constexpr std::string_view kAuthToken = "unit-sut-token";
 constexpr std::string_view kWrongToken = "other-unit-token";
 constexpr std::string_view kBearerKey = "bearer_token";
 constexpr std::size_t kBindingCount = 3;
+constexpr std::string_view kUnsupportedMediaType = "application/x-unsupported-sut-type";
+constexpr std::string_view kRawContent = "sut";
+constexpr char kMessageId[] = "media-type-message";
 
 std::unique_ptr<a2a::tests::sut::SutAgent> MakeAgent(a2a::tests::sut::SutAgentOptions options = {}) {
   const a2a::server::stores::InMemoryStoreFactory factory;
@@ -65,6 +68,39 @@ TEST(SutAgentTest, NegativeCapabilitiesAreEnforcedBeforeExecutorDispatch) {
                                    context);
   ASSERT_FALSE(push.ok());
   EXPECT_EQ(push.error().protocol_code(), a2a::core::protocol_codes::kPushNotificationNotSupported);
+}
+
+lf::a2a::v1::SendMessageRequest MediaRequest(std::string_view mode) {
+  lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send.mutable_message()->set_message_id(kMessageId);
+  auto* part = send.mutable_message()->add_parts();
+  part->set_raw(std::string(kRawContent));
+  part->set_media_type(std::string(mode));
+  return send;
+}
+
+TEST(SutAgentTest, AdvertisedInputModesAreAccepted) {
+  const auto agent = MakeAgent();
+  a2a::server::RequestContext context;
+  for (const auto& mode : agent->agent_card().default_input_modes()) {
+    const auto result = agent->dispatcher().Dispatch(
+        {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = MediaRequest(mode)}, context);
+    EXPECT_TRUE(result.ok());
+  }
+}
+
+TEST(SutAgentTest, UnsupportedMessagePartMediaTypesAreRejected) {
+  const auto agent = MakeAgent();
+  a2a::server::RequestContext context;
+  for (const auto operation :
+       {a2a::server::DispatcherOperation::kSendMessage, a2a::server::DispatcherOperation::kSendStreamingMessage}) {
+    const auto result =
+        agent->dispatcher().Dispatch({.operation = operation, .payload = MediaRequest(kUnsupportedMediaType)}, context);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kContentTypeNotSupported);
+    EXPECT_EQ(result.error().http_status(), a2a::core::http::kStatusBadRequest);
+  }
 }
 
 TEST(SutAgentTest, SharedAuthorizationPolicyRejectsMissingAndIncorrectCredentials) {

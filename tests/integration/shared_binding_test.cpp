@@ -56,7 +56,7 @@ constexpr char kAuthorization[] = "Authorization";
 constexpr char kBearerPrefix[] = "Bearer ";
 constexpr auto kStreamTimeout = std::chrono::seconds(5);
 constexpr int kGrpcNotFound = 5;
-constexpr int kGrpcUnimplemented = 12;
+constexpr int kGrpcFailedPrecondition = 9;
 constexpr int kGrpcUnauthenticated = 16;
 constexpr int kGrpcPermissionDenied = 7;
 constexpr std::size_t kArtifactCount = 4;
@@ -240,7 +240,7 @@ class SharedBindingTest : public testing::TestWithParam<BindingPair> {
       const auto rejected = target_->GetTask(get, options);
       ASSERT_FALSE(rejected.ok());
       ExpectProtocolFailure(rejected.error(), std::get<1>(GetParam()), a2a::core::protocol_codes::kVersionNotSupported,
-                            kGrpcUnimplemented, a2a::core::http::kStatusBadRequest);
+                            kGrpcFailedPrecondition, a2a::core::http::kStatusBadRequest);
     }
   }
 
@@ -439,7 +439,7 @@ TEST_P(SharedBindingTest, TerminalTaskSubscriptionUsesEquivalentError) {
   }
   ASSERT_TRUE(error.has_value());
   ExpectProtocolFailure(error.value_or(a2a::core::Error::Internal(std::string(kText))), std::get<1>(GetParam()),
-                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcUnimplemented,
+                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcFailedPrecondition,
                         a2a::core::http::kStatusBadRequest);
 }
 
@@ -463,7 +463,7 @@ TEST_P(SharedBindingTest, NegativePushProfileHasPrescribedBindingError) {
   const auto result = target_->ListTaskPushNotificationConfigs(request, options_);
   ASSERT_FALSE(result.ok());
   ExpectProtocolFailure(result.error(), binding, a2a::core::protocol_codes::kPushNotificationNotSupported,
-                        kGrpcUnimplemented, a2a::core::http::kStatusBadRequest);
+                        kGrpcFailedPrecondition, a2a::core::http::kStatusBadRequest);
 }
 
 TEST_P(SharedBindingTest, NegativeStreamingProfileHasPrescribedBindingError) {
@@ -478,7 +478,7 @@ TEST_P(SharedBindingTest, NegativeStreamingProfileHasPrescribedBindingError) {
   }
   ASSERT_TRUE(error.has_value());
   ExpectProtocolFailure(error.value_or(a2a::core::Error::Internal(std::string(kText))), std::get<1>(GetParam()),
-                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcUnimplemented,
+                        a2a::core::protocol_codes::kUnsupportedOperation, kGrpcFailedPrecondition,
                         a2a::core::http::kStatusBadRequest);
 }
 

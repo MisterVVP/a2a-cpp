@@ -80,7 +80,8 @@ std::string ErrorBody(const ErrorBodySpec& spec) {
   auto* error_fields = error_value.mutable_struct_value()->mutable_fields();
 
   (*error_fields)["code"].set_number_value(spec.status_code);
-  (*error_fields)["status"].set_string_value(HttpStatusName(spec.status_code));
+  (*error_fields)["status"].set_string_value(
+      std::string(internal::A2aErrorStatus(spec.reason, HttpStatusName(spec.status_code))));
   (*error_fields)["message"].set_string_value(std::string(spec.message));
 
   google::protobuf::Value details;
@@ -102,7 +103,7 @@ std::string ErrorBody(const ErrorBodySpec& spec) {
 HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message, std::string_view reason) {
   return HttpServerResponseBuilder()
       .WithStatus(status_code)
-      .WithJsonContentType()
+      .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
       .WithA2aVersion()
       .WithBody(ErrorBody({.status_code = status_code, .message = message, .reason = reason}))
       .Build();
@@ -112,7 +113,7 @@ HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view
                                                const std::vector<std::string>& activated_extensions) {
   return HttpServerResponseBuilder()
       .WithStatus(status_code)
-      .WithJsonContentType()
+      .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
       .WithA2aVersion()
       .WithActivatedExtensions(activated_extensions)
       .WithBody(ErrorBody({.status_code = status_code, .message = message, .reason = reason}))
@@ -547,7 +548,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
 
   return HttpServerResponseBuilder()
       .WithStatus(core::http::kStatusOk)
-      .WithJsonContentType()
+      .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
       .WithA2aVersion()
       .WithActivatedExtensions(extensions.value())
       .WithBody(normalized.value())

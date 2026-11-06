@@ -48,7 +48,7 @@ const std::array kErrorCases{ErrorCase{.error = core::Error::Validation(kMessage
                                        .name = "validation",
                                        .reason = "VALIDATION_ERROR"},
                              ErrorCase{.error = core::Error::UnsupportedVersion(kMessage),
-                                       .status = ::grpc::StatusCode::UNIMPLEMENTED,
+                                       .status = ::grpc::StatusCode::FAILED_PRECONDITION,
                                        .name = "unsupported_version",
                                        .reason = "VERSION_NOT_SUPPORTED"},
                              ErrorCase{.error = core::Error::Network(kMessage),
@@ -59,6 +59,14 @@ const std::array kErrorCases{ErrorCase{.error = core::Error::Validation(kMessage
                                        .status = ::grpc::StatusCode::FAILED_PRECONDITION,
                                        .name = "remote_protocol",
                                        .reason = "REMOTE_PROTOCOL_ERROR"},
+                             ErrorCase{.error = core::protocol_errors::ContentTypeNotSupported(kMessage),
+                                       .status = ::grpc::StatusCode::INVALID_ARGUMENT,
+                                       .name = "remote_protocol",
+                                       .reason = "CONTENT_TYPE_NOT_SUPPORTED"},
+                             ErrorCase{.error = core::protocol_errors::InvalidAgentResponse(kMessage),
+                                       .status = ::grpc::StatusCode::INTERNAL,
+                                       .name = "remote_protocol",
+                                       .reason = "INVALID_AGENT_RESPONSE"},
                              ErrorCase{.error = core::Error::Serialization(kMessage),
                                        .status = ::grpc::StatusCode::INTERNAL,
                                        .name = "serialization",
@@ -88,8 +96,15 @@ TEST(GrpcErrorTest, PreservesProtocolAndAuthenticationStatusMapping) {
   EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::TaskNotCancelable()),
             ::grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::PushNotificationNotSupported()),
-            ::grpc::StatusCode::UNIMPLEMENTED);
-  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::UnsupportedOperation()), ::grpc::StatusCode::UNIMPLEMENTED);
+            ::grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::UnsupportedOperation()),
+            ::grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::ContentTypeNotSupported()),
+            ::grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(server::GrpcStatusCode(core::protocol_errors::InvalidAgentResponse()), ::grpc::StatusCode::INTERNAL);
+  EXPECT_EQ(core::protocol_errors::TaskNotCancelable().http_status(), core::http::kStatusBadRequest);
+  EXPECT_EQ(core::protocol_errors::ContentTypeNotSupported().http_status(), core::http::kStatusBadRequest);
+  EXPECT_EQ(core::protocol_errors::InvalidAgentResponse().http_status(), core::http::kStatusInternalServerError);
 }
 
 TEST(GrpcErrorTest, PreservesAuthenticationStatusMapping) {

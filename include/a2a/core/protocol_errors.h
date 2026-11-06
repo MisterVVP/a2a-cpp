@@ -28,7 +28,7 @@ namespace a2a::core::protocol_errors {
 
 [[nodiscard]] inline Error TaskNotCancelable(std::string message = "task is already terminal") {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(409)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kTaskNotCancelable));
 }
 
@@ -46,13 +46,13 @@ namespace a2a::core::protocol_errors {
 
 [[nodiscard]] inline Error ContentTypeNotSupported(std::string message = "content type is not supported") {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(415)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kContentTypeNotSupported));
 }
 
 [[nodiscard]] inline Error InvalidAgentResponse(std::string message = "invalid agent response") {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(502)
+      .WithHttpStatus(http::kStatusInternalServerError)
       .WithProtocolCode(std::string(protocol_codes::kInvalidAgentResponse));
 }
 

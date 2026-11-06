@@ -15,10 +15,12 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/agent_card/agent_card_signing.h"
+#include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/server/security_policy.h"
@@ -237,10 +239,11 @@ class SutSecurityPolicy final : public server::SecurityPolicy {
 
 class SutPolicy final : public server::ServerInterceptor {
  public:
-  explicit SutPolicy(const SutAgentOptions& options)
+  SutPolicy(const SutAgentOptions& options, const lf::a2a::v1::AgentCard& card)
       : streaming_(options.streaming),
         push_notifications_(options.push_notifications),
-        auth_token_(options.auth_token) {}
+        auth_token_(options.auth_token),
+        input_modes_(card.default_input_modes().begin(), card.default_input_modes().end()) {}
 
   core::Result<void> BeforeDispatch(const server::DispatchRequest& request, server::RequestContext& context) override {
     if (!auth_token_.empty()) {
@@ -253,6 +256,9 @@ class SutPolicy final : public server::ServerInterceptor {
       }
     }
     const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
+    if (send != nullptr && !SupportsInput(send->message())) {
+      return core::protocol_errors::ContentTypeNotSupported();
+    }
     if (!push_notifications_ && send != nullptr && send->has_configuration() &&
         send->configuration().has_task_push_notification_config()) {
       return core::protocol_errors::PushNotificationNotSupported();
@@ -280,9 +286,18 @@ class SutPolicy final : public server::ServerInterceptor {
   }
 
  private:
+  [[nodiscard]] bool SupportsInput(const lf::a2a::v1::Message& message) const {
+    return std::ranges::all_of(message.parts(), [this](const auto& part) {
+      return part.media_type().empty() || std::ranges::any_of(input_modes_, [&part](const auto& mode) {
+               return core::http::IsMediaType(part.media_type(), mode);
+             });
+    });
+  }
+
   bool streaming_;
   bool push_notifications_;
   std::string auth_token_;
+  std::vector<std::string> input_modes_;
 };
 
 lf::a2a::v1::AgentCard MaybeSignCard(lf::a2a::v1::AgentCard card, const SutAgentOptions& options) {
@@ -397,7 +412,7 @@ class SutAgent::Impl final {
         executor_(stores_.task_store.get(), stores_.push_store.get(), options.credential_directory,
                   options.task_credential),
         cards_(std::make_shared<core::StaticAgentCardProvider>(ExtendedCard(card_, options))),
-        interceptor_(std::make_shared<SutPolicy>(options)),
+        interceptor_(std::make_shared<SutPolicy>(options, card_)),
         dispatcher_(&executor_, cards_) {
     dispatcher_.AddInterceptor(interceptor_);
     if (options.security) {

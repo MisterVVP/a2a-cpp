@@ -4,6 +4,10 @@ The SDK implements A2A protocol `1.0` across HTTP+JSON, JSON-RPC and gRPC.
 [Binding compatibility](bindings.md), [version negotiation](protocol-versions.md)
 and [security integration](../auth/security.md) describe the public contracts.
 
+HTTP+JSON servers accept `application/a2a+json` and legacy `application/json`
+request envelopes, and use `application/a2a+json` in responses. Domain errors
+follow the A2A 1.0.1 HTTP and gRPC error bindings.
+
 ## Release validation snapshot
 
 For v0.5.2 release preparation, unmodified upstream TCK
@@ -23,13 +27,25 @@ full TCK compliance. Review reports for the specific commit you deploy.
 ## Reproduce the upstream suite
 
 
-Use the same deterministic workflow as `.github/workflows/tck.yml`:
+Use the same deterministic workflow as `.github/workflows/tck.yml`.
+CI pins TCK `70f6f73c30208e80c889141907e094899e6e9f05` and applies
+`scripts/tck_patches/a2a-1.0.1-assertions.patch`: that revision's mandatory
+AIP-193 test incorrectly requires `application/json`, contradicting the separate
+SHOULD test for `application/a2a+json`. Its generic unsupported-media requirement
+also omits its expected error and therefore incorrectly demands success. The patch
+removes the stale media-type assertion and declares the expected error; error-structure
+validation, media-type validation and coverage scoring remain active. Requirements
+without upstream tests remain `NOT TESTED` and lower the reported coverage even
+when every executable test passes.
 
 ```bash
 # Check out the TCK and prepare Python dependencies.
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
-TCK_REF=${TCK_REF:-main}
-git clone --depth 1 --branch "${TCK_REF}" "https://github.com/${TCK_REPO}.git" tck-repo
+TCK_REF=${TCK_REF:-70f6f73c30208e80c889141907e094899e6e9f05}
+git clone --filter=blob:none --no-checkout "https://github.com/${TCK_REPO}.git" tck-repo
+git -C tck-repo fetch --depth 1 origin "${TCK_REF}"
+git -C tck-repo checkout --detach FETCH_HEAD
+git -C tck-repo apply "${PWD}/scripts/tck_patches/a2a-1.0.1-assertions.patch"
 python3 -m venv tck-repo/.venv
 source tck-repo/.venv/bin/activate
 python3 -m pip install --upgrade pip

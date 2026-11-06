@@ -1,0 +1,56 @@
+diff --git a/tck/requirements/core_operations.py b/tck/requirements/core_operations.py
+index 77e7692..9cacbab 100644
+--- a/tck/requirements/core_operations.py
++++ b/tck/requirements/core_operations.py
+@@ -9,6 +9,7 @@ from __future__ import annotations
+
+ from tck.requirements.base import (
+     CANCEL_TASK_BINDING,
++    CONTENT_TYPE_NOT_SUPPORTED_ERROR,
+     EXTENSION_SUPPORT_REQUIRED_ERROR,
+     GET_TASK_BINDING,
+     LIST_TASKS_BINDING,
+@@ -108,6 +109,7 @@ CORE_OPERATIONS_REQUIREMENTS: list[RequirementSpec] = [
+         binding=SEND_MESSAGE_BINDING,
+         proto_request_type="SendMessageRequest",
+         expected_behavior="ContentTypeNotSupportedError returned",
++        expected_error=CONTENT_TYPE_NOT_SUPPORTED_ERROR,
+         spec_url=f"{SPEC_BASE}311-send-message",
+         tags=[CORE, SEND_MESSAGE, ERROR],
+         sample_input={
+diff --git a/tests/compatibility/core_operations/test_error_handling.py b/tests/compatibility/core_operations/test_error_handling.py
+index baa8597..cad19ad 100644
+--- a/tests/compatibility/core_operations/test_error_handling.py
++++ b/tests/compatibility/core_operations/test_error_handling.py
+@@ -774,22 +774,18 @@ class TestRestErrorStructure:
+         raw = response.raw_response
+         if not isinstance(raw, httpx.Response):
+             pytest.skip("Error response is not an HTTP response object")
+-        ct = raw.headers.get("content-type", "")
++        # HTTP_JSON-SVC-001 checks the recommended application/a2a+json media type.
++        # This MUST requirement checks the AIP-193 error structure independently.
+         errors = []
+-        if "application/json" not in ct:
++        body = raw.json()
++        if "error" not in body:
++            errors.append(
++                "AIP-193 error response must include 'error' object"
++            )
++        elif "code" not in body.get("error", {}):
+             errors.append(
+-                f"Error Content-Type must be application/json, got: {ct!r}"
++                "AIP-193 error.code field is required"
+             )
+-        else:
+-            body = raw.json()
+-            if "error" not in body:
+-                errors.append(
+-                    "AIP-193 error response must include 'error' object"
+-                )
+-            elif "code" not in body.get("error", {}):
+-                errors.append(
+-                    "AIP-193 error.code field is required"
+-                )
+         assert_and_record(compatibility_collector, req, transport, errors)
+
+     def test_a2a_error_info_in_details(

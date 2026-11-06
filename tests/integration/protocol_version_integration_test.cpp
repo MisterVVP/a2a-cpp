@@ -263,7 +263,7 @@ class ProtocolVersionIntegrationTest : public testing::TestWithParam<Binding> {
     context.AddMetadata(std::string(kLowercaseVersionHeader), std::string(kPatchVersion));
     lf::a2a::v1::Task task;
     const auto status = stub->GetTask(&context, GetRequest(), &task);
-    EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+    EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
     CheckGrpcProtocolCode(context);
   }
   static void CheckGrpcProtocolCode(const grpc::ClientContext& context) {
@@ -291,7 +291,7 @@ class ProtocolVersionIntegrationTest : public testing::TestWithParam<Binding> {
   static void ExpectVersionFailure(const a2a::core::Error& error) {
     switch (GetParam()) {
       case Binding::kGrpc:
-        EXPECT_EQ(error.protocol_code(), std::to_string(static_cast<int>(grpc::StatusCode::UNIMPLEMENTED)));
+        EXPECT_EQ(error.protocol_code(), std::to_string(static_cast<int>(grpc::StatusCode::FAILED_PRECONDITION)));
         break;
       case Binding::kJsonRpc:
         EXPECT_EQ(error.protocol_code(), a2a::core::protocol_codes::kVersionNotSupported);
