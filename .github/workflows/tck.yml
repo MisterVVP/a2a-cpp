@@ -11,7 +11,7 @@ on:
 
 env:
   TCK_REPO: a2aproject/a2a-tck
-  TCK_REF: 70f6f73c30208e80c889141907e094899e6e9f05
+  TCK_REF: main
   TCK_WORKDIR: tck-repo
   TCK_REPORT_DIR: tck-artifacts/reports
   TCK_LOG_DIR: tck-artifacts/logs
@@ -64,12 +64,6 @@ jobs:
           repository: ${{ env.TCK_REPO }}
           ref: ${{ env.TCK_REF }}
           path: ${{ env.TCK_WORKDIR }}
-
-      # Upstream's MUST error-structure test still requires application/json,
-      # contradicting its separate SHOULD check for application/a2a+json.
-      # Its generic unsupported-media requirement also omits the expected error.
-      - name: Correct contradictory upstream TCK assertions
-        run: git -C "${TCK_WORKDIR}" apply "${GITHUB_WORKSPACE}/scripts/tck_patches/a2a-1.0.1-assertions.patch"
 
       - name: Start deterministic SUT with in-memory store
         env:
