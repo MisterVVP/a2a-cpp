@@ -20,6 +20,7 @@
 #include "a2a/core/http_utils.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
+#include "a2a/core/protocol_error_reasons.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
@@ -252,7 +253,7 @@ std::string ErrorInfoReason(const core::Error& error) {
       return "CONTENT_TYPE_NOT_SUPPORTED";
     }
     if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) {
-      return "INVALID_AGENT_RESPONSE";
+      return core::protocol_error_reasons::kInvalidAgentResponse;
     }
   }
 
@@ -262,7 +263,7 @@ std::string ErrorInfoReason(const core::Error& error) {
   if (error.code() == core::ErrorCode::kRemoteProtocol || error.code() == core::ErrorCode::kValidation) {
     return "UNSUPPORTED_OPERATION";
   }
-  return "INVALID_AGENT_RESPONSE";
+  return core::protocol_error_reasons::kInvalidAgentResponse;
 }
 
 int ToHttpStatus(const core::Error& error) {

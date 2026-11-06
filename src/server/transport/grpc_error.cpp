@@ -7,6 +7,7 @@
 
 #include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/core/protocol_error_reasons.h"
 #include "a2a/server/grpc_server_transport.h"
 #include "server/transport/grpc_request_context.h"
 #include "server/transport/grpc_status_details.h"
@@ -20,7 +21,6 @@ constexpr auto kRemoteProtocolCode = "remote_protocol";
 constexpr auto kSerializationCode = "serialization";
 constexpr auto kInternalCode = "internal";
 constexpr auto kContentTypeReason = "CONTENT_TYPE_NOT_SUPPORTED";
-constexpr auto kInvalidAgentResponseReason = "INVALID_AGENT_RESPONSE";
 constexpr auto kTaskNotFoundReason = "TASK_NOT_FOUND";
 constexpr auto kTaskNotCancelableReason = "TASK_NOT_CANCELABLE";
 constexpr auto kPushNotSupportedReason = "PUSH_NOTIFICATION_NOT_SUPPORTED";
@@ -119,7 +119,7 @@ std::string GrpcErrorInfoReason(const core::Error& error) {
     return kContentTypeReason;
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kInvalidAgentResponse) {
-    return kInvalidAgentResponseReason;
+    return core::protocol_error_reasons::kInvalidAgentResponse;
   }
   switch (error.code()) {
     case core::ErrorCode::kValidation:

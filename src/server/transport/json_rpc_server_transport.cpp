@@ -24,6 +24,7 @@
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protocol_codes.h"
 #include "a2a/core/protocol_error_messages.h"
+#include "a2a/core/protocol_error_reasons.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protocol_methods.h"
 #include "a2a/core/protojson.h"
@@ -556,7 +557,7 @@ std::string ErrorInfoReason(const core::Error& error) {
       return "CONTENT_TYPE_NOT_SUPPORTED";
     }
     if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) {
-      return "INVALID_AGENT_RESPONSE";
+      return core::protocol_error_reasons::kInvalidAgentResponse;
     }
     if (*protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
       return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
@@ -579,9 +580,9 @@ std::string ErrorInfoReason(const core::Error& error) {
     case core::ErrorCode::kNetwork:
     case core::ErrorCode::kSerialization:
     case core::ErrorCode::kInternal:
-      return "INVALID_AGENT_RESPONSE";
+      return core::protocol_error_reasons::kInvalidAgentResponse;
   }
-  return "INVALID_AGENT_RESPONSE";
+  return core::protocol_error_reasons::kInvalidAgentResponse;
 }
 
 int JsonRpcCodeFromError(const core::Error& error) {
