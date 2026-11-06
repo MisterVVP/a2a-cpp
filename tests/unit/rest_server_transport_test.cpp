@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
@@ -27,6 +28,16 @@ constexpr std::string_view kTenantId = "tenant-1";
 constexpr std::string_view kPageSizeQueryKey = "pageSize";
 constexpr std::string_view kPageTokenQueryKey = "pageToken";
 constexpr std::string_view kHistoryLengthQueryKey = "historyLength";
+constexpr std::string_view kFailedPreconditionStatus = "FAILED_PRECONDITION";
+
+void ExpectProtocolPrecondition(const a2a::server::HttpServerResponse& response) {
+  EXPECT_EQ(response.status_code, a2a::core::http::kStatusBadRequest);
+  EXPECT_EQ(response.headers.at(std::string(a2a::core::http::kContentTypeHeaderName)),
+            a2a::core::http::kContentTypeApplicationA2aJson);
+  google::protobuf::Struct error;
+  ASSERT_TRUE(a2a::core::JsonToMessage(response.body, &error).ok());
+  EXPECT_EQ(error.fields().at("error").struct_value().fields().at("status").string_value(), kFailedPreconditionStatus);
+}
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
@@ -234,7 +245,7 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
       server.Handle({.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 400);
+  ExpectProtocolPrecondition(response.value());
   EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
 }
 
@@ -302,7 +313,7 @@ TEST(RestServerTransportTest, DoesNotEchoActivatedExtensionsWhenRequiredExtensio
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 400);
+  ExpectProtocolPrecondition(response.value());
   EXPECT_FALSE(response.value().headers.contains("A2A-Extensions"));
 }
 
@@ -416,7 +427,7 @@ TEST(RestServerTransportTest, ExtendedAgentCardPreservesProviderErrorReason) {
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 502);
+  EXPECT_EQ(response.value().status_code, a2a::core::http::kStatusInternalServerError);
   EXPECT_NE(response.value().body.find(kExpectedReason), std::string::npos);
   EXPECT_EQ(response.value().body.find(kUnexpectedReason), std::string::npos);
 }

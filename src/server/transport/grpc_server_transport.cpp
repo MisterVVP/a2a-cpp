@@ -35,7 +35,7 @@ template <std::size_t MessageSize>
     case core::ErrorCode::kValidation:
       return ::grpc::StatusCode::INVALID_ARGUMENT;
     case core::ErrorCode::kUnsupportedVersion:
-      return ::grpc::StatusCode::UNIMPLEMENTED;
+      return ::grpc::StatusCode::FAILED_PRECONDITION;
     case core::ErrorCode::kNetwork:
       return ::grpc::StatusCode::UNAVAILABLE;
     case core::ErrorCode::kRemoteProtocol:
@@ -58,9 +58,11 @@ template <std::size_t MessageSize>
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
     return ::grpc::StatusCode::NOT_FOUND;
   }
-  if (protocol_code.has_value() && (*protocol_code == core::protocol_codes::kPushNotificationNotSupported ||
-                                    *protocol_code == core::protocol_codes::kUnsupportedOperation)) {
-    return ::grpc::StatusCode::UNIMPLEMENTED;
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+    return ::grpc::StatusCode::INVALID_ARGUMENT;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+    return ::grpc::StatusCode::INTERNAL;
   }
   return ::grpc::StatusCode::FAILED_PRECONDITION;
 }
@@ -83,6 +85,9 @@ std::string ErrorCodeName(core::ErrorCode code) {
   return "internal";
 }
 
+constexpr auto kContentTypeReason = "CONTENT_TYPE_NOT_SUPPORTED";
+constexpr auto kInvalidAgentResponseReason = "INVALID_AGENT_RESPONSE";
+
 std::string ErrorInfoReason(const core::Error& error) {
   const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kTaskNotFound) {
@@ -102,6 +107,12 @@ std::string ErrorInfoReason(const core::Error& error) {
   }
   if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kExtensionSupportRequired) {
     return "EXTENSION_SUPPORT_REQUIRED";
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kContentTypeNotSupported) {
+    return kContentTypeReason;
+  }
+  if (protocol_code.has_value() && *protocol_code == core::protocol_codes::kInvalidAgentResponse) {
+    return kInvalidAgentResponseReason;
   }
   switch (error.code()) {
     case core::ErrorCode::kValidation:

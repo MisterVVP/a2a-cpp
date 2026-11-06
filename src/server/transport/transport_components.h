@@ -14,6 +14,21 @@
 
 namespace a2a::server::internal {
 
+inline constexpr std::string_view kPreconditionReasons[]{
+    "TASK_NOT_CANCELABLE",        "PUSH_NOTIFICATION_NOT_SUPPORTED",
+    "UNSUPPORTED_OPERATION",      "EXTENDED_AGENT_CARD_NOT_CONFIGURED",
+    "EXTENSION_SUPPORT_REQUIRED", "VERSION_NOT_SUPPORTED"};
+inline constexpr std::string_view kFailedPrecondition = "FAILED_PRECONDITION";
+
+[[nodiscard]] inline std::string_view A2aErrorStatus(std::string_view reason, std::string_view fallback) {
+  for (const auto expected : kPreconditionReasons) {
+    if (reason == expected) {
+      return kFailedPrecondition;
+    }
+  }
+  return fallback;
+}
+
 struct JsonRpcEnvelope final {
   google::protobuf::Value id;
   std::string method;

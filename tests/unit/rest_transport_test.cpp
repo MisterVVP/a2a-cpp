@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "a2a/core/http_constants.h"
+#include "a2a/core/protocol_errors.h"
 #include "a2a/server/http_adapter.h"
 
 namespace {
@@ -24,9 +25,14 @@ constexpr std::string_view kSubscribeTaskPath = "/tasks/task-77:subscribe";
 constexpr int kRequestedHistoryLength = 20;
 constexpr std::string_view kContentTypeHeaderName = "Content-Type";
 constexpr std::string_view kApplicationJsonWithCharsetContentType = "Application/JSON; charset=utf-8";
+constexpr std::string_view kA2aJsonWithCharsetContentType = "Application/A2A+JSON; charset=utf-8";
 constexpr std::string_view kTextPlainContentType = "text/plain";
 constexpr std::string_view kContentTypeNotSupportedReason = "CONTENT_TYPE_NOT_SUPPORTED";
 constexpr std::string_view kContentTypeNotSupportedProtocolCode = "-32005";
+constexpr std::string_view kRawValidationError = "invalid input";
+constexpr std::string_view kInternalErrorReason = "INVALID_AGENT_RESPONSE";
+constexpr std::string_view kInvalidArgumentStatusField = R"("status":"INVALID_ARGUMENT")";
+constexpr std::string_view kInternalStatusField = R"("status":"INTERNAL")";
 constexpr std::string_view kSseErrorEventName = "event: error";
 constexpr std::string_view kFiniteProducerFailureMessage = "finite producer failed";
 
@@ -102,6 +108,9 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
  public:
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& context) override {
+    if (send_failure.has_value()) {
+      return *send_failure;
+    }
     observed_request_id = context.request_id.value_or("missing");
     lf::a2a::v1::SendMessageResponse response;
     auto* message = response.mutable_message();
@@ -171,6 +180,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
     return std::unique_ptr<a2a::server::ServerStreamSession>(std::make_unique<SingleLiveEventSession>(event));
   }
 
+  std::optional<a2a::core::Error> send_failure;
   std::string observed_request_id;
   int observed_history_length = -1;
   std::size_t observed_page_size = 0;
@@ -309,7 +319,7 @@ void ExpectUnsupportedContentType(std::string_view path, std::string_view body) 
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusUnsupportedMediaType);
+  EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusBadRequest);
   EXPECT_NE(response.value().body.find(kContentTypeNotSupportedReason), std::string::npos);
   EXPECT_NE(response.value().body.find(kContentTypeNotSupportedProtocolCode), std::string::npos);
 }
@@ -361,6 +371,43 @@ TEST(RestTransportTest, AcceptsJsonContentTypeWithParametersForSendMessage) {
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 200);
+}
+
+TEST(RestTransportTest, AcceptsA2aJsonAndReturnsProtocolMediaType) {
+  FakeExecutor executor;
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+  a2a::server::RestRequest request;
+  request.method = a2a::core::http::kMethodPost;
+  request.path = a2a::server::RestEndpointPaths::kSendMessage;
+  request.headers[std::string(kContentTypeHeaderName)] = std::string(kA2aJsonWithCharsetContentType);
+  request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})";
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusOk);
+  EXPECT_EQ(response.value().headers.at(std::string(kContentTypeHeaderName)),
+            a2a::core::http::kContentTypeApplicationA2aJson);
+}
+
+TEST(RestTransportTest, ErrorStatusPreservesProtocolAndValidationClassification) {
+  FakeExecutor executor;
+  executor.send_failure = a2a::core::protocol_errors::InvalidAgentResponse();
+  a2a::server::Dispatcher dispatcher(&executor);
+  a2a::server::RestTransport transport(&dispatcher);
+  a2a::server::RestRequest request;
+  request.method = a2a::core::http::kMethodPost;
+  request.path = a2a::server::RestEndpointPaths::kSendMessage;
+  request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})";
+  const auto response = transport.Handle(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusInternalServerError);
+  EXPECT_NE(response.value().body.find(kInternalErrorReason), std::string::npos);
+  EXPECT_NE(response.value().body.find(kInternalStatusField), std::string::npos);
+  executor.send_failure = a2a::core::Error::Validation(std::string(kRawValidationError));
+  const auto invalid_request = transport.Handle(request);
+  ASSERT_TRUE(invalid_request.ok());
+  EXPECT_EQ(invalid_request.value().http_status, a2a::core::http::kStatusBadRequest);
+  EXPECT_NE(invalid_request.value().body.find(kInvalidArgumentStatusField), std::string::npos);
 }
 
 TEST(RestTransportTest, DispatchesGetTaskUsingPathAndQuery) {

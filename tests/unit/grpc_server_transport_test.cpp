@@ -389,7 +389,7 @@ TEST_F(GrpcServerTransportTest, ListTasksCopiesResponseFieldsOnSuccess) {
 
 #endif  // A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
 
-TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnaryOperations) {
+TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsFailedPreconditionForUnaryOperations) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -398,25 +398,26 @@ TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForUnary
   lf::a2a::v1::SendMessageRequest send;
   send.mutable_message()->set_task_id(std::string(kTaskIdOne));
   lf::a2a::v1::SendMessageResponse send_response;
-  EXPECT_EQ(transport.SendMessage(&context, &send, &send_response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(transport.SendMessage(&context, &send, &send_response).error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 
   lf::a2a::v1::GetTaskRequest get;
   get.set_id(std::string(kTaskIdOne));
   lf::a2a::v1::Task get_response;
-  EXPECT_EQ(transport.GetTask(&context, &get, &get_response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(transport.GetTask(&context, &get, &get_response).error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 
   lf::a2a::v1::CancelTaskRequest cancel;
   cancel.set_id(std::string(kTaskIdTwo));
   lf::a2a::v1::Task cancel_response;
-  EXPECT_EQ(transport.CancelTask(&context, &cancel, &cancel_response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(transport.CancelTask(&context, &cancel, &cancel_response).error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
 
   lf::a2a::v1::ListTasksRequest list;
   list.set_page_size(kValidPageSize);
   lf::a2a::v1::ListTasksResponse list_response;
-  EXPECT_EQ(transport.ListTasks(&context, &list, &list_response).error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(transport.ListTasks(&context, &list, &list_response).error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
 
-TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsUnimplementedForStreamingOperations) {
+TEST_F(GrpcServerTransportTest, MissingVersionHeaderReturnsFailedPreconditionForStreamingOperations) {
   FakeExecutor executor;
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::GrpcServerTransport transport(&dispatcher);
@@ -449,7 +450,7 @@ TEST_F(GrpcServerTransportTest, ListTasksInputValidationRequiresProtocolVersionH
 
   lf::a2a::v1::ListTasksResponse response;
   const auto status = transport.ListTasks(&context, &request, &response);
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
 
 TEST_F(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
@@ -462,22 +463,22 @@ TEST_F(GrpcServerTransportTest, PushNotificationRpcsReturnUnimplemented) {
   lf::a2a::v1::TaskPushNotificationConfig create_response;
   auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
   EXPECT_EQ(service->CreateTaskPushNotificationConfig(&context, &create_request, &create_response).error_code(),
-            grpc::StatusCode::UNIMPLEMENTED);
+            grpc::StatusCode::FAILED_PRECONDITION);
 
   lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
   lf::a2a::v1::TaskPushNotificationConfig get_response;
   EXPECT_EQ(service->GetTaskPushNotificationConfig(&context, &get_request, &get_response).error_code(),
-            grpc::StatusCode::UNIMPLEMENTED);
+            grpc::StatusCode::FAILED_PRECONDITION);
 
   lf::a2a::v1::ListTaskPushNotificationConfigsRequest list_request;
   lf::a2a::v1::ListTaskPushNotificationConfigsResponse list_response;
   EXPECT_EQ(service->ListTaskPushNotificationConfigs(&context, &list_request, &list_response).error_code(),
-            grpc::StatusCode::UNIMPLEMENTED);
+            grpc::StatusCode::FAILED_PRECONDITION);
 
   lf::a2a::v1::DeleteTaskPushNotificationConfigRequest delete_request;
   google::protobuf::Empty delete_response;
   EXPECT_EQ(service->DeleteTaskPushNotificationConfig(&context, &delete_request, &delete_response).error_code(),
-            grpc::StatusCode::UNIMPLEMENTED);
+            grpc::StatusCode::FAILED_PRECONDITION);
 }
 
 TEST_F(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigured) {
@@ -499,7 +500,7 @@ TEST_F(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigure
 
   auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
   const auto status = service->GetExtendedAgentCard(&context, &request, &response);
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
 
 #if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
@@ -538,7 +539,7 @@ TEST_F(GrpcServerTransportTest, GetExtendedAgentCardValidatesRequiredExtensions)
   auto* service = static_cast<lf::a2a::v1::A2AService::Service*>(&transport);
   const auto status = service->GetExtendedAgentCard(&context, &request, &response);
 
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
 
 TEST_F(GrpcServerTransportTest, ReturnsInternalWhenDispatcherMissing) {
@@ -580,13 +581,13 @@ TEST_F(GrpcServerTransportTest, PushNotificationMethodsReturnProtocolMessage) {
   lf::a2a::v1::TaskPushNotificationConfig create_request;
   lf::a2a::v1::TaskPushNotificationConfig create_response;
   const auto create_status = service->CreateTaskPushNotificationConfig(&context, &create_request, &create_response);
-  EXPECT_EQ(create_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(create_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_FALSE(create_status.error_message().empty());
 
   lf::a2a::v1::GetTaskPushNotificationConfigRequest get_request;
   lf::a2a::v1::TaskPushNotificationConfig get_response;
   const auto get_status = service->GetTaskPushNotificationConfig(&context, &get_request, &get_response);
-  EXPECT_EQ(get_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(get_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_FALSE(get_status.error_message().empty());
 }
 
@@ -612,7 +613,7 @@ TEST_F(GrpcServerTransportTest, MissingVersionHeaderIncludesHelpfulMessage) {
   lf::a2a::v1::Task response;
 
   const auto status = transport.GetTask(&context, &request, &response);
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_NE(status.error_message().find("Missing required A2A-Version header"), std::string::npos);
 }
 
@@ -651,20 +652,20 @@ TEST_F(GrpcServerTransportTest, MissingVersionHeaderMappingIsConsistentAcrossRpc
   send_request.mutable_message()->set_task_id(std::string(kTaskIdOne));
   lf::a2a::v1::SendMessageResponse send_response;
   const auto send_status = transport.SendMessage(&context, &send_request, &send_response);
-  EXPECT_EQ(send_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(send_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_NE(send_status.error_message().find("Missing required A2A-Version header"), std::string::npos);
 
   lf::a2a::v1::CancelTaskRequest cancel_request;
   cancel_request.set_id(std::string(kTaskIdTwo));
   lf::a2a::v1::Task cancel_response;
   const auto cancel_status = transport.CancelTask(&context, &cancel_request, &cancel_response);
-  EXPECT_EQ(cancel_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(cancel_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_NE(cancel_status.error_message().find("Missing required A2A-Version header"), std::string::npos);
 
   lf::a2a::v1::ListTasksRequest list_request;
   lf::a2a::v1::ListTasksResponse list_response;
   const auto list_status = transport.ListTasks(&context, &list_request, &list_response);
-  EXPECT_EQ(list_status.error_code(), grpc::StatusCode::UNIMPLEMENTED);
+  EXPECT_EQ(list_status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_NE(list_status.error_message().find("Missing required A2A-Version header"), std::string::npos);
 }
 
