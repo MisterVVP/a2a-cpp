@@ -1,10 +1,8 @@
 # Windows outbound HTTP reactor
 
-The default libcurl HTTP client uses a shared socket-readiness reactor on Windows.
-HTTP+JSON and JSON-RPC streaming retain their existing client and observer APIs.
-Synchronous HTTP requests also use this reactor; asynchronous unary work can
-share it without another scheduler. This backend handles outbound HTTP, while
-inbound server sockets and gRPC have their own implementations.
+The default libcurl HTTP client uses a shared socket-readiness reactor on Windows
+for synchronous requests and HTTP+JSON/JSON-RPC streaming. Client and observer APIs
+are unchanged. Inbound server sockets and gRPC use separate implementations.
 
 ## Decision and baseline
 
@@ -18,9 +16,8 @@ private loopback TCP wake connection. `WSAPoll` has no
 `FD_SETSIZE`/`MAXIMUM_WAIT_OBJECTS` 64-socket restriction. Membership updates and
 swap-removals use an index map in O(1) average time. Waiting and readiness
 collection take O(number of registered sockets), without per-stream workers or
-an imposed stream/handle ceiling. IOCP would require an overlapped-I/O adaptation
-around libcurl's readiness contract; a wait set of WSA events would require
-sharding around the handle limit. Neither is needed here.
+an imposed stream/handle ceiling. IOCP would require adapting libcurl's readiness
+contract to overlapped I/O; WSA event wait sets would require handle-limit sharding.
 
 `tests/curl_reactor_evidence.cpp` compares identical finite and idle-cancellation
 workloads against the old fallback. The development-only
@@ -72,12 +69,9 @@ owner finishes queued commands, including cancellation, then activates one new
 transfer per event-loop turn. Libcurl's zero-timeout callback drives its start;
 ready sockets run before the timer. This gives readiness and cancellation a turn
 between new connection starts, without a polling interval or another worker.
-Native Windows traces found 10–11 ms waits in libcurl's `SO_ERROR` and
-`getpeername()` connection checks;
-running those checks while draining commands delayed queued cancellation and
-already-readable responses. Connection setup can still depend on the installed
-libcurl and Winsock versions. First-event measurements include new TCP connects,
-server admission and dispatch, in addition to readiness processing.
+Libcurl's Winsock connection checks can delay ready work when run while draining
+commands. Connection setup still depends on libcurl and Winsock; first-event
+measurements include new TCP connects, server admission and dispatch.
 
 Shutdown wakes and joins the owner before destroying the wake sockets. Libcurl
 cleanup runs while the backend remains alive, since cleanup may invoke socket
@@ -92,14 +86,10 @@ lifetime and completion arbitration remain shared across platforms. Linux's
 
 Install Visual Studio 2022 with **Desktop development with C++**, CMake, Git,
 and Python 3. Run these commands from the repository in Developer PowerShell for
-VS 2022. PowerShell 7 is recommended. Fetch the PR branch and select your vcpkg
-installation; the first CMake configure installs its pinned manifest dependencies.
+VS 2022. PowerShell 7 is recommended. Select your vcpkg installation; the first
+CMake configure installs its pinned manifest dependencies.
 
 ```powershell
-git fetch origin
-git switch perf/windows-curl-readiness-232
-git pull --ff-only
-
 $env:VCPKG_ROOT = 'C:/vcpkg' # Adjust if vcpkg is installed elsewhere.
 if (-not (Test-Path "$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake")) {
     git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
@@ -121,11 +111,10 @@ ctest --test-dir build-windows -C RelWithDebInfo --output-on-failure `
     --no-tests=error -R 'CurlReactor|CurlWindowsReadiness|CurlStreamingTransport'
 ```
 
-This focused run includes the EOF/hangup mapping, timer, cancellation, shutdown,
-scale, synchronous unary, and real HTTP+JSON/JSON-RPC streaming checks. Winsock
-can return from a timed wait before the steady-clock deadline; the timer test
-waits for the actual deadline, as the reactor does, without assuming one system
-call has millisecond-exact timing.
+The focused suite covers EOF/hangup mapping, timers, wakeups, cancellation and
+shutdown races, callback order, synchronous unary requests, and HTTP+JSON/JSON-RPC
+streaming. It also establishes 96 transfers on a single reactor to check scale
+independently of pool sharding.
 
 To run the complete SDK suite with the same platform exclusions as Windows CI:
 
@@ -143,8 +132,8 @@ which the Visual Studio generator does not produce. TCK compliance is separate.
 The CI comparison opens 28,320 loopback streams across four processes. Windows
 retains TCP `TIME_WAIT` entries after a process exits, so CI expands its disposable
 runner's IPv4 dynamic TCP port range to 1025–65535 before measuring both orders.
-The artifacts include the configured range and TCP state counts. This provisions
-the fixture without changing latency budgets or retrying failed measurements.
+This provides capacity for both execution orders without changing latency budgets
+or retrying failed measurements.
 
 Keep the machine otherwise idle during latency measurements. Use explicit UTF-8
 output so the reports also work in Windows PowerShell 5.1:
@@ -159,25 +148,23 @@ cmake --build build-windows --config RelWithDebInfo --parallel
 python scripts/compare_curl_reactor_evidence.py fallback.json native.json --output reactor-summary.md
 ```
 
-Windows CI runs these equivalent workloads and the mandatory gRPC and HTTP+JSON
-performance smoke. It publishes raw JSON and a Markdown comparison in
-`windows-curl-reactor-evidence`. The report records first-event p95,
-finite-completion/cancellation p95 and p99, samples, errors and added process
-threads for 1/16/64/96 streams over twenty repetitions. One server worker serves
-all sockets. Cancellation timing starts after the first event establishes each
-stream and ends at dispatch completion, while peers remain idle. Finite timing
-starts before releasing all established server connections. First-event timing
-includes submission and cold shard startup. Record compiler, libcurl version,
-OS and build configuration when comparing results outside CI.
-The fixture sends the headers and first SSE chunk in one write so TCP
-Nagle/delayed-ACK behavior cannot hold the tiny chunk behind the headers.
-The evidence executable requests a 1 ms Windows process timer period with
-`timeBeginPeriod`, balances it with `timeEndPeriod` on exit, and records
-`timer_period_ms` in each row. Both backends use this same setting; the
-comparison rejects mismatched periods. The SDK itself does not request a timer
-resolution change. Default Windows timer granularity can dominate startup
-measurements (about 16 ms at one stream on both backends in a native CI run).
-Twenty repetitions reduce dependence on a single cold or descheduled sample.
+Windows CI builds both executables before measuring native-first and fallback-first
+orders. It uploads raw JSON, executable/DLL hashes and runner metadata in
+`windows-reactor-comparison`, with the mandatory gRPC and HTTP+JSON smoke results
+in `windows-performance-smoke`.
+
+Each backend measures 1/16/64/96 streams over twenty repetitions, recording
+first-event p95, completion/cancellation p95 and p99, samples, errors and thread
+growth. Cancellation starts after the first event establishes each stream and
+includes dispatch completion while peers remain idle. Finite completion starts
+before releasing all established server connections. First-event timing includes
+cold connection setup and shard startup. The fixture sends headers and the first
+SSE chunk together to avoid Nagle/delayed-ACK artifacts.
+
+The executable requests and records a 1 ms Windows process timer period for both
+backends, balancing `timeBeginPeriod` with `timeEndPeriod`. The SDK does not change
+timer resolution. Keep the machine idle and record compiler, libcurl version, OS
+and build configuration when comparing results outside CI.
 
 Both comparison profiles require zero errors, complete/equal sample counts,
 matching timer periods, and at most eight added SDK threads. The default
@@ -194,67 +181,8 @@ errors, incomplete workloads and thread-budget violations still fail CI.
 A failure retains the raw evidence. Cloud budgets are a coarse regression
 guard; deployment-hardware measurements establish local performance parity.
 
-Deterministic tests cover disarm/rearm/immediate timers, retained and concurrent
-wakeups, readiness-interest changes, stale registrations, closure, idle Add and
-Cancel, repeated/concurrent cancellation, completion/cancellation races,
-start/shutdown races, peer isolation, callback order, and real HTTP+JSON and
-JSON-RPC SSE. One test establishes 96 transfers on a single reactor, independent
-of the pool's sharding. Existing HTTP SSE interoperability scripts also apply.
-TCK compliance is a separate validation step; this backend does not establish
-protocol conformance by itself.
-
-### Native Windows startup results
-
-Two native Windows job attempts for `221bfe6` measured both execution orders
-using prebuilt binaries, 20 repetitions and a requested 1 ms timer period.
-The runners used Windows Server 2022 build 20348, Intel Xeon Platinum 8573C
-with four exposed logical CPUs, MSVC 19.44.35229 and RelWithDebInfo. Runtime
-libcurl was 7.74.0-DEV with Schannel and zlib 1.2.11; dependency DLL hashes
-matched between the two backends.
-
-At 96 streams, first-event p95 values were milliseconds, fallback/native:
-
-| Attempt | Order | Complete startup | Cancellation-workload startup |
-| ---: | --- | ---: | ---: |
-| 1 | native-first | 160.305/110.278 | 151.488/118.112 |
-| 1 | fallback-first | 149.108/138.259 | 170.325/125.165 |
-| 2 | native-first | 159.102/126.864 | 138.240/147.240 |
-| 2 | fallback-first | 151.103/99.605 | 162.961/118.419 |
-
-All four 96-stream comparisons passed the unchanged strict budgets. Every
-completion and actual cancellation check passed at 1/16/64/96 streams, with
-zero errors, equal complete samples and at most five added SDK threads.
-Cancellation-workload startup above is separate from actual cancellation time.
-
-Strict startup parity across every workload is not established. At 16 streams,
-native first-event p95 was sometimes 8–9 ms slower than fallback; four startup
-checks exceeded their strict budgets by 0.190–0.857 ms. Connection setup still
-depends on libcurl and Winsock. The scheduling correction removes repeated
-connection starts ahead of ready work, but does not eliminate platform connect
-waits. The cloud gate and strict thresholds remain unchanged.
-
-The [first attempt's raw reports](https://github.com/MisterVVP/a2a-cpp/actions/runs/42108738541/artifacts/13453307322)
-and [independent attempt's raw reports](https://github.com/MisterVVP/a2a-cpp/actions/runs/42108738541/artifacts/13457933707)
-include both execution orders, DLL/executable hashes and runner metadata.
-
-### Local comparison limits
-
-The Linux-hosted Windows check used MinGW GCC 14, libcurl 8.17.0 with
-Schannel, and Wine 10.0. All 27 applicable deadline, readiness and transfer tests
-passed in the initial implementation, with zero workload errors and bounded
-thread growth. Wine did not reproduce native Winsock's EOF flag combination;
-the regression tests now cover those flags directly. With competing lint
-and build processes paused, the native backend's cancellation p95/p99 were 0.507/0.507 ms
-at one stream, 0.524/1.225 ms at 16, 0.567/0.744 ms at 64, and 0.527/0.712 ms at
-96. Under concurrent compiler/analyzer load, Wine exhibited cancellation tails
-above 20 ms for both implementations.
-
-The unloaded Wine comparison still flagged some first-event and finite-completion
-regressions, including cold one-stream startup (fallback/native first-event p95
-4.010/9.076 ms) and 16-stream completion p99 (5.455/9.851 ms). Removing analyzer
-contention reduced cancellation tails but did not establish full latency parity.
-These measurements include Wine's Winsock translation and the fixture's sequential
-accept/release work. They are diagnostic evidence, not a passing native Windows
-performance claim. The Windows CI comparison publishes native-runner evidence
-with the documented cloud budgets; local comparisons retain the stricter
-default thresholds.
+First-event timing remains sensitive to libcurl/Winsock connection setup and
+runner scheduling. Earlier native measurements occasionally exceeded the strict
+16-stream startup budget; passing a shared-runner cloud gate does not establish
+strict parity on deployment hardware. TCK protocol conformance is a separate
+validation step.

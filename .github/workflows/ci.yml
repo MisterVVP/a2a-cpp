@@ -690,16 +690,6 @@ jobs:
           }
           exit $comparisonExit
 
-      - name: Capture Windows TCP allocation diagnostics
-        if: always()
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force reactor-evidence | Out-Null
-          netsh int ipv4 show dynamicport tcp | Out-File -Encoding utf8 reactor-evidence/tcp-port-range.txt
-          Get-NetTCPConnection -ErrorAction SilentlyContinue | Group-Object State |
-            Select-Object Name, Count | ConvertTo-Json |
-            Out-File -Encoding utf8 reactor-evidence/tcp-states.json
-
       - name: Upload Windows reactor comparison
         if: always()
         uses: actions/upload-artifact@v6
@@ -734,14 +724,12 @@ jobs:
           python -c "import json; rows=json.load(open('perf-artifacts-smoke/results.json', encoding='utf-8'))['results']; assert rows and not sum(int(row.get('errors', 0)) for row in rows)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload Windows reactor evidence
+      - name: Upload Windows performance smoke
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: windows-curl-reactor-evidence
-          path: |
-            reactor-evidence
-            perf-artifacts-smoke
+          name: windows-performance-smoke
+          path: perf-artifacts-smoke
           if-no-files-found: warn
 
       - name: Require Windows reactor comparison

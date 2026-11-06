@@ -69,7 +69,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.15'
-          allow-prereleases: true
 
       - name: Start deterministic SUT with in-memory store
         env:
