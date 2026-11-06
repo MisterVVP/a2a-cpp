@@ -27,25 +27,24 @@ full TCK compliance. Review reports for the specific commit you deploy.
 ## Reproduce the upstream suite
 
 
-Use the same deterministic workflow as `.github/workflows/tck.yml`.
-CI pins TCK `70f6f73c30208e80c889141907e094899e6e9f05` and applies
-`scripts/tck_patches/a2a-1.0.1-assertions.patch`: that revision's mandatory
-AIP-193 test incorrectly requires `application/json`, contradicting the separate
-SHOULD test for `application/a2a+json`. Its generic unsupported-media requirement
-also omits its expected error and therefore incorrectly demands success. The patch
-removes the stale media-type assertion and declares the expected error; error-structure
-validation, media-type validation and coverage scoring remain active. Requirements
-without upstream tests remain `NOT TESTED` and lower the reported coverage even
-when every executable test passes.
+Use the same workflow as `.github/workflows/tck.yml`. CI checks out upstream
+`main` and runs its assertions without local TCK patches.
+
+At upstream revision `70f6f73c30208e80c889141907e094899e6e9f05`, two assertion
+defects remain: [CORE-SEND-003 lacks its expected error](https://github.com/a2aproject/a2a-tck/issues/202),
+and the [mandatory AIP-193 structure test](https://github.com/a2aproject/a2a-tck/blob/70f6f73c30208e80c889141907e094899e6e9f05/tests/compatibility/core_operations/test_error_handling.py#L777)
+requires legacy `application/json` while the separate media-type test expects
+`application/a2a+json`. These failures remain visible in the upstream results;
+the SDK does not alter their assertions, skip them, or override their exit status.
+Registered requirements without upstream tests remain `NOT TESTED`.
 
 ```bash
 # Check out the TCK and prepare Python dependencies.
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
-TCK_REF=${TCK_REF:-70f6f73c30208e80c889141907e094899e6e9f05}
+TCK_REF=${TCK_REF:-main}
 git clone --filter=blob:none --no-checkout "https://github.com/${TCK_REPO}.git" tck-repo
 git -C tck-repo fetch --depth 1 origin "${TCK_REF}"
 git -C tck-repo checkout --detach FETCH_HEAD
-git -C tck-repo apply "${PWD}/scripts/tck_patches/a2a-1.0.1-assertions.patch"
 python3 -m venv tck-repo/.venv
 source tck-repo/.venv/bin/activate
 python3 -m pip install --upgrade pip
