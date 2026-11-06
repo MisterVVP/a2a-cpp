@@ -36,6 +36,7 @@
 #include "a2a/server/grpc_server_transport.h"
 #include "a2a/server/json_rpc_server_transport.h"
 #include "a2a/server/rest_server_transport.h"
+#include "a2a/server/rest_transport.h"
 #include "example_support.h"
 
 namespace {
@@ -274,12 +275,13 @@ class ProtocolVersionIntegrationTest : public testing::TestWithParam<Binding> {
               a2a::core::protocol_codes::kUnsupportedOperation);
   }
   void CheckHttpWirePatch() const {
-    std::string url = std::string(kRestUrl).append("/tasks/").append(kTaskId);
+    std::string url = std::string(kRestUrl).append(a2a::server::RestEndpointPaths::kTaskResourcePrefix).append(kTaskId);
     if (GetParam() == Binding::kJsonRpc) {
       url = kRpcUrl;
     }
     const auto response =
-        Handle({.method = GetParam() == Binding::kRest ? "GET" : "POST",
+        Handle({.method = std::string(GetParam() == Binding::kRest ? a2a::core::http::kMethodGet
+                                                                   : a2a::core::http::kMethodPost),
                 .url = url,
                 .headers = {{std::string(a2a::core::Version::kHeaderName), std::string(kPatchVersion)},
                             {std::string(a2a::core::http::kContentTypeHeaderName),

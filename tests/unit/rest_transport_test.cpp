@@ -20,6 +20,17 @@
 
 namespace {
 
+constexpr char kGetMethod[] = "GET";
+constexpr char kPostMethod[] = "POST";
+constexpr char kDeleteMethod[] = "DELETE";
+constexpr char kTaskNotFoundSymbol[] = "TASK_NOT_FOUND";
+constexpr char kPushNotSupportedSymbol[] = "PUSH_NOTIFICATION_NOT_SUPPORTED";
+constexpr char kAgentRoleName[] = "ROLE_AGENT";
+constexpr char kEventStreamContentType[] = "text/event-stream";
+
+constexpr char kBasicSendMessageJson[] =
+    R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})";
+
 constexpr std::string_view kSubscribedTaskId = "task-77";
 constexpr std::string_view kSubscribeTaskPath = "/tasks/task-77:subscribe";
 constexpr int kRequestedHistoryLength = 20;
@@ -133,7 +144,7 @@ class FakeExecutor final : public a2a::server::AgentExecutor {
                                                a2a::server::RequestContext& context) override {
     (void)context;
     if (request.id() == "missing") {
-      return a2a::core::Error::RemoteProtocol("task not found").WithProtocolCode("TASK_NOT_FOUND");
+      return a2a::core::Error::RemoteProtocol("task not found").WithProtocolCode(kTaskNotFoundSymbol);
     }
 
     observed_history_length = request.history_length();
@@ -239,7 +250,7 @@ TEST(RestTransportTest, ExposesCentralRouteTable) {
   const auto& routes = a2a::server::RestTransport::Routes();
 
   ASSERT_EQ(routes.size(), 11U);
-  EXPECT_EQ(routes[0].method, "POST");
+  EXPECT_EQ(routes[0].method, kPostMethod);
   EXPECT_EQ(routes[0].path_pattern, "/message:send");
   EXPECT_EQ(routes[1].path_pattern, "/message:stream");
   EXPECT_EQ(routes[2].path_pattern, "/tasks/{id}");
@@ -330,7 +341,7 @@ TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "POST";
+  request.method = kPostMethod;
   request.path = "/message:send";
   request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-42"}})";
   request.context.request_id = "req-9";
@@ -338,18 +349,16 @@ TEST(RestTransportTest, DispatchesSendMessageFromJsonBody) {
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 200);
-  EXPECT_NE(response.value().body.find("ROLE_AGENT"), std::string::npos);
+  EXPECT_NE(response.value().body.find(kAgentRoleName), std::string::npos);
   EXPECT_EQ(executor.observed_request_id, "req-9");
 }
 
 TEST(RestTransportTest, RejectsTextPlainContentTypeForSendMessage) {
-  ExpectUnsupportedContentType(a2a::server::RestEndpointPaths::kSendMessage,
-                               R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})");
+  ExpectUnsupportedContentType(a2a::server::RestEndpointPaths::kSendMessage, kBasicSendMessageJson);
 }
 
 TEST(RestTransportTest, RejectsTextPlainContentTypeForStreamingSendMessage) {
-  ExpectUnsupportedContentType(a2a::server::RestEndpointPaths::kSendStreamingMessage,
-                               R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})");
+  ExpectUnsupportedContentType(a2a::server::RestEndpointPaths::kSendStreamingMessage, kBasicSendMessageJson);
 }
 
 TEST(RestTransportTest, RejectsTextPlainContentTypeForPushConfigCreate) {
@@ -381,7 +390,7 @@ TEST(RestTransportTest, AcceptsA2aJsonAndReturnsProtocolMediaType) {
   request.method = a2a::core::http::kMethodPost;
   request.path = a2a::server::RestEndpointPaths::kSendMessage;
   request.headers[std::string(kContentTypeHeaderName)] = std::string(kA2aJsonWithCharsetContentType);
-  request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})";
+  request.body = kBasicSendMessageJson;
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusOk);
@@ -397,7 +406,7 @@ TEST(RestTransportTest, ErrorStatusPreservesProtocolAndValidationClassification)
   a2a::server::RestRequest request;
   request.method = a2a::core::http::kMethodPost;
   request.path = a2a::server::RestEndpointPaths::kSendMessage;
-  request.body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}})";
+  request.body = kBasicSendMessageJson;
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusInternalServerError);
@@ -416,7 +425,7 @@ TEST(RestTransportTest, DispatchesGetTaskUsingPathAndQuery) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "GET";
+  request.method = kGetMethod;
   request.path = "/tasks/task-99";
   request.query_params["historyLength"] = "20";
 
@@ -433,7 +442,7 @@ TEST(RestTransportTest, DispatchesListTasksUsingQuery) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "GET";
+  request.method = kGetMethod;
   request.path = "/tasks";
   request.query_params["pageSize"] = "15";
   request.query_params["pageToken"] = "page-2";
@@ -452,7 +461,7 @@ TEST(RestTransportTest, ListTasksUsesProtocolDefaultWhenPageSizeIsOmitted) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "GET";
+  request.method = kGetMethod;
   request.path = "/tasks";
 
   const auto response = transport.Handle(request);
@@ -466,7 +475,7 @@ TEST(RestTransportTest, ListTasksResponseIncludesRequiredTopLevelFields) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestTransport transport(&dispatcher);
   a2a::server::RestRequest request;
-  request.method = "GET";
+  request.method = kGetMethod;
   request.path = "/tasks";
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
@@ -483,7 +492,7 @@ TEST(RestTransportTest, ListTasksRejectsPageSizesOutsideProtocolRange) {
 
   for (const std::string_view page_size : {"0", "101", "-1"}) {
     a2a::server::RestRequest request;
-    request.method = "GET";
+    request.method = kGetMethod;
     request.path = "/tasks";
     request.query_params["pageSize"] = page_size;
 
@@ -499,7 +508,7 @@ TEST(RestTransportTest, DispatchesCancelTaskFromPath) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "POST";
+  request.method = kPostMethod;
   request.path = "/tasks/task-55:cancel";
 
   const auto response = transport.Handle(request);
@@ -514,14 +523,14 @@ TEST(RestTransportTest, MapsDispatcherErrorsToStructuredHttpErrorBody) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "GET";
+  request.method = kGetMethod;
   request.path = "/tasks/missing";
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 502);
-  EXPECT_NE(response.value().body.find("TASK_NOT_FOUND"), std::string::npos);
-  EXPECT_NE(response.value().body.find("TASK_NOT_FOUND"), std::string::npos);
+  EXPECT_NE(response.value().body.find(kTaskNotFoundSymbol), std::string::npos);
+  EXPECT_NE(response.value().body.find(kTaskNotFoundSymbol), std::string::npos);
 }
 
 TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {
@@ -530,7 +539,7 @@ TEST(RestTransportTest, ReturnsNotFoundForUnknownRoute) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "DELETE";
+  request.method = kDeleteMethod;
   request.path = "/tasks/task-1";
 
   const auto response = transport.Handle(request);
@@ -544,7 +553,7 @@ TEST(RestTransportTest, RejectsMalformedListQueryWithBadRequest) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "GET";
+  request.method = kGetMethod;
   request.path = "/tasks";
   request.query_params["pageSize"] = "abc";
 
@@ -559,14 +568,14 @@ TEST(RestTransportTest, RejectsUnsupportedPushNotificationEndpoints) {
   a2a::server::RestTransport transport(&dispatcher);
 
   a2a::server::RestRequest request;
-  request.method = "POST";
+  request.method = kPostMethod;
   request.path = "/tasks/task-1/pushNotificationConfigs";
   request.body = R"({"id":"push-1","url":"http://127.0.0.1/webhook"})";
 
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 400);
-  EXPECT_NE(response.value().body.find("PUSH_NOTIFICATION_NOT_SUPPORTED"), std::string::npos);
+  EXPECT_NE(response.value().body.find(kPushNotSupportedSymbol), std::string::npos);
 }
 
 void ExpectSubscribeEndpoint(std::string_view method) {
@@ -581,7 +590,7 @@ void ExpectSubscribeEndpoint(std::string_view method) {
   const auto response = transport.Handle(request);
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, 200);
-  EXPECT_EQ(response.value().headers.at("Content-Type"), "text/event-stream");
+  EXPECT_EQ(response.value().headers.at(std::string(kContentTypeHeaderName)), kEventStreamContentType);
   ASSERT_TRUE(response.value().stream_writer);
   RecordingHttpTransport output;
   const auto write = response.value().stream_writer(output);

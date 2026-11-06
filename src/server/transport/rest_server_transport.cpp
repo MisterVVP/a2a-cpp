@@ -32,6 +32,18 @@
 namespace a2a::server {
 namespace {
 
+constexpr char kMalformedUrlEncodingMessage[] = "Malformed URL encoding";
+constexpr char kMissingQueryOutputMessage[] = "Query output map is required";
+constexpr char kInvalidRequestTargetMessage[] = "HTTP request target must start with '/'";
+constexpr char kMismatchedBasePathMessage[] = "Request path does not match configured REST API base path";
+constexpr char kExtendedCardPayloadMismatchMessage[] = "GetExtendedAgentCard dispatch returned an unexpected payload";
+constexpr char kHttpDateFormat[] = "%a, %d %b %Y %H:%M:%S GMT";
+constexpr char kLastModifiedHeaderName[] = "Last-Modified";
+constexpr char kEtagHeaderName[] = "ETag";
+constexpr char kRootPath[] = "/";
+constexpr char kSerializationFailureBody[] =
+    R"({"error":{"code":500,"status":"INTERNAL","message":"serialization failed"}})";
+
 constexpr int kHexAlphabetOffset = 10;
 constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
@@ -48,57 +60,57 @@ struct ErrorBodySpec final {
 std::string HttpStatusName(int status_code) {
   switch (status_code) {
     case core::http::kStatusBadRequest:
-      return "INVALID_ARGUMENT";
+      return internal::error_statuses::kInvalidArgument;
     case core::http::kStatusNotFound:
-      return "NOT_FOUND";
+      return internal::error_statuses::kNotFound;
     case core::http::kStatusUnauthorized:
-      return "UNAUTHENTICATED";
+      return internal::error_statuses::kUnauthenticated;
     case core::http::kStatusForbidden:
-      return "PERMISSION_DENIED";
+      return internal::error_statuses::kPermissionDenied;
     case core::http::kStatusConflict:
-      return "CONFLICT";
+      return internal::error_statuses::kConflict;
     case core::http::kStatusUnsupportedMediaType:
-      return "UNSUPPORTED_MEDIA_TYPE";
+      return internal::error_statuses::kUnsupportedMediaType;
     case core::http::kStatusInternalServerError:
-      return "INTERNAL";
+      return internal::error_statuses::kInternal;
     case core::http::kStatusBadGateway:
-      return "BAD_GATEWAY";
+      return internal::error_statuses::kBadGateway;
     default:
-      return "UNKNOWN";
+      return internal::error_statuses::kUnknown;
   }
 }
 
 std::string ErrorBody(const ErrorBodySpec& spec) {
   google::protobuf::Struct error_info;
   auto* error_info_fields = error_info.mutable_fields();
-  (*error_info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
-  (*error_info_fields)["reason"].set_string_value(std::string(spec.reason));
-  (*error_info_fields)["domain"].set_string_value("a2a-protocol.org");
+  (*error_info_fields)[internal::error_fields::kType].set_string_value(internal::error_fields::kTypeUrl);
+  (*error_info_fields)[internal::error_fields::kReason].set_string_value(std::string(spec.reason));
+  (*error_info_fields)[internal::error_fields::kDomain].set_string_value(internal::error_fields::kDomainValue);
 
   google::protobuf::Struct envelope;
   auto* envelope_fields = envelope.mutable_fields();
   google::protobuf::Value error_value;
   auto* error_fields = error_value.mutable_struct_value()->mutable_fields();
 
-  (*error_fields)["code"].set_number_value(spec.status_code);
-  (*error_fields)["status"].set_string_value(
+  (*error_fields)[internal::error_fields::kCode].set_number_value(spec.status_code);
+  (*error_fields)[internal::error_fields::kStatus].set_string_value(
       std::string(internal::A2aErrorStatus(spec.reason, HttpStatusName(spec.status_code))));
-  (*error_fields)["message"].set_string_value(std::string(spec.message));
+  (*error_fields)[internal::error_fields::kMessage].set_string_value(std::string(spec.message));
 
   google::protobuf::Value details;
   auto* details_values = details.mutable_list_value()->mutable_values();
   google::protobuf::Value error_info_value;
   *error_info_value.mutable_struct_value() = std::move(error_info);
   details_values->Add(std::move(error_info_value));
-  (*error_fields)["details"] = std::move(details);
+  (*error_fields)[internal::error_fields::kDetails] = std::move(details);
 
-  (*envelope_fields)["error"] = std::move(error_value);
+  (*envelope_fields)[internal::error_fields::kEnvelope] = std::move(error_value);
 
   const auto serialized = core::MessageToJson(envelope);
   if (serialized.ok()) {
     return serialized.value();
   }
-  return R"({"error":{"code":500,"status":"INTERNAL","message":"serialization failed"}})";
+  return kSerializationFailureBody;
 }
 
 HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message, std::string_view reason) {
@@ -123,24 +135,24 @@ HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view
 
 std::string_view ProtocolCodeToRestReason(std::string_view protocol_code) {
   if (protocol_code == core::protocol_codes::kExtendedAgentCardNotConfigured) {
-    return "EXTENDED_AGENT_CARD_NOT_CONFIGURED";
+    return core::protocol_error_reasons::kExtendedAgentCardNotConfigured;
   }
   if (protocol_code == core::protocol_codes::kUnsupportedOperation) {
-    return "UNSUPPORTED_OPERATION";
+    return core::protocol_error_reasons::kUnsupportedOperation;
   }
   if (protocol_code == core::protocol_codes::kContentTypeNotSupported) {
-    return "CONTENT_TYPE_NOT_SUPPORTED";
+    return core::protocol_error_reasons::kContentTypeNotSupported;
   }
   if (protocol_code == core::protocol_codes::kInvalidAgentResponse) {
     return core::protocol_error_reasons::kInvalidAgentResponse;
   }
   if (protocol_code == core::protocol_codes::kExtensionSupportRequired) {
-    return "EXTENSION_SUPPORT_REQUIRED";
+    return core::protocol_error_reasons::kExtensionSupportRequired;
   }
   if (protocol_code == core::protocol_codes::kVersionNotSupported) {
-    return "VERSION_NOT_SUPPORTED";
+    return core::protocol_error_reasons::kVersionNotSupported;
   }
-  return "REMOTE_PROTOCOL_ERROR";
+  return core::protocol_error_reasons::kRemoteProtocol;
 }
 
 std::string_view RestReasonFromError(const core::Error& error) {
@@ -149,12 +161,12 @@ std::string_view RestReasonFromError(const core::Error& error) {
     return ProtocolCodeToRestReason(*protocol_code);
   }
   if (error.code() == core::ErrorCode::kUnsupportedVersion) {
-    return "VERSION_NOT_SUPPORTED";
+    return core::protocol_error_reasons::kVersionNotSupported;
   }
   if (error.code() == core::ErrorCode::kInternal || error.code() == core::ErrorCode::kSerialization) {
-    return "INTERNAL";
+    return internal::error_statuses::kInternal;
   }
-  return "INVALID_ARGUMENT";
+  return internal::error_statuses::kInvalidArgument;
 }
 
 int HttpStatusFromError(const core::Error& error) {
@@ -187,7 +199,7 @@ std::string FormatHttpDate(std::chrono::system_clock::time_point time_point) {
     return {};
   }
   std::ostringstream stream;
-  stream << std::put_time(utc_tm, "%a, %d %b %Y %H:%M:%S GMT");
+  stream << std::put_time(utc_tm, kHttpDateFormat);
   return stream.str();
 }
 
@@ -212,7 +224,7 @@ void ApplyAgentCardCacheHeaders(const std::optional<RestServerTransportOptions::
 
   const std::string formatted = FormatHttpDate(*settings->last_modified);
   if (!formatted.empty()) {
-    response->headers["Last-Modified"] = formatted;
+    response->headers[kLastModifiedHeaderName] = formatted;
   }
 }
 
@@ -237,7 +249,7 @@ core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
     }
 
     if (index + 2 >= raw.size()) {
-      return core::Error::Validation("Malformed URL encoding");
+      return core::Error::Validation(kMalformedUrlEncodingMessage);
     }
 
     const auto hex_to_int = [](char hex) -> int {
@@ -256,7 +268,7 @@ core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
     const int hi = hex_to_int(raw[index + 1]);
     const int lo = hex_to_int(raw[index + 2]);
     if (hi < 0 || lo < 0) {
-      return core::Error::Validation("Malformed URL encoding");
+      return core::Error::Validation(kMalformedUrlEncodingMessage);
     }
     decoded.push_back(static_cast<char>((hi << 4) | lo));
     index += 2;
@@ -267,7 +279,7 @@ core::Result<std::string> DecodeUrlComponent(std::string_view raw) {
 
 core::Result<void> ParseQueryStringImpl(std::string_view raw, std::unordered_map<std::string, std::string>* out) {
   if (out == nullptr) {
-    return core::Error::Internal("Query output map is required");
+    return core::Error::Internal(kMissingQueryOutputMessage);
   }
   out->clear();
   if (raw.empty()) {
@@ -317,7 +329,7 @@ core::Result<bool> HasExtendedAgentCardView(std::string_view query) {
 }
 
 bool PathStartsWithBasePath(std::string_view path, std::string_view base_path) {
-  return !base_path.empty() && base_path != "/" && path.starts_with(base_path) &&
+  return !base_path.empty() && base_path != kRootPath && path.starts_with(base_path) &&
          (path.size() == base_path.size() || path[base_path.size()] == '/');
 }
 
@@ -375,7 +387,7 @@ RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::Ag
 
 core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerRequest& request) const {
   if (request.target.empty() || request.target.front() != '/') {
-    return core::Error::Validation("HTTP request target must start with '/'");
+    return core::Error::Validation(kInvalidRequestTargetMessage);
   }
 
   const auto query_start = request.target.find('?');
@@ -385,7 +397,7 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   const std::string_view query =
       query_start == std::string::npos ? std::string_view{} : std::string_view(request.target).substr(query_start + 1);
   const bool is_base_path_extended_agent_card =
-      options_.rest_api_base_path != "/" &&
+      options_.rest_api_base_path != kRootPath &&
       path == options_.rest_api_base_path + std::string(core::protocol_paths::kExtendedAgentCard);
 
   if (path == core::protocol_paths::kAgentCard) {
@@ -411,19 +423,20 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
 
   const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(),
+                                  core::protocol_error_reasons::kVersionNotSupported);
   }
 
   const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
-                                  "EXTENSION_SUPPORT_REQUIRED");
+                                  core::protocol_error_reasons::kExtensionSupportRequired);
   }
 
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildValidatedErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
-                                       "UNSUPPORTED_OPERATION", extensions.value());
+    return BuildValidatedErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
+                                       core::protocol_error_reasons::kUnsupportedOperation, extensions.value());
   }
 
   const auto rest_response = transport_.Handle(rest_request.value());
@@ -437,13 +450,13 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
   const auto query_start = request.target.find('?');
   std::string path = query_start == std::string::npos ? request.target : request.target.substr(0, query_start);
 
-  if (!options_.rest_api_base_path.empty() && options_.rest_api_base_path != "/") {
+  if (!options_.rest_api_base_path.empty() && options_.rest_api_base_path != kRootPath) {
     if (!path.starts_with(options_.rest_api_base_path)) {
-      return core::Error::Validation("Request path does not match configured REST API base path");
+      return core::Error::Validation(kMismatchedBasePathMessage);
     }
     path = path.substr(options_.rest_api_base_path.size());
     if (path.empty()) {
-      path = "/";
+      path = kRootPath;
     }
   }
 
@@ -472,8 +485,8 @@ core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServer
 
 core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const HttpServerRequest& request) const {
   if (request.method != core::http::kMethodGet) {
-    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
-                                  "UNSUPPORTED_OPERATION");
+    return BuildJsonErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
+                                  core::protocol_error_reasons::kUnsupportedOperation);
   }
 
   const auto card = BuildNormalizedAgentCard(agent_card_, options_.include_legacy_transport_fields);
@@ -493,28 +506,30 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
                       .WithBody(normalized.value())
                       .Build();
   ApplyAgentCardCacheHeaders(options_.agent_card_cache_settings, &response);
-  response.headers["ETag"] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
+  response.headers[kEtagHeaderName] = BuildQuotedEtag(ComputeEtagHash(normalized.value()));
   return response;
 }
 
 core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(const HttpServerRequest& request,
                                                                               std::string_view tenant) const {
   if (request.method != core::http::kMethodGet) {
-    return BuildJsonErrorResponse(core::http::kStatusNotFound, "No matching route or request was malformed",
-                                  "UNSUPPORTED_OPERATION");
+    return BuildJsonErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
+                                  core::protocol_error_reasons::kUnsupportedOperation);
   }
   const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(), "VERSION_NOT_SUPPORTED");
+    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(),
+                                  core::protocol_error_reasons::kVersionNotSupported);
   }
   const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
     return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
-                                  "EXTENSION_SUPPORT_REQUIRED");
+                                  core::protocol_error_reasons::kExtensionSupportRequired);
   }
   if (dispatcher_ == nullptr) {
     return BuildValidatedErrorResponse(core::http::kStatusInternalServerError,
-                                       "REST transport dispatcher is not configured", "INTERNAL", extensions.value());
+                                       internal::messages::kMissingRestDispatcher, internal::error_statuses::kInternal,
+                                       extensions.value());
   }
   RequestContext context;
   context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
@@ -534,7 +549,7 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
   }
   const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
   if (payload == nullptr) {
-    return core::Error::Internal("GetExtendedAgentCard dispatch returned an unexpected payload");
+    return core::Error::Internal(kExtendedCardPayloadMismatchMessage);
   }
 
   const auto card = BuildNormalizedAgentCard(*payload, options_.include_legacy_transport_fields);

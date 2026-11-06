@@ -34,6 +34,20 @@
 namespace a2a::server {
 namespace {
 
+constexpr char kEmptyStreamingWriteMessage[] = "Transport write returned zero bytes while streaming SSE";
+constexpr char kMissingStreamSessionMessage[] = "Streaming response session is missing";
+constexpr char kMissingSubscriptionSessionMessage[] = "Subscription response session is missing";
+constexpr char kUnexpectedExtendedCardDispatch[] = "Extended agent card is handled by the server transport";
+constexpr char kUnsupportedDispatchMessage[] = "Unsupported dispatcher operation";
+constexpr char kInvalidListTasksParametersMessage[] = "ListTasks request parameters are invalid";
+constexpr char kTrueQueryValue[] = "true";
+constexpr char kTaskResourcePattern[] = "/tasks/{id}";
+constexpr char kTaskCancelPattern[] = "/tasks/{id}:cancel";
+constexpr char kPushConfigCollectionPattern[] = "/tasks/{task_id}/pushNotificationConfigs";
+constexpr char kPushConfigResourcePattern[] = "/tasks/{task_id}/pushNotificationConfigs/{id}";
+constexpr char kErrorSerializationFailureBody[] =
+    R"({"error":{"code":500,"status":"INTERNAL","message":"Failed to serialize error"}})";
+
 template <std::size_t MessageSize>
 [[nodiscard]] core::Error InternalResponsePayloadMismatch(const std::array<char, MessageSize>& message) {
   return core::Error::Internal(core::protocol_error_messages::ToString(message));
@@ -46,13 +60,14 @@ const std::array<RestRoute, 11> kRoutes = {
     RestRoute{.method = core::http::kMethodPost,
               .path_pattern = RestEndpointPaths::kSendStreamingMessage,
               .operation = DispatcherOperation::kSendStreamingMessage},
-    RestRoute{
-        .method = core::http::kMethodGet, .path_pattern = "/tasks/{id}", .operation = DispatcherOperation::kGetTask},
+    RestRoute{.method = core::http::kMethodGet,
+              .path_pattern = kTaskResourcePattern,
+              .operation = DispatcherOperation::kGetTask},
     RestRoute{.method = core::http::kMethodGet,
               .path_pattern = RestEndpointPaths::kTaskCollection,
               .operation = DispatcherOperation::kListTasks},
     RestRoute{.method = core::http::kMethodPost,
-              .path_pattern = "/tasks/{id}:cancel",
+              .path_pattern = kTaskCancelPattern,
               .operation = DispatcherOperation::kCancelTask},
     RestRoute{.method = core::http::kMethodGet,
               .path_pattern = RestEndpointPaths::kTaskSubscribePath,
@@ -61,16 +76,16 @@ const std::array<RestRoute, 11> kRoutes = {
               .path_pattern = RestEndpointPaths::kTaskSubscribePath,
               .operation = DispatcherOperation::kSubscribeTask},
     RestRoute{.method = core::http::kMethodPost,
-              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
+              .path_pattern = kPushConfigCollectionPattern,
               .operation = DispatcherOperation::kCreateTaskPushNotificationConfig},
     RestRoute{.method = core::http::kMethodGet,
-              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
+              .path_pattern = kPushConfigResourcePattern,
               .operation = DispatcherOperation::kGetTaskPushNotificationConfig},
     RestRoute{.method = core::http::kMethodGet,
-              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs",
+              .path_pattern = kPushConfigCollectionPattern,
               .operation = DispatcherOperation::kListTaskPushNotificationConfigs},
     RestRoute{.method = core::http::kMethodDelete,
-              .path_pattern = "/tasks/{task_id}/pushNotificationConfigs/{id}",
+              .path_pattern = kPushConfigResourcePattern,
               .operation = DispatcherOperation::kDeleteTaskPushNotificationConfig},
 };
 
@@ -173,7 +188,7 @@ std::optional<core::Error> ValidateJsonRequestContentType(const RestRequest& req
       core::http::IsMediaType(*content_type, core::http::kContentTypeApplicationA2aJson)) {
     return std::nullopt;
   }
-  return core::protocol_errors::ContentTypeNotSupported().WithTransport("rest");
+  return core::protocol_errors::ContentTypeNotSupported().WithTransport(internal::transport_names::kRest);
 }
 
 int ParsePageSize(std::string_view raw_page_size) {
@@ -202,7 +217,7 @@ std::optional<std::string> LookupQuery(const RestRequest& request, std::string_v
 }
 
 bool ApplyHistoryLengthQuery(const RestRequest& request, lf::a2a::v1::GetTaskRequest& get_task_request) {
-  const auto history_length = LookupQuery(request, "historyLength");
+  const auto history_length = LookupQuery(request, internal::request_fields::kHistoryLength);
   if (!history_length.has_value()) {
     return true;
   }
@@ -217,20 +232,20 @@ bool ApplyHistoryLengthQuery(const RestRequest& request, lf::a2a::v1::GetTaskReq
 std::string ErrorStatusName(int http_status) {
   switch (http_status) {
     case core::http::kStatusBadRequest:
-      return "INVALID_ARGUMENT";
+      return internal::error_statuses::kInvalidArgument;
     case core::http::kStatusNotFound:
-      return "NOT_FOUND";
+      return internal::error_statuses::kNotFound;
     case core::http::kStatusConflict:
-      return "FAILED_PRECONDITION";
+      return internal::error_statuses::kFailedPrecondition;
     case core::http::kStatusUnsupportedMediaType:
-      return "UNSUPPORTED_MEDIA_TYPE";
+      return internal::error_statuses::kUnsupportedMediaType;
     case core::http::kStatusBadGateway:
     case core::http::kStatusInternalServerError:
-      return "INTERNAL";
+      return internal::error_statuses::kInternal;
     case core::http::kStatusServiceUnavailable:
-      return "UNAVAILABLE";
+      return internal::error_statuses::kUnavailable;
     default:
-      return "UNKNOWN";
+      return internal::error_statuses::kUnknown;
   }
 }
 
@@ -238,19 +253,19 @@ std::string ErrorInfoReason(const core::Error& error) {
   const auto& protocol_code = error.protocol_code();
   if (protocol_code.has_value()) {
     if (*protocol_code == core::protocol_codes::kTaskNotFound) {
-      return "TASK_NOT_FOUND";
+      return core::protocol_error_reasons::kTaskNotFound;
     }
     if (*protocol_code == core::protocol_codes::kTaskNotCancelable) {
-      return "TASK_NOT_CANCELABLE";
+      return core::protocol_error_reasons::kTaskNotCancelable;
     }
     if (*protocol_code == core::protocol_codes::kPushNotificationNotSupported) {
-      return "PUSH_NOTIFICATION_NOT_SUPPORTED";
+      return core::protocol_error_reasons::kPushNotificationNotSupported;
     }
     if (*protocol_code == core::protocol_codes::kUnsupportedOperation) {
-      return "UNSUPPORTED_OPERATION";
+      return core::protocol_error_reasons::kUnsupportedOperation;
     }
     if (*protocol_code == core::protocol_codes::kContentTypeNotSupported) {
-      return "CONTENT_TYPE_NOT_SUPPORTED";
+      return core::protocol_error_reasons::kContentTypeNotSupported;
     }
     if (*protocol_code == core::protocol_codes::kInvalidAgentResponse) {
       return core::protocol_error_reasons::kInvalidAgentResponse;
@@ -258,10 +273,10 @@ std::string ErrorInfoReason(const core::Error& error) {
   }
 
   if (error.code() == core::ErrorCode::kUnsupportedVersion) {
-    return "VERSION_NOT_SUPPORTED";
+    return core::protocol_error_reasons::kVersionNotSupported;
   }
   if (error.code() == core::ErrorCode::kRemoteProtocol || error.code() == core::ErrorCode::kValidation) {
-    return "UNSUPPORTED_OPERATION";
+    return core::protocol_error_reasons::kUnsupportedOperation;
   }
   return core::protocol_error_reasons::kInvalidAgentResponse;
 }
@@ -301,8 +316,8 @@ constexpr std::size_t kSseFramingOverhead = 8U;
 constexpr std::string_view kSseDataPrefix = "data: ";
 constexpr std::string_view kSseErrorEventPrefix = "event: error\ndata: ";
 constexpr std::string_view kSseEventTerminator = "\n\n";
-constexpr std::string_view kSseErrorCodeMemberName = "code";
-constexpr std::string_view kSseErrorMessageMemberName = "message";
+constexpr std::string_view kSseErrorCodeMemberName = internal::error_fields::kCode;
+constexpr std::string_view kSseErrorMessageMemberName = internal::error_fields::kMessage;
 
 core::Result<void> BuildSseEvent(std::string& body, const lf::a2a::v1::StreamResponse& event) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
@@ -357,7 +372,7 @@ core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view 
       return written.error();
     }
     if (written.value() == 0) {
-      return core::Error::Internal("Transport write returned zero bytes while streaming SSE");
+      return core::Error::Internal(kEmptyStreamingWriteMessage);
     }
     sent += written.value();
   }
@@ -366,7 +381,7 @@ core::Result<void> WriteSseChunk(HttpByteTransport& transport, std::string_view 
 
 core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
-    return core::Error::Internal("Streaming response session is missing");
+    return core::Error::Internal(kMissingStreamSessionMessage);
   }
 
   RestResponse response;
@@ -379,7 +394,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
   response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
                                HttpByteTransport& transport) -> core::Result<void> {
     if (*session == nullptr) {
-      return core::Error::Internal("Streaming response session is missing");
+      return core::Error::Internal(kMissingStreamSessionMessage);
     }
     std::string chunk;
     auto next = (*session)->Next();
@@ -413,7 +428,7 @@ core::Result<RestResponse> BuildStreamingResponse(std::unique_ptr<ServerStreamSe
 
 core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSession>& session) {
   if (session == nullptr) {
-    return core::Error::Internal("Subscription response session is missing");
+    return core::Error::Internal(kMissingSubscriptionSessionMessage);
   }
 
   RestResponse response;
@@ -425,7 +440,7 @@ core::Result<RestResponse> BuildSubscribeResponse(std::unique_ptr<ServerStreamSe
   response.stream_writer = [session = std::make_shared<std::unique_ptr<ServerStreamSession>>(std::move(session))](
                                HttpByteTransport& transport) -> core::Result<void> {
     if (*session == nullptr) {
-      return core::Error::Internal("Subscription response session is missing");
+      return core::Error::Internal(kMissingSubscriptionSessionMessage);
     }
 
     std::string chunk;
@@ -490,7 +505,7 @@ std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& 
 
   ListTasksRequest payload;
   std::optional<std::int64_t> requested_page_size;
-  if (const auto raw_page_size = LookupQuery(request, "pageSize"); raw_page_size.has_value()) {
+  if (const auto raw_page_size = LookupQuery(request, internal::request_fields::kPageSize); raw_page_size.has_value()) {
     const int parsed_page_size = ParsePageSize(*raw_page_size);
     if (parsed_page_size < 0) {
       return std::nullopt;
@@ -503,21 +518,24 @@ std::optional<DispatchRequest> BuildListTasksDispatchRequest(const RestRequest& 
   }
   payload.page_size = normalized_page_size.value();
 
-  if (const auto raw_page_token = LookupQuery(request, "pageToken"); raw_page_token.has_value()) {
+  if (const auto raw_page_token = LookupQuery(request, internal::request_fields::kPageToken);
+      raw_page_token.has_value()) {
     payload.page_token = *raw_page_token;
   }
-  if (const auto context_id = LookupQuery(request, "contextId"); context_id.has_value()) {
+  if (const auto context_id = LookupQuery(request, internal::request_fields::kContextId); context_id.has_value()) {
     payload.context_id = *context_id;
   }
-  if (const auto history_length = LookupQuery(request, "historyLength"); history_length.has_value()) {
+  if (const auto history_length = LookupQuery(request, internal::request_fields::kHistoryLength);
+      history_length.has_value()) {
     const int parsed_history_length = ParsePageSize(*history_length);
     if (parsed_history_length < 0) {
       return std::nullopt;
     }
     payload.history_length = static_cast<std::size_t>(parsed_history_length);
   }
-  if (const auto include_artifacts = LookupQuery(request, "includeArtifacts"); include_artifacts.has_value()) {
-    payload.include_artifacts = *include_artifacts == "true";
+  if (const auto include_artifacts = LookupQuery(request, internal::request_fields::kIncludeArtifacts);
+      include_artifacts.has_value()) {
+    payload.include_artifacts = *include_artifacts == kTrueQueryValue;
   }
   return DispatchRequest{.operation = DispatcherOperation::kListTasks, .payload = payload};
 }
@@ -572,10 +590,10 @@ std::optional<DispatchRequest> BuildPushConfigDispatchRequest(const RestRequest&
   if (request.method == core::http::kMethodGet && path->collection) {
     lf::a2a::v1::ListTaskPushNotificationConfigsRequest payload;
     payload.set_task_id(path->task_id);
-    if (const auto page_size = LookupQuery(request, "pageSize"); page_size.has_value()) {
+    if (const auto page_size = LookupQuery(request, internal::request_fields::kPageSize); page_size.has_value()) {
       payload.set_page_size(ParsePageSize(*page_size));
     }
-    if (const auto page_token = LookupQuery(request, "pageToken"); page_token.has_value()) {
+    if (const auto page_token = LookupQuery(request, internal::request_fields::kPageToken); page_token.has_value()) {
       payload.set_page_token(*page_token);
     }
     return DispatchRequest{.operation = DispatcherOperation::kListTaskPushNotificationConfigs, .payload = payload};
@@ -675,7 +693,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
       return BuildJsonResponse(empty);
     }
     case DispatcherOperation::kGetExtendedAgentCard:
-      return core::Error::Validation("Extended agent card is handled by the server transport");
+      return core::Error::Validation(kUnexpectedExtendedCardDispatch);
     case DispatcherOperation::kListTasks: {
       const auto* payload = std::get_if<ListTasksResponse>(&response.payload());
       if (payload == nullptr) {
@@ -694,7 +712,7 @@ core::Result<RestResponse> RestTransport::SerializeDispatchResponse(DispatcherOp
     }
   }
 
-  return core::Error::Internal("Unsupported dispatcher operation");
+  return core::Error::Internal(kUnsupportedDispatchMessage);
 }
 
 RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
@@ -702,9 +720,9 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
 
   google::protobuf::Struct error_info;
   auto* error_info_fields = error_info.mutable_fields();
-  (*error_info_fields)["@type"].set_string_value("type.googleapis.com/google.rpc.ErrorInfo");
-  (*error_info_fields)["reason"].set_string_value(ErrorInfoReason(error));
-  (*error_info_fields)["domain"].set_string_value("a2a-protocol.org");
+  (*error_info_fields)[internal::error_fields::kType].set_string_value(internal::error_fields::kTypeUrl);
+  (*error_info_fields)[internal::error_fields::kReason].set_string_value(ErrorInfoReason(error));
+  (*error_info_fields)[internal::error_fields::kDomain].set_string_value(internal::error_fields::kDomainValue);
 
   const auto& transport_value = error.transport();
   const auto& protocol_code_value = error.protocol_code();
@@ -712,32 +730,32 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
     google::protobuf::Value metadata_value;
     auto* metadata_fields = metadata_value.mutable_struct_value()->mutable_fields();
     if (transport_value.has_value()) {
-      (*metadata_fields)["transport"].set_string_value(*transport_value);
+      (*metadata_fields)[internal::error_fields::kTransport].set_string_value(*transport_value);
     }
     if (protocol_code_value.has_value()) {
-      (*metadata_fields)["protocolCode"].set_string_value(*protocol_code_value);
+      (*metadata_fields)[internal::error_fields::kProtocolCode].set_string_value(*protocol_code_value);
     }
-    (*error_info_fields)["metadata"] = std::move(metadata_value);
+    (*error_info_fields)[internal::error_fields::kMetadata] = std::move(metadata_value);
   }
 
   google::protobuf::Struct envelope;
   auto* envelope_fields = envelope.mutable_fields();
   google::protobuf::Value error_node;
   auto* error_fields = error_node.mutable_struct_value()->mutable_fields();
-  (*error_fields)["code"].set_number_value(http_status);
+  (*error_fields)[internal::error_fields::kCode].set_number_value(http_status);
   const auto protocol_reason = error.protocol_code().has_value() ? ErrorInfoReason(error) : std::string{};
-  (*error_fields)["status"].set_string_value(
+  (*error_fields)[internal::error_fields::kStatus].set_string_value(
       std::string(internal::A2aErrorStatus(protocol_reason, ErrorStatusName(http_status))));
-  (*error_fields)["message"].set_string_value(std::string(error.message()));
+  (*error_fields)[internal::error_fields::kMessage].set_string_value(std::string(error.message()));
 
   google::protobuf::Value details;
   auto* details_values = details.mutable_list_value()->mutable_values();
   google::protobuf::Value error_info_value;
   *error_info_value.mutable_struct_value() = std::move(error_info);
   details_values->Add(std::move(error_info_value));
-  (*error_fields)["details"] = std::move(details);
+  (*error_fields)[internal::error_fields::kDetails] = std::move(details);
 
-  (*envelope_fields)["error"] = std::move(error_node);
+  (*envelope_fields)[internal::error_fields::kEnvelope] = std::move(error_node);
 
   RestResponse response;
   response.http_status = http_status;
@@ -748,14 +766,14 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   if (serialized.ok()) {
     response.body = serialized.value();
   } else {
-    response.body = R"({"error":{"code":500,"status":"INTERNAL","message":"Failed to serialize error"}})";
+    response.body = kErrorSerializationFailureBody;
   }
   return response;
 }
 
 core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) const {
   if (dispatcher_ == nullptr) {
-    return core::Error::Internal("REST transport dispatcher is not configured");
+    return core::Error::Internal(internal::messages::kMissingRestDispatcher);
   }
 
   if (request.method == core::http::kMethodGet || request.method == core::http::kMethodPost) {
@@ -764,25 +782,25 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
       lf::a2a::v1::GetTaskRequest get_task_request;
       get_task_request.set_id(*subscribe_task_id);
       if (!ApplyHistoryLengthQuery(request, get_task_request)) {
-        return BuildErrorResponse(core::Error::Validation("No matching route or request was malformed")
+        return BuildErrorResponse(core::Error::Validation(internal::messages::kNoMatchingRestRoute)
                                       .WithHttpStatus(core::http::kStatusNotFound));
       }
       RequestContext context = request.context;
       auto dispatch_response = dispatcher_->Dispatch(
           {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, context);
       if (!dispatch_response.ok()) {
-        return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
+        return BuildErrorResponse(dispatch_response.error().WithTransport(internal::transport_names::kRest));
       }
       auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch_response.value().payload());
       if (stream == nullptr || *stream == nullptr) {
         return BuildErrorResponse(
             core::Error::Internal(core::protocol_error_messages::ToString(
                                       core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask))
-                .WithTransport("rest"));
+                .WithTransport(internal::transport_names::kRest));
       }
       const auto subscribe_response = BuildSubscribeResponse(*stream);
       if (!subscribe_response.ok()) {
-        return BuildErrorResponse(subscribe_response.error().WithTransport("rest"));
+        return BuildErrorResponse(subscribe_response.error().WithTransport(internal::transport_names::kRest));
       }
       return subscribe_response.value();
     }
@@ -795,21 +813,21 @@ core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) con
   const auto dispatch_request = BuildDispatchRequest(request);
   if (!dispatch_request.has_value()) {
     if (request.method == core::http::kMethodGet && request.path == RestEndpointPaths::kTaskCollection) {
-      return BuildErrorResponse(core::Error::Validation("ListTasks request parameters are invalid"));
+      return BuildErrorResponse(core::Error::Validation(kInvalidListTasksParametersMessage));
     }
-    return BuildErrorResponse(core::Error::Validation("No matching route or request was malformed")
-                                  .WithHttpStatus(core::http::kStatusNotFound));
+    return BuildErrorResponse(
+        core::Error::Validation(internal::messages::kNoMatchingRestRoute).WithHttpStatus(core::http::kStatusNotFound));
   }
 
   RequestContext context = request.context;
   auto dispatch_response = dispatcher_->Dispatch(dispatch_request.value(), context);
   if (!dispatch_response.ok()) {
-    return BuildErrorResponse(dispatch_response.error().WithTransport("rest"));
+    return BuildErrorResponse(dispatch_response.error().WithTransport(internal::transport_names::kRest));
   }
 
   const auto response = SerializeDispatchResponse(dispatch_request->operation, dispatch_response.value());
   if (!response.ok()) {
-    return BuildErrorResponse(response.error().WithTransport("rest"));
+    return BuildErrorResponse(response.error().WithTransport(internal::transport_names::kRest));
   }
 
   return response.value();

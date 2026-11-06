@@ -9,6 +9,10 @@ import sys
 import tempfile
 import unittest
 
+MODE_COMPLETE = "complete"
+MODE_CANCEL = "cancel"
+PROFILE_CLOUD = "cloud"
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "compare_curl_reactor_evidence.py"
 SPEC = importlib.util.spec_from_file_location("reactor_evidence", SCRIPT)
 EVIDENCE = importlib.util.module_from_spec(SPEC)
@@ -50,37 +54,37 @@ class EvidenceTest(unittest.TestCase):
     def test_latency_regression_fails(self):
         baseline = self.read(rows())
         slower = copy.deepcopy(baseline)
-        slower[(64, "complete")]["first_p95_ms"] = 10
+        slower[(64, MODE_COMPLETE)]["first_p95_ms"] = 10
         _, failures = EVIDENCE.compare(baseline, slower)
         self.assertTrue(failures)
 
     def test_cancellation_targets_enforced_even_with_slow_baseline(self):
         baseline = self.read(rows())
-        baseline[(64, "cancel")].update(finish_p95_ms=10, finish_p99_ms=20)
+        baseline[(64, MODE_CANCEL)].update(finish_p95_ms=10, finish_p99_ms=20)
         _, failures = EVIDENCE.compare(baseline, baseline)
         self.assertTrue(failures)
 
     def test_unequal_sample_counts_fail(self):
         baseline = self.read(rows())
         candidate = copy.deepcopy(baseline)
-        candidate[(16, "complete")]["samples"] += 1
+        candidate[(16, MODE_COMPLETE)]["samples"] += 1
         _, failures = EVIDENCE.compare(baseline, candidate)
         self.assertTrue(failures)
 
     def test_unequal_timer_periods_fail(self):
         baseline = self.read(rows())
         candidate = copy.deepcopy(baseline)
-        candidate[(16, "complete")]["timer_period_ms"] = 0
+        candidate[(16, MODE_COMPLETE)]["timer_period_ms"] = 0
         _, failures = EVIDENCE.compare(baseline, candidate)
         self.assertTrue(any("unequal timer periods" in failure for failure in failures))
 
     def test_cloud_profile_tolerates_shared_runner_startup_variance(self):
         baseline = self.read(rows())
-        baseline[(64, "complete")]["first_p95_ms"] = 27
+        baseline[(64, MODE_COMPLETE)]["first_p95_ms"] = 27
         candidate = copy.deepcopy(baseline)
-        candidate[(64, "complete")]["first_p95_ms"] = 57
+        candidate[(64, MODE_COMPLETE)]["first_p95_ms"] = 57
         _, strict_failures = EVIDENCE.compare(baseline, candidate)
-        report, cloud_failures = EVIDENCE.compare(baseline, candidate, "cloud")
+        report, cloud_failures = EVIDENCE.compare(baseline, candidate, PROFILE_CLOUD)
         self.assertTrue(strict_failures)
         self.assertFalse(cloud_failures)
         self.assertIn("Latency profile: cloud", report)
@@ -88,14 +92,14 @@ class EvidenceTest(unittest.TestCase):
     def test_cloud_profile_still_rejects_large_regressions(self):
         baseline = self.read(rows())
         candidate = copy.deepcopy(baseline)
-        candidate[(64, "complete")]["first_p95_ms"] = 100
-        _, failures = EVIDENCE.compare(baseline, candidate, "cloud")
+        candidate[(64, MODE_COMPLETE)]["first_p95_ms"] = 100
+        _, failures = EVIDENCE.compare(baseline, candidate, PROFILE_CLOUD)
         self.assertTrue(failures)
 
     def test_cloud_cancellation_limits_remain_enforced(self):
         baseline = self.read(rows())
-        baseline[(64, "cancel")].update(finish_p95_ms=50, finish_p99_ms=100)
-        _, failures = EVIDENCE.compare(baseline, baseline, "cloud")
+        baseline[(64, MODE_CANCEL)].update(finish_p95_ms=50, finish_p99_ms=100)
+        _, failures = EVIDENCE.compare(baseline, baseline, PROFILE_CLOUD)
         self.assertTrue(any("cancellation target" in failure for failure in failures))
 
 

@@ -22,6 +22,21 @@
 
 namespace {
 
+constexpr char kReportStreamsPrefix[] = R"({"streams":)";
+constexpr char kReportModePrefix[] = R"(,"mode":")";
+constexpr char kReportSamplesPrefix[] = R"(","samples":)";
+constexpr char kReportFirstP95MsPrefix[] = R"(,"first_p95_ms":)";
+constexpr char kReportFinishP95MsPrefix[] = R"(,"finish_p95_ms":)";
+constexpr char kReportFinishP99MsPrefix[] = R"(,"finish_p99_ms":)";
+constexpr char kReportMaximumThreadGrowthPrefix[] = R"(,"maximum_thread_growth":)";
+constexpr char kReportTimerPeriodMsPrefix[] = R"(,"timer_period_ms":)";
+constexpr char kReportSuccessSuffix[] = R"(,"errors":0})";
+constexpr char kCompleteMode[] = "complete";
+constexpr char kCancelMode[] = "cancel";
+constexpr char kReportArrayPrefix[] = "[\n";
+constexpr char kReportArraySeparator[] = ",\n";
+constexpr char kReportArraySuffix[] = "\n]\n";
+
 using namespace a2a::http::testing;
 constexpr std::array<std::size_t, 4> kStreamCounts{1U, 16U, 64U, 96U};
 constexpr std::size_t kRepetitions = 20U;
@@ -133,11 +148,12 @@ double Percentile(std::vector<double> values, double quantile) {
 }
 
 void PrintSamples(std::size_t count, bool cancel, const Samples& samples) {
-  std::cout << R"({"streams":)" << count << R"(,"mode":")" << (cancel ? "cancel" : "complete") << R"(","samples":)"
-            << samples.finish_ms.size() << R"(,"first_p95_ms":)" << Percentile(samples.first_ms, kP95)
-            << R"(,"finish_p95_ms":)" << Percentile(samples.finish_ms, kP95) << R"(,"finish_p99_ms":)"
-            << Percentile(samples.finish_ms, kP99) << R"(,"maximum_thread_growth":)" << samples.maximum_thread_growth
-            << R"(,"timer_period_ms":)" << kEvidenceTimerPeriodMs << R"(,"errors":0})";
+  std::cout << kReportStreamsPrefix << count << kReportModePrefix << (cancel ? kCancelMode : kCompleteMode)
+            << kReportSamplesPrefix << samples.finish_ms.size() << kReportFirstP95MsPrefix
+            << Percentile(samples.first_ms, kP95) << kReportFinishP95MsPrefix << Percentile(samples.finish_ms, kP95)
+            << kReportFinishP99MsPrefix << Percentile(samples.finish_ms, kP99) << kReportMaximumThreadGrowthPrefix
+            << samples.maximum_thread_growth << kReportTimerPeriodMsPrefix << kEvidenceTimerPeriodMs
+            << kReportSuccessSuffix;
 }
 
 }  // namespace
@@ -147,18 +163,18 @@ int main() {
 #ifdef _WIN32
     const EvidenceTimerPeriod timer_period;
 #endif
-    std::cout << std::fixed << std::setprecision(3) << "[\n";
+    std::cout << std::fixed << std::setprecision(3) << kReportArrayPrefix;
     bool first = true;
     for (const auto count : kStreamCounts) {
       for (const bool cancel : {false, true}) {
         if (!first) {
-          std::cout << ",\n";
+          std::cout << kReportArraySeparator;
         }
         first = false;
         PrintSamples(count, cancel, Measure(count, cancel));
       }
     }
-    std::cout << "\n]\n";
+    std::cout << kReportArraySuffix;
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -6,14 +6,19 @@ import json
 import math
 from pathlib import Path
 
+MODE_COMPLETE = "complete"
+MODE_CANCEL = "cancel"
+PROFILE_STRICT = "strict"
+PROFILE_CLOUD = "cloud"
+
 STREAM_COUNTS = (1, 16, 64, 96)
-MODES = ("complete", "cancel")
+MODES = (MODE_COMPLETE, MODE_CANCEL)
 MAX_THREAD_GROWTH = 8
 LATENCY_PROFILES = {
-    "strict": dict(regression_ratio=1.25, scheduling_tolerance_ms=2.0,
-                   cancel_p95_ms=10.0, cancel_p99_ms=20.0),
-    "cloud": dict(regression_ratio=2.5, scheduling_tolerance_ms=20.0,
-                  cancel_p95_ms=50.0, cancel_p99_ms=100.0),
+    PROFILE_STRICT: dict(regression_ratio=1.25, scheduling_tolerance_ms=2.0,
+                         cancel_p95_ms=10.0, cancel_p99_ms=20.0),
+    PROFILE_CLOUD: dict(regression_ratio=2.5, scheduling_tolerance_ms=20.0,
+                        cancel_p95_ms=50.0, cancel_p99_ms=100.0),
 }
 METRICS = ("first_p95_ms", "finish_p95_ms", "finish_p99_ms")
 
@@ -42,7 +47,7 @@ def read_evidence(path):
     return indexed
 
 
-def compare(baseline, candidate, profile="strict"):
+def compare(baseline, candidate, profile=PROFILE_STRICT):
     budgets = LATENCY_PROFILES[profile]
     failures = []
     lines = [
@@ -71,7 +76,7 @@ def compare(baseline, candidate, profile="strict"):
                          old[metric] + budgets["scheduling_tolerance_ms"])
             if native[metric] > budget:
                 failures.append(f"{key}: {metric} {native[metric]:.3f} ms exceeds {budget:.3f} ms")
-        if key[1] == "cancel":
+        if key[1] == MODE_CANCEL:
             if (native["finish_p95_ms"] >= budgets["cancel_p95_ms"] or
                     native["finish_p99_ms"] >= budgets["cancel_p99_ms"]):
                 failures.append(f"{key}: cancellation target p95 < {budgets['cancel_p95_ms']:g} ms / "
@@ -93,7 +98,7 @@ def main():
     parser.add_argument("baseline")
     parser.add_argument("candidate")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--profile", choices=LATENCY_PROFILES, default="strict")
+    parser.add_argument("--profile", choices=LATENCY_PROFILES, default=PROFILE_STRICT)
     args = parser.parse_args()
     report, failures = compare(read_evidence(args.baseline), read_evidence(args.candidate), args.profile)
     Path(args.output).write_text(report, encoding="utf-8")

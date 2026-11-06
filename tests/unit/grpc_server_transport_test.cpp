@@ -32,6 +32,10 @@
 #include "a2a/v1/a2a.pb.h"
 
 namespace {
+
+constexpr char kErrorCodeMetadataKey[] = "a2a-error-code";
+constexpr char kStatusDetailsMetadataKey[] = "grpc-status-details-bin";
+constexpr char kTextPlainContentType[] = "text/plain";
 constexpr int64_t kStatusTimestampSeconds = 10;
 constexpr int32_t kStatusTimestampNanos = 5;
 constexpr int32_t kValidPageSize = 10;
@@ -243,9 +247,9 @@ TEST_F(GrpcServerTransportTest, DispatchErrorMapsProtocolCodeAndTrailingMetadata
   EXPECT_EQ(status.error_code(), grpc::StatusCode::INVALID_ARGUMENT);
 
   const auto trailing = spouse.GetTrailingMetadata();
-  EXPECT_TRUE(trailing.contains("a2a-error-code"));
+  EXPECT_TRUE(trailing.contains(kErrorCodeMetadataKey));
   EXPECT_TRUE(trailing.contains(std::string(a2a::server::GrpcServerTransport::kProtocolCodeMetadataKey)));
-  EXPECT_TRUE(trailing.contains("grpc-status-details-bin"));
+  EXPECT_TRUE(trailing.contains(kStatusDetailsMetadataKey));
 }
 
 TEST_F(GrpcServerTransportTest, DispatchErrorIncludesActivatedExtensionTrailingMetadata) {
@@ -487,8 +491,8 @@ TEST_F(GrpcServerTransportTest, GetExtendedAgentCardRequiresVersionWhenConfigure
   extended_card.set_name("Extended Unit Agent");
   extended_card.set_description("Configured extended card");
   extended_card.set_version(std::string(a2a::core::Version::kAgentCardVersion));
-  extended_card.add_default_input_modes("text/plain");
-  extended_card.add_default_output_modes("text/plain");
+  extended_card.add_default_input_modes(kTextPlainContentType);
+  extended_card.add_default_output_modes(kTextPlainContentType);
   extended_card.mutable_capabilities()->set_streaming(true);
   auto provider = std::make_shared<a2a::core::StaticAgentCardProvider>(extended_card);
   a2a::server::Dispatcher dispatcher(&executor, provider);
