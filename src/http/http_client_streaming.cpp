@@ -56,8 +56,12 @@ class DispatchCallbackScope final {
  public:
   explicit DispatchCallbackScope(detail::ClientState* state) : previous_(g_dispatch_client_state) {
     g_dispatch_client_state = state;
+    core::async_detail::EnterCallback();
   }
-  ~DispatchCallbackScope() { g_dispatch_client_state = previous_; }
+  ~DispatchCallbackScope() {
+    g_dispatch_client_state = previous_;
+    core::async_detail::LeaveCallback();
+  }
 
  private:
   detail::ClientState* previous_;

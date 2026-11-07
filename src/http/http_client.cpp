@@ -99,17 +99,19 @@ void Client::Shutdown() const {
     std::lock_guard lock(state_->stream_mutex);
     state_->shutting_down = true;
     state_->suppress_stream_callbacks.store(true);
-    has_active_streams = state_->active_streams != 0U;
+    has_active_streams = state_->active_streams != 0U || state_->active_unary_requests != 0U;
     released_stream_slots.swap(state_->idle_stream_slots);
   }
+  state_->unary_scope.Shutdown();
   if (has_active_streams) {
     state_->global_state->stream_reactor_pool->CancelOwner(state_.get());
   }
-  if (detail::IsDispatchingStreamCallback(state_.get())) {
+  if (detail::IsDispatchingStreamCallback(state_.get()) || core::async_detail::IsCallbackThread()) {
     return;
   }
   std::unique_lock lock(state_->stream_mutex);
-  state_->streams_finished.wait(lock, [this] { return state_->active_streams == 0U; });
+  state_->streams_finished.wait(lock,
+                                [this] { return state_->active_streams == 0U && state_->active_unary_requests == 0U; });
 }
 
 core::Result<Response> Client::SendRequest(const Request& request) const {

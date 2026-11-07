@@ -11,11 +11,13 @@
 #include <string_view>
 #include <utility>
 
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_utils.h"
 #include "a2a/core/json_rpc.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 #include "core/json.h"
+#include "request_headers.h"
 
 namespace a2a::client::json_rpc_internal {
 namespace {
@@ -200,4 +202,82 @@ core::Result<std::string> BuildJsonRpcEnvelope(std::string_view method_name, con
   return envelope;
 }
 
+}  // namespace a2a::client::json_rpc_internal
+
+namespace a2a::client::json_rpc_internal {
+core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response) {
+  if (response.status_code >= core::http::kSuccessStatusMin && response.status_code <= core::http::kSuccessStatusMax) {
+    return {};
+  }
+  return BuildJsonRpcEnvelopeError("JSON-RPC response received with non-success HTTP status", response);
+}
+}  // namespace a2a::client::json_rpc_internal
+
+namespace a2a::client::json_rpc_internal {
+core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
+                                                                  std::string_view expected_id) {
+  const auto result_json = ParseResponseResult(response, expected_id);
+  if (!result_json.ok()) {
+    return result_json.error();
+  }
+  const auto status = ValidateJsonRpcHttpStatus(response);
+  if (!status.ok()) {
+    return status.error();
+  }
+  lf::a2a::v1::ListTasksResponse result;
+  const auto parsed = core::JsonToMessage(
+      result_json.value(), &result,
+      {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
+  if (!parsed.ok()) {
+    return parsed.error().WithTransport(json_rpc_internal::kTransportName).WithHttpStatus(response.status_code);
+  }
+  return result;
+}
+}  // namespace a2a::client::json_rpc_internal
+
+namespace a2a::client::json_rpc_internal {
+core::Result<HttpRequest> BuildUnaryRequest(const ResolvedInterface& resolved_interface,
+                                            std::chrono::milliseconds default_timeout, std::string request_body,
+                                            const CallOptions& options) {
+  if (resolved_interface.transport != PreferredTransport::kJsonRpc) {
+    return core::Error::Validation("JsonRpcTransport requires a JSON-RPC interface");
+  }
+  if (resolved_interface.url.empty()) {
+    return core::Error::Validation("Resolved JSON-RPC interface URL is required");
+  }
+
+  HttpRequest http_request;
+  http_request.method = std::string(core::http::kMethodPost);
+  http_request.url = JoinUrl(resolved_interface.url);
+  http_request.body = std::move(request_body);
+  http_request.timeout = options.timeout.value_or(default_timeout);
+  http_request.headers = options.headers;
+  http_request.headers[std::string(core::http::kContentTypeHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
+  http_request.headers[std::string(core::http::kAcceptHeaderName)] =
+      std::string(core::http::kContentTypeApplicationJson);
+  http_request.tls = options.tls;
+  http_request.mtls = options.mtls;
+
+  if (!options.extensions.empty()) {
+    http_request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
+  }
+  if (options.auth_hook) {
+    options.auth_hook(http_request.headers);
+  }
+  if (options.credential_provider != nullptr) {
+    const auto applied =
+        ApplyCredentialProvider(*options.credential_provider, options.auth_context, &http_request.headers);
+    if (!applied.ok()) {
+      return applied.error();
+    }
+  }
+
+  const auto version = internal::ApplyProtocolVersion(options, http_request.headers);
+  if (!version.ok()) {
+    return version.error();
+  }
+
+  return http_request;
+}
 }  // namespace a2a::client::json_rpc_internal

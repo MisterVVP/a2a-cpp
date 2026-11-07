@@ -33,6 +33,8 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
@@ -1726,6 +1728,66 @@ TEST(DefaultHttpTransportTest, LegacyEmptyStreamRequesterConstructionRemainsUnam
 
   (void)http_transport;
   (void)json_rpc_transport;
+}
+
+a2a::core::Result<lf::a2a::v1::Task> AwaitAsyncTask(a2a::client::A2AClient& client,
+                                                    const lf::a2a::v1::GetTaskRequest& request) {
+  std::promise<a2a::core::Result<lf::a2a::v1::Task>> promise;
+  auto future = promise.get_future();
+  auto operation = client.Async().GetTask(request, [&](auto response) { promise.set_value(std::move(response)); });
+  if (!operation.ok()) {
+    return operation.error();
+  }
+  EXPECT_EQ(future.wait_for(std::chrono::milliseconds(kStreamTimeoutMs)), std::future_status::ready);
+  auto response = future.get();
+  operation.value().Wait();
+  return response;
+}
+
+TEST(DefaultHttpTransportTest, HttpJsonAsyncUnaryAndStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server{std::string(kRestTaskBody)};
+  auto transport = a2a::client::HttpJsonTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kRest, server.port(), kLoopbackRestPath),
+      std::chrono::milliseconds(kStreamTimeoutMs));
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = AwaitAsyncTask(client, request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
+}
+
+TEST(DefaultHttpTransportTest, JsonRpcAsyncUnaryAndStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server{std::string(kJsonRpcTaskBody)};
+  auto transport = a2a::client::JsonRpcTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kJsonRpc, server.port(), kLoopbackJsonRpcPath),
+      std::chrono::milliseconds(kStreamTimeoutMs), [] { return std::string(kJsonRpcRequestId); });
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = AwaitAsyncTask(client, request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
 }
 
 TEST(DefaultHttpTransportTest, HttpJsonUnaryAndStreamReuseOneConnection) {

@@ -6,20 +6,28 @@
 #include <grpcpp/create_channel.h>
 
 #include <cctype>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <ranges>
 #include <string>
 #include <thread>
 
+#include "a2a/client/async_transport.h"
 #include "a2a/client/auth.h"
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/version.h"
 #include "a2a/v1/a2a.grpc.pb.h"
+#include "grpc_transport_internal.h"
 #include "request_headers.h"
 
 namespace a2a::client {
 namespace {
+using grpc_internal::kCancelTaskIdRequired;
+using grpc_internal::kDeletePushConfigIdRequired;
+using grpc_internal::kGetPushConfigIdRequired;
+using grpc_internal::kGetTaskIdRequired;
 
 class StubStreamReader final : public GrpcTransport::StreamReader {
  public:
@@ -101,64 +109,30 @@ class StubRpcClient final : public GrpcTransport::RpcClient {
 
 GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface, std::shared_ptr<::grpc::Channel> channel,
                              std::chrono::milliseconds default_timeout)
-    : GrpcTransport(std::move(resolved_interface),
-                    std::make_unique<StubRpcClient>(lf::a2a::v1::A2AService::NewStub(std::move(channel))),
-                    default_timeout) {}
+    : GrpcTransport(resolved_interface, std::make_unique<StubRpcClient>(lf::a2a::v1::A2AService::NewStub(channel)),
+                    default_timeout) {
+  async_transport_ =
+      grpc_internal::MakeAsyncTransport(std::move(resolved_interface), std::move(channel), default_timeout);
+}
 
 GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface, std::unique_ptr<RpcClient> rpc_client,
                              std::chrono::milliseconds default_timeout)
-    : resolved_interface_(std::move(resolved_interface)),
+    : async_transport_(std::make_shared<AsyncClientTransport>()),
+      resolved_interface_(std::move(resolved_interface)),
       rpc_client_(std::move(rpc_client)),
       default_timeout_(default_timeout) {}
 
+core::Result<void> GrpcTransport::Shutdown() {
+  async_transport_->Shutdown();
+  return {};
+}
+
 core::Result<std::unique_ptr<::grpc::ClientContext>> GrpcTransport::BuildContext(const CallOptions& options) const {
-  if (resolved_interface_.transport != PreferredTransport::kGrpc) {
-    return core::Error::Validation("GrpcTransport requires a gRPC interface");
-  }
-  if (resolved_interface_.url.empty()) {
-    return core::Error::Validation("Resolved gRPC interface URL is required");
-  }
-  if (rpc_client_ == nullptr) {
-    return core::Error::Internal("gRPC stub is not configured");
-  }
-
-  auto context = std::make_unique<::grpc::ClientContext>();
-  const auto timeout = options.timeout.value_or(default_timeout_);
-  context->set_deadline(std::chrono::system_clock::now() + timeout);
-
-  HeaderMap headers = options.headers;
-
-  if (!options.extensions.empty()) {
-    headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
-  }
-  if (options.auth_hook) {
-    options.auth_hook(headers);
-  }
-  if (options.credential_provider != nullptr) {
-    const auto apply = ApplyCredentialProvider(*options.credential_provider, options.auth_context, &headers);
-    if (!apply.ok()) {
-      return apply.error();
-    }
-  }
-
-  const auto version = internal::ApplyProtocolVersion(options, headers);
-  if (!version.ok()) {
-    return version.error();
-  }
-
-  for (const auto& [name, value] : headers) {
-    std::string lowered_name = name;
-    std::ranges::transform(lowered_name, lowered_name.begin(),
-                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    context->AddMetadata(lowered_name, value);
-  }
-  return context;
+  return grpc_internal::BuildContext(resolved_interface_, rpc_client_ != nullptr, default_timeout_, options);
 }
 
 core::Error GrpcTransport::BuildGrpcError(const ::grpc::Status& status) {
-  core::Error error = core::Error::RemoteProtocol(status.error_message()).WithTransport("grpc");
-  error = error.WithProtocolCode(std::to_string(static_cast<int>(status.error_code())));
-  return error;
+  return grpc_internal::BuildGrpcError(status);
 }
 
 core::Result<lf::a2a::v1::SendMessageResponse> GrpcTransport::SendMessage(
@@ -179,7 +153,7 @@ core::Result<lf::a2a::v1::SendMessageResponse> GrpcTransport::SendMessage(
 core::Result<lf::a2a::v1::Task> GrpcTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                        const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("GetTaskRequest.id is required");
+    return core::Error::Validation(kGetTaskIdRequired);
   }
 
   auto context_result = BuildContext(options);
@@ -214,19 +188,13 @@ core::Result<ListTasksResponse> GrpcTransport::ListTasks(const ListTasksRequest&
     return BuildGrpcError(status);
   }
 
-  ListTasksResponse result;
-  result.tasks.reserve(static_cast<std::size_t>(response.tasks_size()));
-  for (const auto& task : response.tasks()) {
-    result.tasks.push_back(task);
-  }
-  result.next_page_token = response.next_page_token();
-  return result;
+  return grpc_internal::DecodeListTasks(std::move(response));
 }
 
 core::Result<lf::a2a::v1::Task> GrpcTransport::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                           const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("CancelTaskRequest.id is required");
+    return core::Error::Validation(kCancelTaskIdRequired);
   }
 
   auto context_result = BuildContext(options);
@@ -260,7 +228,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::CreateTaskP
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> GrpcTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
+    return core::Error::Validation(kGetPushConfigIdRequired);
   }
   auto context_result = BuildContext(options);
   if (!context_result.ok()) {
@@ -293,7 +261,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> GrpcTransport
 core::Result<void> GrpcTransport::DeleteTaskPushNotificationConfig(
     const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
+    return core::Error::Validation(kDeletePushConfigIdRequired);
   }
 
   auto context_result = BuildContext(options);
@@ -330,6 +298,7 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SendStreamingMessage(
   }
   auto worker =
       StreamHandle::WorkerThread([rpc_client, state, request, &observer, context = std::move(context)]() mutable {
+        StreamHandle::State::CallbackExecutionScope callback_scope(*state);
         auto reader = rpc_client->SendStreamingMessage(context.get(), request);
         if (reader == nullptr) {
           observer.OnError(core::Error::Internal("Failed to create gRPC stream reader"));
@@ -365,7 +334,7 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
                                                                          StreamObserver& observer,
                                                                          const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("GetTaskRequest.id is required");
+    return core::Error::Validation(kGetTaskIdRequired);
   }
 
   auto context_result = BuildContext(options);
@@ -389,6 +358,7 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
   }
   auto worker = StreamHandle::WorkerThread(
       [rpc_client, state, subscribe_request, &observer, context = std::move(context)]() mutable {
+        StreamHandle::State::CallbackExecutionScope callback_scope(*state);
         auto reader = rpc_client->SubscribeToTask(context.get(), subscribe_request);
         if (reader == nullptr) {
           observer.OnError(core::Error::Internal("Failed to create gRPC subscribe stream reader"));

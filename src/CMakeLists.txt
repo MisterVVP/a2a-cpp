@@ -32,6 +32,7 @@ else()
 endif()
 
 set(A2A_CORE_SOURCES
+  core/async_operation.cpp
   core/agent_card/agent_card_builder.cpp
   core/agent_card/agent_card_provider.cpp
   core/core.cpp
@@ -60,6 +61,7 @@ target_link_libraries(a2a_core
   PUBLIC
     a2a::proto_generated
     protobuf::libprotobuf
+    Threads::Threads
   PRIVATE
     simdjson::simdjson
 )
@@ -78,6 +80,7 @@ endif()
 add_library(a2a_http STATIC
   http/curl_stream_reactor.cpp
   http/curl_windows_readiness.cpp
+  http/http_client_async.cpp
   http/http_client.cpp
   http/http_client_curl.cpp
   http/http_client_streaming.cpp
@@ -114,14 +117,20 @@ if(A2A_HAS_LIBCURL)
 endif()
 
 set(A2A_CLIENT_SOURCES
+  client/async_transport.cpp
+  client/async_client.cpp
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
+  client/transport/grpc_async_transport.cpp
+  client/transport/grpc_transport_internal.cpp
   client/transport/grpc_transport.cpp
   client/transport/http_json_streaming.cpp
+  client/transport/http_json_async_transport.cpp
   client/transport/http_json_transport.cpp
   client/transport/http_json_transport_internal.cpp
   client/transport/json_rpc_streaming.cpp
+  client/transport/json_rpc_async_transport.cpp
   client/transport/json_rpc_transport.cpp
   client/transport/json_rpc_transport_internal.cpp
   client/transport/sse_parser.cpp
@@ -226,7 +235,7 @@ endif()
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(a2a_core_diagnostics STATIC ${A2A_CORE_SOURCES} core/subscription_diagnostics.cpp)
   target_include_directories(a2a_core_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf PRIVATE simdjson::simdjson)
+  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf Threads::Threads PRIVATE simdjson::simdjson)
 
   add_library(a2a_client_diagnostics STATIC ${A2A_CLIENT_SOURCES})
   target_include_directories(a2a_client_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
