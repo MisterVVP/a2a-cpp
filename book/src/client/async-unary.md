@@ -133,6 +133,12 @@ libcurl fetcher. Async discovery has a separate thread-safe cache with the same
 configured TTL, validates cards and verifies original JSON before parsing. A
 verifier snapshot is retained for each call; setting a verifier clears both
 caches, and cache hits reverify original JSON. Extended cards are always fetched.
+Async verifier exceptions complete with an internal error; they do not defer the
+result until the network deadline.
+Discovery shutdown also drains active verifier hooks when called outside SDK
+callbacks. Verifiers run in SDK callback context so reentrant shutdown cancels
+work without waiting on the verifier itself.
+
 Serialize verifier changes and synchronous discovery calls with initiation, as
 with the existing synchronous discovery API. `DiscoveryClient::Shutdown()` closes
 async discovery. Copies share async cache and operation ownership.

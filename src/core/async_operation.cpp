@@ -73,7 +73,13 @@ class CompletionRuntime final : private NonCopyableOrMovable {
     const auto expires =
         timeout >= maximum ? Clock::time_point::max() : now + std::max(timeout, std::chrono::milliseconds::zero());
     auto deadline = deadlines_.emplace(expires, operation);
-    operations_.emplace(operation.get(), deadline);
+    try {
+      operations_.emplace(operation.get(), deadline);
+    } catch (...) {
+      // Rejected admission must not leave a timer that can deliver a callback.
+      deadlines_.erase(deadline);
+      throw;
+    }
     deadlines_changed_.notify_one();
     return true;
   }
@@ -137,10 +143,12 @@ class CompletionRuntime final : private NonCopyableOrMovable {
         deadlines_changed_.wait_until(lock, deadline);
       } else {
         auto node = deadlines_.extract(deadlines_.begin());
-        auto operation = std::move(node.mapped());
+        const auto operation = node.mapped();
         // Keep an inert deadline entry until the callback releases admission.
-        auto deadline = deadlines_.emplace(Clock::time_point::max(), operation);
-        operations_[operation.get()] = deadline;
+        // Reuse the admitted node so expiry needs no replacement allocation.
+        node.key() = Clock::time_point::max();
+        const auto deadline = deadlines_.insert(std::move(node));
+        operations_.at(operation.get()) = deadline;
         lock.unlock();
         operation->Cancel(Error::Network(kDeadline).WithProtocolCode(kDeadlineCode));
         lock.lock();

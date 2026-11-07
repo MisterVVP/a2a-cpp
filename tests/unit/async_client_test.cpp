@@ -42,6 +42,9 @@ static_assert(!std::is_copy_constructible_v<core::AsyncScope>);
 static_assert(!std::is_move_constructible_v<core::AsyncScope>);
 constexpr auto kWait = std::chrono::seconds(5);
 constexpr auto kTimeout = std::chrono::milliseconds(10);
+constexpr auto kVerifierWait = std::chrono::seconds(1);
+constexpr std::size_t kDeadlineBatch = 64;
+constexpr int kCardRefetchRequests = 2;
 constexpr auto kCancelled = "CANCELLED";
 constexpr auto kDeadline = "DEADLINE_EXCEEDED";
 constexpr auto kFailure = "test error";
@@ -669,6 +672,35 @@ TEST(AsyncClientContractTest, CapacityIncludesPendingCallbacksAndRecovers) {
   EXPECT_TRUE(scope.Start<int>([](auto result) { (void)result; }, kWait).ok());
 }
 
+void ExpectDeadline(const core::Result<int>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), kDeadline);
+}
+TEST(AsyncClientContractTest, ExpiredBatchCompletesOnceAndReleasesAdmission) {
+  std::atomic<std::size_t> expired{0};
+  core::AsyncScope scope;
+  std::vector<core::AsyncHandle> handles;
+  handles.reserve(kDeadlineBatch);
+  for (std::size_t index = 0; index < kDeadlineBatch; ++index) {
+    auto token = scope.Start<int>(
+        [&expired](auto result) {
+          ExpectDeadline(result);
+          ++expired;
+        },
+        kTimeout);
+    ASSERT_TRUE(token.ok());
+    handles.push_back(token.value().handle());
+  }
+  for (const auto& handle : handles) {
+    handle.Wait();
+  }
+  EXPECT_EQ(expired.load(), kDeadlineBatch);
+  auto recovered = scope.Start<int>([](auto result) { (void)result; }, kWait);
+  ASSERT_TRUE(recovered.ok());
+  recovered.value().Complete(1);
+  recovered.value().handle().Wait();
+}
+
 TEST(AsyncClientContractTest, ThrowingCancellationSignalDoesNotStopDeadlineThread) {
   core::AsyncScope scope;
   std::promise<core::Result<int>> result;
@@ -729,7 +761,8 @@ client::HttpAsyncFetcher ImmediateFetcher(core::AsyncScope& network, int& reques
         return token.value().handle();
       };
 }
-core::Result<lf::a2a::v1::AgentCard> FetchCard(client::DiscoveryClient& discovery, bool extended = false) {
+core::Result<lf::a2a::v1::AgentCard> FetchCard(client::DiscoveryClient& discovery, bool extended = false,
+                                               std::chrono::milliseconds wait = kWait) {
   std::promise<core::Result<lf::a2a::v1::AgentCard>> result;
   auto future = result.get_future();
   const auto complete = [&](auto value) { result.set_value(std::move(value)); };
@@ -738,13 +771,11 @@ core::Result<lf::a2a::v1::AgentCard> FetchCard(client::DiscoveryClient& discover
   if (!started.ok()) {
     return started.error();
   }
-  if (future.wait_for(kWait) != std::future_status::ready) {
+  if (future.wait_for(wait) != std::future_status::ready) {
     started.value().Cancel();
-    started.value().Wait();
-    return core::Error::Internal(kFailure);
   }
-  auto response = future.get();
   started.value().Wait();
+  auto response = future.get();
   return response;
 }
 TEST(AsyncDiscoveryTest, FetchVerifiesCachesAndSupportsExtendedDiscovery) {
@@ -760,5 +791,91 @@ TEST(AsyncDiscoveryTest, FetchVerifiesCachesAndSupportsExtendedDiscovery) {
   });
   EXPECT_FALSE(FetchCard(discovery, true).ok());
   discovery.Shutdown();
+}
+void ExpectInternalCardError(const core::Result<lf::a2a::v1::AgentCard>& result) {
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code(), core::ErrorCode::kInternal);
+}
+TEST(AsyncDiscoveryTest, ThrowingVerifierCompletesWithInternalErrorWithoutWaitingForDeadline) {
+  core::AsyncScope network;
+  int requests = 0;
+  client::DiscoveryClient discovery({}, client::kDefaultDiscoveryCacheTtl, ImmediateFetcher(network, requests));
+  discovery.SetAgentCardVerifier([](auto json) -> core::Result<void> {
+    (void)json;
+    throw std::runtime_error(kFailure);
+  });
+  ExpectInternalCardError(FetchCard(discovery, false, kVerifierWait));
+  EXPECT_EQ(requests, 1);
+}
+TEST(AsyncDiscoveryTest, CacheHitRevalidatesWhenVerifierStartsThrowing) {
+  core::AsyncScope network;
+  int requests = 0;
+  bool fail_verification = false;
+  client::DiscoveryClient discovery({}, client::kDefaultDiscoveryCacheTtl, ImmediateFetcher(network, requests));
+  discovery.SetAgentCardVerifier([&fail_verification](auto json) -> core::Result<void> {
+    (void)json;
+    if (fail_verification) {
+      throw std::runtime_error(kFailure);
+    }
+    return {};
+  });
+  EXPECT_TRUE(FetchCard(discovery).ok());
+  fail_verification = true;
+  ExpectInternalCardError(FetchCard(discovery, false, kVerifierWait));
+  EXPECT_EQ(requests, kCardRefetchRequests);
+}
+TEST(AsyncDiscoveryTest, ShutdownWaitsForRunningVerification) {
+  core::AsyncScope network;
+  int requests = 0;
+  client::DiscoveryClient discovery({}, client::kDefaultDiscoveryCacheTtl, ImmediateFetcher(network, requests));
+  std::promise<void> entered;
+  auto entered_future = entered.get_future();
+  std::promise<void> release;
+  auto release_future = release.get_future().share();
+  discovery.SetAgentCardVerifier([&entered, release_future](auto json) -> core::Result<void> {
+    (void)json;
+    entered.set_value();
+    release_future.wait();
+    return {};
+  });
+  std::promise<core::Result<lf::a2a::v1::AgentCard>> result;
+  auto result_future = result.get_future();
+  auto operation = discovery.FetchAsync(kBaseUrl, [&](auto response) { result.set_value(std::move(response)); });
+  ASSERT_TRUE(operation.ok());
+  const bool verifying = entered_future.wait_for(kWait) == std::future_status::ready;
+  std::promise<void> stopped;
+  auto stopped_future = stopped.get_future();
+  std::thread shutdown([&] {
+    discovery.Shutdown();
+    stopped.set_value();
+  });
+  const bool completed = result_future.wait_for(kWait) == std::future_status::ready;
+  const bool drained = stopped_future.wait_for(kTimeout) == std::future_status::timeout;
+  release.set_value();
+  shutdown.join();
+  operation.value().Wait();
+  EXPECT_TRUE(verifying);
+  EXPECT_TRUE(completed);
+  EXPECT_TRUE(drained);
+}
+
+TEST(AsyncDiscoveryTest, VerifierCanShutdownDiscoveryOnCacheHit) {
+  core::AsyncScope network;
+  int requests = 0;
+  bool shutdown = false;
+  client::DiscoveryClient discovery({}, client::kDefaultDiscoveryCacheTtl, ImmediateFetcher(network, requests));
+  discovery.SetAgentCardVerifier([&](auto json) -> core::Result<void> {
+    (void)json;
+    if (shutdown) {
+      discovery.Shutdown();
+    }
+    return {};
+  });
+  EXPECT_TRUE(FetchCard(discovery).ok());
+  shutdown = true;
+  auto result = FetchCard(discovery, false, kVerifierWait);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), kCancelled);
+  EXPECT_EQ(requests, 1);
 }
 }  // namespace

@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <condition_variable>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <ranges>
@@ -15,6 +17,7 @@
 #include "a2a/core/error.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protocol_paths.h"
 #include "a2a/core/protojson.h"
@@ -30,6 +33,8 @@ constexpr int kHttpStatusOkMin = 200;
 constexpr int kHttpStatusOkMax = 299;
 constexpr int kHttpStatusNotFound = 404;
 constexpr const char* kHttpTransport = "http";
+constexpr const char* kVerifierThrew = "async Agent Card verifier threw an exception";
+constexpr const char* kDiscoveryClosed = "async discovery shut down";
 
 std::string Trim(std::string_view input) {
   std::string value(input);
@@ -117,6 +122,63 @@ HttpFetcher MakeDefaultHttpFetcher(std::optional<http::TlsOptions> tls) {
 struct DiscoveryClient::AsyncCache final {
   std::mutex mutex;
   std::unordered_map<std::string, CacheEntry> entries;
+  std::condition_variable finished;
+  std::size_t active_verifications = 0;
+  bool closed = false;
+
+  class Verification final : private core::NonCopyableOrMovable {
+   public:
+    explicit Verification(AsyncCache& cache) : cache_(cache) {
+      std::lock_guard lock(cache_.mutex);
+      if (!cache_.closed) {
+        ++cache_.active_verifications;
+        active_ = true;
+        core::async_detail::EnterCallback();
+      }
+    }
+    ~Verification() {
+      if (active_) {
+        core::async_detail::LeaveCallback();
+        std::lock_guard lock(cache_.mutex);
+        --cache_.active_verifications;
+        cache_.finished.notify_all();
+      }
+    }
+    [[nodiscard]] bool IsActive() const { return active_; }
+
+   private:
+    AsyncCache& cache_;
+    bool active_ = false;
+  };
+
+  static AgentCardVerifier SnapshotVerifier(const AgentCardVerifier& verifier, std::shared_ptr<AsyncCache> cache) {
+    if (!verifier) {
+      return {};
+    }
+    return [verifier, cache = std::move(cache)](std::string_view json) -> core::Result<void> {
+      const Verification verification(*cache);
+      if (!verification.IsActive()) {
+        return core::Error::Network(kDiscoveryClosed).WithProtocolCode(core::AsyncHandle::kCancelled);
+      }
+      try {
+        return verifier(json);
+      } catch (...) {
+        return core::Error::Internal(kVerifierThrew);
+      }
+    };
+  }
+
+  void Close() {
+    std::lock_guard lock(mutex);
+    closed = true;
+  }
+  void WaitForVerification() {
+    if (core::async_detail::IsCallbackThread()) {
+      return;
+    }
+    std::unique_lock lock(mutex);
+    finished.wait(lock, [this] { return active_verifications == 0; });
+  }
 };
 
 DiscoveryClient::DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl, HttpAsyncFetcher async_fetcher)
@@ -184,7 +246,13 @@ constexpr const char* kMtlsUnsupported = "default async discovery does not suppo
 constexpr const char* kDiscoveryStartFailed = "async discovery initiation threw an exception";
 
 }  // namespace
-void DiscoveryClient::Shutdown() const { async_scope_->Shutdown(); }
+void DiscoveryClient::Shutdown() const {
+  const auto cache = async_cache_;
+  const auto scope = async_scope_;
+  cache->Close();
+  scope->Shutdown();
+  cache->WaitForVerification();
+}
 core::Result<core::AsyncHandle> DiscoveryClient::FetchAsync(std::string_view base_url,
                                                             core::Completion<lf::a2a::v1::AgentCard> completion,
                                                             const CallOptions& options) {
@@ -223,7 +291,7 @@ core::Result<core::AsyncHandle> DiscoveryClient::StartFetchAsync(std::string_vie
 void DiscoveryClient::StartDiscoveryRequest(const std::string& url, bool extended, const CallOptions& options,
                                             const core::AsyncCompletion<lf::a2a::v1::AgentCard>& token) {
   // Parsing uses an owned verifier snapshot and never refers back to this client.
-  auto verifier = verifier_;
+  auto verifier = AsyncCache::SnapshotVerifier(verifier_, async_cache_);
   if (!extended) {
     std::optional<CacheEntry> cached;
     {
@@ -233,7 +301,7 @@ void DiscoveryClient::StartDiscoveryRequest(const std::string& url, bool extende
         cached = found->second;
       }
     }
-    if (cached && (!verifier_ || verifier_(cached->json).ok())) {
+    if (cached && (!verifier || verifier(cached->json).ok())) {
       token.Complete(cached->card);
       return;
     }
