@@ -824,15 +824,18 @@ TEST(AsyncDiscoveryTest, CacheHitRevalidatesWhenVerifierStartsThrowing) {
   ExpectInternalCardError(FetchCard(discovery, false, kVerifierWait));
   EXPECT_EQ(requests, kCardRefetchRequests);
 }
-TEST(AsyncDiscoveryTest, ShutdownWaitsForRunningVerification) {
+void ExpectDiscoveryVerificationDrain(bool destroy) {
   core::AsyncScope network;
   int requests = 0;
-  client::DiscoveryClient discovery({}, client::kDefaultDiscoveryCacheTtl, ImmediateFetcher(network, requests));
+  auto original = std::make_unique<client::DiscoveryClient>(client::HttpFetcher{}, client::kDefaultDiscoveryCacheTtl,
+                                                            ImmediateFetcher(network, requests));
+  auto discovery = std::make_unique<client::DiscoveryClient>(*original);
+  original.reset();
   std::promise<void> entered;
   auto entered_future = entered.get_future();
   std::promise<void> release;
   auto release_future = release.get_future().share();
-  discovery.SetAgentCardVerifier([&entered, release_future](auto json) -> core::Result<void> {
+  discovery->SetAgentCardVerifier([&entered, release_future](auto json) -> core::Result<void> {
     (void)json;
     entered.set_value();
     release_future.wait();
@@ -840,13 +843,17 @@ TEST(AsyncDiscoveryTest, ShutdownWaitsForRunningVerification) {
   });
   std::promise<core::Result<lf::a2a::v1::AgentCard>> result;
   auto result_future = result.get_future();
-  auto operation = discovery.FetchAsync(kBaseUrl, [&](auto response) { result.set_value(std::move(response)); });
+  auto operation = discovery->FetchAsync(kBaseUrl, [&](auto response) { result.set_value(std::move(response)); });
   ASSERT_TRUE(operation.ok());
   const bool verifying = entered_future.wait_for(kWait) == std::future_status::ready;
   std::promise<void> stopped;
   auto stopped_future = stopped.get_future();
   std::thread shutdown([&] {
-    discovery.Shutdown();
+    if (destroy) {
+      discovery.reset();
+    } else {
+      discovery->Shutdown();
+    }
     stopped.set_value();
   });
   const bool completed = result_future.wait_for(kWait) == std::future_status::ready;
@@ -858,6 +865,10 @@ TEST(AsyncDiscoveryTest, ShutdownWaitsForRunningVerification) {
   EXPECT_TRUE(completed);
   EXPECT_TRUE(drained);
 }
+
+TEST(AsyncDiscoveryTest, ShutdownWaitsForRunningVerification) { ExpectDiscoveryVerificationDrain(false); }
+
+TEST(AsyncDiscoveryTest, DestructionOfLastCopyWaitsForRunningVerification) { ExpectDiscoveryVerificationDrain(true); }
 
 TEST(AsyncDiscoveryTest, VerifierCanShutdownDiscoveryOnCacheHit) {
   core::AsyncScope network;

@@ -168,6 +168,17 @@ struct DiscoveryClient::AsyncCache final {
     };
   }
 
+  static std::shared_ptr<core::AsyncScope> MakeScope(std::shared_ptr<AsyncCache> cache) {
+    // Only client copies own this scope. In-flight calls retain the cache, so
+    // last-owner teardown must close and drain verification before releasing it.
+    return {new core::AsyncScope, [cache = std::move(cache)](core::AsyncScope* scope) {
+              const std::unique_ptr<core::AsyncScope> owned(scope);
+              cache->Close();
+              owned->Shutdown();
+              cache->WaitForVerification();
+            }};
+  }
+
   void Close() {
     std::lock_guard lock(mutex);
     closed = true;
@@ -184,6 +195,7 @@ struct DiscoveryClient::AsyncCache final {
 DiscoveryClient::DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl, HttpAsyncFetcher async_fetcher)
     : async_cache_(std::make_shared<AsyncCache>()),
       async_fetcher_(std::move(async_fetcher)),
+      async_scope_(AsyncCache::MakeScope(async_cache_)),
       fetcher_(std::move(fetcher)),
       cache_ttl_(cache_ttl) {}
 
