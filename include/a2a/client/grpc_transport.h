@@ -9,6 +9,7 @@
 #include <grpcpp/support/status.h>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 
 #include "a2a/client/call_options.h"
@@ -25,6 +26,8 @@ namespace a2a::client {
 class GrpcTransport final : public ClientTransport {
  public:
   static constexpr std::chrono::milliseconds kDefaultTimeout{30000};
+  ~GrpcTransport() override;
+  [[nodiscard]] core::Result<void> Shutdown() override;
 
   class StreamReader {
    public:
@@ -84,6 +87,75 @@ class GrpcTransport final : public ClientTransport {
     [[nodiscard]] virtual ::grpc::Status DeleteTaskPushNotificationConfig(
         ::grpc::ClientContext* context, const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
         google::protobuf::Empty* response) = 0;
+    // Native async hook; sync-only injected clients report UNIMPLEMENTED.
+    virtual void StartSendMessage(::grpc::ClientContext* context, const lf::a2a::v1::SendMessageRequest* request,
+                                  lf::a2a::v1::SendMessageResponse* response,
+                                  std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartGetTask(::grpc::ClientContext* context, const lf::a2a::v1::GetTaskRequest* request,
+                              lf::a2a::v1::Task* response, std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartListTasks(::grpc::ClientContext* context, const lf::a2a::v1::ListTasksRequest* request,
+                                lf::a2a::v1::ListTasksResponse* response,
+                                std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartCancelTask(::grpc::ClientContext* context, const lf::a2a::v1::CancelTaskRequest* request,
+                                 lf::a2a::v1::Task* response, std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartCreateTaskPushNotificationConfig(::grpc::ClientContext* context,
+                                                       const lf::a2a::v1::TaskPushNotificationConfig* request,
+                                                       lf::a2a::v1::TaskPushNotificationConfig* response,
+                                                       std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartGetTaskPushNotificationConfig(::grpc::ClientContext* context,
+                                                    const lf::a2a::v1::GetTaskPushNotificationConfigRequest* request,
+                                                    lf::a2a::v1::TaskPushNotificationConfig* response,
+                                                    std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartListTaskPushNotificationConfigs(
+        ::grpc::ClientContext* context, const lf::a2a::v1::ListTaskPushNotificationConfigsRequest* request,
+        lf::a2a::v1::ListTaskPushNotificationConfigsResponse* response,
+        std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+    virtual void StartDeleteTaskPushNotificationConfig(
+        ::grpc::ClientContext* context, const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest* request,
+        google::protobuf::Empty* response, std::function<void(::grpc::Status)> completion) {
+      (void)context;
+      (void)request;
+      (void)response;
+      completion(::grpc::Status(::grpc::StatusCode::UNIMPLEMENTED, kAsyncUnavailable));
+    }
+
+   private:
+    static constexpr const char* kAsyncUnavailable = "injected gRPC client does not implement native async unary calls";
   };
 
   GrpcTransport(ResolvedInterface resolved_interface, std::shared_ptr<::grpc::Channel> channel,
@@ -122,10 +194,35 @@ class GrpcTransport final : public ClientTransport {
                                                                           StreamObserver& observer,
                                                                           const CallOptions& options) override;
 
+ protected:
+  [[nodiscard]] std::chrono::milliseconds DefaultAsyncTimeout() const override { return default_timeout_; }
+  void StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options,
+                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) override;
+  void StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options,
+                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
+  void StartListTasks(const ListTasksRequest& request, const CallOptions& options,
+                      const core::AsyncCompletion<ListTasksResponse>& completion) override;
+  void StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options,
+                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
+  void StartCreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
+  void StartGetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
+  void StartListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) override;
+  void StartDeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+                                             const CallOptions& options,
+                                             const core::AsyncCompletion<void>& completion) override;
+
  private:
   [[nodiscard]] core::Result<std::unique_ptr<::grpc::ClientContext>> BuildContext(const CallOptions& options) const;
   [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
+  struct NativeCalls;
+  std::shared_ptr<NativeCalls> native_calls_;
   ResolvedInterface resolved_interface_;
   std::shared_ptr<RpcClient> rpc_client_;
   std::chrono::milliseconds default_timeout_;

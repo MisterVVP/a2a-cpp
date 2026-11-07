@@ -178,6 +178,7 @@ struct ClientState final {
 
   std::shared_ptr<const ClientGlobalState> global_state;
   std::atomic_size_t client_owners{1U};
+  core::AsyncScope unary_scope;
   // The first unary and streaming handles share one reactor shard so common
   // request -> stream sequences can reuse the same CURLM connection cache.
   std::mutex reactor_mutex;
@@ -192,6 +193,7 @@ struct ClientState final {
   bool primary_stream_reactor_assigned = false;
   std::condition_variable streams_finished;
   std::size_t active_streams = 0;
+  std::size_t active_unary_requests = 0;
   bool shutting_down = false;
   std::atomic<bool> suppress_stream_callbacks{false};
 };
@@ -205,6 +207,7 @@ struct StreamHeaderContext final {
 [[nodiscard]] bool IsDispatchingStreamCallback(const ClientState* state) noexcept;
 [[nodiscard]] std::string BuildCurlErrorMessage(std::string_view prefix, CURLcode code, std::string_view detail);
 [[nodiscard]] core::Result<CurlHeaderList> BuildHeaders(const std::vector<Header>& headers);
+std::size_t CaptureResponseHeader(char* contents, std::size_t size, std::size_t count, void* capture);
 [[nodiscard]] core::Result<void> ValidateStreamMetadata(StreamCallbackContext* context);
 std::size_t WriteStreamResponseHeader(char* contents, std::size_t size, std::size_t nmemb, void* user_data);
 [[nodiscard]] core::Result<void> ConfigureCurl(CURL* handle, const Request& request, const CurlHeaderList& headers,

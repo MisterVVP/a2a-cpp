@@ -31,7 +31,7 @@ class JsonRpcTransport final : public ClientTransport {
   explicit JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                             HttpStreamRequester stream_requester,
                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
-                            RequestIdGenerator id_generator = {});
+                            RequestIdGenerator id_generator = {}, HttpAsyncRequester async_requester = {});
 
   [[nodiscard]] static std::unique_ptr<JsonRpcTransport> CreateDefault(
       ResolvedInterface resolved_interface, std::chrono::milliseconds default_timeout = kDefaultTimeout,
@@ -66,7 +66,31 @@ class JsonRpcTransport final : public ClientTransport {
                                                                           const CallOptions& options) override;
   [[nodiscard]] core::Result<void> Shutdown() override;
 
+ protected:
+  [[nodiscard]] std::chrono::milliseconds DefaultAsyncTimeout() const override { return default_timeout_; }
+  void StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options,
+                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) override;
+  void StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options,
+                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
+  void StartListTasks(const ListTasksRequest& request, const CallOptions& options,
+                      const core::AsyncCompletion<ListTasksResponse>& completion) override;
+  void StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options,
+                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
+  void StartCreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
+  void StartGetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
+  void StartListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) override;
+  void StartDeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+                                             const CallOptions& options,
+                                             const core::AsyncCompletion<void>& completion) override;
+
  private:
+  [[nodiscard]] core::Result<HttpRequest> BuildUnaryRequest(std::string request_body, const CallOptions& options) const;
   [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(std::string request_body,
                                                                     const CallOptions& options) const;
 
@@ -81,6 +105,7 @@ class JsonRpcTransport final : public ClientTransport {
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
+  HttpAsyncRequester async_requester_;
   HttpStreamRequester stream_requester_;
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;

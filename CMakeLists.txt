@@ -36,6 +36,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 endif()
 
+find_package(Threads REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(simdjson CONFIG REQUIRED)
 if(simdjson_VERSION VERSION_LESS 3.0)

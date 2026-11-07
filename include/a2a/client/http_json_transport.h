@@ -39,6 +39,8 @@ struct HttpClientResponse final {
   std::string body;
 };
 
+using HttpAsyncRequester = std::function<core::Result<core::AsyncHandle>(
+    const HttpRequest& request, core::Completion<HttpClientResponse> completion)>;
 using HttpRequester = std::function<core::Result<HttpClientResponse>(const HttpRequest& request)>;
 using HttpStreamMetadataHandler = std::function<core::Result<void>(const HttpClientResponse& response)>;
 using HttpStreamChunkHandler = std::function<core::Result<void>(std::string_view chunk)>;
@@ -65,7 +67,8 @@ class HttpJsonTransport final : public ClientTransport {
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              HttpStreamRequester stream_requester,
-                             std::chrono::milliseconds default_timeout = kDefaultTimeout);
+                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
+                             HttpAsyncRequester async_requester = {});
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              std::chrono::milliseconds default_timeout = kDefaultTimeout);
@@ -102,7 +105,32 @@ class HttpJsonTransport final : public ClientTransport {
                                                                           const CallOptions& options) override;
   [[nodiscard]] core::Result<void> Shutdown() override;
 
+ protected:
+  [[nodiscard]] std::chrono::milliseconds DefaultAsyncTimeout() const override { return default_timeout_; }
+  void StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options,
+                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) override;
+  void StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options,
+                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
+  void StartListTasks(const ListTasksRequest& request, const CallOptions& options,
+                      const core::AsyncCompletion<ListTasksResponse>& completion) override;
+  void StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options,
+                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
+  void StartCreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
+  void StartGetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
+  void StartListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) override;
+  void StartDeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+                                             const CallOptions& options,
+                                             const core::AsyncCompletion<void>& completion) override;
+
  private:
+  [[nodiscard]] core::Result<HttpRequest> BuildUnaryRequest(HttpOperation operation, std::string body,
+                                                            const CallOptions& options) const;
   [[nodiscard]] core::Result<HttpClientResponse> SendRequest(HttpOperation operation, std::string body,
                                                              const CallOptions& options) const;
 
@@ -112,6 +140,7 @@ class HttpJsonTransport final : public ClientTransport {
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
+  HttpAsyncRequester async_requester_;
   HttpStreamRequester stream_requester_;
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;

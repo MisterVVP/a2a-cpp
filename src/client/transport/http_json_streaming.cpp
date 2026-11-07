@@ -335,6 +335,7 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
 }
 
 core::Result<void> HttpJsonTransport::Shutdown() {
+  async_scope_->Shutdown();
   std::shared_ptr<a2a::http::Client> async_client;
   {
     std::lock_guard lock(*async_client_mutex_);

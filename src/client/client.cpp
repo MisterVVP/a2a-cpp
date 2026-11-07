@@ -34,6 +34,7 @@ StreamHandle::State::CallbackExecutionScope::CallbackExecutionScope(State& state
   std::lock_guard lock(state_.completion_mutex);
   state_.callback_thread_id = std::this_thread::get_id();
   StreamCallbackThreadContext::Enter();
+  core::async_detail::EnterCallback();
 }
 
 StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
@@ -42,6 +43,7 @@ StreamHandle::State::CallbackExecutionScope::~CallbackExecutionScope() {
     state_.callback_thread_id = {};
   }
   StreamCallbackThreadContext::Leave();
+  core::async_detail::LeaveCallback();
   state_.completion_condition.notify_all();
 }
 
@@ -132,12 +134,13 @@ A2AClient::A2AClient(std::unique_ptr<ClientTransport> transport) : transport_(st
 
 core::Result<lf::a2a::v1::SendMessageResponse> A2AClient::SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                       const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kSendMessage, .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->SendMessage(request, options);
+  const auto result = transport->SendMessage(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -145,24 +148,26 @@ core::Result<lf::a2a::v1::SendMessageResponse> A2AClient::SendMessage(const lf::
 
 core::Result<lf::a2a::v1::Task> A2AClient::GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                    const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kGetTask, .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->GetTask(request, options);
+  const auto result = transport->GetTask(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
 }
 
 core::Result<ListTasksResponse> A2AClient::ListTasks(const ListTasksRequest& request, const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kListTasks, .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->ListTasks(request, options);
+  const auto result = transport->ListTasks(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -170,12 +175,13 @@ core::Result<ListTasksResponse> A2AClient::ListTasks(const ListTasksRequest& req
 
 core::Result<lf::a2a::v1::Task> A2AClient::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                       const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kCancelTask, .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->CancelTask(request, options);
+  const auto result = transport->CancelTask(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -183,13 +189,14 @@ core::Result<lf::a2a::v1::Task> A2AClient::CancelTask(const lf::a2a::v1::CancelT
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kCreateTaskPushNotificationConfig,
                                   .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->CreateTaskPushNotificationConfig(request, options);
+  const auto result = transport->CreateTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -197,13 +204,14 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::CreateTaskPushN
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kGetTaskPushNotificationConfig,
                                   .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->GetTaskPushNotificationConfig(request, options);
+  const auto result = transport->GetTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -211,13 +219,14 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> A2AClient::GetTaskPushNoti
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> A2AClient::ListTaskPushNotificationConfigs(
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kListTaskPushNotificationConfigs,
                                   .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->ListTaskPushNotificationConfigs(request, options);
+  const auto result = transport->ListTaskPushNotificationConfigs(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -225,13 +234,14 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> A2AClient::Li
 
 core::Result<void> A2AClient::DeleteTaskPushNotificationConfig(
     const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = core::protocol_methods::kDeleteTaskPushNotificationConfig,
                                   .options = &options};
   RunBeforeInterceptors(context);
-  const auto result = transport_->DeleteTaskPushNotificationConfig(request, options);
+  const auto result = transport->DeleteTaskPushNotificationConfig(request, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -239,12 +249,13 @@ core::Result<void> A2AClient::DeleteTaskPushNotificationConfig(
 
 core::Result<std::unique_ptr<StreamHandle>> A2AClient::SendStreamingMessage(
     const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer, const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = "SendStreamingMessage", .options = &options};
   RunBeforeInterceptors(context);
-  auto result = transport_->SendStreamingMessage(request, observer, options);
+  auto result = transport->SendStreamingMessage(request, observer, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -253,12 +264,13 @@ core::Result<std::unique_ptr<StreamHandle>> A2AClient::SendStreamingMessage(
 core::Result<std::unique_ptr<StreamHandle>> A2AClient::SubscribeTask(const lf::a2a::v1::GetTaskRequest& request,
                                                                      StreamObserver& observer,
                                                                      const CallOptions& options) {
-  if (transport_ == nullptr) {
+  auto transport = TransportSnapshot();
+  if (transport == nullptr) {
     return core::Error::Internal("Client transport is not configured");
   }
   const ClientCallContext context{.operation = "SubscribeTask", .options = &options};
   RunBeforeInterceptors(context);
-  auto result = transport_->SubscribeTask(request, observer, options);
+  auto result = transport->SubscribeTask(request, observer, options);
   RunAfterInterceptors(context,
                        result.ok() ? ClientCallResult{} : ClientCallResult{.ok = false, .error = result.error()});
   return result;
@@ -272,13 +284,31 @@ void A2AClient::AddInterceptor(std::shared_ptr<ClientInterceptor> interceptor) {
   interceptors_.push_back(std::move(interceptor));
 }
 
+std::shared_ptr<ClientTransport> A2AClient::TransportSnapshot() const {
+  std::lock_guard lock(transport_mutex_);
+  return transport_;
+}
+
 core::Result<void> A2AClient::Destroy() {
-  if (transport_ == nullptr) {
+  std::shared_ptr<ClientTransport> transport;
+  {
+    std::lock_guard lock(transport_mutex_);
+    if (transport_) {
+      closing_transport_ = std::move(transport_);
+    }
+    transport = closing_transport_;
+  }
+  if (!transport) {
     return {};
   }
-  const auto shutdown = transport_->Shutdown();
-  transport_.reset();
-  return shutdown;
+  const auto result = transport->Shutdown();
+  // Keep reentrant shutdown observable by a later external Destroy(), which
+  // must still drain callbacks. Concurrent external callers share the drain.
+  if (!core::async_detail::IsCallbackThread()) {
+    std::lock_guard lock(transport_mutex_);
+    closing_transport_.reset();
+  }
+  return result;
 }
 
 void A2AClient::RunBeforeInterceptors(const ClientCallContext& context) const {
