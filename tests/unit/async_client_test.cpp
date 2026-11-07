@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 
+#include "a2a/client/async_client.h"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -11,9 +13,11 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "a2a/client/async_transport.h"
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/core/async_operation.h"
@@ -23,6 +27,19 @@ namespace {
 using namespace a2a;
 using client::ListTasksRequest;
 using client::ListTasksResponse;
+// Owning clients/scopes have stable identities; callback facades are value views.
+static_assert(!std::is_copy_constructible_v<client::A2AClient>);
+static_assert(!std::is_copy_assignable_v<client::A2AClient>);
+static_assert(!std::is_move_constructible_v<client::A2AClient>);
+static_assert(!std::is_move_assignable_v<client::A2AClient>);
+static_assert(std::is_copy_constructible_v<client::AsyncClient>);
+static_assert(std::is_copy_assignable_v<client::AsyncClient>);
+static_assert(std::is_move_constructible_v<client::AsyncClient>);
+static_assert(std::is_move_assignable_v<client::AsyncClient>);
+static_assert(!std::is_copy_constructible_v<client::AsyncClientTransport>);
+static_assert(!std::is_move_constructible_v<client::AsyncClientTransport>);
+static_assert(!std::is_copy_constructible_v<core::AsyncScope>);
+static_assert(!std::is_move_constructible_v<core::AsyncScope>);
 constexpr auto kWait = std::chrono::seconds(5);
 constexpr auto kTimeout = std::chrono::milliseconds(10);
 constexpr auto kCancelled = "CANCELLED";
@@ -42,17 +59,80 @@ constexpr std::size_t kCapacity = 4096;
 
 void ExpectBackgroundCallback(std::thread::id caller) { EXPECT_NE(std::this_thread::get_id(), caller); }
 
-class FakeTransport final : public client::ClientTransport {
+class FakeAsyncTransport final : public client::AsyncClientTransport {
  public:
   bool hold = false;
+  std::optional<core::AsyncCompletion<lf::a2a::v1::Task>> pending;
+
+ protected:
+  void StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const client::CallOptions& options,
+                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete(lf::a2a::v1::SendMessageResponse{});
+  }
+  void StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const client::CallOptions& options,
+                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override {
+    (void)request;
+    (void)options;
+    if (hold) {
+      pending = completion;
+      return;
+    }
+    completion.Complete(lf::a2a::v1::Task{});
+  }
+  void StartListTasks(const ListTasksRequest& request, const client::CallOptions& options,
+                      const core::AsyncCompletion<ListTasksResponse>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete(ListTasksResponse{});
+  }
+  void StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const client::CallOptions& options,
+                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete(lf::a2a::v1::Task{});
+  }
+  void StartCreateTaskPushNotificationConfig(
+      const lf::a2a::v1::TaskPushNotificationConfig& request, const client::CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete(lf::a2a::v1::TaskPushNotificationConfig{});
+  }
+  void StartGetTaskPushNotificationConfig(
+      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const client::CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete(lf::a2a::v1::TaskPushNotificationConfig{});
+  }
+  void StartListTaskPushNotificationConfigs(
+      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const client::CallOptions& options,
+      const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete(lf::a2a::v1::ListTaskPushNotificationConfigsResponse{});
+  }
+  void StartDeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
+                                             const client::CallOptions& options,
+                                             const core::AsyncCompletion<void>& completion) override {
+    (void)request;
+    (void)options;
+    completion.Complete({});
+  }
+};
+class FakeTransport final : public client::ClientTransport {
+ public:
   std::function<void()> on_shutdown;
+  std::function<void()> on_async;
   core::Result<void> Shutdown() override {
     if (on_shutdown) {
       on_shutdown();
     }
-    return ClientTransport::Shutdown();
+    async->Shutdown();
+    return {};
   }
-  std::optional<core::AsyncCompletion<lf::a2a::v1::Task>> pending;
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                              const client::CallOptions& options) override {
     (void)request;
@@ -119,62 +199,12 @@ class FakeTransport final : public client::ClientTransport {
     return core::Error::Internal(kFailure);
   }
 
- protected:
-  void StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const client::CallOptions& options,
-                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete(lf::a2a::v1::SendMessageResponse{});
-  }
-  void StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const client::CallOptions& options,
-                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override {
-    (void)request;
-    (void)options;
-    if (hold) {
-      pending = completion;
-      return;
+  std::shared_ptr<FakeAsyncTransport> async = std::make_shared<FakeAsyncTransport>();
+  [[nodiscard]] std::shared_ptr<client::AsyncClientTransport> Async() const override {
+    if (on_async) {
+      on_async();
     }
-    completion.Complete(lf::a2a::v1::Task{});
-  }
-  void StartListTasks(const ListTasksRequest& request, const client::CallOptions& options,
-                      const core::AsyncCompletion<ListTasksResponse>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete(ListTasksResponse{});
-  }
-  void StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const client::CallOptions& options,
-                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete(lf::a2a::v1::Task{});
-  }
-  void StartCreateTaskPushNotificationConfig(
-      const lf::a2a::v1::TaskPushNotificationConfig& request, const client::CallOptions& options,
-      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete(lf::a2a::v1::TaskPushNotificationConfig{});
-  }
-  void StartGetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const client::CallOptions& options,
-      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete(lf::a2a::v1::TaskPushNotificationConfig{});
-  }
-  void StartListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const client::CallOptions& options,
-      const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete(lf::a2a::v1::ListTaskPushNotificationConfigsResponse{});
-  }
-  void StartDeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-                                             const client::CallOptions& options,
-                                             const core::AsyncCompletion<void>& completion) override {
-    (void)request;
-    (void)options;
-    completion.Complete({});
+    return async;
   }
 };
 
@@ -184,12 +214,12 @@ TEST(AsyncClientContractTest, SendMessageCompletesOnceAwayFromCaller) {
   auto future = result.get_future();
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
-  auto started = client.SendMessageAsync(lf::a2a::v1::SendMessageRequest{},
-                                         [&](core::Result<lf::a2a::v1::SendMessageResponse> response) {
-                                           ExpectBackgroundCallback(caller);
-                                           ++calls;
-                                           result.set_value(std::move(response));
-                                         });
+  auto started = client.Async().SendMessage(lf::a2a::v1::SendMessageRequest{},
+                                            [&](core::Result<lf::a2a::v1::SendMessageResponse> response) {
+                                              ExpectBackgroundCallback(caller);
+                                              ++calls;
+                                              result.set_value(std::move(response));
+                                            });
   ASSERT_TRUE(started.ok());
   ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
   EXPECT_TRUE(future.get().ok());
@@ -204,7 +234,7 @@ TEST(AsyncClientContractTest, GetTaskCompletesOnceAwayFromCaller) {
   auto future = result.get_future();
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
-  auto started = client.GetTaskAsync(lf::a2a::v1::GetTaskRequest{}, [&](core::Result<lf::a2a::v1::Task> response) {
+  auto started = client.Async().GetTask(lf::a2a::v1::GetTaskRequest{}, [&](core::Result<lf::a2a::v1::Task> response) {
     ExpectBackgroundCallback(caller);
     ++calls;
     result.set_value(std::move(response));
@@ -223,7 +253,7 @@ TEST(AsyncClientContractTest, ListTasksCompletesOnceAwayFromCaller) {
   auto future = result.get_future();
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
-  auto started = client.ListTasksAsync(ListTasksRequest{}, [&](core::Result<ListTasksResponse> response) {
+  auto started = client.Async().ListTasks(ListTasksRequest{}, [&](core::Result<ListTasksResponse> response) {
     ExpectBackgroundCallback(caller);
     ++calls;
     result.set_value(std::move(response));
@@ -243,7 +273,7 @@ TEST(AsyncClientContractTest, CancelTaskCompletesOnceAwayFromCaller) {
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
   auto started =
-      client.CancelTaskAsync(lf::a2a::v1::CancelTaskRequest{}, [&](core::Result<lf::a2a::v1::Task> response) {
+      client.Async().CancelTask(lf::a2a::v1::CancelTaskRequest{}, [&](core::Result<lf::a2a::v1::Task> response) {
         ExpectBackgroundCallback(caller);
         ++calls;
         result.set_value(std::move(response));
@@ -262,7 +292,7 @@ TEST(AsyncClientContractTest, CreateTaskPushNotificationConfigCompletesOnceAwayF
   auto future = result.get_future();
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
-  auto started = client.CreateTaskPushNotificationConfigAsync(
+  auto started = client.Async().CreateTaskPushNotificationConfig(
       lf::a2a::v1::TaskPushNotificationConfig{}, [&](core::Result<lf::a2a::v1::TaskPushNotificationConfig> response) {
         ExpectBackgroundCallback(caller);
         ++calls;
@@ -283,12 +313,12 @@ TEST(AsyncClientContractTest, GetTaskPushNotificationConfigCompletesOnceAwayFrom
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
   auto started =
-      client.GetTaskPushNotificationConfigAsync(lf::a2a::v1::GetTaskPushNotificationConfigRequest{},
-                                                [&](core::Result<lf::a2a::v1::TaskPushNotificationConfig> response) {
-                                                  ExpectBackgroundCallback(caller);
-                                                  ++calls;
-                                                  result.set_value(std::move(response));
-                                                });
+      client.Async().GetTaskPushNotificationConfig(lf::a2a::v1::GetTaskPushNotificationConfigRequest{},
+                                                   [&](core::Result<lf::a2a::v1::TaskPushNotificationConfig> response) {
+                                                     ExpectBackgroundCallback(caller);
+                                                     ++calls;
+                                                     result.set_value(std::move(response));
+                                                   });
   ASSERT_TRUE(started.ok());
   ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
   EXPECT_TRUE(future.get().ok());
@@ -303,7 +333,7 @@ TEST(AsyncClientContractTest, ListTaskPushNotificationConfigsCompletesOnceAwayFr
   auto future = result.get_future();
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
-  auto started = client.ListTaskPushNotificationConfigsAsync(
+  auto started = client.Async().ListTaskPushNotificationConfigs(
       lf::a2a::v1::ListTaskPushNotificationConfigsRequest{},
       [&](core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> response) {
         ExpectBackgroundCallback(caller);
@@ -324,18 +354,118 @@ TEST(AsyncClientContractTest, DeleteTaskPushNotificationConfigCompletesOnceAwayF
   auto future = result.get_future();
   const auto caller = std::this_thread::get_id();
   std::atomic<int> calls{0};
-  auto started = client.DeleteTaskPushNotificationConfigAsync(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest{},
-                                                              [&](core::Result<void> response) {
-                                                                ExpectBackgroundCallback(caller);
-                                                                ++calls;
-                                                                result.set_value(std::move(response));
-                                                              });
+  auto started = client.Async().DeleteTaskPushNotificationConfig(lf::a2a::v1::DeleteTaskPushNotificationConfigRequest{},
+                                                                 [&](core::Result<void> response) {
+                                                                   ExpectBackgroundCallback(caller);
+                                                                   ++calls;
+                                                                   result.set_value(std::move(response));
+                                                                 });
   ASSERT_TRUE(started.ok());
   ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
   EXPECT_TRUE(future.get().ok());
   started.value().Wait();
   EXPECT_FALSE(started.value().IsActive());
   EXPECT_EQ(calls.load(), 1);
+}
+
+void ExpectCancelledTask(std::future<core::Result<lf::a2a::v1::Task>>& future) {
+  ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
+  auto result = future.get();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), kCancelled);
+}
+
+TEST(AsyncClientContractTest, FacadeCopiesObserveOwnerDestructionAndCancelPendingCalls) {
+  auto transport = std::make_unique<FakeTransport>();
+  transport->async->hold = true;
+  auto owner = std::make_unique<client::A2AClient>(std::move(transport));
+  auto view = owner->Async();
+  auto copied_view = view;
+  std::promise<core::Result<lf::a2a::v1::Task>> result;
+  auto future = result.get_future();
+  auto operation = copied_view.GetTask({}, [&](auto value) { result.set_value(std::move(value)); });
+  ASSERT_TRUE(operation.ok());
+  owner.reset();
+  ExpectCancelledTask(future);
+  operation.value().Wait();
+  EXPECT_FALSE(view.GetTask({}, [](auto value) { (void)value; }).ok());
+  EXPECT_FALSE(copied_view.GetTask({}, [](auto value) { (void)value; }).ok());
+}
+
+class CountingInterceptor final : public client::ClientInterceptor {
+ public:
+  int before = 0;
+  int after = 0;
+  void BeforeCall(const client::ClientCallContext& context) override {
+    (void)context;
+    ++before;
+  }
+  void AfterCall(const client::ClientCallContext& context, const client::ClientCallResult& result) override {
+    (void)context;
+    (void)result;
+    ++after;
+  }
+};
+class RegisteringInterceptor final : public client::ClientInterceptor {
+ public:
+  RegisteringInterceptor(client::A2AClient& owner, std::shared_ptr<CountingInterceptor> next)
+      : owner_(owner), next_(std::move(next)) {}
+  void BeforeCall(const client::ClientCallContext& context) override {
+    (void)context;
+    if (!std::exchange(registered_, true)) {
+      owner_.AddInterceptor(next_);
+    }
+  }
+
+ private:
+  client::A2AClient& owner_;
+  std::shared_ptr<CountingInterceptor> next_;
+  bool registered_ = false;
+};
+void ExpectCallCounts(const CountingInterceptor& interceptor, int expected) {
+  EXPECT_EQ(interceptor.before, expected);
+  EXPECT_EQ(interceptor.after, expected);
+}
+TEST(AsyncClientContractTest, InterceptorCanRegisterAnotherWithoutDeadlockOrUnpairedAfter) {
+  client::A2AClient owner(std::make_unique<FakeTransport>());
+  auto counter = std::make_shared<CountingInterceptor>();
+  owner.AddInterceptor(std::make_shared<RegisteringInterceptor>(owner, counter));
+  EXPECT_TRUE(owner.GetTask({}).ok());
+  ExpectCallCounts(*counter, 0);
+  auto operation = owner.Async().GetTask({}, [](auto value) { (void)value; });
+  ASSERT_TRUE(operation.ok());
+  operation.value().Wait();
+  ExpectCallCounts(*counter, 1);
+}
+TEST(AsyncClientContractTest, ThrowingAsyncProviderPairsInterceptorsWithoutCallingCompletion) {
+  auto transport = std::make_unique<FakeTransport>();
+  auto* fake = transport.get();
+  client::A2AClient owner(std::move(transport));
+  auto counter = std::make_shared<CountingInterceptor>();
+  owner.AddInterceptor(counter);
+  fake->on_async = [] { throw std::runtime_error(kFailure); };
+  bool callback_called = false;
+  auto operation = owner.Async().GetTask({}, [&](auto value) {
+    (void)value;
+    callback_called = true;
+  });
+  fake->on_async = {};
+  EXPECT_FALSE(operation.ok());
+  EXPECT_FALSE(callback_called);
+  ExpectCallCounts(*counter, 1);
+}
+
+TEST(AsyncClientContractTest, FacadeCanBeMovedAndReassigned) {
+  client::A2AClient owner(std::make_unique<FakeTransport>());
+  auto original = owner.Async();
+  auto moved = std::move(original);
+  original = owner.Async();
+  auto operation = moved.GetTask({}, [](auto value) { (void)value; });
+  ASSERT_TRUE(operation.ok());
+  operation.value().Wait();
+  auto reassigned = original.GetTask({}, [](auto value) { (void)value; });
+  ASSERT_TRUE(reassigned.ok());
+  reassigned.value().Wait();
 }
 
 TEST(AsyncClientContractTest, CancellationPropagatesBeforeNetworkRegistration) {
@@ -358,39 +488,40 @@ TEST(AsyncClientContractTest, CancellationPropagatesBeforeNetworkRegistration) {
 TEST(AsyncClientContractTest, NonpositiveDeadlineSkipsTransportInitiation) {
   auto transport = std::make_unique<FakeTransport>();
   auto* fake = transport.get();
-  fake->hold = true;
+  fake->async->hold = true;
   client::A2AClient client(std::move(transport));
   std::promise<core::Result<lf::a2a::v1::Task>> result;
   auto future = result.get_future();
   client::CallOptions options;
   options.timeout = std::chrono::milliseconds::zero();
-  auto started = client.GetTaskAsync({}, [&](auto value) { result.set_value(std::move(value)); }, options);
+  auto started = client.Async().GetTask({}, [&](auto value) { result.set_value(std::move(value)); }, options);
   ASSERT_TRUE(started.ok());
   ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
   auto response = future.get();
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().protocol_code(), kDeadline);
-  EXPECT_FALSE(fake->pending.has_value());
+  EXPECT_FALSE(fake->async->pending.has_value());
   started.value().Wait();
 }
 
 TEST(AsyncClientContractTest, DeadlineWinsAgainstLateTransportResult) {
   auto transport = std::make_unique<FakeTransport>();
   auto* fake = transport.get();
-  fake->hold = true;
+  fake->async->hold = true;
   client::A2AClient client(std::move(transport));
   std::promise<core::Result<lf::a2a::v1::Task>> result;
   auto future = result.get_future();
   client::CallOptions options;
   options.timeout = kTimeout;
-  auto started = client.GetTaskAsync({}, [&](auto value) { result.set_value(std::move(value)); }, options);
+  auto started = client.Async().GetTask({}, [&](auto value) { result.set_value(std::move(value)); }, options);
   ASSERT_TRUE(started.ok());
   ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
   auto response = future.get();
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().protocol_code(), kDeadline);
-  if (fake->pending.has_value()) {
-    fake->pending->Complete(lf::a2a::v1::Task{});
+  auto& pending = fake->async->pending;
+  if (pending.has_value()) {
+    pending->Complete(lf::a2a::v1::Task{});
   }
   started.value().Wait();
 }
@@ -441,18 +572,18 @@ class RecordingInterceptor final : public client::ClientInterceptor {
 
 TEST(AsyncClientContractTest, DestroyDrainsInterceptorsBeforeCompletionAndRejectsNewCalls) {
   auto transport = std::make_unique<FakeTransport>();
-  transport->hold = true;
+  transport->async->hold = true;
   client::A2AClient client(std::move(transport));
   std::vector<int> order;
   client.AddInterceptor(std::make_shared<RecordingInterceptor>(order));
-  auto started = client.GetTaskAsync({}, [&](auto result) {
+  auto started = client.Async().GetTask({}, [&](auto result) {
     EXPECT_FALSE(result.ok());
     order.push_back(kCompletionEvent);
   });
   ASSERT_TRUE(started.ok());
   EXPECT_TRUE(client.Destroy().ok());
   EXPECT_EQ(order, (std::vector<int>{kBeforeEvent, kAfterEvent, kCompletionEvent}));
-  EXPECT_FALSE(client.GetTaskAsync({}, [](auto result) { (void)result; }).ok());
+  EXPECT_FALSE(client.Async().GetTask({}, [](auto result) { (void)result; }).ok());
 }
 
 TEST(AsyncClientContractTest, ConcurrentDestroyCallsBothDrainTheSameCallbacks) {
@@ -470,7 +601,7 @@ TEST(AsyncClientContractTest, ConcurrentDestroyCallsBothDrainTheSameCallbacks) {
     }
   };
   client::A2AClient client(std::move(transport));
-  auto operation = client.GetTaskAsync({}, [&](auto result) {
+  auto operation = client.Async().GetTask({}, [&](auto result) {
     (void)result;
     entered.set_value();
     release_future.wait();
@@ -495,7 +626,7 @@ TEST(AsyncClientContractTest, CompletionCanDestroyClientAndThrow) {
   auto client = std::make_unique<client::A2AClient>(std::make_unique<FakeTransport>());
   std::promise<void> done;
   auto future = done.get_future();
-  auto started = client->GetTaskAsync({}, [&](auto result) {
+  auto started = client->Async().GetTask({}, [&](auto result) {
     EXPECT_TRUE(result.ok());
     client.reset();
     done.set_value();
@@ -510,10 +641,10 @@ TEST(AsyncClientContractTest, DestructionContainsCustomShutdownExceptions) {
   std::promise<core::Result<lf::a2a::v1::Task>> result;
   auto future = result.get_future();
   auto transport = std::make_unique<FakeTransport>();
-  transport->hold = true;
+  transport->async->hold = true;
   transport->on_shutdown = [] { throw std::runtime_error(kFailure); };
   auto client = std::make_unique<client::A2AClient>(std::move(transport));
-  auto operation = client->GetTaskAsync({}, [&](auto value) { result.set_value(std::move(value)); });
+  auto operation = client->Async().GetTask({}, [&](auto value) { result.set_value(std::move(value)); });
   ASSERT_TRUE(operation.ok());
   client.reset();
   ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);

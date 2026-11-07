@@ -8,6 +8,7 @@
 #include <thread>
 #include <utility>
 
+#include "a2a/client/async_transport.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
@@ -335,7 +336,9 @@ core::Result<std::unique_ptr<StreamHandle>> HttpJsonTransport::SubscribeTask(con
 }
 
 core::Result<void> HttpJsonTransport::Shutdown() {
-  async_scope_->Shutdown();
+  if (async_transport_) {
+    async_transport_->Shutdown();
+  }
   std::shared_ptr<a2a::http::Client> async_client;
   {
     std::lock_guard lock(*async_client_mutex_);

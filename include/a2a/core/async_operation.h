@@ -10,6 +10,7 @@
 #include <mutex>
 #include <utility>
 
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/result.h"
 
 namespace a2a::core {
@@ -22,7 +23,7 @@ void EnterCallback() noexcept;
 void LeaveCallback() noexcept;
 [[nodiscard]] bool IsCallbackThread() noexcept;
 struct ScopeState;
-class Operation : public std::enable_shared_from_this<Operation> {
+class Operation : public std::enable_shared_from_this<Operation>, private NonCopyableOrMovable {
  public:
   virtual ~Operation() = default;
   virtual void Fail(Error error) = 0;

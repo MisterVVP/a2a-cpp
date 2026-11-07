@@ -29,17 +29,14 @@ namespace {
 using json_rpc_internal::BuildJsonRpcEnvelope;
 using json_rpc_internal::BuildJsonRpcEnvelopeError;
 using json_rpc_internal::JoinUrl;
+using json_rpc_internal::ParseListTasksResult;
 using json_rpc_internal::ParseResponseResult;
 using json_rpc_internal::ParseResultMessage;
 using json_rpc_internal::ToClientHttpResponse;
 using json_rpc_internal::ToSharedHttpRequest;
+using json_rpc_internal::ValidateJsonRpcHttpStatus;
 using json_rpc_internal::ValidateResponseVersion;
 
-template <typename T>
-struct PreparedRpc final {
-  std::string body;
-  std::function<core::Result<T>(const HttpClientResponse&)> decode;
-};
 constexpr const char* kPageSizeField = "pageSize";
 constexpr const char* kPageTokenField = "pageToken";
 constexpr const char* kEmptyRequestId = "JSON-RPC request id generator returned an empty id";
@@ -48,7 +45,6 @@ constexpr const char* kCancelTaskIdRequired = "CancelTaskRequest.id is required"
 constexpr const char* kGetPushConfigIdRequired = "GetTaskPushNotificationConfigRequest.id is required";
 constexpr const char* kDeletePushConfigIdRequired = "DeleteTaskPushNotificationConfigRequest.id is required";
 constexpr const char* kMissingRequester = "HTTP requester is not configured";
-constexpr const char* kMissingAsyncRequester = "HTTP async requester is not configured";
 constexpr std::string_view kDefaultMtlsUnsupportedMessage =
     "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
 
@@ -71,33 +67,6 @@ std::string BuildDefaultRequestId() {
   return "jsonrpc-" + std::to_string(current);
 }
 
-core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response) {
-  if (response.status_code >= core::http::kSuccessStatusMin && response.status_code <= core::http::kSuccessStatusMax) {
-    return {};
-  }
-  return BuildJsonRpcEnvelopeError("JSON-RPC response received with non-success HTTP status", response);
-}
-
-core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
-                                                                  std::string_view expected_id) {
-  const auto result_json = ParseResponseResult(response, expected_id);
-  if (!result_json.ok()) {
-    return result_json.error();
-  }
-  const auto status = ValidateJsonRpcHttpStatus(response);
-  if (!status.ok()) {
-    return status.error();
-  }
-  lf::a2a::v1::ListTasksResponse result;
-  const auto parsed = core::JsonToMessage(
-      result_json.value(), &result,
-      {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
-  if (!parsed.ok()) {
-    return parsed.error().WithTransport(json_rpc_internal::kTransportName).WithHttpStatus(response.status_code);
-  }
-  return result;
-}
-
 }  // namespace
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
@@ -110,26 +79,21 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
                                    RequestIdGenerator id_generator, HttpAsyncRequester async_requester)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
-      async_requester_(std::move(async_requester)),
       stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout),
-      id_generator_(std::move(id_generator)) {
-  if (id_generator_ == nullptr) {
-    id_generator_ = BuildDefaultRequestId;
-  }
+      id_generator_(std::make_shared<RequestIdGenerator>(id_generator ? std::move(id_generator)
+                                                                      : RequestIdGenerator(BuildDefaultRequestId))) {
+  async_transport_ = json_rpc_internal::MakeAsyncTransport(resolved_interface_, std::move(async_requester),
+                                                           default_timeout_, id_generator_);
 }
 
 std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                   std::chrono::milliseconds default_timeout,
                                                                   RequestIdGenerator id_generator) {
   auto default_http_client = std::make_shared<a2a::http::Client>();
-  auto transport =
-      std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client),
-                                         HttpStreamRequester{}, default_timeout, std::move(id_generator));
-  transport->async_requester_ =
-      [client = default_http_client](
-          const HttpRequest& request,
-          core::Completion<HttpClientResponse> completion) -> core::Result<core::AsyncHandle> {
+  auto async_requester = [client = default_http_client](
+                             const HttpRequest& request,
+                             core::Completion<HttpClientResponse> completion) -> core::Result<core::AsyncHandle> {
     if (request.mtls) {
       return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
     }
@@ -142,52 +106,16 @@ std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterf
                                       }
                                     });
   };
+  auto transport = std::make_unique<JsonRpcTransport>(
+      std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client), HttpStreamRequester{},
+      default_timeout, std::move(id_generator), std::move(async_requester));
   transport->default_async_stream_client_ = std::move(default_http_client);
   return transport;
 }
 
 core::Result<HttpRequest> JsonRpcTransport::BuildUnaryRequest(std::string request_body,
                                                               const CallOptions& options) const {
-  if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {
-    return core::Error::Validation("JsonRpcTransport requires a JSON-RPC interface");
-  }
-  if (resolved_interface_.url.empty()) {
-    return core::Error::Validation("Resolved JSON-RPC interface URL is required");
-  }
-
-  HttpRequest http_request;
-  http_request.method = std::string(core::http::kMethodPost);
-  http_request.url = JoinUrl(resolved_interface_.url);
-  http_request.body = std::move(request_body);
-  http_request.timeout = options.timeout.value_or(default_timeout_);
-  http_request.headers = options.headers;
-  http_request.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  http_request.headers[std::string(core::http::kAcceptHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  http_request.tls = options.tls;
-  http_request.mtls = options.mtls;
-
-  if (!options.extensions.empty()) {
-    http_request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
-  }
-  if (options.auth_hook) {
-    options.auth_hook(http_request.headers);
-  }
-  if (options.credential_provider != nullptr) {
-    const auto applied =
-        ApplyCredentialProvider(*options.credential_provider, options.auth_context, &http_request.headers);
-    if (!applied.ok()) {
-      return applied.error();
-    }
-  }
-
-  const auto version = internal::ApplyProtocolVersion(options, http_request.headers);
-  if (!version.ok()) {
-    return version.error();
-  }
-
-  return http_request;
+  return json_rpc_internal::BuildUnaryRequest(resolved_interface_, default_timeout_, std::move(request_body), options);
 }
 
 core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
@@ -218,7 +146,7 @@ core::Result<std::string> JsonRpcTransport::InvokeForResultJson(std::string_view
     return core::Error::Validation("JSON-RPC method name is required");
   }
 
-  const std::string request_id = id_generator_();
+  const std::string request_id = (*id_generator_)();
   if (request_id.empty()) {
     return core::Error::Internal(kEmptyRequestId);
   }
@@ -287,7 +215,7 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
     (*params.mutable_fields())[kPageTokenField].set_string_value(request.page_token);
   }
 
-  const std::string request_id = id_generator_();
+  const std::string request_id = (*id_generator_)();
   if (request_id.empty()) {
     return core::Error::Internal(kEmptyRequestId);
   }
@@ -398,575 +326,6 @@ core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
     return parsed_empty.error();
   }
   return {};
-}
-
-void JsonRpcTransport::StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options,
-                                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<lf::a2a::v1::SendMessageResponse>> {
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kSendMessage, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<lf::a2a::v1::SendMessageResponse>{
-        .body = envelope_json.value(),
-        .decode =
-            [request_id](const HttpClientResponse& input_response) -> core::Result<lf::a2a::v1::SendMessageResponse> {
-          const auto parsed_result = ParseResponseResult(input_response, request_id);
-          if (!parsed_result.ok()) {
-            return parsed_result.error();
-          }
-          const auto status = ValidateJsonRpcHttpStatus(input_response);
-          if (!status.ok()) {
-            return status.error();
-          }
-          const auto& result = parsed_result.value();
-
-          const auto response = ParseResultMessage<lf::a2a::v1::SendMessageResponse>(result, core::http::kStatusOk);
-          if (!response.ok()) {
-            return response.error();
-          }
-          return response.value();
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options,
-                                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<lf::a2a::v1::Task>> {
-    if (request.id().empty()) {
-      return core::Error::Validation(kGetTaskIdRequired);
-    }
-
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kGetTask, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<lf::a2a::v1::Task>{
-        .body = envelope_json.value(),
-        .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<lf::a2a::v1::Task> {
-          const auto parsed_result = ParseResponseResult(input_response, request_id);
-          if (!parsed_result.ok()) {
-            return parsed_result.error();
-          }
-          const auto status = ValidateJsonRpcHttpStatus(input_response);
-          if (!status.ok()) {
-            return status.error();
-          }
-          const auto& result = parsed_result.value();
-          const auto response = ParseResultMessage<lf::a2a::v1::Task>(result, core::http::kStatusOk);
-          if (!response.ok()) {
-            return response.error();
-          }
-          return response.value();
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartListTasks(const ListTasksRequest& request, const CallOptions& options,
-                                      const core::AsyncCompletion<ListTasksResponse>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<ListTasksResponse>> {
-    google::protobuf::Struct params;
-    if (request.page_size > 0) {
-      (*params.mutable_fields())[kPageSizeField].set_number_value(static_cast<double>(request.page_size));
-    }
-    if (!request.page_token.empty()) {
-      (*params.mutable_fields())[kPageTokenField].set_string_value(request.page_token);
-    }
-
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    const auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kListTasks, params, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<ListTasksResponse>{
-        .body = envelope_json.value(),
-        .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<ListTasksResponse> {
-          auto typed_result = ParseListTasksResult(input_response, request_id);
-          if (!typed_result.ok()) {
-            return typed_result.error();
-          }
-
-          ListTasksResponse parsed;
-          auto payload = std::move(typed_result.value());
-          parsed.tasks.reserve(static_cast<std::size_t>(payload.tasks_size()));
-          for (auto& task : *payload.mutable_tasks()) {
-            parsed.tasks.push_back(std::move(task));
-          }
-          parsed.next_page_token = std::move(*payload.mutable_next_page_token());
-
-          return parsed;
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options,
-                                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<lf::a2a::v1::Task>> {
-    if (request.id().empty()) {
-      return core::Error::Validation(kCancelTaskIdRequired);
-    }
-
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kCancelTask, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<lf::a2a::v1::Task>{
-        .body = envelope_json.value(),
-        .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<lf::a2a::v1::Task> {
-          const auto parsed_result = ParseResponseResult(input_response, request_id);
-          if (!parsed_result.ok()) {
-            return parsed_result.error();
-          }
-          const auto status = ValidateJsonRpcHttpStatus(input_response);
-          if (!status.ok()) {
-            return status.error();
-          }
-          const auto& result = parsed_result.value();
-          const auto response = ParseResultMessage<lf::a2a::v1::Task>(result, core::http::kStatusOk);
-          if (!response.ok()) {
-            return response.error();
-          }
-          return response.value();
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartCreateTaskPushNotificationConfig(
-    const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options,
-    const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<lf::a2a::v1::TaskPushNotificationConfig>> {
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json =
-        BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kCreateTaskPushNotificationConfig, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<lf::a2a::v1::TaskPushNotificationConfig>{
-        .body = envelope_json.value(),
-        .decode = [request_id](const HttpClientResponse& input_response)
-            -> core::Result<lf::a2a::v1::TaskPushNotificationConfig> {
-          const auto parsed_result = ParseResponseResult(input_response, request_id);
-          if (!parsed_result.ok()) {
-            return parsed_result.error();
-          }
-          const auto status = ValidateJsonRpcHttpStatus(input_response);
-          if (!status.ok()) {
-            return status.error();
-          }
-          const auto& result = parsed_result.value();
-          const auto response =
-              ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result, core::http::kStatusOk);
-          if (!response.ok()) {
-            return response.error();
-          }
-          return response.value();
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartGetTaskPushNotificationConfig(
-    const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options,
-    const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<lf::a2a::v1::TaskPushNotificationConfig>> {
-    if (request.id().empty()) {
-      return core::Error::Validation(kGetPushConfigIdRequired);
-    }
-
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json =
-        BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kGetTaskPushNotificationConfig, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<lf::a2a::v1::TaskPushNotificationConfig>{
-        .body = envelope_json.value(),
-        .decode = [request_id](const HttpClientResponse& input_response)
-            -> core::Result<lf::a2a::v1::TaskPushNotificationConfig> {
-          const auto parsed_result = ParseResponseResult(input_response, request_id);
-          if (!parsed_result.ok()) {
-            return parsed_result.error();
-          }
-          const auto status = ValidateJsonRpcHttpStatus(input_response);
-          if (!status.ok()) {
-            return status.error();
-          }
-          const auto& result = parsed_result.value();
-          const auto response =
-              ParseResultMessage<lf::a2a::v1::TaskPushNotificationConfig>(result, core::http::kStatusOk);
-          if (!response.ok()) {
-            return response.error();
-          }
-          return response.value();
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartListTaskPushNotificationConfigs(
-    const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options,
-    const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>> {
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json =
-        BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kListTaskPushNotificationConfigs, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>{
-        .body = envelope_json.value(),
-        .decode = [request_id](const HttpClientResponse& input_response)
-            -> core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> {
-          const auto parsed_result = ParseResponseResult(input_response, request_id);
-          if (!parsed_result.ok()) {
-            return parsed_result.error();
-          }
-          const auto status = ValidateJsonRpcHttpStatus(input_response);
-          if (!status.ok()) {
-            return status.error();
-          }
-          const auto& result = parsed_result.value();
-          const auto response =
-              ParseResultMessage<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(result, core::http::kStatusOk);
-          if (!response.ok()) {
-            return response.error();
-          }
-          return response.value();
-        }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
-}
-
-void JsonRpcTransport::StartDeleteTaskPushNotificationConfig(
-    const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options,
-    const core::AsyncCompletion<void>& completion) {
-  auto prepare = [&]() -> core::Result<PreparedRpc<void>> {
-    if (request.id().empty()) {
-      return core::Error::Validation(kDeletePushConfigIdRequired);
-    }
-
-    const std::string request_id = id_generator_();
-    if (request_id.empty()) {
-      return core::Error::Internal(kEmptyRequestId);
-    }
-    auto envelope_json =
-        BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kDeleteTaskPushNotificationConfig, request, request_id);
-    if (!envelope_json.ok()) {
-      return envelope_json.error();
-    }
-
-    return PreparedRpc<void>{.body = envelope_json.value(),
-                             .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<void> {
-                               const auto parsed_result = ParseResponseResult(input_response, request_id);
-                               if (!parsed_result.ok()) {
-                                 return parsed_result.error();
-                               }
-                               const auto status = ValidateJsonRpcHttpStatus(input_response);
-                               if (!status.ok()) {
-                                 return status.error();
-                               }
-                               const auto& result = parsed_result.value();
-
-                               const auto parsed_empty =
-                                   ParseResultMessage<google::protobuf::Empty>(result, core::http::kStatusOk);
-                               if (!parsed_empty.ok()) {
-                                 return parsed_empty.error();
-                               }
-                               return {};
-                             }};
-  };
-  auto prepared = prepare();
-  if (!prepared.ok()) {
-    completion.Complete(prepared.error());
-    return;
-  }
-  auto plan = std::move(prepared.value());
-  auto http_request = BuildUnaryRequest(std::move(plan.body), options);
-  if (!http_request.ok()) {
-    completion.Complete(http_request.error());
-    return;
-  }
-  if (!async_requester_) {
-    completion.Complete(core::Error::Validation(kMissingAsyncRequester));
-    return;
-  }
-  auto started = async_requester_(
-      http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-        if (!response.ok()) {
-          completion.Complete(response.error());
-          return;
-        }
-        const auto version = ValidateResponseVersion(response.value());
-        if (!version.ok()) {
-          completion.Complete(version.error());
-          return;
-        }
-        completion.Complete(decode(response.value()));
-      });
-  if (!started.ok()) {
-    completion.Complete(started.error());
-    return;
-  }
-  completion.RegisterCancellation([handle = std::move(started.value())] { handle.Cancel(); });
 }
 
 }  // namespace a2a::client

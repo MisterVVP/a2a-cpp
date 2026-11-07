@@ -66,28 +66,7 @@ class JsonRpcTransport final : public ClientTransport {
                                                                           const CallOptions& options) override;
   [[nodiscard]] core::Result<void> Shutdown() override;
 
- protected:
-  [[nodiscard]] std::chrono::milliseconds DefaultAsyncTimeout() const override { return default_timeout_; }
-  void StartSendMessage(const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options,
-                        const core::AsyncCompletion<lf::a2a::v1::SendMessageResponse>& completion) override;
-  void StartGetTask(const lf::a2a::v1::GetTaskRequest& request, const CallOptions& options,
-                    const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
-  void StartListTasks(const ListTasksRequest& request, const CallOptions& options,
-                      const core::AsyncCompletion<ListTasksResponse>& completion) override;
-  void StartCancelTask(const lf::a2a::v1::CancelTaskRequest& request, const CallOptions& options,
-                       const core::AsyncCompletion<lf::a2a::v1::Task>& completion) override;
-  void StartCreateTaskPushNotificationConfig(
-      const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options,
-      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
-  void StartGetTaskPushNotificationConfig(
-      const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options,
-      const core::AsyncCompletion<lf::a2a::v1::TaskPushNotificationConfig>& completion) override;
-  void StartListTaskPushNotificationConfigs(
-      const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options,
-      const core::AsyncCompletion<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>& completion) override;
-  void StartDeleteTaskPushNotificationConfig(const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request,
-                                             const CallOptions& options,
-                                             const core::AsyncCompletion<void>& completion) override;
+  [[nodiscard]] std::shared_ptr<AsyncClientTransport> Async() const override { return async_transport_; }
 
  private:
   [[nodiscard]] core::Result<HttpRequest> BuildUnaryRequest(std::string request_body, const CallOptions& options) const;
@@ -105,11 +84,11 @@ class JsonRpcTransport final : public ClientTransport {
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
-  HttpAsyncRequester async_requester_;
+  std::shared_ptr<AsyncClientTransport> async_transport_;
   HttpStreamRequester stream_requester_;
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;
-  RequestIdGenerator id_generator_;
+  std::shared_ptr<RequestIdGenerator> id_generator_;
   std::shared_ptr<std::mutex> async_client_mutex_ = std::make_shared<std::mutex>();
   std::shared_ptr<http::Client> default_async_stream_client_;
   std::shared_ptr<std::atomic<bool>> async_shutdown_ = std::make_shared<std::atomic<bool>>(false);

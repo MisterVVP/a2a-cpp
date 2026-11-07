@@ -4,6 +4,7 @@
 #include <grpcpp/create_channel.h>
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
+#include <grpcpp/support/sync_stream.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -15,9 +16,12 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/grpc_transport.h"
 #include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
@@ -26,6 +30,8 @@
 
 namespace {
 using namespace a2a;
+static_assert(std::is_copy_constructible_v<client::GrpcTransport>);
+static_assert(std::is_move_constructible_v<client::GrpcTransport>);
 using client::ListTasksRequest;
 using client::ListTasksResponse;
 constexpr auto kCancellationWait = std::chrono::seconds(1);
@@ -88,6 +94,24 @@ class UnaryService final : public lf::a2a::v1::A2AService::Service {
   bool WaitForCancellation() {
     std::unique_lock lock(mutex);
     return changed.wait_for(lock, kCancellationWait, [this] { return cancelled.load(); });
+  }
+  ::grpc::Status SendStreamingMessage(::grpc::ServerContext* context, const lf::a2a::v1::SendMessageRequest* request,
+                                      ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) override {
+    (void)context;
+    (void)request;
+    return EmitEvent(writer);
+  }
+  ::grpc::Status SubscribeToTask(::grpc::ServerContext* context, const lf::a2a::v1::SubscribeToTaskRequest* request,
+                                 ::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) override {
+    (void)context;
+    (void)request;
+    return EmitEvent(writer);
+  }
+  static ::grpc::Status EmitEvent(::grpc::ServerWriter<lf::a2a::v1::StreamResponse>* writer) {
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_task()->set_id(kTaskId);
+    (void)writer->Write(event);
+    return ::grpc::Status::OK;
   }
   ::grpc::Status SendMessage(::grpc::ServerContext* context, const lf::a2a::v1::SendMessageRequest* request,
                              lf::a2a::v1::SendMessageResponse* response) override {
@@ -177,6 +201,28 @@ class UnaryService final : public lf::a2a::v1::A2AService::Service {
   }
 };
 
+class ShutdownFromStreamObserver final : public client::StreamObserver {
+ public:
+  explicit ShutdownFromStreamObserver(client::A2AClient& owner) : owner_(owner) {}
+  std::promise<void> destroyed;
+  bool shutdown_ok = false;
+  void OnEvent(const lf::a2a::v1::StreamResponse& response) override {
+    (void)response;
+    shutdown_ok = owner_.Destroy().ok();
+    destroyed.set_value();
+  }
+  void OnError(const core::Error& error) override { (void)error; }
+  void OnCompleted() override {}
+
+ private:
+  client::A2AClient& owner_;
+};
+void ExpectStreamShutdown(bool started, bool returned, const ShutdownFromStreamObserver& observer) {
+  EXPECT_TRUE(started);
+  EXPECT_TRUE(returned);
+  EXPECT_TRUE(observer.shutdown_ok);
+}
+
 class NativeAsyncGrpcTest : public testing::Test {
  protected:
   void SetUp() override {
@@ -221,15 +267,47 @@ class NativeAsyncGrpcTest : public testing::Test {
     operation.value().Wait();
     return response;
   }
+  void CheckStreamShutdown(bool subscribe) {
+    service_.hold.store(true);
+    std::promise<void> release;
+    auto released = release.get_future().share();
+    lf::a2a::v1::GetTaskRequest request;
+    request.set_id(kTaskId);
+    auto unary = client_->Async().GetTask(
+        request,
+        [released](auto result) {
+          (void)result;
+          released.wait();
+        },
+        Options());
+    ASSERT_TRUE(unary.ok());
+    ShutdownFromStreamObserver observer(*client_);
+    auto destroyed = observer.destroyed.get_future();
+    auto stream = subscribe ? client_->SubscribeTask(request, observer, Options())
+                            : client_->SendStreamingMessage({}, observer, Options());
+    const bool returned = stream.ok() && destroyed.wait_for(kCancellationWait) == std::future_status::ready;
+    // Release the unary callback even on failure, so cleanup cannot hang the test.
+    release.set_value();
+    if (stream.ok()) {
+      stream.value()->Cancel();
+    }
+    unary.value().Wait();
+    ExpectStreamShutdown(stream.ok(), returned, observer);
+  }
   UnaryService service_;
   std::unique_ptr<::grpc::Server> server_;
   std::unique_ptr<client::A2AClient> client_;
 };
 
+TEST_F(NativeAsyncGrpcTest, SendStreamCallbackShutdownDoesNotDrainDependentUnaryCallback) {
+  CheckStreamShutdown(false);
+}
+TEST_F(NativeAsyncGrpcTest, SubscribeCallbackShutdownDoesNotDrainDependentUnaryCallback) { CheckStreamShutdown(true); }
+
 TEST_F(NativeAsyncGrpcTest, SendMessageUsesNativeCallbackApi) {
   lf::a2a::v1::SendMessageRequest request;
   auto response = Await<lf::a2a::v1::SendMessageResponse>(
-      [&](auto completion) { return client_->SendMessageAsync(request, std::move(completion), Options()); });
+      [&](auto completion) { return client_->Async().SendMessage(request, std::move(completion), Options()); });
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().task().id(), kTaskId);
 }
@@ -238,7 +316,7 @@ TEST_F(NativeAsyncGrpcTest, GetTaskUsesNativeCallbackApi) {
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(kTaskId);
   auto response = Await<lf::a2a::v1::Task>(
-      [&](auto completion) { return client_->GetTaskAsync(request, std::move(completion), Options()); });
+      [&](auto completion) { return client_->Async().GetTask(request, std::move(completion), Options()); });
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().id(), kTaskId);
 }
@@ -246,7 +324,7 @@ TEST_F(NativeAsyncGrpcTest, GetTaskUsesNativeCallbackApi) {
 TEST_F(NativeAsyncGrpcTest, ListTasksUsesNativeCallbackApi) {
   ListTasksRequest request;
   auto response = Await<ListTasksResponse>(
-      [&](auto completion) { return client_->ListTasksAsync(request, std::move(completion), Options()); });
+      [&](auto completion) { return client_->Async().ListTasks(request, std::move(completion), Options()); });
   ASSERT_TRUE(response.ok()) << response.error().message();
   ASSERT_EQ(response.value().tasks.size(), 1U);
   EXPECT_EQ(response.value().tasks.front().id(), kTaskId);
@@ -256,7 +334,7 @@ TEST_F(NativeAsyncGrpcTest, ListTasksPreservesExplicitPagination) {
   service_.expected_page_size.store(kPageSize);
   client::ListTasksRequest request{.page_size = kPageSize, .page_token = kPageToken};
   auto response = Await<client::ListTasksResponse>(
-      [&](auto completion) { return client_->ListTasksAsync(request, std::move(completion), Options()); });
+      [&](auto completion) { return client_->Async().ListTasks(request, std::move(completion), Options()); });
   ASSERT_TRUE(response.ok()) << response.error().message();
 }
 
@@ -264,7 +342,7 @@ TEST_F(NativeAsyncGrpcTest, CancelTaskUsesNativeCallbackApi) {
   lf::a2a::v1::CancelTaskRequest request;
   request.set_id(kTaskId);
   auto response = Await<lf::a2a::v1::Task>(
-      [&](auto completion) { return client_->CancelTaskAsync(request, std::move(completion), Options()); });
+      [&](auto completion) { return client_->Async().CancelTask(request, std::move(completion), Options()); });
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().id(), kTaskId);
 }
@@ -273,7 +351,7 @@ TEST_F(NativeAsyncGrpcTest, CreateTaskPushNotificationConfigUsesNativeCallbackAp
   lf::a2a::v1::TaskPushNotificationConfig request;
   request.set_task_id(kTaskId);
   auto response = Await<lf::a2a::v1::TaskPushNotificationConfig>([&](auto completion) {
-    return client_->CreateTaskPushNotificationConfigAsync(request, std::move(completion), Options());
+    return client_->Async().CreateTaskPushNotificationConfig(request, std::move(completion), Options());
   });
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().id(), kConfigId);
@@ -284,7 +362,7 @@ TEST_F(NativeAsyncGrpcTest, GetTaskPushNotificationConfigUsesNativeCallbackApi) 
   request.set_task_id(kTaskId);
   request.set_id(kConfigId);
   auto response = Await<lf::a2a::v1::TaskPushNotificationConfig>([&](auto completion) {
-    return client_->GetTaskPushNotificationConfigAsync(request, std::move(completion), Options());
+    return client_->Async().GetTaskPushNotificationConfig(request, std::move(completion), Options());
   });
   ASSERT_TRUE(response.ok()) << response.error().message();
   EXPECT_EQ(response.value().id(), kConfigId);
@@ -294,7 +372,7 @@ TEST_F(NativeAsyncGrpcTest, ListTaskPushNotificationConfigsUsesNativeCallbackApi
   lf::a2a::v1::ListTaskPushNotificationConfigsRequest request;
   request.set_task_id(kTaskId);
   auto response = Await<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>([&](auto completion) {
-    return client_->ListTaskPushNotificationConfigsAsync(request, std::move(completion), Options());
+    return client_->Async().ListTaskPushNotificationConfigs(request, std::move(completion), Options());
   });
   ASSERT_TRUE(response.ok()) << response.error().message();
   ASSERT_EQ(response.value().configs_size(), 1);
@@ -306,7 +384,7 @@ TEST_F(NativeAsyncGrpcTest, DeleteTaskPushNotificationConfigUsesNativeCallbackAp
   request.set_task_id(kTaskId);
   request.set_id(kConfigId);
   auto response = Await<void>([&](auto completion) {
-    return client_->DeleteTaskPushNotificationConfigAsync(request, std::move(completion), Options());
+    return client_->Async().DeleteTaskPushNotificationConfig(request, std::move(completion), Options());
   });
   ASSERT_TRUE(response.ok()) << response.error().message();
 }
@@ -316,7 +394,7 @@ TEST_F(NativeAsyncGrpcTest, RemoteErrorsRetainGrpcProtocolCode) {
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(kTaskId);
   auto result = Await<lf::a2a::v1::Task>(
-      [&](auto completion) { return client_->GetTaskAsync(request, std::move(completion), Options()); });
+      [&](auto completion) { return client_->Async().GetTask(request, std::move(completion), Options()); });
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().transport(), kGrpcTransport);
   EXPECT_EQ(result.error().protocol_code(), std::to_string(static_cast<int>(::grpc::StatusCode::NOT_FOUND)));
@@ -328,7 +406,7 @@ TEST_F(NativeAsyncGrpcTest, CancelSignalsClientContextAndCompletesOnce) {
   std::promise<core::Result<lf::a2a::v1::Task>> result;
   auto future = result.get_future();
   std::atomic<int> calls{0};
-  auto operation = client_->GetTaskAsync(
+  auto operation = client_->Async().GetTask(
       request,
       [&](auto response) {
         ++calls;
@@ -352,7 +430,7 @@ TEST_F(NativeAsyncGrpcTest, DeadlineCompletesHeldNativeCall) {
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(kTaskId);
   auto result = Await<lf::a2a::v1::Task>(
-      [&](auto completion) { return client_->GetTaskAsync(request, std::move(completion), options); });
+      [&](auto completion) { return client_->Async().GetTask(request, std::move(completion), options); });
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().protocol_code(), kDeadline);
 }
@@ -363,7 +441,7 @@ TEST_F(NativeAsyncGrpcTest, ConcurrentOperationsAndDestroyDrainCallbacks) {
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(kTaskId);
   for (std::size_t index = 0; index < kConcurrentCalls; ++index) {
-    auto operation = client_->GetTaskAsync(
+    auto operation = client_->Async().GetTask(
         request,
         [&](auto result) {
           (void)result;

@@ -33,6 +33,8 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
@@ -1732,7 +1734,7 @@ a2a::core::Result<lf::a2a::v1::Task> AwaitAsyncTask(a2a::client::A2AClient& clie
                                                     const lf::a2a::v1::GetTaskRequest& request) {
   std::promise<a2a::core::Result<lf::a2a::v1::Task>> promise;
   auto future = promise.get_future();
-  auto operation = client.GetTaskAsync(request, [&](auto response) { promise.set_value(std::move(response)); });
+  auto operation = client.Async().GetTask(request, [&](auto response) { promise.set_value(std::move(response)); });
   if (!operation.ok()) {
     return operation.error();
   }

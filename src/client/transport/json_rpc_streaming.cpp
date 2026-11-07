@@ -8,6 +8,7 @@
 #include <thread>
 #include <utility>
 
+#include "a2a/client/async_transport.h"
 #include "a2a/client/json_rpc_transport.h"
 #include "a2a/client/sse_parser.h"
 #include "a2a/core/error.h"
@@ -348,7 +349,7 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::StartSseStream(std
       default_async_stream_client_ == nullptr) {
     return core::Error::Internal(kJsonRpcStreamRequesterNotConfiguredMessage);
   }
-  const std::string request_id = id_generator_();
+  const std::string request_id = (*id_generator_)();
   if (request_id.empty()) {
     return core::Error::Internal(std::string(kEmptyRequestIdMessage));
   }
@@ -448,7 +449,9 @@ core::Result<std::unique_ptr<StreamHandle>> JsonRpcTransport::SubscribeTask(cons
 }
 
 core::Result<void> JsonRpcTransport::Shutdown() {
-  async_scope_->Shutdown();
+  if (async_transport_) {
+    async_transport_->Shutdown();
+  }
   std::shared_ptr<a2a::http::Client> async_client;
   {
     std::lock_guard lock(*async_client_mutex_);

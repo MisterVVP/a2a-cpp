@@ -117,15 +117,20 @@ if(A2A_HAS_LIBCURL)
 endif()
 
 set(A2A_CLIENT_SOURCES
+  client/async_transport.cpp
   client/async_client.cpp
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
+  client/transport/grpc_async_transport.cpp
+  client/transport/grpc_transport_internal.cpp
   client/transport/grpc_transport.cpp
   client/transport/http_json_streaming.cpp
+  client/transport/http_json_async_transport.cpp
   client/transport/http_json_transport.cpp
   client/transport/http_json_transport_internal.cpp
   client/transport/json_rpc_streaming.cpp
+  client/transport/json_rpc_async_transport.cpp
   client/transport/json_rpc_transport.cpp
   client/transport/json_rpc_transport_internal.cpp
   client/transport/sse_parser.cpp

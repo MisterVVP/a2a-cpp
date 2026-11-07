@@ -1,18 +1,20 @@
 # Async unary calls
 
-`A2AClient` and `ClientTransport` expose opt-in callback methods alongside their
-synchronous methods. Each returns `core::Result<core::AsyncHandle>`:
+Include `a2a/client/async_client.h` and obtain the opt-in callback facade with
+`auto async = client.Async()`. `A2AClient` keeps its synchronous methods in
+`client.h`; `AsyncClient` defines callback methods in its own header. Each async
+method returns `core::Result<core::AsyncHandle>`:
 
 | Async method | Callback result |
 | --- | --- |
-| `SendMessageAsync` | `Result<SendMessageResponse>` |
-| `GetTaskAsync` | `Result<Task>` |
-| `ListTasksAsync` | `Result<client::ListTasksResponse>` |
-| `CancelTaskAsync` | `Result<Task>` |
-| `CreateTaskPushNotificationConfigAsync` | `Result<TaskPushNotificationConfig>` |
-| `GetTaskPushNotificationConfigAsync` | `Result<TaskPushNotificationConfig>` |
-| `ListTaskPushNotificationConfigsAsync` | `Result<ListTaskPushNotificationConfigsResponse>` |
-| `DeleteTaskPushNotificationConfigAsync` | `Result<void>` |
+| `SendMessage` | `Result<SendMessageResponse>` |
+| `GetTask` | `Result<Task>` |
+| `ListTasks` | `Result<client::ListTasksResponse>` |
+| `CancelTask` | `Result<Task>` |
+| `CreateTaskPushNotificationConfig` | `Result<TaskPushNotificationConfig>` |
+| `GetTaskPushNotificationConfig` | `Result<TaskPushNotificationConfig>` |
+| `ListTaskPushNotificationConfigs` | `Result<ListTaskPushNotificationConfigsResponse>` |
+| `DeleteTaskPushNotificationConfig` | `Result<void>` |
 
 The protobuf types in this table are in `lf::a2a::v1`. Existing synchronous methods
 and `StreamObserver` remain available.
@@ -23,7 +25,7 @@ request.set_id("my-task");
 a2a::client::CallOptions options;
 options.timeout = std::chrono::seconds(5);
 
-auto operation = client.GetTaskAsync(request,
+auto operation = client.Async().GetTask(request,
     [](a2a::core::Result<lf::a2a::v1::Task> result) {
       if (result.ok()) {
         ConsumeTask(result.value());
@@ -68,12 +70,22 @@ code can start more calls or destroy its client. Avoid blocking the shared
 completion workers waiting for other callbacks.
 
 `AsyncHandle` is copyable. `Cancel()` is thread-safe, idempotent, and requests
-network cancellation of this outbound call. Use `CancelTaskAsync` to request a
+network cancellation of this outbound call. Use `CancelTask` to request a
 task state transition. `Cancel()` does not wait for the callback. `IsActive()`
 becomes false once a terminal result has been selected. `Wait()` waits for the callback
 to return when called outside completion workers; inside an SDK callback it is a
 no-op to prevent callback cycles. It is an observation aid, not another result
 channel. Use callback delivery to access the result.
+
+`AsyncClient` is a copyable, movable view of the owner's transport, interceptors,
+and shutdown state. Retaining a view does not keep a destroyed `A2AClient` open;
+all views reject new calls after owner shutdown. Reassign a moved-from view before
+using it. An owning `A2AClient` and each
+`AsyncClientTransport` have stable identities and cannot be copied or moved.
+Concrete synchronous transport wrappers follow the Rule of Zero; copying a wrapper
+shares its async component and native channel/client. Explicit shutdown closes that
+shared component. A retained low-level `transport.Async()` pointer is itself an
+owner of the async component; releasing its last owner drains outstanding calls.
 
 `A2AClient::Destroy()`, transport `Shutdown()`, and destruction cancel outstanding
 unary calls. Shutdown from outside SDK callbacks drains their callbacks.
@@ -102,7 +114,9 @@ Deadline expiry uses `AsyncHandle::kDeadlineExceeded` (`DEADLINE_EXCEEDED`),
 including native network deadline results. Other protocol and network errors
 retain the synchronous decoders and mappings.
 
-An interceptor snapshot belongs to each async call. `BeforeCall` runs in
+One interceptor snapshot belongs to each call, sync or async. Hooks run without
+holding the registration mutex, so registering another interceptor from a hook
+affects subsequent calls and never creates an unmatched `AfterCall`. `BeforeCall` runs in
 registration order. `AfterCall` runs once in reverse order, before the application
 callback, and observes the final selected result even on cancel/shutdown. A start
 rejected after `BeforeCall` pairs it with `AfterCall` on the initiating thread;
@@ -124,15 +138,16 @@ with the existing synchronous discovery API. `DiscoveryClient::Shutdown()` close
 async discovery. Copies share async cache and operation ownership.
 
 Existing custom synchronous transports and HTTP requesters continue to compile.
-They do not acquire a blocking worker adaptation: the inherited async hooks
-complete with an unsupported-operation validation error. Custom transports
-implement protected `StartSendMessage`, `StartGetTask`, and the other `Start*`
-hooks using `core::AsyncCompletion<T>`. Copy request data needed after return,
+The default `ClientTransport::Async()` returns null; async initiation then
+rejects with a validation error, without calling a synchronous operation. Custom
+transports compose a separate `AsyncClientTransport` and return it from `Async()`.
+Include `a2a/client/async_transport.h` to implement its protected `StartSendMessage`,
+`StartGetTask`, and other `Start*` hooks using `core::AsyncCompletion<T>`. Copy request data needed after return,
 register a cancellation signal with `RegisterCancellation`, and call `Complete`
 with the final `Result<T>`. The token isolates callbacks and enforces once-only
 completion; duplicate or late completions are ignored. Override
 `DefaultAsyncTimeout()` when needed. Custom transport shutdown must close its
-shared `async_scope_` before releasing network resources.
+owned `async_scope_` before releasing network resources.
 
 The HTTP transport constructors optionally accept `HttpAsyncRequester`. Discovery
 accepts `HttpAsyncFetcher`. Inject native async I/O that returns an accepted
@@ -172,16 +187,15 @@ errors, request throughput, p50/p95 latency and sampled client thread count (Lin
 zero means unavailable elsewhere). Both modes use the same `ListTasks` request,
 client, cache warmup, server and build configuration. The benchmark advertises
 the deterministic SUT's required `urn:a2a:tck:required-extension` in both modes.
-Sync mode uses one application caller per concurrency slot; async mode starts replacements from
-callbacks. Measurements include callback dispatch and periodic resource sampling.
+Sync mode uses one application caller per concurrency slot; async mode starts
+replacements from callbacks. Measurements include callback dispatch and periodic resource sampling.
 Do not compare these numbers to streaming or server coroutine benchmarks.
-
 
 ### Local comparison
 
 A Linux x86-64 run used GCC 14, Release builds, libcurl 8.14, gRPC 1.51,
 1024 loopback `ListTasks` calls per case, and concurrency 1, 8 and 32. The SUT
-used the in-memory store. The same candidate executable ran both modes;
+was freshly started with an empty in-memory task store for this comparison. The same candidate executable ran both modes;
 compilation and linting were paused during measurement. These short local runs
 illustrate dispatch costs and thread use, rather than predicting deployment
 capacity. All 18 network cases completed without errors.
@@ -190,17 +204,17 @@ At concurrency 32:
 
 | Binding | Mode | Requests/s | p50 ms | p95 ms | Peak sampled threads | Peak sampled RSS MiB |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| gRPC | Sync | 14786 | 1.572 | 2.525 | 40 | 17.4 |
-| gRPC | Async | 17312 | 1.728 | 2.572 | 15 | 17.6 |
-| HTTP+JSON | Sync | 15551 | 1.127 | 3.347 | 37 | 15.0 |
-| HTTP+JSON | Async | 12387 | 1.617 | 4.789 | 10 | 14.4 |
-| JSON-RPC | Sync | 11712 | 1.832 | 4.307 | 37 | 16.1 |
-| JSON-RPC | Async | 10717 | 2.179 | 4.763 | 10 | 15.4 |
+| gRPC | Sync | 14893 | 1.927 | 3.065 | 40 | 17.4 |
+| gRPC | Async | 14137 | 2.100 | 3.541 | 15 | 17.7 |
+| HTTP+JSON | Sync | 16058 | 1.283 | 2.670 | 37 | 15.2 |
+| HTTP+JSON | Async | 17782 | 1.482 | 3.751 | 10 | 14.7 |
+| JSON-RPC | Sync | 21488 | 1.150 | 3.215 | 37 | 16.3 |
+| JSON-RPC | Async | 19007 | 1.372 | 3.953 | 10 | 15.4 |
 
-At concurrency 8, sync/async throughput was 10007/10776 requests/s for gRPC,
-16954/12464 for HTTP+JSON and 11031/9001 for JSON-RPC. At concurrency 1,
-async dispatch increased p50 latency from 0.086 to 0.150 ms for gRPC,
-0.101 to 0.134 ms for HTTP+JSON and 0.099 to 0.138 ms for JSON-RPC. The shared
+At concurrency 8, sync/async throughput was 12366/10138 requests/s for gRPC,
+18043/14289 for HTTP+JSON and 19768/13919 for JSON-RPC. At concurrency 1,
+async dispatch increased p50 latency from 0.097 to 0.158 ms for gRPC,
+0.091 to 0.132 ms for HTTP+JSON and 0.127 to 0.147 ms for JSON-RPC. The shared
 completion pool adds fixed overhead at low concurrency. Async is useful for
 bounded application thread use; it does not guarantee higher throughput.
 Thread counts include application and native runtime threads. RSS was sampled
@@ -212,13 +226,32 @@ Median CPU time over five samples of at least 0.1 seconds per case was:
 
 | Benchmark | Tasks | Baseline microseconds | Candidate microseconds | Change |
 | --- | ---: | ---: | ---: | ---: |
-| HTTP+JSON ListTasks | 1 | 4.611 | 4.923 | +6.8% |
-| HTTP+JSON ListTasks | 20 | 65.992 | 67.346 | +2.1% |
-| HTTP+JSON ListTasks | 200 | 650.291 | 638.242 | -1.9% |
-| JSON-RPC ListTasks | 1 | 9.665 | 9.403 | -2.7% |
-| JSON-RPC ListTasks | 20 | 71.739 | 72.039 | +0.4% |
-| JSON-RPC ListTasks | 200 | 672.389 | 651.528 | -3.1% |
+| HTTP+JSON ListTasks | 1 | 4.691 | 4.643 | -1.0% |
+| HTTP+JSON ListTasks | 20 | 65.536 | 64.279 | -1.9% |
+| HTTP+JSON ListTasks | 200 | 659.550 | 679.125 | +3.0% |
+| JSON-RPC ListTasks | 1 | 9.320 | 9.626 | +3.3% |
+| JSON-RPC ListTasks | 20 | 74.198 | 72.289 | -2.6% |
+| JSON-RPC ListTasks | 200 | 681.697 | 651.229 | -4.5% |
 
 All six cases remain below the repository's absolute benchmark thresholds.
-The smallest HTTP+JSON case shows a 0.312 microsecond increase; these short
-measurements include noise and do not establish a regression bound.
+Changes range from -4.5% to +3.3%; these short measurements include noise and do
+not establish a regression bound.
+
+## Implementation choices
+
+Sync and async client facades compose one private session for transport ownership,
+interceptor registration and shutdown. Public async transport declarations live in
+`async_transport.h`; each binding composes a private async implementation in a
+separate source file. HTTP request construction and protocol decoders are shared,
+as are gRPC metadata/deadline construction and error mapping. Both HTTP facades
+retain the same native client and reactor connection cache.
+
+The completion scope uses standard C++ mutexes, condition variables and threads.
+Boost.Asio's executors, `thread_pool`, `steady_timer` and cancellation slots were
+considered. Boost is an optional dependency behind `A2A_ENABLE_ASIO` for server
+execution; using these types in core would make it mandatory for all clients.
+They would also leave the SDK-specific once-only result claim, admission bound,
+native cancellation bridge and draining/reentrant shutdown rules to implement.
+The small transport-independent completion layer therefore remains based on the
+standard library; native I/O stays with libcurl and gRPC. This does not add an Asio
+I/O context or another network reactor.

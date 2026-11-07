@@ -37,7 +37,7 @@ void InvokeCallback(const std::function<void()>& callback) noexcept {
   }
 }
 
-class CompletionRuntime final {
+class CompletionRuntime final : private NonCopyableOrMovable {
  public:
   CompletionRuntime() = default;
   void StartThreads() {
@@ -52,8 +52,6 @@ class CompletionRuntime final {
     }
   }
   ~CompletionRuntime() { Stop(); }
-  CompletionRuntime(const CompletionRuntime&) = delete;
-  CompletionRuntime& operator=(const CompletionRuntime&) = delete;
 
   bool Admit(const std::shared_ptr<async_detail::Operation>& operation, std::chrono::milliseconds timeout) {
     std::call_once(started_, [this] {

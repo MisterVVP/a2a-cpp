@@ -7,6 +7,8 @@
 #include <string_view>
 #include <utility>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/client.h"
 #include "a2a/client/http_json_transport.h"
 
@@ -32,7 +34,7 @@ int main(int argc, char** argv) {
   auto future = completed.get_future();
   a2a::client::CallOptions options;
   options.timeout = kWait;
-  auto call = client.ListTasksAsync(
+  auto call = client.Async().ListTasks(
       {},
       [&](a2a::core::Result<a2a::client::ListTasksResponse> result) {
         if (result.ok()) {

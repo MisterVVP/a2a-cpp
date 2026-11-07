@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
@@ -226,7 +228,7 @@ TEST_P(DefaultAsyncHttpTransportTest, DefaultFactoryUsesSharedHttpAsyncEngine) {
   auto future = result.get_future();
   lf::a2a::v1::GetTaskRequest request;
   request.set_id(kTaskId);
-  auto operation = client.GetTaskAsync(request, [&](auto response) { result.set_value(std::move(response)); });
+  auto operation = client.Async().GetTask(request, [&](auto response) { result.set_value(std::move(response)); });
   ASSERT_TRUE(operation.ok());
   ASSERT_TRUE(server.WaitForStreams(1));
   ASSERT_TRUE(server.Finish(0, kNoChunk));

@@ -19,6 +19,8 @@
 #include <thread>
 #include <vector>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/grpc_transport.h"
 #include "a2a/client/http_json_transport.h"
 #include "a2a/client/json_rpc_transport.h"
@@ -103,7 +105,7 @@ class Measurement final {
         return;
       }
       const auto started = Clock::now();
-      auto accepted = client_.ListTasksAsync(
+      auto accepted = client_.Async().ListTasks(
           {},
           [this, index = *index, started](auto result) {
             Record(index, started, result.ok());
