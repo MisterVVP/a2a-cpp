@@ -28,6 +28,10 @@
 
 namespace a2a::http::detail {
 
+#if defined(_WIN32)
+class CurlWindowsReadiness;
+#endif
+
 class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamReactor> {
  public:
   using ThreadFactory = std::function<std::thread(std::function<void()>)>;
@@ -95,6 +99,14 @@ class CurlStreamReactor final : public std::enable_shared_from_this<CurlStreamRe
   long portable_poll_timeout_ms_ = kDefaultPortablePollTimeoutMs;
 #endif
 
+#if defined(_WIN32)
+  void StartPendingWindowsTransfer();
+  void WaitForWindowsEvents();
+  void ProcessWindowsSocket(curl_socket_t socket, short events);
+  std::unique_ptr<CurlWindowsReadiness> windows_readiness_;
+  std::deque<std::shared_ptr<Transfer>> pending_windows_transfers_;
+#endif
+
   CURLM* multi_handle_ = nullptr;
   std::thread thread_;
   std::mutex command_mutex_;
@@ -114,8 +126,11 @@ class CurlStreamReactorPool final {
  public:
   [[nodiscard]] std::shared_ptr<CurlStreamReactor> Acquire();
   void CancelOwner(const void* owner);
-  // Returns false only when a pool-only shard is the calling reactor and its
-  // release must be retried from another thread.
+  // Process teardown joins reactors while global curl state and callback workers
+  // are still alive, even when a terminal callback retains a client owner.
+  void Shutdown();
+  // Returns false on reactor threads; cleanup must be retried off-thread to
+  // avoid self-join and cross-shard join/lock cycles.
   [[nodiscard]] bool ReleaseUnused();
   [[nodiscard]] std::size_t size() const;
 

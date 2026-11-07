@@ -21,6 +21,16 @@
           "version>=": "3.0.8"
         }
       ]
+    },
+    "asio": {
+      "description": "Boost.Asio coroutine executor support",
+      "dependencies": [
+        {
+          "name": "boost-asio",
+          "version>=": "1.92.0",
+          "default-features": false
+        }
+      ]
     }
   },
   "builtin-baseline": "3426db05b996481ca31e95fff3734cf23e0f51bc",

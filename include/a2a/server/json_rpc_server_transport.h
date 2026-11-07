@@ -67,7 +67,6 @@ class JsonRpcServerTransport final {
   [[nodiscard]] static HttpServerResponse BuildSuccessResponse(const ResponseId& id,
                                                                const google::protobuf::Value& result,
                                                                const std::vector<std::string>& activated_extensions);
-  [[nodiscard]] static std::string NormalizePath(std::string path);
 
   Dispatcher* dispatcher_ = nullptr;
   JsonRpcServerTransportOptions options_;

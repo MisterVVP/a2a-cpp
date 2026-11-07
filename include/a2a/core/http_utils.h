@@ -12,6 +12,10 @@
 
 namespace a2a::core::http {
 
+// Normalize configured route paths: add a leading slash, trim trailing slashes,
+// and map an empty path to root. Query strings are not part of route options.
+[[nodiscard]] std::string NormalizeRoutePath(std::string path);
+
 [[nodiscard]] std::optional<std::string_view> FindHeaderValue(
     const std::unordered_map<std::string, std::string>& headers, std::string_view name);
 

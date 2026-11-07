@@ -8,6 +8,8 @@
 - A C++20 compiler.
 - Protobuf and gRPC development packages.
 - Optional: libcurl for the default buffered outbound HTTP implementation.
+- Optional: Boost 1.92+ headers and CMake package configuration when `A2A_ENABLE_ASIO=ON`
+  for [coroutine executors](../server/asio-coroutines.md).
 - Optional: PostgreSQL client libraries when `A2A_ENABLE_POSTGRES_STORE=ON`.
 
 On Ubuntu-like systems, the repository helper installs the dependencies used by CI:

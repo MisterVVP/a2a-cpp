@@ -64,7 +64,17 @@ jobs:
       - name: Install deps
         run: |
           ./scripts/install_build_deps.sh
+          # Clang 18 misanalyzes suspended Boost.Asio coroutine frames. Keep the
+          # analyzer enabled and use Clang 19 without changing the build compiler.
+          sudo apt-get install -y --no-install-recommends clang-tidy-19
+          mkdir -p "${RUNNER_TEMP}/a2a-lint"
+          ln -s /usr/bin/clang-tidy-19 "${RUNNER_TEMP}/a2a-lint/clang-tidy"
+          echo "${RUNNER_TEMP}/a2a-lint" >> "${GITHUB_PATH}"
           python3 -m pip install --upgrade gcovr
+      - name: Install pinned coroutine build dependencies
+        run: |
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallBoost.cmake
+          cmake -DA2A_SIMDJSON_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallSimdjson.cmake
       - name: Check formatting
         run: |
           mapfile -t CPP_FILES < <(git ls-files '*.h' '*.hpp' '*.c' '*.cpp')
@@ -77,7 +87,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DA2A_ENABLE_TESTING=ON \
-            -DA2A_ENABLE_POSTGRES_STORE=ON
+            -DA2A_ENABLE_POSTGRES_STORE=ON \
+            -DA2A_ENABLE_ASIO=ON \
+            -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-deps
       - name: Build
         run: cmake --build build -j"$(nproc)"
       - name: Test
@@ -398,11 +410,15 @@ jobs:
         run: |
           ./scripts/install_build_deps.sh
           sudo apt-get install -y --no-install-recommends clang
+      - name: Install pinned Boost.Asio dependencies
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
       - name: Configure and test ASan/UBSan
         run: |
-          cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake -S . -B build-asan -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined' -DA2A_ENABLE_ASIO=ON -DCMAKE_PREFIX_PATH=${{ runner.temp }}/a2a-boost
           cmake --build build-asan --parallel
-          ctest --test-dir build-asan --output-on-failure -R 'ExamplesInteropIntegrationTest\..*'
+          ctest --test-dir build-asan --output-on-failure --no-tests=error -R 'ExamplesInteropIntegrationTest\..*|AsyncDispatcherTest|AsyncUnaryTest|AsyncGrpc|AsyncStream|CoroutineDispatcher|AsioGrpc'
 
   thread-sanitizer:
     name: ThreadSanitizer focused concurrency tests
@@ -414,7 +430,14 @@ jobs:
         run: |
           ./scripts/install_build_deps.sh
           sudo apt-get install -y --no-install-recommends clang
+      - name: Install pinned Boost.Asio dependencies
+        run: >-
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-boost
+          -P cmake/InstallBoost.cmake
       - name: Run focused ThreadSanitizer profile
+        env:
+          A2A_TSAN_ASIO: "ON"
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-boost
         run: ./scripts/run_thread_sanitizer.sh
 
   python-cross-sdk-interop:
@@ -484,15 +507,39 @@ jobs:
           if-no-files-found: ignore
 
   macos-build:
-    runs-on: macos-14
+    name: ${{ matrix.asio == 'OFF' && 'macos-build' || 'macos-asio-build' }}
+    # Keep non-Asio coverage on Intel, separate from the constrained ARM runner pool.
+    runs-on: ${{ matrix.asio == 'OFF' && 'macos-15-intel' || 'macos-15' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        asio: ['OFF', 'ON']
     steps:
       - uses: actions/checkout@v6
-      - run: |
+      - name: Install dependencies
+        run: |
           brew install cmake ninja protobuf grpc re2 abseil curl simdjson
+          if [[ "${{ matrix.asio }}" == "ON" ]]; then
+            brew install boost llvm
+          fi
+      - name: Configure and build
+        run: |
+          cmake_args=()
+          if [[ "${{ matrix.asio }}" == "ON" ]]; then
+            llvm_prefix="$(brew --prefix llvm)"
+            # Imported dependencies add SDK C headers with -isystem; libc++ wrappers must precede them.
+            cmake_args+=(
+              "-DCMAKE_CXX_COMPILER=${llvm_prefix}/bin/clang++"
+              "-DCMAKE_CXX_FLAGS=-nostdinc++ -I${llvm_prefix}/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY"
+              "-DCMAKE_EXE_LINKER_FLAGS=-L${llvm_prefix}/lib/c++ -L${llvm_prefix}/lib/unwind -Wl,-rpath,${llvm_prefix}/lib/c++ -Wl,-rpath,${llvm_prefix}/lib/unwind -lunwind"
+            )
+          fi
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DA2A_ENABLE_ASIO=${{ matrix.asio }} \
             -DA2A_ENABLE_TESTING=ON \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)"
+            -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)" \
+            "${cmake_args[@]}"
           cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure --no-tests=error
@@ -533,7 +580,8 @@ jobs:
             ${{ runner.os }}-vcpkg-downloads-
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v5
+        id: windows-vcpkg-cache
+        uses: actions/cache/restore@v5
         with:
           path: C:/vcpkg-binary-cache
           key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
@@ -544,12 +592,21 @@ jobs:
         shell: pwsh
         run: |
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
-          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET --x-feature=signing
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --host-triplet $env:VCPKG_HOST_TRIPLET --x-feature=signing --x-feature=asio
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $sw.Stop()
           "dependency_install_seconds=$([Math]::Round($sw.Elapsed.TotalSeconds, 2))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_triplet=$env:VCPKG_DEFAULT_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "vcpkg_host_triplet=$env:VCPKG_HOST_TRIPLET" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: deps
+
+      # Preserve expensive successful dependency builds even if a later test fails.
+      - name: Save installed vcpkg binaries
+        if: steps.windows-vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: C:/vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-bin-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json', 'triplets/ci-x64-windows-release.cmake') }}
 
       - name: Setup MSVC build environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -563,8 +620,87 @@ jobs:
           $toolchain = "$vcpkgRoot/scripts/buildsystems/vcpkg.cmake"
           $targetTriplet = $env:VCPKG_DEFAULT_TRIPLET
           $hostTriplet = $env:VCPKG_HOST_TRIPLET
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_SIGNING=ON -DVCPKG_MANIFEST_FEATURES=signing
-          cmake --build build --config RelWithDebInfo --parallel
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" "-DVCPKG_TARGET_TRIPLET=$targetTriplet" "-DVCPKG_HOST_TRIPLET=$hostTriplet" -DA2A_ENABLE_TESTING=ON -DA2A_ENABLE_SIGNING=ON -DA2A_ENABLE_ASIO=ON "-DVCPKG_MANIFEST_FEATURES=signing;asio"
+          cmake --build build --config RelWithDebInfo --target curl_reactor_test curl_reactor_evidence --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test Windows libcurl reactor
+        shell: pwsh
+        run: >-
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
+          -R "CurlReactor|CurlWindowsReadiness|CurlStreamingTransport"
+
+      # Four fresh-process runs open 28,320 streams plus listener/wake sockets.
+      # TIME_WAIT survives process exit; provide capacity for both execution orders.
+      - name: Provision TCP ports for paired reactor measurements
+        shell: pwsh
+        run: |
+          netsh int ipv4 set dynamicport tcp start=1025 num=64511
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to provision benchmark TCP ports' }
+          netsh int ipv4 show dynamicport tcp
+
+      - name: Measure native and fallback Windows libcurl reactors
+        id: reactor_comparison
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:CI_VCPKG_ROOT
+          New-Item -ItemType Directory -Force reactor-evidence | Out-Null
+          $snapshotRoot = Join-Path (Resolve-Path build) "reactor-comparison-binaries"
+          try {
+            foreach ($backend in @('native', 'fallback')) {
+              $portable = if ($backend -eq 'fallback') { 'ON' } else { 'OFF' }
+              cmake -S . -B build "-DA2A_TEST_CURL_PORTABLE_REACTOR=$portable"
+              if ($LASTEXITCODE -ne 0) { throw "Configure failed: $backend" }
+              cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
+              if ($LASTEXITCODE -ne 0) { throw "Build failed: $backend" }
+              $destination = Join-Path $snapshotRoot $backend
+              New-Item -ItemType Directory -Force $destination | Out-Null
+              Copy-Item build/tests/RelWithDebInfo/curl_reactor_evidence.exe $destination -ErrorAction Stop
+              Copy-Item build/tests/RelWithDebInfo/*.dll $destination -ErrorAction Stop
+              Get-ChildItem $destination -File | Get-FileHash -Algorithm SHA256 |
+                Select-Object @{Name='File';Expression={Split-Path $_.Path -Leaf}}, Hash |
+                ConvertTo-Json | Out-File -Encoding utf8 "reactor-evidence/$backend-sha256.json"
+            }
+          } finally {
+            cmake -S . -B build -DA2A_TEST_CURL_PORTABLE_REACTOR=OFF
+            if ($LASTEXITCODE -ne 0) { throw 'Native configure restoration failed' }
+            cmake --build build --config RelWithDebInfo --target curl_reactor_evidence --parallel
+            if ($LASTEXITCODE -ne 0) { throw 'Native build restoration failed' }
+          }
+          @{
+            cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)
+            windows = [Environment]::OSVersion.VersionString
+            logical_cpus = [Environment]::ProcessorCount
+            configuration = 'RelWithDebInfo'
+          } | ConvertTo-Json | Out-File -Encoding utf8 reactor-evidence/environment.json
+          $comparisonExit = 0
+          foreach ($order in @('native-first', 'fallback-first')) {
+            $directory = "reactor-evidence/$order"
+            New-Item -ItemType Directory -Force $directory | Out-Null
+            $backends = if ($order -eq 'native-first') { @('native', 'fallback') } else { @('fallback', 'native') }
+            foreach ($backend in $backends) {
+              & "$snapshotRoot/$backend/curl_reactor_evidence.exe" | Out-File -Encoding utf8 "$directory/$backend.json"
+              if ($LASTEXITCODE -ne 0) { throw "Evidence failed: $order/$backend" }
+            }
+            python scripts/compare_curl_reactor_evidence.py "$directory/fallback.json" "$directory/native.json" --profile cloud --output "$directory/summary.md"
+            if ($LASTEXITCODE -ne 0) { $comparisonExit = 1 }
+            python scripts/compare_curl_reactor_evidence.py "$directory/fallback.json" "$directory/native.json" --profile strict --output "$directory/strict.md"
+            Get-Content "$directory/summary.md", "$directory/strict.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+          exit $comparisonExit
+
+      - name: Upload Windows reactor comparison
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-reactor-comparison
+          path: reactor-evidence
+          if-no-files-found: warn
+
+      - name: Build remaining Windows targets
+        shell: pwsh
+        run: cmake --build build --config RelWithDebInfo --parallel
 
       - name: Test
         shell: pwsh
@@ -575,6 +711,31 @@ jobs:
         run: >-
           ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error
           -E "^(sut_entrypoints_test|performance_runner_script_test|run_examples_script_test)$"
+
+      - name: Windows transport performance smoke
+        shell: pwsh
+        env:
+          A2A_PERF_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_performance_driver.exe
+          A2A_PERF_WIRE_DRIVER: ${{ github.workspace }}/build/tests/RelWithDebInfo/a2a_wire_performance_driver.exe
+          A2A_PERF_SUT: ${{ github.workspace }}/build/tests/RelWithDebInfo/performance_sut.exe
+        run: |
+          python scripts/performance_runner.py --transports grpc,http_json --store-backends inmemory --requests 2 --concurrency 1 --warmup-seconds 0 --duration-seconds 0 --report-dir perf-artifacts-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import json; rows=json.load(open('perf-artifacts-smoke/results.json', encoding='utf-8'))['results']; assert rows and not sum(int(row.get('errors', 0)) for row in rows)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows performance smoke
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-performance-smoke
+          path: perf-artifacts-smoke
+          if-no-files-found: warn
+
+      - name: Require Windows reactor comparison
+        if: always() && steps.reactor_comparison.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
 
       - name: Publish Windows stage timings
         shell: pwsh

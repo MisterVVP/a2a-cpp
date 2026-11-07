@@ -30,6 +30,7 @@ inline constexpr std::string_view kHttpVersion20 = "HTTP/2.0";
 inline constexpr std::string_view kHttpVersion30 = "HTTP/3.0";
 inline constexpr std::string_view kDefaultPushHttpVersion = kHttpVersion20;
 inline constexpr std::string_view kContentTypeApplicationJson = "application/json";
+inline constexpr std::string_view kContentTypeApplicationA2aJson = "application/a2a+json";
 inline constexpr std::string_view kContentTypeTextEventStream = "text/event-stream";
 inline constexpr std::string_view kSseHeartbeat = ": keep-alive\n\n";
 inline constexpr std::chrono::seconds kSseHeartbeatInterval{15};

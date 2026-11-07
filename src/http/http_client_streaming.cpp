@@ -146,10 +146,12 @@ class StreamDispatchExecutor final {
 struct HttpProcessState final {
   HttpProcessState() : global_state(std::make_shared<detail::ClientGlobalState>()) {}
   ~HttpProcessState() {
-    // Drop the process-global curl owner while callback workers can still
-    // accept terminal work emitted by reactor teardown.
-    global_state.reset();
+    // Pin the pool until reactors have exited and terminal callbacks have drained.
+    // Dropping it first can destroy the last client/global owner on a reactor,
+    // causing that reactor to join itself during process teardown.
+    global_state->stream_reactor_pool->Shutdown();
     stream_dispatch_executor.reset();
+    global_state.reset();
   }
 
   HttpProcessState(const HttpProcessState&) = delete;
@@ -647,9 +649,18 @@ bool CurlStreamReactorPoolDefersSelfThreadRelease() {
     return false;
   }
   auto transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  std::promise<void> callback_started_promise;
+  auto callback_started = callback_started_promise.get_future();
+  std::promise<void> caller_released_promise;
+  auto caller_released = caller_released_promise.get_future();
   std::promise<bool> deferred_release_promise;
   auto deferred_release = deferred_release_promise.get_future();
-  transfer->on_complete = [reactor_pool, &deferred_release_promise](CURLcode) {
+  std::atomic_bool deferred_while_owned{false};
+  transfer->on_complete = [reactor_pool, &callback_started_promise, &caller_released, &deferred_release_promise,
+                           &deferred_while_owned](CURLcode) {
+    deferred_while_owned.store(!reactor_pool->ReleaseUnused());
+    callback_started_promise.set_value();
+    caller_released.wait();
     const bool needs_retry = !reactor_pool->ReleaseUnused();
     if (needs_retry) {
       DeferUnusedReactorRelease(reactor_pool);
@@ -657,10 +668,14 @@ bool CurlStreamReactorPoolDefersSelfThreadRelease() {
     deferred_release_promise.set_value(needs_retry);
   };
   reactor->Cancel(transfer);
+  callback_started.wait();
+  // Exercise an early callback, but check self-release only after the pool owns
+  // the final reactor reference.
   reactor.reset();
+  caller_released_promise.set_value();
   const bool was_deferred = deferred_release.get();
   const bool released_off_thread = reactor_pool->ReleaseUnused();
-  return was_deferred && released_off_thread && reactor_pool->size() == 0U;
+  return deferred_while_owned.load() && was_deferred && released_off_thread && reactor_pool->size() == 0U;
 }
 
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept {

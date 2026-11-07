@@ -15,10 +15,13 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/agent_card/agent_card_builder.h"
 #include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/agent_card/agent_card_signing.h"
+#include "a2a/core/http_utils.h"
+#include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/server/security_policy.h"
 #include "a2a/server/server_interceptor.h"
@@ -40,6 +43,22 @@ constexpr std::string_view kSecuritySchemeName = "sut_bearer";
 constexpr std::string_view kBearerScheme = "bearer";
 constexpr std::string_view kInvalidProfileMessage = "Unsupported A2A_TCK_PROFILE";
 constexpr std::string_view kInvalidCardModeMessage = "Unsupported A2A_TCK_EXTENDED_AGENT_CARD_MODE";
+
+bool AsyncTransportsSupported() {
+  const auto* configured = std::getenv(kSutTransportsEnv);
+  std::string_view names = configured == nullptr ? kGrpcTransport : configured;
+  while (!names.empty()) {
+    const auto comma = names.find(',');
+    if (names.substr(0, comma) != kGrpcTransport) {
+      return false;
+    }
+    if (comma == std::string_view::npos) {
+      return true;
+    }
+    names.remove_prefix(comma + 1);
+  }
+  return false;
+}
 
 std::string_view EnvironmentValue(const char* name) {
   const char* value = std::getenv(name);
@@ -220,10 +239,11 @@ class SutSecurityPolicy final : public server::SecurityPolicy {
 
 class SutPolicy final : public server::ServerInterceptor {
  public:
-  explicit SutPolicy(const SutAgentOptions& options)
+  SutPolicy(const SutAgentOptions& options, const lf::a2a::v1::AgentCard& card)
       : streaming_(options.streaming),
         push_notifications_(options.push_notifications),
-        auth_token_(options.auth_token) {}
+        auth_token_(options.auth_token),
+        input_modes_(card.default_input_modes().begin(), card.default_input_modes().end()) {}
 
   core::Result<void> BeforeDispatch(const server::DispatchRequest& request, server::RequestContext& context) override {
     if (!auth_token_.empty()) {
@@ -236,6 +256,9 @@ class SutPolicy final : public server::ServerInterceptor {
       }
     }
     const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
+    if (send != nullptr && !SupportsInput(send->message())) {
+      return core::protocol_errors::ContentTypeNotSupported();
+    }
     if (!push_notifications_ && send != nullptr && send->has_configuration() &&
         send->configuration().has_task_push_notification_config()) {
       return core::protocol_errors::PushNotificationNotSupported();
@@ -263,9 +286,18 @@ class SutPolicy final : public server::ServerInterceptor {
   }
 
  private:
+  [[nodiscard]] bool SupportsInput(const lf::a2a::v1::Message& message) const {
+    return std::ranges::all_of(message.parts(), [this](const auto& part) {
+      return part.media_type().empty() || std::ranges::any_of(input_modes_, [&part](const auto& mode) {
+               return core::http::IsMediaType(part.media_type(), mode);
+             });
+    });
+  }
+
   bool streaming_;
   bool push_notifications_;
   std::string auth_token_;
+  std::vector<std::string> input_modes_;
 };
 
 lf::a2a::v1::AgentCard MaybeSignCard(lf::a2a::v1::AgentCard card, const SutAgentOptions& options) {
@@ -293,6 +325,13 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
           .WithPushNotifications(options.push_notifications)
           .WithExtendedAgentCard(options.extended_card_mode != kExtendedCardModeDisabled)
           .Build();
+  if (options.asynchronous) {
+    auto* interfaces = card.mutable_supported_interfaces();
+    const auto removed = std::ranges::remove_if(*interfaces, [](const auto& interface) {
+      return interface.protocol_binding() != core::protocol_bindings::kGrpc;
+    });
+    interfaces->erase(removed.begin(), removed.end());
+  }
   card.mutable_capabilities()->set_streaming(options.streaming);
   if (!options.auth_token.empty() || options.security) {
     auto& scheme = (*card.mutable_security_schemes())[std::string(kSecuritySchemeName)];
@@ -313,15 +352,21 @@ std::optional<lf::a2a::v1::AgentCard> ExtendedCard(const lf::a2a::v1::AgentCard&
 
 }  // namespace
 
-core::Result<SutAgentOptions> ReadSutAgentOptions() {
+core::Result<SutAgentOptions> ReadSutAgentOptions(bool asynchronous) {
+  constexpr auto kUnsupportedTransports =
+      "Only grpc is implemented in the async SUT; jsonrpc and http_json are not enabled yet";
+  if (asynchronous && !AsyncTransportsSupported()) {
+    return core::Error::Validation(kUnsupportedTransports);
+  }
   SutAgentOptions options;
   const auto profile = EnvironmentValue(kProfileEnv);
   if (!profile.empty() && profile != kDefaultProfile && profile != kCapabilityNegativeProfile &&
       profile != kSecurityProfile) {
     return core::Error::Validation(std::string(kInvalidProfileMessage));
   }
-  options.streaming = profile != kCapabilityNegativeProfile;
-  options.push_notifications = options.streaming;
+  options.asynchronous = asynchronous;
+  options.push_notifications = profile != kCapabilityNegativeProfile;
+  options.streaming = options.push_notifications;
   options.auth_token = EnvironmentValue(kAuthTokenEnv);
   options.security = profile == kSecurityProfile;
   options.alice_token = EnvironmentValue(kAliceTokenEnv);
@@ -366,26 +411,39 @@ class SutAgent::Impl final {
         card_(BuildCard(endpoints, options)),
         executor_(stores_.task_store.get(), stores_.push_store.get(), options.credential_directory,
                   options.task_credential),
-        dispatcher_(&executor_, std::make_shared<core::StaticAgentCardProvider>(ExtendedCard(card_, options))) {
-    dispatcher_.AddInterceptor(std::make_shared<SutPolicy>(options));
+        cards_(std::make_shared<core::StaticAgentCardProvider>(ExtendedCard(card_, options))),
+        interceptor_(std::make_shared<SutPolicy>(options, card_)),
+        dispatcher_(&executor_, cards_) {
+    dispatcher_.AddInterceptor(interceptor_);
     if (options.security) {
-      dispatcher_.SetSecurityPolicy(std::make_shared<SutSecurityPolicy>(options.alice_token, options.bob_token),
-                                    stores_.task_store.get());
+      security_ = std::make_shared<SutSecurityPolicy>(options.alice_token, options.bob_token);
+      dispatcher_.SetSecurityPolicy(security_, stores_.task_store.get());
     }
   }
 
   server::stores::StoreBundle stores_;
   lf::a2a::v1::AgentCard card_;
   SecurityExecutor executor_;
+  std::shared_ptr<core::AgentCardProvider> cards_;
+  std::shared_ptr<server::ServerInterceptor> interceptor_;
+  std::shared_ptr<const server::SecurityPolicy> security_;
   server::Dispatcher dispatcher_;
 };
 
 SutAgent::SutAgent(server::stores::StoreBundle stores, const SutEndpoints& endpoints, SutAgentOptions options)
-    : impl_(std::make_unique<Impl>(std::move(stores), endpoints, options)) {}
-
-SutAgent::~SutAgent() = default;
+    : impl_(std::make_shared<Impl>(std::move(stores), endpoints, options)) {}
+std::shared_ptr<server::AgentExecutor> SutAgent::executor() const { return {impl_, &impl_->executor_}; }
 server::Dispatcher& SutAgent::dispatcher() noexcept { return impl_->dispatcher_; }
 const lf::a2a::v1::AgentCard& SutAgent::agent_card() const noexcept { return impl_->card_; }
+std::shared_ptr<core::AgentCardProvider> SutAgent::card_provider() const { return impl_->cards_; }
+std::shared_ptr<server::ServerInterceptor> SutAgent::interceptor() const { return impl_->interceptor_; }
+std::shared_ptr<const server::SecurityPolicy> SutAgent::security_policy() const { return impl_->security_; }
+server::TaskStore* SutAgent::task_store() const { return impl_->stores_.task_store.get(); }
+core::Result<std::vector<lf::a2a::v1::StreamResponse>> SutAgent::BuildStreamingEvents(
+    const lf::a2a::v1::SendMessageRequest& request, server::RequestContext context) {
+  return impl_->executor_.BuildStreamingEvents(request, context);
+}
+server::TaskSubscriptionService& SutAgent::TaskSubscriptions() { return impl_->executor_.TaskSubscriptions(); }
 void SutAgent::ShutdownSubscriptions() { impl_->executor_.ShutdownSubscriptions(); }
 
 }  // namespace a2a::tests::sut

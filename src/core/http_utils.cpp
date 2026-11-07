@@ -8,6 +8,19 @@
 
 namespace a2a::core::http {
 
+std::string NormalizeRoutePath(std::string path) {
+  if (path.empty()) {
+    path = "/";
+  }
+  if (path.front() != '/') {
+    path.insert(path.begin(), '/');
+  }
+  while (path.size() > 1 && path.back() == '/') {
+    path.pop_back();
+  }
+  return path;
+}
+
 std::optional<std::string_view> FindHeaderValue(const std::unordered_map<std::string, std::string>& headers,
                                                 std::string_view name) {
   for (const auto& [header_name, value] : headers) {

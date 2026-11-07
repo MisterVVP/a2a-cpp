@@ -2,6 +2,10 @@
 
 Server integrations implement `a2a::server::AgentExecutor` and route protocol requests through `Dispatcher` plus one or more transports.
 
+For transport registration and optional coroutine runtime ownership, see
+[Runtime and transport helpers](runtime-helpers.md). The helpers support both
+existing synchronous applications and the opt-in coroutine engine.
+
 ## Server capabilities
 
 - REST server transport.

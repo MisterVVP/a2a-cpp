@@ -82,6 +82,9 @@ class TransportMux final {
   void RegisterJsonRpcRoute(JsonRpcServerTransport& transport, JsonRpcRouteOptions options);
   void RegisterRestRoute(RestServerTransport& transport);
   void RegisterRestRoute(RestServerTransport& transport, RestRouteOptions options);
+  // Registers only public discovery (including the legacy path), without REST
+  // operation routes. The transport must outlive the mux, as with other routes.
+  void RegisterAgentCardRoute(RestServerTransport& transport);
   void SetNotFoundHandler(Handler handler);
 
   [[nodiscard]] core::Result<HttpServerResponse> RouteRequest(const HttpServerRequest& request) const;

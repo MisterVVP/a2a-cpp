@@ -273,6 +273,16 @@ class ExampleExecutor : public server::AgentExecutor {
 
   core::Result<std::unique_ptr<server::ServerStreamSession>> SendStreamingMessage(
       const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) override {
+    auto events = BuildStreamingEvents(request, context);
+    if (!events.ok()) {
+      return events.error();
+    }
+    return std::unique_ptr<server::ServerStreamSession>(
+        std::make_unique<SequenceStreamSession>(std::move(events.value())));
+  }
+
+  core::Result<std::vector<lf::a2a::v1::StreamResponse>> BuildStreamingEvents(
+      const lf::a2a::v1::SendMessageRequest& request, server::RequestContext& context) {
     auto resolved = ResolveStreamingTaskId(request, context);
     if (!resolved.ok()) {
       return resolved.error();
@@ -316,8 +326,7 @@ class ExampleExecutor : public server::AgentExecutor {
     events.push_back(working);
     events.push_back(completed);
 
-    std::unique_ptr<server::ServerStreamSession> stream = std::make_unique<SequenceStreamSession>(std::move(events));
-    return stream;
+    return events;
   }
 
   core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
@@ -390,6 +399,7 @@ class ExampleExecutor : public server::AgentExecutor {
     return push_notifications_.DeleteConfig(request);
   }
 
+  server::TaskSubscriptionService& TaskSubscriptions() { return subscriptions_; }
   void ShutdownSubscriptions() { subscriptions_.Shutdown(); }
 
  private:

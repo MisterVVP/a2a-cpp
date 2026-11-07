@@ -11,6 +11,10 @@
 #endif
 
 namespace a2a::server {
+namespace {
+constexpr auto kAsyncSubscriptionOverflow = "Async task subscriber buffer capacity exceeded";
+constexpr auto kSubscriptionShutdown = "Task subscription service shut down";
+}  // namespace
 
 std::optional<lf::a2a::v1::StreamResponse> StreamResponseCoroutine::Next() { return WaitForNext(std::nullopt); }
 
@@ -140,8 +144,20 @@ void TaskSubscriptionService::SubscriptionSession::Cancel() noexcept {
 TaskSubscriptionService::~TaskSubscriptionService() { Shutdown(); }
 
 core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subscribe(const lf::a2a::v1::Task& task) {
+  auto registered = RegisterSubscriber(task);
+  if (!registered.ok()) {
+    return registered.error();
+  }
+  return std::unique_ptr<ServerStreamSession>(
+      std::make_unique<SubscriptionSession>(state_, std::move(registered.value())));
+}
+
+core::Result<std::shared_ptr<TaskSubscriptionService::SubscriberState>> TaskSubscriptionService::RegisterSubscriber(
+    const lf::a2a::v1::Task& task, std::size_t capacity, std::function<void()> notify) {
   auto subscriber_state = std::make_shared<SubscriberState>();
   subscriber_state->task_id = task.id();
+  subscriber_state->capacity = capacity;
+  subscriber_state->notify = std::move(notify);
   const auto service_state = state_;
 
   std::lock_guard lock(service_state->mutex);
@@ -160,8 +176,7 @@ core::Result<std::unique_ptr<ServerStreamSession>> TaskSubscriptionService::Subs
   }
   service_state->subscribers_by_task_id[subscriber_state->task_id].push_back(subscriber_state);
 
-  return std::unique_ptr<ServerStreamSession>(
-      std::make_unique<SubscriptionSession>(service_state, std::move(subscriber_state)));
+  return subscriber_state;
 }
 
 void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) {
@@ -204,9 +219,15 @@ void TaskSubscriptionService::PublishTaskUpdated(const lf::a2a::v1::Task& task) 
     {
       std::lock_guard lock(subscriber->mutex);
       if (!subscriber->closed.load()) {
-        subscriber->events.push_back(event);
-        subscriber->pending_delivery_count.fetch_add(1);
-        subscriber->closed.store(close_after_event);
+        if (subscriber->capacity != 0 && subscriber->events.size() >= subscriber->capacity) {
+          subscriber->failure = core::Error::Network(kAsyncSubscriptionOverflow);
+          subscriber->events.clear();
+          subscriber->closed.store(true);
+        } else {
+          subscriber->events.push_back(event);
+          subscriber->pending_delivery_count.fetch_add(1);
+          subscriber->closed.store(close_after_event);
+        }
       }
     }
     SignalSubscriber(subscriber);
@@ -237,6 +258,9 @@ void TaskSubscriptionService::Shutdown() {
     {
       std::lock_guard lock(subscriber->mutex);
       subscriber->closed.store(true);
+      if (subscriber->capacity != 0) {
+        subscriber->failure = core::Error::Network(kSubscriptionShutdown);
+      }
     }
     SignalSubscriber(subscriber);
   }
@@ -273,6 +297,9 @@ void TaskSubscriptionService::SignalSubscriber(const std::shared_ptr<SubscriberS
     if (continuation) {
       ++state->active_resumes;
     }
+  }
+  if (state->notify) {
+    state->notify();
   }
   if (continuation) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)

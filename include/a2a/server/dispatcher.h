@@ -4,9 +4,7 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <shared_mutex>
-#include <string>
 #include <vector>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
@@ -32,10 +30,6 @@ class Dispatcher final {
   void AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor);
 
  private:
-  void RunAfterInterceptors(const DispatchRequest& request, RequestContext& context,
-                            const core::Result<DispatchResponse>& result,
-                            const std::optional<std::string>& authenticated_principal) const;
-
   std::shared_ptr<const DispatchSecurity> security_;
   AgentExecutor* executor_ = nullptr;
   std::shared_ptr<core::AgentCardProvider> agent_card_provider_;

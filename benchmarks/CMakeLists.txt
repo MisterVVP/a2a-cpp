@@ -35,6 +35,11 @@ add_executable(a2a_benchmarks
   bench_uuidv7_task_id.cpp
 )
 
+if(A2A_ENABLE_ASIO)
+  target_link_libraries(a2a_benchmarks PRIVATE a2a::asio)
+  target_sources(a2a_benchmarks PRIVATE bench_async_dispatcher.cpp)
+endif()
+
 target_link_libraries(a2a_benchmarks
   PRIVATE
     a2a::client
