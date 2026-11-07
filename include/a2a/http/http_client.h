@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "a2a/core/async_operation.h"
 #include "a2a/core/error.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/result.h"
@@ -87,6 +88,8 @@ class Client final {
       std::function<core::Result<void>(std::string_view)> on_chunk, std::function<bool()> is_cancelled,
       const std::function<void(const std::function<void()>&)>& register_cancellation,
       StreamCompletion on_complete) const;
+  [[nodiscard]] core::Result<core::AsyncHandle> SendRequestAsync(Request request,
+                                                                 core::Completion<Response> completion) const;
   void Shutdown() const;
 
  private:

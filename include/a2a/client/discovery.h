@@ -6,12 +6,14 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
+#include "a2a/client/call_options.h"
 #include "a2a/core/result.h"
 #include "a2a/http/http_client.h"
 #include "a2a/v1/a2a.pb.h"
@@ -31,6 +33,8 @@ struct HttpResponse final {
   std::string body;
 };
 
+using HttpAsyncFetcher =
+    std::function<core::Result<core::AsyncHandle>(http::Request request, core::Completion<HttpResponse> completion)>;
 using HttpFetcher = std::function<core::Result<HttpResponse>(std::string_view url)>;
 // Verifies the original JSON before parsing; errors reject the card.
 using AgentCardVerifier = std::function<core::Result<void>(std::string_view json)>;
@@ -46,7 +50,8 @@ struct ResolvedInterface final {
 
 class DiscoveryClient final {
  public:
-  explicit DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
+  explicit DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl,
+                           HttpAsyncFetcher async_fetcher = {});
 
   [[nodiscard]] static DiscoveryClient CreateDefault(std::chrono::seconds cache_ttl = kDefaultDiscoveryCacheTtl);
 
@@ -55,7 +60,19 @@ class DiscoveryClient final {
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> Fetch(std::string_view base_url);
   [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> FetchExtendedAgentCard(std::string_view base_url);
 
+  [[nodiscard]] core::Result<core::AsyncHandle> FetchAsync(std::string_view base_url,
+                                                           core::Completion<lf::a2a::v1::AgentCard> completion,
+                                                           const CallOptions& options = {});
+  [[nodiscard]] core::Result<core::AsyncHandle> FetchExtendedAgentCardAsync(
+      std::string_view base_url, core::Completion<lf::a2a::v1::AgentCard> completion, const CallOptions& options = {});
+  void Shutdown() const;
+
  private:
+  [[nodiscard]] core::Result<core::AsyncHandle> StartFetchAsync(std::string_view base_url, bool extended,
+                                                                core::Completion<lf::a2a::v1::AgentCard> completion,
+                                                                const CallOptions& options);
+  void StartDiscoveryRequest(const std::string& url, bool extended, const CallOptions& options,
+                             const core::AsyncCompletion<lf::a2a::v1::AgentCard>& token);
   struct CacheEntry final {
     lf::a2a::v1::AgentCard card;
     std::string json;
@@ -65,8 +82,13 @@ class DiscoveryClient final {
   [[nodiscard]] static core::Result<std::string> BuildDiscoveryUrl(std::string_view base_url);
   [[nodiscard]] static core::Result<std::string> BuildExtendedDiscoveryUrl(std::string_view base_url);
   [[nodiscard]] static core::Result<void> ValidateAgentCard(const lf::a2a::v1::AgentCard& card);
-  [[nodiscard]] core::Result<lf::a2a::v1::AgentCard> VerifyAndParseAgentCard(std::string_view json) const;
+  [[nodiscard]] static core::Result<lf::a2a::v1::AgentCard> VerifyAndParseAgentCard(std::string_view json,
+                                                                                    const AgentCardVerifier& verifier);
 
+  struct AsyncCache;
+  std::shared_ptr<AsyncCache> async_cache_;
+  HttpAsyncFetcher async_fetcher_;
+  std::shared_ptr<core::AsyncScope> async_scope_ = std::make_shared<core::AsyncScope>();
   AgentCardVerifier verifier_;
   HttpFetcher fetcher_;
   std::chrono::seconds cache_ttl_;

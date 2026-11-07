@@ -29,12 +29,22 @@ namespace {
 using json_rpc_internal::BuildJsonRpcEnvelope;
 using json_rpc_internal::BuildJsonRpcEnvelopeError;
 using json_rpc_internal::JoinUrl;
+using json_rpc_internal::ParseListTasksResult;
 using json_rpc_internal::ParseResponseResult;
 using json_rpc_internal::ParseResultMessage;
 using json_rpc_internal::ToClientHttpResponse;
 using json_rpc_internal::ToSharedHttpRequest;
+using json_rpc_internal::ValidateJsonRpcHttpStatus;
 using json_rpc_internal::ValidateResponseVersion;
 
+constexpr const char* kPageSizeField = "pageSize";
+constexpr const char* kPageTokenField = "pageToken";
+constexpr const char* kEmptyRequestId = "JSON-RPC request id generator returned an empty id";
+constexpr const char* kGetTaskIdRequired = "GetTaskRequest.id is required";
+constexpr const char* kCancelTaskIdRequired = "CancelTaskRequest.id is required";
+constexpr const char* kGetPushConfigIdRequired = "GetTaskPushNotificationConfigRequest.id is required";
+constexpr const char* kDeletePushConfigIdRequired = "DeleteTaskPushNotificationConfigRequest.id is required";
+constexpr const char* kMissingRequester = "HTTP requester is not configured";
 constexpr std::string_view kDefaultMtlsUnsupportedMessage =
     "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
 
@@ -57,33 +67,6 @@ std::string BuildDefaultRequestId() {
   return "jsonrpc-" + std::to_string(current);
 }
 
-core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response) {
-  if (response.status_code >= core::http::kSuccessStatusMin && response.status_code <= core::http::kSuccessStatusMax) {
-    return {};
-  }
-  return BuildJsonRpcEnvelopeError("JSON-RPC response received with non-success HTTP status", response);
-}
-
-core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
-                                                                  std::string_view expected_id) {
-  const auto result_json = ParseResponseResult(response, expected_id);
-  if (!result_json.ok()) {
-    return result_json.error();
-  }
-  const auto status = ValidateJsonRpcHttpStatus(response);
-  if (!status.ok()) {
-    return status.error();
-  }
-  lf::a2a::v1::ListTasksResponse result;
-  const auto parsed = core::JsonToMessage(
-      result_json.value(), &result,
-      {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
-  if (!parsed.ok()) {
-    return parsed.error().WithTransport(json_rpc_internal::kTransportName).WithHttpStatus(response.status_code);
-  }
-  return result;
-}
-
 }  // namespace
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
@@ -93,73 +76,58 @@ JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpReq
 
 JsonRpcTransport::JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                    HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout,
-                                   RequestIdGenerator id_generator)
+                                   RequestIdGenerator id_generator, HttpAsyncRequester async_requester)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
       default_timeout_(default_timeout),
-      id_generator_(std::move(id_generator)) {
-  if (id_generator_ == nullptr) {
-    id_generator_ = BuildDefaultRequestId;
-  }
+      id_generator_(std::make_shared<RequestIdGenerator>(id_generator ? std::move(id_generator)
+                                                                      : RequestIdGenerator(BuildDefaultRequestId))) {
+  async_transport_ = json_rpc_internal::MakeAsyncTransport(resolved_interface_, std::move(async_requester),
+                                                           default_timeout_, id_generator_);
 }
 
 std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                   std::chrono::milliseconds default_timeout,
                                                                   RequestIdGenerator id_generator) {
   auto default_http_client = std::make_shared<a2a::http::Client>();
-  auto transport =
-      std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client),
-                                         HttpStreamRequester{}, default_timeout, std::move(id_generator));
+  auto async_requester = [client = default_http_client](
+                             const HttpRequest& request,
+                             core::Completion<HttpClientResponse> completion) -> core::Result<core::AsyncHandle> {
+    if (request.mtls) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
+    return client->SendRequestAsync(ToSharedHttpRequest(request),
+                                    [completion = std::move(completion)](core::Result<http::Response> response) {
+                                      if (!response.ok()) {
+                                        completion(response.error());
+                                      } else {
+                                        completion(ToClientHttpResponse(std::move(response.value())));
+                                      }
+                                    });
+  };
+  auto transport = std::make_unique<JsonRpcTransport>(
+      std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client), HttpStreamRequester{},
+      default_timeout, std::move(id_generator), std::move(async_requester));
   transport->default_async_stream_client_ = std::move(default_http_client);
   return transport;
 }
 
+core::Result<HttpRequest> JsonRpcTransport::BuildUnaryRequest(std::string request_body,
+                                                              const CallOptions& options) const {
+  return json_rpc_internal::BuildUnaryRequest(resolved_interface_, default_timeout_, std::move(request_body), options);
+}
+
 core::Result<HttpClientResponse> JsonRpcTransport::SendJsonRpcRequest(std::string request_body,
                                                                       const CallOptions& options) const {
-  if (resolved_interface_.transport != PreferredTransport::kJsonRpc) {
-    return core::Error::Validation("JsonRpcTransport requires a JSON-RPC interface");
+  if (!requester_) {
+    return core::Error::Internal(kMissingRequester);
   }
-  if (resolved_interface_.url.empty()) {
-    return core::Error::Validation("Resolved JSON-RPC interface URL is required");
+  const auto prepared = BuildUnaryRequest(std::move(request_body), options);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-  if (requester_ == nullptr) {
-    return core::Error::Internal("HTTP requester is not configured");
-  }
-
-  HttpRequest http_request;
-  http_request.method = std::string(core::http::kMethodPost);
-  http_request.url = JoinUrl(resolved_interface_.url);
-  http_request.body = std::move(request_body);
-  http_request.timeout = options.timeout.value_or(default_timeout_);
-  http_request.headers = options.headers;
-  http_request.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  http_request.headers[std::string(core::http::kAcceptHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  http_request.tls = options.tls;
-  http_request.mtls = options.mtls;
-
-  if (!options.extensions.empty()) {
-    http_request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
-  }
-  if (options.auth_hook) {
-    options.auth_hook(http_request.headers);
-  }
-  if (options.credential_provider != nullptr) {
-    const auto applied =
-        ApplyCredentialProvider(*options.credential_provider, options.auth_context, &http_request.headers);
-    if (!applied.ok()) {
-      return applied.error();
-    }
-  }
-
-  const auto version = internal::ApplyProtocolVersion(options, http_request.headers);
-  if (!version.ok()) {
-    return version.error();
-  }
-
-  const auto response = requester_(http_request);
+  const auto response = requester_(prepared.value());
   if (!response.ok()) {
     return response.error();
   }
@@ -178,9 +146,9 @@ core::Result<std::string> JsonRpcTransport::InvokeForResultJson(std::string_view
     return core::Error::Validation("JSON-RPC method name is required");
   }
 
-  const std::string request_id = id_generator_();
+  const std::string request_id = (*id_generator_)();
   if (request_id.empty()) {
-    return core::Error::Internal("JSON-RPC request id generator returned an empty id");
+    return core::Error::Internal(kEmptyRequestId);
   }
 
   const auto envelope_json = BuildJsonRpcEnvelope(method_name, request, request_id);
@@ -223,7 +191,7 @@ core::Result<lf::a2a::v1::SendMessageResponse> JsonRpcTransport::SendMessage(
 core::Result<lf::a2a::v1::Task> JsonRpcTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                           const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("GetTaskRequest.id is required");
+    return core::Error::Validation(kGetTaskIdRequired);
   }
 
   const auto result = InvokeForResultJson(core::json_rpc::MethodNames::kGetTask, request, options);
@@ -241,15 +209,15 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
                                                             const CallOptions& options) {
   google::protobuf::Struct params;
   if (request.page_size > 0) {
-    (*params.mutable_fields())["pageSize"].set_number_value(static_cast<double>(request.page_size));
+    (*params.mutable_fields())[kPageSizeField].set_number_value(static_cast<double>(request.page_size));
   }
   if (!request.page_token.empty()) {
-    (*params.mutable_fields())["pageToken"].set_string_value(request.page_token);
+    (*params.mutable_fields())[kPageTokenField].set_string_value(request.page_token);
   }
 
-  const std::string request_id = id_generator_();
+  const std::string request_id = (*id_generator_)();
   if (request_id.empty()) {
-    return core::Error::Internal("JSON-RPC request id generator returned an empty id");
+    return core::Error::Internal(kEmptyRequestId);
   }
   const auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kListTasks, params, request_id);
   if (!envelope_json.ok()) {
@@ -278,7 +246,7 @@ core::Result<ListTasksResponse> JsonRpcTransport::ListTasks(const ListTasksReque
 core::Result<lf::a2a::v1::Task> JsonRpcTransport::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                              const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("CancelTaskRequest.id is required");
+    return core::Error::Validation(kCancelTaskIdRequired);
   }
 
   const auto result = InvokeForResultJson(core::json_rpc::MethodNames::kCancelTask, request, options);
@@ -310,7 +278,7 @@ core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::CreateTa
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> JsonRpcTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
+    return core::Error::Validation(kGetPushConfigIdRequired);
   }
 
   const auto result =
@@ -344,7 +312,7 @@ core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> JsonRpcTransp
 core::Result<void> JsonRpcTransport::DeleteTaskPushNotificationConfig(
     const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
   if (request.id().empty()) {
-    return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
+    return core::Error::Validation(kDeletePushConfigIdRequired);
   }
 
   const auto result =

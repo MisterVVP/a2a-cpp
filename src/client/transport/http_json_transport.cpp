@@ -21,114 +21,35 @@
 
 namespace a2a::client {
 namespace {
-
-using http_json_internal::BuildHttpError;
-using http_json_internal::BuildTaskPath;
-using http_json_internal::EndpointMap;
-using http_json_internal::JoinUrl;
+constexpr const char* kMissingRequester = "HTTP requester is not configured";
+constexpr std::string_view kDefaultMtlsUnsupportedMessage =
+    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
+}  // namespace
+using http_json_internal::MakeHttpRequesterForClient;
+using http_json_internal::PrepareCancelTask;
+using http_json_internal::PrepareCreateTaskPushNotificationConfig;
+using http_json_internal::PrepareDeleteTaskPushNotificationConfig;
+using http_json_internal::PrepareGetTask;
+using http_json_internal::PrepareGetTaskPushNotificationConfig;
+using http_json_internal::PrepareListTaskPushNotificationConfigs;
+using http_json_internal::PrepareListTasks;
+using http_json_internal::PrepareSendMessage;
 using http_json_internal::ToClientHttpResponse;
 using http_json_internal::ToSharedHttpRequest;
 using http_json_internal::ValidateResponseVersion;
 
-constexpr int kHttpOkMin = 200;
-constexpr int kHttpOkMax = 299;
-constexpr int kHttpNoContent = 204;
-constexpr std::string_view kDefaultMtlsUnsupportedMessage =
-    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
-
-HttpRequester MakeHttpRequesterForClient(std::shared_ptr<a2a::http::Client> client) {
-  return [client = std::move(client)](const HttpRequest& request) -> core::Result<HttpClientResponse> {
-    if (request.mtls.has_value()) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    auto response = client->SendRequest(ToSharedHttpRequest(request));
-    if (!response.ok()) {
-      return response.error();
-    }
-    return ToClientHttpResponse(std::move(response.value()));
-  };
-}
-
-template <typename T>
-core::Result<T> ParseBodyOrMapError(std::string_view method, std::string_view endpoint,
-                                    const HttpClientResponse& response) {
-  if (response.status_code < kHttpOkMin || response.status_code > kHttpOkMax) {
-    return BuildHttpError(method, endpoint, response);
-  }
-
-  T parsed;
-  const auto parse = core::JsonToMessage(response.body, &parsed);
-  if (!parse.ok()) {
-    return parse.error().WithTransport("http").WithHttpStatus(response.status_code);
-  }
-  return parsed;
-}
-
-std::string BuildTaskPushConfigCollectionPath(std::string_view task_id) {
-  std::string path = BuildTaskPath(task_id);
-  path.reserve(path.size() + EndpointMap::kPushConfigCollection.size());
-  path += EndpointMap::kPushConfigCollection;
-  return path;
-}
-
-struct PushConfigPathParts final {
-  std::string_view task_id;
-  std::string_view id;
-};
-
-std::string BuildTaskPushConfigPath(PushConfigPathParts parts) {
-  std::string path = BuildTaskPushConfigCollectionPath(parts.task_id);
-  path.reserve(path.size() + 1 + parts.id.size());
-  path += '/';
-  path += parts.id;
-  return path;
-}
-
-core::Result<ListTasksResponse> ParseListTasksResponsePayload(const HttpClientResponse& response,
-                                                              std::string_view endpoint) {
-  if (response.status_code < kHttpOkMin || response.status_code > kHttpOkMax) {
-    return BuildHttpError(core::http::kMethodGet, endpoint, response);
-  }
-
-  lf::a2a::v1::ListTasksResponse payload;
-  const auto parse = core::JsonToMessage(
-      response.body, &payload,
-      {.ignore_unknown_fields = true, .reject_top_level_null_fields = true, .reject_duplicate_top_level_fields = true});
-  if (!parse.ok()) {
-    return parse.error().WithTransport("http").WithHttpStatus(response.status_code);
-  }
-
-  ListTasksResponse parsed;
-  parsed.tasks.reserve(static_cast<std::size_t>(payload.tasks_size()));
-  for (auto& task : *payload.mutable_tasks()) {
-    parsed.tasks.push_back(std::move(task));
-  }
-  parsed.next_page_token = std::move(*payload.mutable_next_page_token());
-
-  return parsed;
-}
-
-}  // namespace
-
-HttpRequester MakeDefaultHttpRequester() {
-  return [client = a2a::http::Client{}](const HttpRequest& request) -> core::Result<HttpClientResponse> {
-    if (request.mtls.has_value()) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    auto response = client.SendRequest(ToSharedHttpRequest(request));
-    if (!response.ok()) {
-      return response.error();
-    }
-    return ToClientHttpResponse(std::move(response.value()));
-  };
-}
+HttpRequester MakeDefaultHttpRequester() { return MakeHttpRequesterForClient(std::make_shared<http::Client>()); }
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
-                                     HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout)
+                                     HttpStreamRequester stream_requester, std::chrono::milliseconds default_timeout,
+                                     HttpAsyncRequester async_requester)
     : resolved_interface_(std::move(resolved_interface)),
       requester_(std::move(requester)),
       stream_requester_(std::move(stream_requester)),
-      default_timeout_(default_timeout) {}
+      default_timeout_(default_timeout) {
+  async_transport_ =
+      http_json_internal::MakeAsyncTransport(resolved_interface_, std::move(async_requester), default_timeout_);
+}
 
 HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                                      std::chrono::milliseconds default_timeout)
@@ -137,58 +58,44 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
 std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                     std::chrono::milliseconds default_timeout) {
   auto default_http_client = std::make_shared<a2a::http::Client>();
-  auto transport = std::make_unique<HttpJsonTransport>(std::move(resolved_interface),
-                                                       MakeHttpRequesterForClient(default_http_client),
-                                                       HttpStreamRequester{}, default_timeout);
+  auto async_requester = [client = default_http_client](
+                             const HttpRequest& request,
+                             core::Completion<HttpClientResponse> completion) -> core::Result<core::AsyncHandle> {
+    if (request.mtls) {
+      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
+    }
+    return client->SendRequestAsync(ToSharedHttpRequest(request),
+                                    [completion = std::move(completion)](core::Result<http::Response> response) {
+                                      if (!response.ok()) {
+                                        completion(response.error());
+                                      } else {
+                                        completion(ToClientHttpResponse(std::move(response.value())));
+                                      }
+                                    });
+  };
+  auto transport = std::make_unique<HttpJsonTransport>(
+      std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client), HttpStreamRequester{},
+      default_timeout, std::move(async_requester));
   transport->default_async_stream_client_ = std::move(default_http_client);
   return transport;
 }
 
+core::Result<HttpRequest> HttpJsonTransport::BuildUnaryRequest(HttpOperation operation, std::string body,
+                                                               const CallOptions& options) const {
+  return http_json_internal::BuildUnaryRequest(resolved_interface_, default_timeout_, operation, std::move(body),
+                                               options);
+}
+
 core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation operation, std::string body,
                                                                 const CallOptions& options) const {
-  if (resolved_interface_.transport != PreferredTransport::kRest) {
-    return core::Error::Validation("HttpJsonTransport requires a REST interface");
+  if (!requester_) {
+    return core::Error::Internal(kMissingRequester);
   }
-  if (requester_ == nullptr) {
-    return core::Error::Internal("HTTP requester is not configured");
+  const auto prepared = BuildUnaryRequest(operation, std::move(body), options);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-  if (resolved_interface_.url.empty()) {
-    return core::Error::Validation("Resolved REST interface URL is required");
-  }
-
-  HttpRequest request;
-  request.method = std::string(operation.method);
-  request.url = JoinUrl(resolved_interface_.url, operation.endpoint);
-  request.body = std::move(body);
-  request.timeout = options.timeout.value_or(default_timeout_);
-
-  request.headers = options.headers;
-  request.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationJson);
-  request.headers[std::string(core::http::kAcceptHeaderName)] = std::string(core::http::kContentTypeApplicationJson);
-  request.tls = options.tls;
-  request.mtls = options.mtls;
-
-  if (!options.extensions.empty()) {
-    request.headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
-  }
-
-  if (options.auth_hook) {
-    options.auth_hook(request.headers);
-  }
-  if (options.credential_provider != nullptr) {
-    const auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context, &request.headers);
-    if (!applied.ok()) {
-      return applied.error();
-    }
-  }
-
-  const auto version = internal::ApplyProtocolVersion(options, request.headers);
-  if (!version.ok()) {
-    return version.error();
-  }
-
-  const auto response = requester_(request);
+  const auto response = requester_(prepared.value());
   if (!response.ok()) {
     return response.error();
   }
@@ -202,183 +109,114 @@ core::Result<HttpClientResponse> HttpJsonTransport::SendRequest(HttpOperation op
 
 core::Result<lf::a2a::v1::SendMessageResponse> HttpJsonTransport::SendMessage(
     const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) {
-  const auto body = core::MessageToJson(request);
-  if (!body.ok()) {
-    return body.error();
+  auto prepared = PrepareSendMessage(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-
-  const std::string endpoint(EndpointMap::kSendMessage);
-  const auto response =
-      SendRequest({.method = std::string(core::http::kMethodPost), .endpoint = endpoint}, body.value(), options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-
-  return ParseBodyOrMapError<lf::a2a::v1::SendMessageResponse>(core::http::kMethodPost, endpoint, response.value());
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<lf::a2a::v1::Task> HttpJsonTransport::GetTask(const lf::a2a::v1::GetTaskRequest& request,
                                                            const CallOptions& options) {
-  if (request.id().empty()) {
-    return core::Error::Validation("GetTaskRequest.id is required");
+  auto prepared = PrepareGetTask(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-
-  std::string endpoint = BuildTaskPath(request.id());
-  if (request.has_history_length()) {
-    endpoint += "?historyLength=" + std::to_string(request.history_length());
-  }
-
-  const auto response = SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = endpoint}, {}, options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::Task>(core::http::kMethodGet, endpoint, response.value());
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<ListTasksResponse> HttpJsonTransport::ListTasks(const ListTasksRequest& request,
                                                              const CallOptions& options) {
-  std::ostringstream endpoint;
-  endpoint << EndpointMap::kTaskCollection;
-  if (request.page_size > 0 || !request.page_token.empty()) {
-    endpoint << "?";
-    bool has_previous = false;
-    if (request.page_size > 0) {
-      endpoint << "pageSize=" << request.page_size;
-      has_previous = true;
-    }
-    if (!request.page_token.empty()) {
-      if (has_previous) {
-        endpoint << "&";
-      }
-      endpoint << "pageToken=" << request.page_token;
-    }
+  auto prepared = PrepareListTasks(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-
-  const std::string endpoint_path = endpoint.str();
-  const auto response =
-      SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = endpoint_path}, {}, options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseListTasksResponsePayload(response.value(), endpoint_path);
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<lf::a2a::v1::Task> HttpJsonTransport::CancelTask(const lf::a2a::v1::CancelTaskRequest& request,
                                                               const CallOptions& options) {
-  if (request.id().empty()) {
-    return core::Error::Validation("CancelTaskRequest.id is required");
+  auto prepared = PrepareCancelTask(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-
-  const std::string endpoint = BuildTaskPath(request.id()) + ":cancel";
-  const auto response =
-      SendRequest({.method = std::string(core::http::kMethodPost), .endpoint = endpoint}, "{}", options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::Task>(core::http::kMethodPost, endpoint, response.value());
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::CreateTaskPushNotificationConfig(
     const lf::a2a::v1::TaskPushNotificationConfig& request, const CallOptions& options) {
-  if (request.task_id().empty()) {
-    return core::Error::Validation("TaskPushNotificationConfig.task_id is required");
+  auto prepared = PrepareCreateTaskPushNotificationConfig(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-
-  const auto body = core::MessageToJson(request);
-  if (!body.ok()) {
-    return body.error();
-  }
-
-  const std::string endpoint = BuildTaskPushConfigCollectionPath(request.task_id());
-  const auto response =
-      SendRequest({.method = std::string(core::http::kMethodPost), .endpoint = endpoint}, body.value(), options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>(core::http::kMethodPost, endpoint,
-                                                                      response.value());
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<lf::a2a::v1::TaskPushNotificationConfig> HttpJsonTransport::GetTaskPushNotificationConfig(
     const lf::a2a::v1::GetTaskPushNotificationConfigRequest& request, const CallOptions& options) {
-  if (request.task_id().empty()) {
-    return core::Error::Validation("GetTaskPushNotificationConfigRequest.task_id is required");
+  auto prepared = PrepareGetTaskPushNotificationConfig(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-  if (request.id().empty()) {
-    return core::Error::Validation("GetTaskPushNotificationConfigRequest.id is required");
-  }
-
-  const std::string endpoint = BuildTaskPushConfigPath({.task_id = request.task_id(), .id = request.id()});
-  const auto response = SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = endpoint}, {}, options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::TaskPushNotificationConfig>(core::http::kMethodGet, endpoint,
-                                                                      response.value());
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> HttpJsonTransport::ListTaskPushNotificationConfigs(
     const lf::a2a::v1::ListTaskPushNotificationConfigsRequest& request, const CallOptions& options) {
-  if (request.task_id().empty()) {
-    return core::Error::Validation("ListTaskPushNotificationConfigsRequest.task_id is required");
+  auto prepared = PrepareListTaskPushNotificationConfigs(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-
-  std::ostringstream endpoint;
-  endpoint << BuildTaskPushConfigCollectionPath(request.task_id());
-  if (request.page_size() > 0 || !request.page_token().empty()) {
-    endpoint << "?";
-    bool has_previous = false;
-    if (request.page_size() > 0) {
-      endpoint << "pageSize=" << request.page_size();
-      has_previous = true;
-    }
-    if (!request.page_token().empty()) {
-      if (has_previous) {
-        endpoint << "&";
-      }
-      endpoint << "pageToken=" << request.page_token();
-    }
-  }
-
-  const std::string path = endpoint.str();
-  const auto response = SendRequest({.method = std::string(core::http::kMethodGet), .endpoint = path}, {}, options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-  return ParseBodyOrMapError<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>(core::http::kMethodGet, path,
-                                                                                   response.value());
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 core::Result<void> HttpJsonTransport::DeleteTaskPushNotificationConfig(
     const lf::a2a::v1::DeleteTaskPushNotificationConfigRequest& request, const CallOptions& options) {
-  if (request.task_id().empty()) {
-    return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.task_id is required");
+  auto prepared = PrepareDeleteTaskPushNotificationConfig(request);
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-  if (request.id().empty()) {
-    return core::Error::Validation("DeleteTaskPushNotificationConfigRequest.id is required");
-  }
-
-  const std::string endpoint = BuildTaskPushConfigPath({.task_id = request.task_id(), .id = request.id()});
-  const auto response =
-      SendRequest({.method = std::string(core::http::kMethodDelete), .endpoint = endpoint}, {}, options);
+  auto& plan = prepared.value();
+  auto response = SendRequest({.method = plan.method, .endpoint = plan.endpoint}, std::move(plan.body), options);
   if (!response.ok()) {
     return response.error();
   }
-
-  if (response.value().status_code < kHttpOkMin || response.value().status_code > kHttpOkMax) {
-    return BuildHttpError(core::http::kMethodDelete, endpoint, response.value());
-  }
-
-  if (response.value().status_code != kHttpNoContent && !response.value().body.empty() &&
-      response.value().body != "{}") {
-    google::protobuf::Empty ignored;
-    const auto parse = core::JsonToMessage(response.value().body, &ignored);
-    if (!parse.ok()) {
-      return parse.error().WithTransport("http").WithHttpStatus(response.value().status_code);
-    }
-  }
-
-  return {};
+  return plan.decode(response.value(), plan.endpoint);
 }
 
 }  // namespace a2a::client

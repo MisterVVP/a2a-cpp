@@ -1334,3 +1334,33 @@ if(A2A_STDLIB_HAS_STOP_TOKEN)
   target_link_libraries(request_execution_test PRIVATE a2a::server GTest::gtest_main)
   gtest_discover_tests(request_execution_test PROPERTIES LABELS tsan)
 endif()
+
+add_executable(async_client_test unit/async_client_test.cpp)
+target_link_libraries(async_client_test PRIVATE a2a::client GTest::gtest_main)
+gtest_discover_tests(async_client_test PROPERTIES LABELS tsan TIMEOUT 30)
+
+add_executable(async_http_transport_test integration/async_http_transport_test.cpp)
+target_link_libraries(async_http_transport_test PRIVATE a2a::client GTest::gtest_main)
+gtest_discover_tests(async_http_transport_test PROPERTIES TIMEOUT 30)
+
+add_executable(async_grpc_client_test integration/async_grpc_client_test.cpp)
+target_link_libraries(async_grpc_client_test PRIVATE a2a::client GTest::gtest_main)
+gtest_discover_tests(async_grpc_client_test PROPERTIES LABELS grpc_async TIMEOUT 30)
+
+add_executable(async_http_network_test integration/async_http_network_test.cpp)
+target_include_directories(async_http_network_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src/http)
+target_link_libraries(async_http_network_test PRIVATE a2a::client GTest::gtest_main)
+if(WIN32)
+  target_link_libraries(async_http_network_test PRIVATE ws2_32)
+endif()
+gtest_discover_tests(async_http_network_test PROPERTIES TIMEOUT 30)
+
+add_executable(async_unary_benchmark performance/async_unary_benchmark.cpp)
+target_link_libraries(async_unary_benchmark PRIVATE a2a::client)
+
+if(Python3_Interpreter_FOUND)
+  add_test(NAME installed_async_unary_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app async_unary_client)
+  set_tests_properties(installed_async_unary_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+endif()

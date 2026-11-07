@@ -40,4 +40,14 @@ template <typename T>
   return message;
 }
 
+[[nodiscard]] core::Result<HttpRequest> BuildUnaryRequest(const ResolvedInterface& resolved_interface,
+                                                          std::chrono::milliseconds default_timeout,
+                                                          std::string request_body, const CallOptions& options);
+[[nodiscard]] std::shared_ptr<AsyncClientTransport> MakeAsyncTransport(
+    ResolvedInterface resolved_interface, HttpAsyncRequester requester, std::chrono::milliseconds default_timeout,
+    std::shared_ptr<RequestIdGenerator> id_generator);
+[[nodiscard]] core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response);
+[[nodiscard]] core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
+                                                                                std::string_view expected_id);
+
 }  // namespace a2a::client::json_rpc_internal

@@ -25,6 +25,7 @@ namespace a2a::client {
 class GrpcTransport final : public ClientTransport {
  public:
   static constexpr std::chrono::milliseconds kDefaultTimeout{30000};
+  [[nodiscard]] core::Result<void> Shutdown() override;
 
   class StreamReader {
    public:
@@ -122,10 +123,13 @@ class GrpcTransport final : public ClientTransport {
                                                                           StreamObserver& observer,
                                                                           const CallOptions& options) override;
 
+  [[nodiscard]] std::shared_ptr<AsyncClientTransport> Async() const override { return async_transport_; }
+
  private:
   [[nodiscard]] core::Result<std::unique_ptr<::grpc::ClientContext>> BuildContext(const CallOptions& options) const;
   [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
+  std::shared_ptr<AsyncClientTransport> async_transport_;
   ResolvedInterface resolved_interface_;
   std::shared_ptr<RpcClient> rpc_client_;
   std::chrono::milliseconds default_timeout_;

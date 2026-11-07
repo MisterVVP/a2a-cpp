@@ -4,6 +4,7 @@
 - [Getting Started](getting-started/installation.md)
   - [Quickstart](getting-started/quickstart.md)
 - [Client](client/overview.md)
+  - [Async unary calls](client/async-unary.md)
   - [Sending Messages](client/sending-messages.md)
   - [Discovery](client/discovery.md)
   - [Get Task and List Tasks](client/get-task.md)
