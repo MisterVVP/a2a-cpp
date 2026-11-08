@@ -109,26 +109,25 @@ void ExpectSuccessfulReply(const std::shared_ptr<GrpcReply>& reply) {
   EXPECT_EQ(reply->response.id(), kCoroutineTaskId);
 }
 
+void ExpectRouteStatus(const AsioGrpcServer& server, std::string_view path, int expected_status) {
+  HttpServerRequest request;
+  request.method = core::http::kMethodGet;
+  request.target = path;
+  const auto response = server.Route(request);
+  ASSERT_TRUE(response.ok());
+  EXPECT_EQ(response.value().status_code, expected_status);
+}
+
 TEST(AsioGrpcServer, BindingsExposeDiscoveryAndKeepAsyncHttpOperationsUnavailable) {
   AsioGrpcServer server;
   ASSERT_TRUE(server.Ready());
   for (const auto path : {RestServerTransport::kAgentCardPath, RestServerTransport::kLegacyAgentCardPath}) {
-    HttpServerRequest request;
-    request.method = core::http::kMethodGet;
-    request.target = path;
-    const auto response = server.Route(request);
-    ASSERT_TRUE(response.ok());
-    EXPECT_EQ(response.value().status_code, core::http::kStatusOk);
+    ExpectRouteStatus(server, path, core::http::kStatusOk);
   }
   constexpr auto kTaskPath = "/a2a/tasks/absent";
   constexpr auto kRpcPath = "/rpc";
   for (const auto* path : {kTaskPath, kRpcPath}) {
-    HttpServerRequest request;
-    request.method = core::http::kMethodGet;
-    request.target = path;
-    const auto response = server.Route(request);
-    ASSERT_TRUE(response.ok());
-    EXPECT_EQ(response.value().status_code, core::http::kStatusNotFound);
+    ExpectRouteStatus(server, path, core::http::kStatusNotFound);
   }
 }
 

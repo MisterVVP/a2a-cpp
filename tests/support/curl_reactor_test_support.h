@@ -201,10 +201,11 @@ inline bool ReadTestRequest(TestSocketHandle socket) {
 // by the test; no per-connection thread or timing-based response scheduling.
 class CurlLoopbackServer final {
  public:
-  explicit CurlLoopbackServer(std::size_t expected, std::string_view initial = kTestFirstChunk)
+  explicit CurlLoopbackServer(std::size_t expected, std::string_view initial = kTestFirstChunk,
+                              std::string_view headers = kTestSseHeaders)
       : global_(detail::EnsureCurlGlobalInit()),
         expected_(expected),
-        initial_response_(std::string(kTestSseHeaders).append(initial)),
+        initial_response_(std::string(headers).append(initial)),
         listener_(MakeTestListener(&port_)),
         worker_([this, listener = listener_.get()] { AcceptStreams(listener); }) {}
   ~CurlLoopbackServer() {
