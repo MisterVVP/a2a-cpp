@@ -29,13 +29,14 @@ bool IsTenantExtendedAgentCardPath(std::string_view path) {
 
 TransportMux::TransportMux() : TransportMux(Options{}) {}
 
-TransportMux::TransportMux(Options options) : options_(std::move(options)) {
-  not_found_handler_ = [this](const HttpServerRequest&) { return BuildDefaultNotFound(last_route_miss_); };
-}
+TransportMux::TransportMux(Options options) : options_(std::move(options)) {}
 
-void TransportMux::RegisterRoute(Route route) {
-  routes_.push_back(std::move(route));
-  std::ranges::stable_sort(routes_, [](const Route& lhs, const Route& rhs) { return lhs.priority > rhs.priority; });
+void TransportMux::RegisterRoute(Route route) { RegisterPreparedRoute(std::move(route), {}); }
+void TransportMux::RegisterPreparedRoute(Route route, PrepareHandler prepare) {
+  routes_.push_back({std::move(route), std::move(prepare)});
+  std::ranges::stable_sort(routes_, [](const RegisteredRoute& lhs, const RegisteredRoute& rhs) {
+    return lhs.route.priority > rhs.route.priority;
+  });
 }
 
 void TransportMux::SetNotFoundHandler(Handler handler) { not_found_handler_ = std::move(handler); }
@@ -45,14 +46,16 @@ void TransportMux::RegisterJsonRpcRoute(JsonRpcServerTransport& transport) {
 }
 
 void TransportMux::RegisterJsonRpcRoute(JsonRpcServerTransport& transport, JsonRpcRouteOptions options) {
-  RegisterRoute({
-      .name = std::move(options.route_name),
-      .matcher = [method = std::move(options.method), rpc_path = std::move(options.rpc_path)](
-                     std::string_view request_method,
-                     std::string_view path) { return request_method == method && path == rpc_path; },
-      .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },
-      .priority = options.priority,
-  });
+  RegisterPreparedRoute(
+      {
+          .name = std::move(options.route_name),
+          .matcher = [method = std::move(options.method), rpc_path = std::move(options.rpc_path)](
+                         std::string_view request_method,
+                         std::string_view path) { return request_method == method && path == rpc_path; },
+          .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },
+          .priority = options.priority,
+      },
+      [&transport](const HttpServerRequest& request) { return transport.Prepare(request); });
 }
 
 void TransportMux::RegisterRestRoute(RestServerTransport& transport) {
@@ -71,25 +74,29 @@ void TransportMux::RegisterAgentCardRoute(RestServerTransport& transport) {
 }
 
 void TransportMux::RegisterRestRoute(RestServerTransport& transport, RestRouteOptions options) {
-  RegisterRoute({
-      .name = std::move(options.route_name),
-      .matcher =
-          [rest_api_prefix = std::move(options.rest_api_prefix),
-           well_known_prefix = std::move(options.well_known_prefix)](std::string_view method, std::string_view path) {
-            (void)method;
-            return path == core::protocol_paths::kExtendedAgentCard || IsTenantExtendedAgentCardPath(path) ||
-                   path.starts_with(rest_api_prefix) || path.starts_with(well_known_prefix);
-          },
-      .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },
-      .priority = options.priority,
-  });
+  RegisterPreparedRoute(
+      {
+          .name = std::move(options.route_name),
+          .matcher =
+              [rest_api_prefix = std::move(options.rest_api_prefix),
+               well_known_prefix = std::move(options.well_known_prefix)](std::string_view method,
+                                                                         std::string_view path) {
+                (void)method;
+                return path == core::protocol_paths::kExtendedAgentCard || IsTenantExtendedAgentCardPath(path) ||
+                       path.starts_with(rest_api_prefix) || path.starts_with(well_known_prefix);
+              },
+          .handler = [&transport](const HttpServerRequest& routed_request) { return transport.Handle(routed_request); },
+          .priority = options.priority,
+      },
+      [&transport](const HttpServerRequest& request) { return transport.Prepare(request); });
 }
 
 core::Result<HttpServerResponse> TransportMux::RouteRequest(const HttpServerRequest& request) const {
   const std::string normalized_path = NormalizePath(request.target);
   bool path_matched = false;
 
-  for (const auto& route : routes_) {
+  for (const auto& registered : routes_) {
+    const auto& route = registered.route;
     if (route.matcher(request.method, normalized_path)) {
       HttpServerRequest normalized_request = request;
       normalized_request.target = NormalizeTargetForHandler(request.target);
@@ -104,7 +111,43 @@ core::Result<HttpServerResponse> TransportMux::RouteRequest(const HttpServerRequ
       RouteMiss{.method = request.method,
                 .normalized_path = normalized_path,
                 .reason = path_matched ? RouteMiss::Reason::kMethodNotAllowed : RouteMiss::Reason::kNoRoute};
-  return not_found_handler_(request);
+  if (not_found_handler_) {
+    return not_found_handler_(request);
+  }
+  return BuildDefaultNotFound(last_route_miss_);
+}
+
+core::Result<PreparedResponse<HttpServerResponse>> TransportMux::PrepareRequest(
+    const HttpServerRequest& request) const {
+  const std::string normalized_path = NormalizePath(request.target);
+  bool path_matched = false;
+  for (const auto& registered : routes_) {
+    const auto& route = registered.route;
+    if (route.matcher(request.method, normalized_path)) {
+      auto normalized = request;
+      normalized.target = NormalizeTargetForHandler(request.target);
+      if (registered.prepare) {
+        return registered.prepare(normalized);
+      }
+      auto response = route.handler(normalized);
+      if (!response.ok()) {
+        return response.error();
+      }
+      return PreparedResponse<HttpServerResponse>(std::move(response.value()));
+    }
+    path_matched = path_matched || route.matcher("*", normalized_path);
+  }
+  if (not_found_handler_) {
+    auto response = not_found_handler_(request);
+    if (!response.ok()) {
+      return response.error();
+    }
+    return PreparedResponse<HttpServerResponse>(std::move(response.value()));
+  }
+  return PreparedResponse<HttpServerResponse>(BuildDefaultNotFound(
+      {.method = request.method,
+       .normalized_path = normalized_path,
+       .reason = path_matched ? RouteMiss::Reason::kMethodNotAllowed : RouteMiss::Reason::kNoRoute}));
 }
 
 const TransportMux::RouteMiss& TransportMux::last_route_miss() const noexcept { return last_route_miss_; }

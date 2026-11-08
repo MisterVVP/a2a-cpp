@@ -25,6 +25,7 @@ namespace {
 constexpr std::size_t kResponsePayloadReserveSlackBytes = 32;
 constexpr std::size_t kResponsePayloadReserveSlackLineCount = 3;
 constexpr std::size_t kChunkSizeBufferBytes = (sizeof(std::size_t) * 2U) + 1U;
+constexpr std::string_view kShrinkingInputMessage = "Incremental HTTP input must retain its incomplete request prefix";
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 
 struct RequestLine final {
@@ -47,8 +48,8 @@ std::string Trim(std::string_view value) {
 [[nodiscard]] std::size_t ResponsePayloadReserveSize(const HttpServerResponse& response,
                                                      std::string_view reason_phrase) {
   std::size_t size = core::http::kHttpVersion11.size() + reason_phrase.size() + core::http::kLineTerminator.size() +
-                     response.body.size() + core::http::kConnectionHeaderName.size() +
-                     core::http::kConnectionCloseHeaderValue.size() + core::http::kContentLengthHeaderName.size() +
+                     core::http::kConnectionHeaderName.size() + core::http::kConnectionCloseHeaderValue.size() +
+                     core::http::kContentLengthHeaderName.size() +
                      (core::http::kLineTerminator.size() * kResponsePayloadReserveSlackLineCount) +
                      kResponsePayloadReserveSlackBytes;
   for (const auto& [name, value] : response.headers) {
@@ -88,24 +89,6 @@ core::Result<std::size_t> ParseContentLength(std::string_view value) {
     return core::Error::Validation("Content-Length value overflows platform size_t");
   }
   return static_cast<std::size_t>(parsed);
-}
-
-core::Result<void> ReadUntilHeadersComplete(HttpByteTransport& transport, std::size_t max_request_size,
-                                            std::vector<char>& buffer, std::string& raw) {
-  while (raw.find(core::http::kHeaderDelimiter) == std::string::npos) {
-    const auto read = transport.Read(buffer.data(), buffer.size());
-    if (!read.ok()) {
-      return read.error();
-    }
-    if (read.value() == 0) {
-      return core::Error::Internal("Unexpected end of stream while reading HTTP headers");
-    }
-    raw.append(buffer.data(), read.value());
-    if (raw.find(core::http::kHeaderDelimiter) == std::string::npos && raw.size() > max_request_size) {
-      return core::Error::Validation("HTTP request exceeds max_request_size before headers complete");
-    }
-  }
-  return {};
 }
 
 core::Result<RequestLine> ParseRequestLine(std::string_view header_block) {
@@ -196,12 +179,6 @@ core::Result<std::optional<std::size_t>> ParseHeaders(std::string_view header_bl
   return content_length;
 }
 
-struct BodyReadLimits final {
-  std::size_t expected_body_size;
-  std::size_t body_start;
-  std::size_t max_request_size;
-};
-
 core::Result<void> WriteAll(HttpByteTransport& transport, std::string_view payload) {
   std::size_t sent = 0;
   while (sent < payload.size()) {
@@ -254,24 +231,6 @@ class ChunkedByteTransport final : public HttpByteTransport {
   HttpByteTransport& transport_;
   std::string scratch_;
 };
-
-core::Result<void> ReadRemainingBody(HttpByteTransport& transport, const BodyReadLimits& limits,
-                                     std::vector<char>& buffer, std::string& raw) {
-  while (raw.size() - limits.body_start < limits.expected_body_size) {
-    const auto read = transport.Read(buffer.data(), buffer.size());
-    if (!read.ok()) {
-      return read.error();
-    }
-    if (read.value() == 0) {
-      return core::Error::Internal("Unexpected end of stream while reading HTTP body");
-    }
-    raw.append(buffer.data(), read.value());
-    if (limits.body_start + limits.expected_body_size > limits.max_request_size) {
-      return core::Error::Validation("HTTP request exceeds max_request_size while reading body");
-    }
-  }
-  return {};
-}
 
 bool HeaderContainsToken(const std::unordered_map<std::string, std::string>& headers, std::string_view header_name,
                          std::string_view expected_token) {
@@ -355,55 +314,106 @@ core::Result<HttpServerRequest> HttpAdapter::ReadRequest(HttpByteTransport& tran
     return core::Error::Internal("HTTP adapter read_buffer_size must be greater than zero");
   }
 
-  std::string& raw = state.buffered_bytes_;
-  if (raw.capacity() < options_.read_buffer_size * 2U) {
-    raw.reserve(options_.read_buffer_size * 2U);
-  }
   std::vector<char> buffer(options_.read_buffer_size);
-
-  const auto headers_read = ReadUntilHeadersComplete(transport, options_.max_request_size, buffer, raw);
-  if (!headers_read.ok()) {
-    return headers_read.error();
+  for (;;) {
+    std::size_t consumed = 0;
+    auto parsed = ParseRequest(state.buffered_bytes_, state, consumed);
+    if (!parsed.ok()) {
+      return parsed.error();
+    }
+    auto& request = parsed.value();
+    if (request.has_value()) {
+      state.buffered_bytes_.erase(0, consumed);
+      request->remote_address = std::move(remote_address);
+      return std::move(request.value());
+    }
+    const auto read = transport.Read(buffer.data(), buffer.size());
+    if (!read.ok()) {
+      return read.error();
+    }
+    if (read.value() == 0) {
+      return core::Error::Internal("Unexpected end of stream while reading HTTP request");
+    }
+    state.buffered_bytes_.append(buffer.data(), read.value());
   }
+}
 
-  const std::size_t header_end = raw.find(core::http::kHeaderDelimiter);
-  const std::string_view header_block(raw.data(), header_end);
+core::Result<std::optional<HttpServerRequest>> HttpAdapter::ParseRequest(std::string_view bytes, std::size_t& consumed,
+                                                                         std::string remote_address) const {
+  HttpConnectionState state;
+  return ParseRequest(bytes, state, consumed, std::move(remote_address));
+}
 
+core::Result<bool> HttpAdapter::ParseRequestHeaders(std::string_view bytes, HttpConnectionState& state) const {
+  const std::size_t header_end = bytes.find(core::http::kHeaderDelimiter, state.header_search_offset_);
+  if (header_end == std::string_view::npos) {
+    if (bytes.size() > options_.max_request_size) {
+      return core::Error::Validation("HTTP request exceeds max_request_size before headers complete");
+    }
+    const auto overlap = core::http::kHeaderDelimiter.size() - 1U;
+    state.header_search_offset_ = bytes.size() > overlap ? bytes.size() - overlap : 0;
+    return false;
+  }
+  const std::size_t body_start = header_end + core::http::kHeaderDelimiter.size();
+  if (body_start > options_.max_request_size) {
+    return core::Error::Validation("HTTP headers exceed max_request_size");
+  }
+  const auto header_block = bytes.substr(0, body_start - core::http::kLineTerminator.size());
   const auto request_line = ParseRequestLine(header_block);
   if (!request_line.ok()) {
     return request_line.error();
   }
-
   std::unordered_map<std::string, std::string> headers;
   const auto content_length = ParseHeaders(header_block, &headers);
   if (!content_length.ok()) {
     return content_length.error();
   }
-
-  const std::size_t body_start = header_end + core::http::kHeaderDelimiter.size();
-  const std::size_t expected_body_size = content_length.value().value_or(0);
-  if (body_start > options_.max_request_size || expected_body_size > options_.max_request_size - body_start) {
+  const std::size_t body_size = content_length.value().value_or(0);
+  if (body_size > options_.max_request_size - body_start) {
     return core::Error::Validation("Content-Length exceeds max_request_size");
   }
+  state.pending_request_ = HttpServerRequest{.method = request_line.value().method,
+                                             .target = request_line.value().target,
+                                             .headers = std::move(headers),
+                                             .body = {},
+                                             .remote_address = {}};
+  state.body_offset_ = body_start;
+  state.request_bytes_ = body_start + body_size;
+  return true;
+}
 
-  const BodyReadLimits limits{
-      .expected_body_size = expected_body_size,
-      .body_start = body_start,
-      .max_request_size = options_.max_request_size,
-  };
-  const auto body_read = ReadRemainingBody(transport, limits, buffer, raw);
-  if (!body_read.ok()) {
-    return body_read.error();
+core::Result<std::optional<HttpServerRequest>> HttpAdapter::ParseRequest(std::string_view bytes,
+                                                                         HttpConnectionState& state,
+                                                                         std::size_t& consumed,
+                                                                         std::string remote_address) const {
+  consumed = 0;
+  if (bytes.size() < state.previous_input_bytes_) {
+    return core::Error::Validation(std::string(kShrinkingInputMessage));
   }
-
-  HttpServerRequest request;
-  request.method = request_line.value().method;
-  request.target = request_line.value().target;
-  request.headers = std::move(headers);
-  request.body = raw.substr(body_start, expected_body_size);
+  state.previous_input_bytes_ = bytes.size();
+  if (!state.pending_request_.has_value()) {
+    const auto headers = ParseRequestHeaders(bytes, state);
+    if (!headers.ok()) {
+      return headers.error();
+    }
+    if (!headers.value()) {
+      return std::optional<HttpServerRequest>{};
+    }
+  }
+  if (!state.pending_request_.has_value() || bytes.size() < state.request_bytes_) {
+    return std::optional<HttpServerRequest>{};
+  }
+  // ParseRequestHeaders establishes this value before returning success.
+  auto request = std::move(state.pending_request_.value());
+  request.body.assign(bytes.substr(state.body_offset_, state.request_bytes_ - state.body_offset_));
   request.remote_address = std::move(remote_address);
-  raw.erase(0, body_start + expected_body_size);
-  return request;
+  consumed = state.request_bytes_;
+  state.pending_request_.reset();
+  state.header_search_offset_ = 0;
+  state.body_offset_ = 0;
+  state.request_bytes_ = 0;
+  state.previous_input_bytes_ = 0;
+  return std::optional<HttpServerRequest>(std::move(request));
 }
 
 bool HttpAdapter::IsConnectionReusable(const HttpServerRequest& request) {
@@ -464,47 +474,22 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
 
 core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, const HttpServerResponse& response,
                                               bool close_connection) {
-  const std::string reason_phrase = ReasonPhrase(response.status_code);
-  std::string payload;
-  payload.reserve(ResponsePayloadReserveSize(response, reason_phrase));
-  payload += core::http::kHttpVersion11;
-  payload.push_back(' ');
-  payload += std::to_string(response.status_code);
-  payload.push_back(' ');
-  payload += reason_phrase;
-  payload += core::http::kLineTerminator;
-
+  if (!response.stream_writer) {
+    const auto bytes = EncodeResponse(response, close_connection);
+    if (!bytes.ok()) {
+      return bytes.error();
+    }
+    return WriteAll(transport, bytes.value());
+  }
+  const auto encoded = EncodeResponseHead(response, close_connection);
+  if (!encoded.ok()) {
+    return encoded.error();
+  }
+  const auto& payload = encoded.value();
   const bool is_streaming = static_cast<bool>(response.stream_writer);
-  const bool response_requests_close =
+  const bool must_close_connection =
+      close_connection ||
       HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
-  const bool must_close_connection = close_connection || response_requests_close;
-  const auto headers =
-      AppendResponseHeaders(response, is_streaming, must_close_connection, response_requests_close, &payload);
-  if (!headers.ok()) {
-    return headers.error();
-  }
-  if (!headers.value() && !is_streaming) {
-    payload += core::http::kContentLengthHeaderName;
-    payload += core::http::kHeaderNameValueSeparator;
-    payload += std::to_string(response.body.size());
-    payload += core::http::kLineTerminator;
-  }
-  if (is_streaming && !must_close_connection) {
-    payload += core::http::kTransferEncodingHeaderName;
-    payload += core::http::kHeaderNameValueSeparator;
-    payload += core::http::kTransferEncodingChunked;
-    payload += core::http::kLineTerminator;
-  }
-  if (must_close_connection && !response_requests_close) {
-    payload += core::http::kConnectionHeaderName;
-    payload += core::http::kHeaderNameValueSeparator;
-    payload += core::http::kConnectionCloseHeaderValue;
-    payload += core::http::kLineTerminator;
-  }
-  payload += core::http::kLineTerminator;
-  if (!is_streaming) {
-    payload += response.body;
-  }
 
   if (is_streaming) {
     if (must_close_connection) {
@@ -529,7 +514,62 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   if (!response_written.ok()) {
     return response_written.error();
   }
-  return {};
+  return WriteAll(transport, response.body);
+}
+
+core::Result<std::string> HttpAdapter::EncodeResponseHead(const HttpServerResponse& response, bool close_connection,
+                                                          bool chunked_stream) {
+  const std::string reason_phrase = ReasonPhrase(response.status_code);
+  std::string payload;
+  payload.reserve(ResponsePayloadReserveSize(response, reason_phrase));
+  payload += core::http::kHttpVersion11;
+  payload.push_back(' ');
+  payload += std::to_string(response.status_code);
+  payload.push_back(' ');
+  payload += reason_phrase;
+  payload += core::http::kLineTerminator;
+
+  const bool is_streaming = chunked_stream || static_cast<bool>(response.stream_writer);
+  const bool response_requests_close =
+      HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
+  const bool must_close_connection = close_connection || response_requests_close;
+  const auto headers =
+      AppendResponseHeaders(response, is_streaming, must_close_connection, response_requests_close, &payload);
+  if (!headers.ok()) {
+    return headers.error();
+  }
+  if (!headers.value() && !is_streaming) {
+    payload += core::http::kContentLengthHeaderName;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += std::to_string(response.body.size());
+    payload += core::http::kLineTerminator;
+  }
+  if (is_streaming && (!must_close_connection || chunked_stream)) {
+    payload += core::http::kTransferEncodingHeaderName;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += core::http::kTransferEncodingChunked;
+    payload += core::http::kLineTerminator;
+  }
+  if (must_close_connection && !response_requests_close) {
+    payload += core::http::kConnectionHeaderName;
+    payload += core::http::kHeaderNameValueSeparator;
+    payload += core::http::kConnectionCloseHeaderValue;
+    payload += core::http::kLineTerminator;
+  }
+  payload += core::http::kLineTerminator;
+  return payload;
+}
+
+core::Result<std::string> HttpAdapter::EncodeResponse(const HttpServerResponse& response, bool close_connection) {
+  if (response.stream_writer) {
+    return core::Error::Validation("EncodeResponse requires a non-streaming response");
+  }
+  auto payload = EncodeResponseHead(response, close_connection);
+  if (!payload.ok()) {
+    return payload.error();
+  }
+  payload.value().append(response.body);
+  return payload;
 }
 
 }  // namespace a2a::server

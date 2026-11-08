@@ -14,6 +14,7 @@
 #include "a2a/core/result.h"
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/dispatcher.h"
+#include "a2a/server/prepared_dispatch.h"
 #include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_server_transport.h"
 #include "a2a/server/version_header_validator.h"
@@ -30,6 +31,7 @@ class JsonRpcServerTransport final {
  public:
   JsonRpcServerTransport(Dispatcher* dispatcher, JsonRpcServerTransportOptions options = {});
 
+  [[nodiscard]] core::Result<PreparedResponse<HttpServerResponse>> Prepare(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> Handle(const HttpServerRequest& request) const;
 
  private:
@@ -59,7 +61,7 @@ class JsonRpcServerTransport final {
   [[nodiscard]] static core::Result<JsonRpcEnvelope> ParseEnvelope(std::string_view body);
   [[nodiscard]] static core::Result<std::string> SerializeSuccessEnvelope(const ResponseId& id,
                                                                           const google::protobuf::Value& result);
-  [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(const DispatchRequest& request,
+  [[nodiscard]] static core::Result<google::protobuf::Value> SerializeDispatchResult(DispatcherOperation operation,
                                                                                      const DispatchResponse& response);
   [[nodiscard]] static HttpServerResponse BuildErrorResponse(int json_rpc_code, std::string_view message,
                                                              const ResponseId& id,
@@ -68,6 +70,9 @@ class JsonRpcServerTransport final {
                                                                const google::protobuf::Value& result,
                                                                const std::vector<std::string>& activated_extensions);
 
+  [[nodiscard]] static core::Result<HttpServerResponse> Complete(const ResponseId& id, DispatcherOperation operation,
+                                                                 const std::vector<std::string>& activated_extensions,
+                                                                 core::Result<DispatchResponse> dispatch);
   Dispatcher* dispatcher_ = nullptr;
   JsonRpcServerTransportOptions options_;
   RequiredExtensionsValidator required_extensions_validator_;

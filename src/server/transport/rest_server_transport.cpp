@@ -194,12 +194,17 @@ std::uint64_t ComputeEtagHash(std::string_view data) {
 
 std::string FormatHttpDate(std::chrono::system_clock::time_point time_point) {
   const std::time_t timestamp = std::chrono::system_clock::to_time_t(time_point);
-  const std::tm* utc_tm = std::gmtime(&timestamp);
-  if (utc_tm == nullptr) {
+  std::tm utc_tm{};
+#ifdef _WIN32
+  const bool converted = gmtime_s(&utc_tm, &timestamp) == 0;
+#else
+  const bool converted = gmtime_r(&timestamp, &utc_tm) != nullptr;
+#endif
+  if (!converted) {
     return {};
   }
   std::ostringstream stream;
-  stream << std::put_time(utc_tm, kHttpDateFormat);
+  stream << std::put_time(&utc_tm, kHttpDateFormat);
   return stream.str();
 }
 
@@ -385,7 +390,17 @@ RestServerTransport::RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::Ag
   }
 }
 
-core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerRequest& request) const {
+namespace {
+core::Result<PreparedResponse<HttpServerResponse>> AsPrepared(core::Result<HttpServerResponse> response) {
+  if (!response.ok()) {
+    return response.error();
+  }
+  return PreparedResponse<HttpServerResponse>(std::move(response.value()));
+}
+}  // namespace
+
+core::Result<PreparedResponse<HttpServerResponse>> RestServerTransport::Prepare(
+    const HttpServerRequest& request) const {
   if (request.target.empty() || request.target.front() != '/') {
     return core::Error::Validation(kInvalidRequestTargetMessage);
   }
@@ -406,44 +421,77 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
       return extended_view.error();
     }
     if (extended_view.value()) {
-      return HandleExtendedAgentCard(request, {});
+      return PrepareExtendedAgentCard(request, {});
     }
-    return HandleAgentCard(request);
+    return AsPrepared(HandleAgentCard(request));
   }
   if (path == core::protocol_paths::kLegacyAgentCard) {
-    return HandleAgentCard(request);
+    return AsPrepared(HandleAgentCard(request));
   }
   if (path == core::protocol_paths::kExtendedAgentCard || is_base_path_extended_agent_card) {
-    return HandleExtendedAgentCard(request, {});
+    return PrepareExtendedAgentCard(request, {});
   }
   if (const auto tenant = ExtractTenantFromExtendedAgentCardPath(path, options_.rest_api_base_path);
       tenant.has_value()) {
-    return HandleExtendedAgentCard(request, *tenant);
+    return PrepareExtendedAgentCard(request, *tenant);
   }
 
   const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(),
-                                  core::protocol_error_reasons::kVersionNotSupported);
+    return PreparedResponse<HttpServerResponse>(BuildJsonErrorResponse(
+        core::http::kStatusBadRequest, version.error().message(), core::protocol_error_reasons::kVersionNotSupported));
   }
 
   const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
-                                  core::protocol_error_reasons::kExtensionSupportRequired);
+    return PreparedResponse<HttpServerResponse>(
+        BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
+                               core::protocol_error_reasons::kExtensionSupportRequired));
   }
 
   const auto rest_request = BuildRestRequest(request);
   if (!rest_request.ok()) {
-    return BuildValidatedErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
-                                       core::protocol_error_reasons::kUnsupportedOperation, extensions.value());
+    return PreparedResponse<HttpServerResponse>(
+        BuildValidatedErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
+                                    core::protocol_error_reasons::kUnsupportedOperation, extensions.value()));
   }
 
-  const auto rest_response = transport_.Handle(rest_request.value());
-  if (!rest_response.ok()) {
-    return rest_response.error();
+  auto prepared = RestTransport::Prepare(rest_request.value());
+  if (!prepared.ok()) {
+    return prepared.error();
   }
-  return ToHttpResponse(rest_response.value(), extensions.value());
+  if (auto* response = std::get_if<RestResponse>(&prepared.value())) {
+    return PreparedResponse<HttpServerResponse>(ToHttpResponse(*response, extensions.value()));
+  }
+  auto plan = std::get<PreparedDispatch<RestResponse>>(std::move(prepared.value()));
+  return PreparedResponse<HttpServerResponse>(PreparedDispatch<HttpServerResponse>{
+      .request = std::move(plan.request),
+      .context = std::move(plan.context),
+      .complete = [complete = std::move(plan.complete), extensions = extensions.value()](
+                      core::Result<DispatchResponse> result) -> core::Result<HttpServerResponse> {
+        auto response = complete(std::move(result));
+        if (!response.ok()) {
+          return response.error();
+        }
+        return ToHttpResponse(response.value(), extensions);
+      },
+      .encode_event = std::move(plan.encode_event),
+      .encode_error = std::move(plan.encode_error)});
+}
+
+core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerRequest& request) const {
+  auto prepared = Prepare(request);
+  if (!prepared.ok()) {
+    return prepared.error();
+  }
+  if (auto* response = std::get_if<HttpServerResponse>(&prepared.value())) {
+    return std::move(*response);
+  }
+  if (dispatcher_ == nullptr) {
+    return core::Error::Internal(internal::messages::kMissingRestDispatcher);
+  }
+  auto& plan = std::get<PreparedDispatch<HttpServerResponse>>(prepared.value());
+  return plan.complete(dispatcher_->Dispatch(plan.request, plan.context));
 }
 
 core::Result<RestRequest> RestServerTransport::BuildRestRequest(const HttpServerRequest& request) const {
@@ -510,26 +558,23 @@ core::Result<HttpServerResponse> RestServerTransport::HandleAgentCard(const Http
   return response;
 }
 
-core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(const HttpServerRequest& request,
-                                                                              std::string_view tenant) const {
+core::Result<PreparedResponse<HttpServerResponse>> RestServerTransport::PrepareExtendedAgentCard(
+    const HttpServerRequest& request, std::string_view tenant) const {
   if (request.method != core::http::kMethodGet) {
-    return BuildJsonErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
-                                  core::protocol_error_reasons::kUnsupportedOperation);
+    return PreparedResponse<HttpServerResponse>(
+        BuildJsonErrorResponse(core::http::kStatusNotFound, internal::messages::kNoMatchingRestRoute,
+                               core::protocol_error_reasons::kUnsupportedOperation));
   }
   const auto version = version_header_validator_.Validate(request.headers);
   if (!version.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, version.error().message(),
-                                  core::protocol_error_reasons::kVersionNotSupported);
+    return PreparedResponse<HttpServerResponse>(BuildJsonErrorResponse(
+        core::http::kStatusBadRequest, version.error().message(), core::protocol_error_reasons::kVersionNotSupported));
   }
   const auto extensions = required_extensions_validator_.Validate(request.headers);
   if (!extensions.ok()) {
-    return BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
-                                  core::protocol_error_reasons::kExtensionSupportRequired);
-  }
-  if (dispatcher_ == nullptr) {
-    return BuildValidatedErrorResponse(core::http::kStatusInternalServerError,
-                                       internal::messages::kMissingRestDispatcher, internal::error_statuses::kInternal,
-                                       extensions.value());
+    return PreparedResponse<HttpServerResponse>(
+        BuildJsonErrorResponse(core::http::kStatusBadRequest, extensions.error().message(),
+                               core::protocol_error_reasons::kExtensionSupportRequired));
   }
   RequestContext context;
   context.remote_address = request.remote_address.empty() ? std::optional<std::string>{}
@@ -541,34 +586,39 @@ core::Result<HttpServerResponse> RestServerTransport::HandleExtendedAgentCard(co
   if (!tenant.empty()) {
     card_request.set_tenant(std::string(tenant));
   }
-  const auto dispatch = dispatcher_->Dispatch(
-      {.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = card_request}, context);
-  if (!dispatch.ok()) {
-    return BuildValidatedErrorResponse(HttpStatusFromError(dispatch.error()), dispatch.error().message(),
-                                       RestReasonFromError(dispatch.error()), extensions.value());
-  }
-  const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
-  if (payload == nullptr) {
-    return core::Error::Internal(kExtendedCardPayloadMismatchMessage);
-  }
+  return PreparedResponse<HttpServerResponse>(PreparedDispatch<HttpServerResponse>{
+      .request = {.operation = DispatcherOperation::kGetExtendedAgentCard, .payload = card_request},
+      .context = std::move(context),
+      .complete = [extensions = extensions.value(), include_legacy = options_.include_legacy_transport_fields](
+                      core::Result<DispatchResponse> dispatch) -> core::Result<HttpServerResponse> {
+        if (!dispatch.ok()) {
+          return BuildValidatedErrorResponse(HttpStatusFromError(dispatch.error()), dispatch.error().message(),
+                                             RestReasonFromError(dispatch.error()), extensions);
+        }
+        const auto* payload = std::get_if<lf::a2a::v1::AgentCard>(&dispatch.value().payload());
+        if (payload == nullptr) {
+          return core::Error::Internal(kExtendedCardPayloadMismatchMessage);
+        }
 
-  const auto card = BuildNormalizedAgentCard(*payload, options_.include_legacy_transport_fields);
-  if (!card.ok()) {
-    return card.error();
-  }
+        const auto card = BuildNormalizedAgentCard(*payload, include_legacy);
+        if (!card.ok()) {
+          return card.error();
+        }
 
-  const auto normalized = core::MessageToJson(card.value());
-  if (!normalized.ok()) {
-    return normalized.error();
-  }
+        const auto normalized = core::MessageToJson(card.value());
+        if (!normalized.ok()) {
+          return normalized.error();
+        }
 
-  return HttpServerResponseBuilder()
-      .WithStatus(core::http::kStatusOk)
-      .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
-      .WithA2aVersion()
-      .WithActivatedExtensions(extensions.value())
-      .WithBody(normalized.value())
-      .Build();
+        return HttpServerResponseBuilder()
+            .WithStatus(core::http::kStatusOk)
+            .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
+            .WithA2aVersion()
+            .WithActivatedExtensions(extensions)
+            .WithBody(normalized.value())
+            .Build();
+      },
+      .encode_event = {}});
 }
 
 HttpServerResponse RestServerTransport::ToHttpResponse(const RestResponse& response,

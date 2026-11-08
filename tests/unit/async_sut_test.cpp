@@ -39,7 +39,7 @@ constexpr auto kToken = "async-sut-token";
 constexpr auto kBearerToken = "bearer_token";
 constexpr auto kTimeout = "async SUT test timed out";
 constexpr std::size_t kCalls = 8;
-constexpr std::size_t kSingleBinding = 1;
+constexpr std::size_t kEnabledBindings = 3;
 
 SutAgentOptions GrpcOptions() {
   SutAgentOptions options;
@@ -99,12 +99,22 @@ core::Result<DispatchResponse> Invoke(AsyncFixture& agent, DispatchRequest reque
   return future.get();
 }
 
+void ExpectEnabledBindings(const lf::a2a::v1::AgentCard& card) {
+  EXPECT_EQ(card.supported_interfaces_size(), kEnabledBindings);
+  std::set<std::string> bindings;
+  for (const auto& interface : card.supported_interfaces()) {
+    bindings.insert(interface.protocol_binding());
+  }
+  const std::set<std::string> expected{std::string(core::protocol_bindings::kGrpc),
+                                       std::string(core::protocol_bindings::kHttpJson),
+                                       std::string(core::protocol_bindings::kJsonRpc)};
+  EXPECT_EQ(bindings, expected);
+}
+
 TEST(AsyncSutTest, AdvertisesEnabledBindingsAndCoroutineStreaming) {
   const auto agent = Agent();
   const auto& card = agent->agent_card();
-  ASSERT_EQ(card.supported_interfaces_size(), kSingleBinding);
-  EXPECT_EQ(card.supported_interfaces(0).protocol_binding(), core::protocol_bindings::kGrpc);
-  EXPECT_EQ(card.supported_interfaces(0).url(), kEndpoint);
+  ExpectEnabledBindings(card);
   EXPECT_TRUE(card.capabilities().streaming());
   EXPECT_TRUE(card.capabilities().push_notifications());
 }
@@ -130,8 +140,7 @@ TEST(AsyncSutTest, UsesSharedExtendedCardProviderWithoutNestedDispatch) {
   ASSERT_TRUE(result.ok());
   const auto* card = std::get_if<lf::a2a::v1::AgentCard>(&result.value().payload());
   ASSERT_NE(card, nullptr);
-  ASSERT_EQ(card->supported_interfaces_size(), kSingleBinding);
-  EXPECT_EQ(card->supported_interfaces(0).protocol_binding(), core::protocol_bindings::kGrpc);
+  ExpectEnabledBindings(*card);
 }
 
 class Gate final {

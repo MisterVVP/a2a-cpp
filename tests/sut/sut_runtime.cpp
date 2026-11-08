@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <thread>
 #include <utility>
 
 #include "a2a/server/network_utils.h"
@@ -22,6 +23,7 @@
 #include "sut/tck_sut_store.h"
 #ifdef A2A_SUT_ASYNC
 #include "a2a/server/engine/async_runtime.h"
+#include "a2a/server/event_http_dispatcher.h"
 #include "sut/sut_coroutine_executor.h"
 #endif
 
@@ -100,8 +102,9 @@ server::ServerBindingsOptions BindingOptions() {
   options.jsonrpc.require_version_header = true;
   return options;
 }
+template <typename HttpListener>
 int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOptions& options,
-          server::ServerBindings& bindings) {
+          server::ServerBindings& bindings, HttpListener& http) {
   SetSignals();
   auto credentials = GrpcCredentials();
   if (!credentials) {
@@ -109,7 +112,6 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
     return 1;
   }
   const auto& listener = config.listener;
-  TckHttpServer http(listener.host, listener.port, bindings.http_mux(), options.observer);
   if (!http.Start()) {
     return 1;
   }
@@ -136,6 +138,25 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
 }
 
 #ifdef A2A_SUT_ASYNC
+// Only the SUT's signal monitor polls; all socket scheduling belongs to the
+// installed SDK runtime, including accept, idle clients and live streams.
+class EventSutServer final {
+ public:
+  EventSutServer(server::EventHttpServer::AsyncHandler handler, const SutConfig& listener)
+      : server_(std::move(handler), {.address = listener.host, .port = static_cast<std::uint16_t>(listener.port)}) {}
+  bool Start() { return server_.Start().ok(); }
+  static void AcceptConnections(const volatile std::sig_atomic_t& keep_running) {
+    constexpr auto kSignalInterval = std::chrono::milliseconds(10);
+    while (keep_running != 0) {
+      std::this_thread::sleep_for(kSignalInterval);
+    }
+  }
+  void ShutdownActiveSockets() { server_.Shutdown(); }
+  void JoinConnections() { server_.Join(); }
+
+ private:
+  server::EventHttpServer server_;
+};
 int RunAsync(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOptions& options) {
   server::engine::AsyncDispatcherOptions execution;
   execution.agent_card_provider = agent.card_provider();
@@ -144,7 +165,9 @@ int RunAsync(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOpt
   execution.task_store = agent.task_store();
   server::engine::AsyncRuntime engine(std::make_shared<SutCoroutineExecutor>(agent), std::move(execution));
   server::ServerBindings bindings(engine.dispatcher(), agent.agent_card(), BindingOptions());
-  return Serve(agent, config, options, bindings);
+  EventSutServer http(server::MakeEventHttpHandler(engine.dispatcher(), agent.agent_card(), BindingOptions()),
+                      config.listener);
+  return Serve(agent, config, options, bindings, http);
 }
 #endif
 }  // namespace
@@ -166,6 +189,7 @@ int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options) {
   }
 #endif
   server::ServerBindings bindings(agent.dispatcher(), agent.agent_card(), BindingOptions());
-  return Serve(agent, config.value(), options, bindings);
+  TckHttpServer http(config.value().listener.host, config.value().listener.port, bindings.http_mux(), options.observer);
+  return Serve(agent, config.value(), options, bindings, http);
 }
 }  // namespace a2a::tests::sut

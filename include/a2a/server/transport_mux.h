@@ -88,6 +88,10 @@ class TransportMux final {
   void SetNotFoundHandler(Handler handler);
 
   [[nodiscard]] core::Result<HttpServerResponse> RouteRequest(const HttpServerRequest& request) const;
+  // Side-effect-free routing for event runtimes; route registration must be
+  // complete before concurrent use. Custom handlers run on application workers.
+  [[nodiscard]] core::Result<PreparedResponse<HttpServerResponse>> PrepareRequest(
+      const HttpServerRequest& request) const;
   [[nodiscard]] const RouteMiss& last_route_miss() const noexcept;
 
  private:
@@ -95,8 +99,14 @@ class TransportMux final {
   [[nodiscard]] std::string NormalizeTargetForHandler(std::string_view target) const;
   [[nodiscard]] static HttpServerResponse BuildDefaultNotFound(const RouteMiss& miss);
 
+  using PrepareHandler = std::function<core::Result<PreparedResponse<HttpServerResponse>>(const HttpServerRequest&)>;
+  struct RegisteredRoute final {
+    Route route;
+    PrepareHandler prepare;
+  };
+  void RegisterPreparedRoute(Route route, PrepareHandler prepare);
   Options options_;
-  std::vector<Route> routes_;
+  std::vector<RegisteredRoute> routes_;
   Handler not_found_handler_;
   mutable RouteMiss last_route_miss_{};
 };
