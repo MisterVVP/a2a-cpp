@@ -73,8 +73,6 @@ struct PushProbe final {
   std::future<core::Result<PushDeliveryResult>> future = promise.get_future();
 };
 
-// Uses only the shared completion runtime. Tests explicitly release transfers;
-// cancellation and timeout are observable on the returned native handle.
 class FakePushRequester final {
  public:
   PushHttpAsyncRequester Requester() {

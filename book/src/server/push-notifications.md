@@ -80,18 +80,15 @@ HttpAsyncPushNotificationDeliveryClient delivery;
 AsyncPushDeliveryOptions options;
 options.timeout = std::chrono::seconds(2);
 options.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-auto started = delivery.DeliverAsync(request, [](auto result) {
-  // Inspect result.ok(), result.value().http_status, or result.error().
-}, options);
+auto started = delivery.DeliverAsync(request, ProcessDeliveryResult, options);
 if (started.ok()) {
   auto handle = started.value();
-  // handle.Cancel();  // optional, thread-safe, best effort
-  handle.Wait();      // wait for the application callback to return
+  handle.Wait();
 }
 delivery.Shutdown();
 ```
 
-`request` is a `PushDeliveryRequest`, with the same config, authentication and
+`ProcessDeliveryResult` is an application callback. `request` is a `PushDeliveryRequest`, with the same config, authentication and
 StreamResponse payload as synchronous delivery. The SDK copies it before
 returning. Protobuf JSON, POST headers, successful status and non-2xx/network
 error mapping are shared with synchronous delivery. The configured HTTP version

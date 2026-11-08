@@ -76,12 +76,17 @@ class StreamBackend final : public server::engine::CoroutineAgentExecutor {
       std::lock_guard lock(mutex);
       tenant = request.tenant();
     }
-    co_return co_await server::engine::AsyncTaskSubscription::Run(publications, StreamTask(), context,
-                                                                  std::move(stream), capacity);
+    co_return co_await server::engine::AsyncTaskSubscription::Run(
+        publications, StreamTask(), context,
+        std::make_shared<AcknowledgedSubscriptionSession>(std::move(stream), *this), capacity);
   }
   bool WaitStarted(std::size_t count = 1) {
     std::unique_lock lock(mutex);
     return changed.wait_for(lock, kCoroutineWait, [&] { return started >= count; });
+  }
+  bool WaitSubscriptionAcknowledged() {
+    std::unique_lock lock(mutex);
+    return changed.wait_for(lock, kCoroutineWait, [&] { return subscription_acknowledged_ != 0; });
   }
   std::size_t ThreadCount() {
     std::lock_guard lock(mutex);
@@ -101,6 +106,28 @@ class StreamBackend final : public server::engine::CoroutineAgentExecutor {
   std::string tenant;
 
  private:
+  class AcknowledgedSubscriptionSession final : public server::engine::AsyncServerStreamSession {
+   public:
+    AcknowledgedSubscriptionSession(std::shared_ptr<server::engine::AsyncServerStreamSession> stream,
+                                    StreamBackend& backend)
+        : stream_(std::move(stream)), backend_(backend) {}
+    boost::asio::awaitable<core::Result<void>> Write(lf::a2a::v1::StreamResponse event) override {
+      auto result = co_await stream_->Write(std::move(event));
+      if (result.ok()) {
+        {
+          std::lock_guard lock(backend_.mutex);
+          ++backend_.subscription_acknowledged_;
+        }
+        backend_.changed.notify_all();
+      }
+      co_return result;
+    }
+
+   private:
+    std::shared_ptr<server::engine::AsyncServerStreamSession> stream_;
+    StreamBackend& backend_;
+  };
+  std::size_t subscription_acknowledged_ = 0;
   void Record(const server::engine::RequestExecutionContext& context) {
     {
       std::lock_guard lock(mutex);

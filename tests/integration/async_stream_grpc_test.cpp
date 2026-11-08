@@ -110,6 +110,7 @@ TEST(AsyncStreamGrpc, ShutdownCompletesIdleStreamsWithUnavailable) {
   ASSERT_TRUE(server.Ready());
   const auto call = server.Start(true);
   ASSERT_TRUE(call->Read());
+  ASSERT_TRUE(server.application->WaitSubscriptionAcknowledged());
   server.Shutdown();
   EXPECT_FALSE(call->Read());
   EXPECT_EQ(call->Finish().error_code(), ::grpc::StatusCode::UNAVAILABLE);

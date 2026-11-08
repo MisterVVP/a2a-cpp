@@ -23,9 +23,11 @@ constexpr auto kSecondConfig = "second-config";
 class FixedPushClient final : public AsyncPushNotificationDeliveryClient {
  public:
   explicit FixedPushClient(PushDeliveryResult response) : response_(std::move(response)) {}
-  core::Result<core::AsyncHandle> DeliverAsync(const PushDeliveryRequest& /*request*/,
+  core::Result<core::AsyncHandle> DeliverAsync(const PushDeliveryRequest& request,
                                                core::Completion<PushDeliveryResult> completion,
-                                               const AsyncPushDeliveryOptions& /*options*/) override {
+                                               const AsyncPushDeliveryOptions& options) override {
+    (void)request;
+    (void)options;
     auto started = scope_.Start<PushDeliveryResult>(std::move(completion), kPushLong);
     if (!started.ok()) {
       return started.error();
@@ -38,6 +40,25 @@ class FixedPushClient final : public AsyncPushNotificationDeliveryClient {
  private:
   core::AsyncScope scope_;
   PushDeliveryResult response_;
+};
+
+class CancelBeforeWaitClient final : public AsyncPushNotificationDeliveryClient {
+ public:
+  CancelBeforeWaitClient(std::shared_ptr<AsyncPushNotificationDeliveryClient> client,
+                         boost::asio::cancellation_signal& cancellation)
+      : client_(std::move(client)), cancellation_(cancellation) {}
+  core::Result<core::AsyncHandle> DeliverAsync(const PushDeliveryRequest& request,
+                                               core::Completion<PushDeliveryResult> completion,
+                                               const AsyncPushDeliveryOptions& options) override {
+    auto started = client_->DeliverAsync(request, std::move(completion), options);
+    cancellation_.emit(boost::asio::cancellation_type::all);
+    return started;
+  }
+  void Shutdown() override { client_->Shutdown(); }
+
+ private:
+  std::shared_ptr<AsyncPushNotificationDeliveryClient> client_;
+  boost::asio::cancellation_signal& cancellation_;
 };
 
 class AsyncPushServiceTest : public ::testing::Test {
@@ -119,6 +140,21 @@ TEST_F(AsyncPushServiceTest, AsioCancellationCancelsOutboundHandle) {
   fake.Token().handle().Wait();
   EXPECT_FALSE(fake.Token().IsActive());
 }
+TEST_F(AsyncPushServiceTest, CancellationBeforeWaitDoesNotLeakOutboundDelivery) {
+  boost::asio::cancellation_signal cancellation;
+  auto cancelling = std::make_shared<CancelBeforeWaitClient>(client, cancellation);
+  auto future = boost::asio::co_spawn(
+      loop, AsyncPushNotificationService::NotifyTaskUpdated(store, cancelling, task, execution.Context()),
+      boost::asio::bind_cancellation_slot(cancellation.slot(), boost::asio::use_future));
+  loop.poll();
+  ASSERT_TRUE(fake.WaitFor(1));
+  core::Result<void> delivered;
+  EXPECT_NO_THROW(delivered = Finish(future));
+  EXPECT_FALSE(fake.Token().IsActive());
+  ASSERT_FALSE(delivered.ok());
+  EXPECT_EQ(delivered.error().protocol_code(), core::AsyncHandle::kCancelled);
+}
+
 TEST_F(AsyncPushServiceTest, FirstErrorStopsConfigFanout) {
   auto config = PushRequest().config;
   config.set_id(kSecondConfig);

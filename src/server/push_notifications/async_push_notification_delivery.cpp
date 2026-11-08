@@ -35,8 +35,6 @@ core::Result<core::AsyncHandle> StartRequest(const PushHttpAsyncRequester& reque
   }
 }
 
-// One cancellation registration per attempt avoids an earlier request's late
-// return overwriting the fallback's cancellation handle.
 struct Attempt final {
   void Cancel() {
     std::optional<core::AsyncHandle> current;
@@ -60,6 +58,7 @@ struct Attempt final {
       value.Cancel();
     }
   }
+  std::atomic<bool> completion_claimed{false};
   std::mutex mutex;
   std::optional<core::AsyncHandle> handle;
   bool cancelled = false;
@@ -88,15 +87,14 @@ struct Delivery final : std::enable_shared_from_this<Delivery> {
         request, body, fallback ? options.fallback_http_version : options.http_version, remaining);
     auto attempt = std::make_shared<Attempt>();
     completion.RegisterCancellation([attempt] { attempt->Cancel(); });
-    auto claimed = std::make_shared<std::atomic<bool>>(false);
     auto started =
-        StartRequest(requester, std::move(http_request), [self = shared_from_this(), fallback, claimed](auto response) {
-          if (!claimed->exchange(true)) {
+        StartRequest(requester, std::move(http_request), [self = shared_from_this(), fallback, attempt](auto response) {
+          if (!attempt->completion_claimed.exchange(true)) {
             self->Finish(std::move(response), fallback);
           }
         });
     if (!started.ok()) {
-      if (!claimed->exchange(true)) {
+      if (!attempt->completion_claimed.exchange(true)) {
         Finish(started.error(), fallback);
       }
       return;
@@ -107,8 +105,6 @@ struct Delivery final : std::enable_shared_from_this<Delivery> {
   void Finish(core::Result<http::Response> response, bool fallback) {
     auto result = response.ok() ? delivery_internal::MapResponse(response.value())
                                 : core::Result<PushDeliveryResult>(response.error());
-    // Match sync's single version fallback, but never retry cancellation or an
-    // expired deadline. The one delivery deadline includes both attempts.
     if (!result.ok() && !fallback && !options.fallback_http_version.empty() &&
         options.fallback_http_version != options.http_version &&
         result.error().protocol_code() != core::AsyncHandle::kCancelled &&

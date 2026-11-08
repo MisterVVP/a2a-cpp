@@ -14,29 +14,19 @@
 
 namespace a2a::server {
 struct AsyncPushDeliveryOptions final {
-  // Absent uses the client's default; zero/negative expires immediately.
   std::optional<std::chrono::milliseconds> timeout;
   std::optional<std::chrono::steady_clock::time_point> deadline;
 };
 
-// Parallel contract: existing synchronous clients/executors remain unchanged.
 class AsyncPushNotificationDeliveryClient : private core::NonCopyableOrMovable {
  public:
   virtual ~AsyncPushNotificationDeliveryClient() = default;
-  // Copies the request before returning. Rejection returns an error without a
-  // callback. Acceptance returns a handle and exactly one completion, including
-  // cancellation/deadline/shutdown, on shared SDK workers, never inline/reactor.
   [[nodiscard]] virtual core::Result<core::AsyncHandle> DeliverAsync(const PushDeliveryRequest& request,
                                                                      core::Completion<PushDeliveryResult> completion,
                                                                      const AsyncPushDeliveryOptions& options = {}) = 0;
-  // Closes admission, cancels requests and drains callbacks. From an SDK callback
-  // cancellation is reentrant and draining is deferred. Safe to call repeatedly.
   virtual void Shutdown() = 0;
 };
 
-// Requester follows http::Client::SendRequestAsync's ownership/completion contract.
-// Injected requesters must support concurrent calls and prompt cancellation;
-// their resources must outlive their accepted requests. No blocking adapters.
 using PushHttpAsyncRequester =
     std::function<core::Result<core::AsyncHandle>(http::Request, core::Completion<http::Response>)>;
 

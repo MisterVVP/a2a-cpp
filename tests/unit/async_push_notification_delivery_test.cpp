@@ -202,7 +202,6 @@ TEST(AsyncPushContractTest, InlinePrimaryCompletionCannotReplaceFallbackCancella
     }
     auto first = fake.Requester()(std::move(request), [](auto result) { (void)result; });
     completion(http::Response{.status_code = kPushError, .headers = {}, .body = {}});
-    // A broken requester must not start a duplicate fallback or complete twice.
     completion(http::Response{.status_code = kPushError, .headers = {}, .body = {}});
     return first;
   });
