@@ -166,6 +166,7 @@ set(A2A_SERVER_SOURCES
   server/version_header_validator.cpp
   server/transport/rest_transport.cpp
   server/transport/json_rpc_server_transport.cpp
+  server/push_notifications/async_push_notification_delivery.cpp
   server/push_notifications/push_notification_delivery.cpp
   server/push_notifications/push_notification_service.cpp
   server/push_notifications/push_notification_store.cpp
@@ -216,6 +217,7 @@ if(A2A_ENABLE_ASIO)
   add_library(a2a_asio STATIC
     server/engine/async_dispatcher.cpp
     server/engine/async_task_subscription.cpp
+    server/engine/async_push_notification_service.cpp
     server/transport/async_grpc_server_transport.cpp
     server/engine/coroutine_agent_executor.cpp
     server/engine/blocking_executor_adapter.cpp
