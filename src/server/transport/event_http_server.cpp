@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/buffer.hpp>
@@ -211,24 +212,48 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     auto token = asio::use_awaitable;
     co_return co_await asio::async_initiate<decltype(token), void(core::Result<void>)>(
         [self = shared_from_this(), bytes = std::move(bytes), gate = std::move(gate)](auto complete) mutable {
+          struct PendingWrite final {
+            decltype(complete) handler;
+            std::atomic_bool pending{true};
+          };
           auto executor = asio::get_associated_executor(complete);
-          auto completion = std::make_shared<decltype(complete)>(std::move(complete));
+          auto slot = asio::get_associated_cancellation_slot(complete);
+          auto completion = std::make_shared<PendingWrite>(std::move(complete));
+          if (slot.is_connected()) {
+            slot.assign([weak = std::weak_ptr(self), operation = std::weak_ptr(completion),
+                         gate](asio::cancellation_type type) {
+              const auto connection = weak.lock();
+              if (!connection || type == asio::cancellation_type::none) {
+                return;
+              }
+              std::lock_guard lock(connection->write_mutex_);
+              if (!connection->closed_) {
+                asio::post(connection->runtime_->network, [connection, operation, gate] {
+                  const auto pending = operation.lock();
+                  if (pending && pending->pending && (!gate || gate == connection->active_stream_)) {
+                    // A partially written chunk cannot be reused safely.
+                    connection->Close();
+                  }
+                });
+              }
+            });
+          }
+          auto finish = [executor, completion](core::Result<void> result) mutable {
+            completion->pending = false;
+            asio::post(executor, [completion, result = std::move(result)]() mutable {
+              asio::get_associated_cancellation_slot(completion->handler).clear();
+              completion->handler(std::move(result));
+            });
+          };
           // Serialize posting with Close so retained sinks cannot revive a stopped loop.
           std::lock_guard lock(self->write_mutex_);
           if (self->closed_) {
-            asio::post(executor, [completion] { (*completion)(core::Error::Network(std::string(kStopped))); });
+            finish(core::Error::Network(std::string(kStopped)));
             return;
           }
           asio::post(self->runtime_->network,
-                     [self, bytes = std::move(bytes), gate = std::move(gate), executor, completion]() mutable {
-                       self->Queue(
-                           std::move(bytes),
-                           [executor, completion](core::Result<void> result) mutable {
-                             asio::post(executor, [completion, result = std::move(result)]() mutable {
-                               (*completion)(std::move(result));
-                             });
-                           },
-                           gate);
+                     [self, bytes = std::move(bytes), gate = std::move(gate), finish = std::move(finish)]() mutable {
+                       self->Queue(std::move(bytes), std::move(finish), gate);
                      });
         },
         token);

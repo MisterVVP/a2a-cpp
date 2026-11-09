@@ -7,6 +7,7 @@
 #include <atomic>
 #include <boost/asio.hpp>
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <stop_token>
 #include <string>
@@ -564,6 +565,123 @@ TEST(EventHttpServer, SlowReaderDoesNotStallUnaryAndShutdownWakesPendingWrite) {
   EXPECT_EQ(finished.wait_for(kTimeout), std::future_status::ready);
   EXPECT_EQ(state->cleanup.load(), 1U);
 }
+
+constexpr int kSlowReceiveBytes = 4096;
+constexpr auto kBackpressureObservation = std::chrono::milliseconds(100);
+constexpr std::size_t kMaxSlowEvents = 4096;
+constexpr std::string_view kAgentCardRequest = "GET /.well-known/agent-card.json HTTP/1.1\r\nConnection: close\r\n\r\n";
+
+class SlowNativeBackend final : public engine::CoroutineAgentExecutor {
+ public:
+  asio::awaitable<core::Result<void>> SubscribeTask(lf::a2a::v1::GetTaskRequest /*request*/,
+                                                    engine::RequestExecutionContext context,
+                                                    std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
+    struct Cleanup final {
+      explicit Cleanup(SlowNativeBackend& backend) : backend(backend), origin(std::this_thread::get_id()) {}
+      ~Cleanup() {
+        backend.wrong_thread.store(origin != std::this_thread::get_id());
+        ++backend.cleanup;
+        backend.finished.set_value();
+      }
+      SlowNativeBackend& backend;
+      const std::thread::id origin;
+    } cleanup(*this);
+    std::stop_callback stop(context.StopToken(), [this] { stopped.set_value(); });
+    lf::a2a::v1::StreamResponse event;
+    auto* task = event.mutable_task();
+    task->set_id(std::string(kNativeId));
+    task->set_context_id("ctx");
+    task->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+    auto* message = task->mutable_status()->mutable_message();
+    message->set_message_id("bulk");
+    message->set_role(lf::a2a::v1::ROLE_AGENT);
+    message->add_parts()->set_text(std::string(kSlowChunkBytes, 'x'));
+    for (std::size_t index = 0; index < kMaxSlowEvents; ++index) {
+      ++writes;
+      const auto written = co_await stream->Write(event);
+      if (!written.ok()) {
+        co_return written.error();
+      }
+    }
+    co_return core::Result<void>{};
+  }
+  std::atomic_size_t writes{0};
+  std::atomic_size_t cleanup{0};
+  std::atomic_bool wrong_thread{false};
+  std::promise<void> stopped;
+  std::promise<void> finished;
+};
+
+bool WaitForBackpressure(const SlowNativeBackend& backend) {
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto count = backend.writes.load();
+    std::this_thread::sleep_for(kBackpressureObservation);
+    if (count > 1U && count == backend.writes.load() && backend.cleanup.load() == 0U) {
+      return true;
+    }
+  }
+  return false;
+}
+
+enum class ConcurrentClose : std::uint8_t { kNone, kPeerReset, kListenerShutdown };
+
+void ExpectNativeCleanup(const SlowNativeBackend& backend, std::future<void>& stopped, std::future<void>& finished) {
+  EXPECT_EQ(stopped.wait_for(kTimeout), std::future_status::ready);
+  EXPECT_EQ(finished.wait_for(kTimeout), std::future_status::ready);
+  EXPECT_EQ(backend.cleanup.load(), 1U);
+  EXPECT_FALSE(backend.wrong_thread.load());
+}
+
+void ExpectNativeWriteCancellation(ConcurrentClose close) {
+  const auto backend = std::make_shared<SlowNativeBackend>();
+  auto stopped = backend->stopped.get_future();
+  auto finished = backend->finished.get_future();
+  engine::AsyncRuntime runtime(backend, {}, {.threads = 1});
+  EventHttpServerOptions options;
+  options.application_threads = 1;
+  options.heartbeat_interval = std::chrono::milliseconds::zero();
+  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  Tcp::socket peer(io);
+  peer.open(Tcp::v4());
+  peer.set_option(asio::socket_base::receive_buffer_size(kSlowReceiveBytes));
+  peer.connect({asio::ip::address_v4::loopback(), server.port()});
+  asio::write(peer, asio::buffer(kSubscribeRequest));
+  std::string headers;
+  asio::read_until(peer, asio::dynamic_buffer(headers), kHeaderEnd);
+  EXPECT_TRUE(WaitForBackpressure(*backend));
+  runtime.Shutdown();
+  if (close == ConcurrentClose::kPeerReset) {
+    peer.set_option(asio::socket_base::linger(true, 0));
+    peer.close();
+  } else if (close == ConcurrentClose::kListenerShutdown) {
+    server.Shutdown();
+  }
+  ExpectNativeCleanup(*backend, stopped, finished);
+  if (close == ConcurrentClose::kNone) {
+    auto unary = Connect(io, server);
+    asio::write(unary, asio::buffer(kAgentCardRequest));
+    EXPECT_NE(ReadToEnd(unary).find(kStatus), std::string::npos);
+  }
+  server.Shutdown();
+  server.Join();
+  runtime.Join();
+}
+
+TEST(EventHttpServer, NativeCancellationWakesBackpressuredWriteBeforeListenerShutdown) {
+  ExpectNativeWriteCancellation(ConcurrentClose::kNone);
+}
+
+TEST(EventHttpServer, NativeWriteCancellationRacesPeerReset) {
+  ExpectNativeWriteCancellation(ConcurrentClose::kPeerReset);
+}
+
+TEST(EventHttpServer, NativeWriteCancellationRacesListenerShutdown) {
+  ExpectNativeWriteCancellation(ConcurrentClose::kListenerShutdown);
+}
+
 constexpr std::string_view kMalformedRequest = "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n";
 constexpr std::string_view kBadRequestStatus = "400 Bad Request";
 

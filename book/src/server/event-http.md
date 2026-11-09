@@ -133,7 +133,11 @@ Disconnect and shutdown wake mailbox waits and socket writes, and call the
 existing dispatcher's cancellation entrypoint. `RequestExecution` arbitrates
 completion/cancellation races and runs application cleanup exactly once. Server
 shutdown cancellation is distinguished from peer cancellation and idle expiry.
-No HTTP stream polling thread is created.
+Native dispatcher cancellation also wakes a backpressured socket write without
+requiring listener shutdown. Cancelling an in-flight write closes that connection
+because a partially written chunk cannot be completed safely. Completion and
+failure resume the awaiting coroutine on its own executor. No HTTP stream polling
+thread is created.
 
 Custom asynchronous handlers can return `EventHttpResponse::stream`, receiving
 an owned `HttpEventStream` and `RequestExecutionContext`. Await each `Write` and
