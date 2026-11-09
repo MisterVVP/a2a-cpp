@@ -487,10 +487,14 @@ core::Result<HttpServerResponse> RestServerTransport::Handle(const HttpServerReq
   if (auto* response = std::get_if<HttpServerResponse>(&prepared.value())) {
     return std::move(*response);
   }
-  if (dispatcher_ == nullptr) {
-    return core::Error::Internal(internal::messages::kMissingRestDispatcher);
-  }
   auto& plan = std::get<PreparedDispatch<HttpServerResponse>>(prepared.value());
+  if (dispatcher_ == nullptr) {
+    auto error = core::Error::Internal(internal::messages::kMissingRestDispatcher);
+    if (plan.request.operation == DispatcherOperation::kGetExtendedAgentCard) {
+      return plan.complete(std::move(error));
+    }
+    return error;
+  }
   return plan.complete(dispatcher_->Dispatch(plan.request, plan.context));
 }
 

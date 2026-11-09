@@ -317,10 +317,6 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       if (error) {
         if (error == asio::error::eof) {
           self->eof_ = true;
-          if (self->streaming_) {
-            self->Close();
-            return;
-          }
           if (!self->processing_) {
             self->Process();
           }

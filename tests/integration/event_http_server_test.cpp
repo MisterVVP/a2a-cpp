@@ -6,7 +6,9 @@
 
 #include <atomic>
 #include <boost/asio.hpp>
+#include <chrono>
 #include <future>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -281,6 +283,100 @@ TEST(EventHttpServer, DisconnectCancelsLiveProducer) {
   runtime.Join();
   EXPECT_EQ(backend->completed.load(), 1U);
 }
+
+TEST(EventHttpServer, PeerResetCancelsLiveProducerBeforeShutdown) {
+  const auto backend = std::make_shared<LiveBackend>();
+  auto completed = backend->first_completed.get_future();
+  engine::AsyncRuntime runtime(backend);
+  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kSubscribeRequest));
+  std::string event;
+  asio::read_until(peer, asio::dynamic_buffer(event), kEventEnd);
+  peer.set_option(asio::socket_base::linger(true, 0));
+  peer.close();
+  EXPECT_EQ(completed.wait_for(kTimeout), std::future_status::ready);
+  server.Shutdown();
+  server.Join();
+  runtime.Shutdown();
+  runtime.Join();
+  EXPECT_EQ(backend->completed.load(), 1U);
+}
+
+constexpr std::string_view kFiniteTarget = "/finite";
+constexpr std::string_view kFiniteRequest = "GET /finite HTTP/1.1\r\n\r\n";
+constexpr std::string_view kFiniteCloseRequest = "GET /finite HTTP/1.1\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kLastEvent = "data: final\n\n";
+constexpr auto kHalfCloseObservation = std::chrono::milliseconds(100);
+
+struct HalfClosedStream final {
+  test::CoroutineReply<void> release{true};
+  std::promise<void> stopped;
+};
+
+asio::awaitable<core::Result<void>> ProduceHalfClosedStream(std::shared_ptr<HalfClosedStream> state,
+                                                            std::shared_ptr<HttpEventStream> stream,
+                                                            engine::RequestExecutionContext context) {
+  std::stop_callback stopped(context.StopToken(), [state] { state->stopped.set_value(); });
+  const auto first = co_await stream->Write(std::string(kEvent));
+  if (!first.ok()) {
+    co_return first.error();
+  }
+  const auto released = co_await state->release.Wait();
+  if (!released.ok()) {
+    co_return released.error();
+  }
+  co_return co_await stream->Write(std::string(kLastEvent));
+}
+
+asio::awaitable<core::Result<EventHttpResponse>> HalfClosedResponse(std::shared_ptr<HalfClosedStream> state,
+                                                                    HttpServerRequest request) {
+  EventHttpResponse response;
+  response.response = Respond(request).value();
+  if (request.target == kFiniteTarget) {
+    response.stream = [state](std::shared_ptr<HttpEventStream> stream, engine::RequestExecutionContext context) {
+      return ProduceHalfClosedStream(state, std::move(stream), std::move(context));
+    };
+  }
+  co_return response;
+}
+
+void ExpectHalfClosedStream(bool pipeline) {
+  const auto state = std::make_shared<HalfClosedStream>();
+  auto stopped = state->stopped.get_future();
+  EventHttpServer::AsyncHandler handler = [state](HttpServerRequest request, engine::RequestExecutionContext) {
+    return HalfClosedResponse(state, std::move(request));
+  };
+  EventHttpServer server(std::move(handler));
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(pipeline ? kFiniteRequest : kFiniteCloseRequest));
+  std::string first;
+  asio::read_until(peer, asio::dynamic_buffer(first), kEventEnd);
+  if (pipeline) {
+    asio::write(peer, asio::buffer(kCloseRequest));
+  }
+  peer.shutdown(Tcp::socket::shutdown_send);
+  const auto cancellation = stopped.wait_for(kHalfCloseObservation);
+  state->release.Resolve(core::Result<void>{});
+  const auto remaining = ReadToEnd(peer);
+  server.Shutdown();
+  server.Join();
+  EXPECT_EQ(cancellation, std::future_status::timeout);
+  EXPECT_NE(remaining.find(kLastEvent), std::string::npos);
+  const auto terminal = remaining.find(kFinalChunk);
+  EXPECT_NE(terminal, std::string::npos);
+  if (pipeline) {
+    EXPECT_NE(remaining.find(kStatus, terminal), std::string::npos);
+  }
+}
+
+TEST(EventHttpServer, SendHalfCloseAfterFirstEventDrainsFiniteStream) { ExpectHalfClosedStream(false); }
+
+TEST(EventHttpServer, SendHalfCloseAfterFirstEventDrainsStreamAndPipeline) { ExpectHalfClosedStream(true); }
 
 using ContextPromise = std::promise<engine::RequestExecutionContext>;
 constexpr std::string_view kProducerFailure = "stream producer failed";

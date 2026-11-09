@@ -80,9 +80,10 @@ legacy live stream is silently introduced.
 
 Each connection processes one application request at a time. Further pipelined
 bytes remain in its bounded input buffer, preserving response and side-effect
-ordering. Other connections can progress independently. TCP send-half-close
-still allows a complete queued request to receive its response. Reset, idle
-expiry, stream disconnect and shutdown close the socket and signal cancellation.
+ordering. Other connections can progress independently. Receive EOF ends request
+input; active responses, including finite SSE, and buffered requests drain before
+the connection closes. Resets, write failures, idle expiry and shutdown close the
+socket and signal cancellation.
 
 ## Bounds and overload
 
