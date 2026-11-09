@@ -113,8 +113,7 @@ void DrainRuntime(std::shared_ptr<Runtime> runtime) {
   auto& state = *runtime;
   state.network_work.reset();
   asio::post(state.application, [runtime = std::move(runtime)] {
-    // Application captures can own dispatchers or blocking backends. Release
-    // them on an application worker, before its executor is stopped.
+    // Handler destruction may release blocking application objects.
     runtime->handler = {};
     runtime->application_work.reset();
   });
@@ -165,6 +164,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       closed_ = true;
     }
     IoError ignored;
+    ignored = socket_.shutdown(Tcp::socket::shutdown_both, ignored);
     ignored = socket_.close(ignored);
     (void)idle_.cancel();
     (void)heartbeat_.cancel();
@@ -180,7 +180,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   static asio::awaitable<core::Result<void>> WriteEvent(std::shared_ptr<Connection> self, std::string bytes,
                                                         std::shared_ptr<StreamGate> gate) {
     if (bytes.empty()) {
-      co_return core::Result<void>{};
+      co_return co_await self->Send({}, std::move(gate));
     }
     if (bytes.size() > self->max_output_bytes_ - kHexBytes - 4U) {
       co_return core::Error::Validation(std::string(kOutputLimit));
@@ -194,9 +194,17 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     WriteCompletion completion;
   };
 
-  bool IsClosed() {
-    std::lock_guard lock(write_mutex_);
-    return closed_;
+  void CompleteApplication(const std::shared_ptr<engine::RequestExecution>& execution, bool failed) {
+    std::unique_lock lock(write_mutex_);
+    if (closed_) {
+      return;
+    }
+    if (failed) {
+      lock.unlock();
+      (void)execution->Cancel();
+      return;
+    }
+    (void)execution->TryComplete(engine::RequestCompletion::kSucceeded);
   }
 
   asio::awaitable<core::Result<void>> Send(std::string bytes, std::shared_ptr<StreamGate> gate = {}) {
@@ -205,9 +213,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
         [self = shared_from_this(), bytes = std::move(bytes), gate = std::move(gate)](auto complete) mutable {
           auto executor = asio::get_associated_executor(complete);
           auto completion = std::make_shared<decltype(complete)>(std::move(complete));
-          // Reserve the post before Close can retire network scheduling. Retained
-          // sinks fail on their caller's executor after shutdown without posting
-          // to a stopped context or touching a destroyed listener.
+          // Serialize posting with Close so retained sinks cannot revive a stopped loop.
           std::lock_guard lock(self->write_mutex_);
           if (self->closed_) {
             asio::post(executor, [completion] { (*completion)(core::Error::Network(std::string(kStopped))); });
@@ -375,12 +381,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     auto execution = execution_;
     asio::co_spawn(runtime_->application, RunApplication(self, std::move(parsed.value()), execution_),
                    [self, execution](const std::exception_ptr& exception, bool close) {
-                     // A socket failure must publish cancellation, even if this
-                     // coroutine unwinds before the off-reactor Cancel task runs.
-                     if (!self->IsClosed()) {
-                       (void)execution->TryComplete(exception ? engine::RequestCompletion::kFailed
-                                                              : engine::RequestCompletion::kSucceeded);
-                     }
+                     self->CompleteApplication(execution, static_cast<bool>(exception));
                      asio::post(self->runtime_->network, [self, exception, close] {
                        --self->runtime_->pending;
                        if (self->runtime_->stopping && self->runtime_->pending == 0) {
@@ -414,11 +415,10 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     }
     auto& event = response.value();
     if (event.response.stream_writer) {
-      // Explicitly reject blocking producers; never occupy an application worker
-      // for each waiting live legacy stream. The synchronous listener is retained.
       event.response = {};
       event.response.status_code = core::http::kStatusNotImplemented;
       event.response.body = kBlockingStream;
+      event.stream = {};
     }
     const bool close = HttpAdapter::ShouldCloseConnection(request, event.response);
     if (!FitsOutput(event.response, self->runtime_->options.max_output_bytes)) {
@@ -441,7 +441,6 @@ class Connection final : public std::enable_shared_from_this<Connection> {
         self->streaming_ = true;
         self->Heartbeat();
       });
-      // co_spawn keeps application production on the fixed application pool.
       const auto streamed = co_await event.stream(std::move(sink), context);
       if (!streamed.ok()) {
         throw std::runtime_error(std::string(streamed.error().message()));
@@ -510,13 +509,11 @@ struct EventHttpServer::Impl final {
         Stop();
         return;
       }
-      if (!error && !runtime->stopping) {
-        if (connections.size() < runtime->options.max_connections) {
-          auto connection = std::make_shared<Connection>(runtime, std::move(socket),
-                                                         [this](const auto& item) { connections.erase(item); });
-          connections.insert(connection);
-          connection->Start();
-        }
+      if (!runtime->stopping && connections.size() < runtime->options.max_connections) {
+        auto connection = std::make_shared<Connection>(runtime, std::move(socket),
+                                                       [this](const auto& item) { connections.erase(item); });
+        connections.insert(connection);
+        connection->Start();
       }
       if (!runtime->stopping) {
         Accept();

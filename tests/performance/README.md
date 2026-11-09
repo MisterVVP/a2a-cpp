@@ -23,7 +23,3 @@ includes throughput, completion and first-event p95/p99, protocol/network errors
 process CPU, resident memory and thread counts. A separate 64-idle-client case
 measures resource use without application work. Results are local workload
 evidence; account for client and host CPU limits when interpreting throughput.
-
-A [captured validation snapshot](event_http_results.md) includes the comparable
-release baseline, complete measurements, resource bounds, and low-concurrency
-streaming trade-offs.

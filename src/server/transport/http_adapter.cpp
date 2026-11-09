@@ -403,7 +403,6 @@ core::Result<std::optional<HttpServerRequest>> HttpAdapter::ParseRequest(std::st
   if (!state.pending_request_.has_value() || bytes.size() < state.request_bytes_) {
     return std::optional<HttpServerRequest>{};
   }
-  // ParseRequestHeaders establishes this value before returning success.
   auto request = std::move(state.pending_request_.value());
   request.body.assign(bytes.substr(state.body_offset_, state.request_bytes_ - state.body_offset_));
   request.remote_address = std::move(remote_address);
@@ -485,36 +484,20 @@ core::Result<void> HttpAdapter::WriteResponse(HttpByteTransport& transport, cons
   if (!encoded.ok()) {
     return encoded.error();
   }
-  const auto& payload = encoded.value();
-  const bool is_streaming = static_cast<bool>(response.stream_writer);
-  const bool must_close_connection =
-      close_connection ||
-      HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue);
-
-  if (is_streaming) {
-    if (must_close_connection) {
-      const auto headers_written = WriteAll(transport, payload);
-      if (!headers_written.ok()) {
-        return headers_written.error();
-      }
-      return response.stream_writer(transport);
-    }
-    const auto headers_written = WriteAll(transport, payload);
-    if (!headers_written.ok()) {
-      return headers_written.error();
-    }
-    ChunkedByteTransport chunked_transport(transport);
-    const auto streamed = response.stream_writer(chunked_transport);
-    if (!streamed.ok()) {
-      return streamed.error();
-    }
-    return chunked_transport.Finish();
+  const auto headers_written = WriteAll(transport, encoded.value());
+  if (!headers_written.ok()) {
+    return headers_written.error();
   }
-  const auto response_written = WriteAll(transport, payload);
-  if (!response_written.ok()) {
-    return response_written.error();
+  if (close_connection ||
+      HeaderContainsToken(response.headers, core::http::kConnectionHeader, core::http::kConnectionCloseHeaderValue)) {
+    return response.stream_writer(transport);
   }
-  return WriteAll(transport, response.body);
+  ChunkedByteTransport chunked_transport(transport);
+  const auto streamed = response.stream_writer(chunked_transport);
+  if (!streamed.ok()) {
+    return streamed.error();
+  }
+  return chunked_transport.Finish();
 }
 
 core::Result<std::string> HttpAdapter::EncodeResponseHead(const HttpServerResponse& response, bool close_connection,

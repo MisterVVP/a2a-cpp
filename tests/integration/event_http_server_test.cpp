@@ -12,6 +12,9 @@
 #include <vector>
 
 #include "a2a/core/http_constants.h"
+#include "a2a/server/engine/async_runtime.h"
+#include "a2a/server/event_http_dispatcher.h"
+#include "support/coroutine_reply.h"
 
 namespace a2a::server {
 namespace {
@@ -20,6 +23,8 @@ using Tcp = asio::ip::tcp;
 constexpr std::string_view kRequest = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
 constexpr std::string_view kCloseRequest = "GET / HTTP/1.1\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kStatus = "HTTP/1.1 200 OK";
+
+constexpr std::string_view kOverload = "503 Service Unavailable";
 constexpr std::string_view kBody = "ok";
 constexpr std::string_view kEvent = "data: hello\n\n";
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
@@ -127,21 +132,11 @@ TEST(EventHttpServer, PendingWorkIsBoundedAndShutdownCancels) {
   ASSERT_EQ(entered.get_future().wait_for(kTimeout), std::future_status::ready);
   auto second = Connect(io, server);
   asio::write(second, asio::buffer(kCloseRequest));
-  constexpr std::string_view kOverload = "503 Service Unavailable";
   EXPECT_NE(ReadToEnd(second).find(kOverload), std::string::npos);
   server.Shutdown();
   release.set_value();
   server.Join();
 }
-}  // namespace
-}  // namespace a2a::server
-
-#include "a2a/server/engine/async_runtime.h"
-#include "a2a/server/event_http_dispatcher.h"
-#include "support/coroutine_reply.h"
-
-namespace a2a::server {
-namespace {
 constexpr std::string_view kRestTask =
     "GET /a2a/tasks/native HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kRpcBody = R"({"jsonrpc":"2.0","id":7,"method":"GetTask","params":{"id":"native"}})";
@@ -152,6 +147,10 @@ constexpr std::string_view kRestStreamBody =
 constexpr std::string_view kNativeId = "native";
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kRestStreamPath = "/a2a/message:stream";
+
+constexpr std::string_view kPostPrefix = "POST ";
+constexpr std::string_view kPostHeaders =
+    " HTTP/1.1\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: ";
 
 class NativeBackend final : public engine::CoroutineAgentExecutor {
  public:
@@ -171,9 +170,6 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
 };
 
 std::string Post(std::string_view path, std::string_view body) {
-  constexpr std::string_view kPostPrefix = "POST ";
-  constexpr std::string_view kPostHeaders =
-      " HTTP/1.1\r\nA2A-Version: 1.0\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: ";
   std::string bytes(kPostPrefix);
   bytes.append(path);
   bytes.append(kPostHeaders);
@@ -202,11 +198,6 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   runtime.Shutdown();
   runtime.Join();
 }
-}  // namespace
-}  // namespace a2a::server
-
-namespace a2a::server {
-namespace {
 constexpr std::string_view kSubscribeRequest = "GET /a2a/tasks/native:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
 constexpr std::string_view kEventEnd = "\n\n";
 constexpr std::size_t kLiveClients = 32;
@@ -219,10 +210,14 @@ class LiveBackend final : public engine::CoroutineAgentExecutor {
                                                     engine::RequestExecutionContext /*context*/,
                                                     std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
     struct Cleanup final {
-      explicit Cleanup(std::atomic_size_t& counter) : counter(counter) {}
-      ~Cleanup() { ++counter; }
-      std::atomic_size_t& counter;
-    } cleanup(completed);
+      explicit Cleanup(LiveBackend& backend) : backend(backend) {}
+      ~Cleanup() {
+        if (backend.completed.fetch_add(1) == 0) {
+          backend.first_completed.set_value();
+        }
+      }
+      LiveBackend& backend;
+    } cleanup(*this);
     const auto origin = std::this_thread::get_id();
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(std::string(kNativeId));
@@ -241,6 +236,7 @@ class LiveBackend final : public engine::CoroutineAgentExecutor {
   }
   std::atomic_size_t completed{0};
   std::atomic_bool wrong_thread{false};
+  std::promise<void> first_completed;
 };
 
 TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
@@ -279,8 +275,103 @@ TEST(EventHttpServer, DisconnectCancelsLiveProducer) {
   std::string event;
   asio::read_until(socket, asio::dynamic_buffer(event), kEventEnd);
   socket.close();
-  // Join drains cancellation caused by both disconnect and shutdown. Arbitration
-  // belongs to RequestExecution; the producer cleanup must still run once.
+  server.Shutdown();
+  server.Join();
+  runtime.Shutdown();
+  runtime.Join();
+  EXPECT_EQ(backend->completed.load(), 1U);
+}
+
+using ContextPromise = std::promise<engine::RequestExecutionContext>;
+constexpr std::string_view kProducerFailure = "stream producer failed";
+
+constexpr std::string_view kNotImplemented = "501 Not Implemented";
+
+asio::awaitable<core::Result<void>> FailProducer(std::shared_ptr<ContextPromise> context_promise,
+                                                 std::shared_ptr<HttpEventStream> stream,
+                                                 engine::RequestExecutionContext context) {
+  context_promise->set_value(std::move(context));
+  const auto written = co_await stream->Write(std::string(kEvent));
+  if (!written.ok()) {
+    co_return written.error();
+  }
+  co_return core::Error::Internal(std::string(kProducerFailure));
+}
+
+asio::awaitable<core::Result<EventHttpResponse>> FailingResponse(std::shared_ptr<ContextPromise> promise) {
+  EventHttpResponse response;
+  response.response = Respond({}).value();
+  response.stream = [promise](std::shared_ptr<HttpEventStream> stream, engine::RequestExecutionContext context) {
+    return FailProducer(promise, std::move(stream), std::move(context));
+  };
+  co_return response;
+}
+
+TEST(EventHttpServer, ProducerFailureSignalsCancellationAfterHeaders) {
+  auto promise = std::make_shared<ContextPromise>();
+  auto context = promise->get_future();
+  EventHttpServer::AsyncHandler handler = [promise](HttpServerRequest, engine::RequestExecutionContext) {
+    return FailingResponse(promise);
+  };
+  EventHttpServer server(std::move(handler));
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kRequest));
+  const auto response = ReadToEnd(peer);
+  EXPECT_NE(response.find(kEvent), std::string::npos);
+  EXPECT_EQ(response.find(kFinalChunk), std::string::npos);
+  EXPECT_TRUE(context.get().StopToken().stop_requested());
+  server.Shutdown();
+  server.Join();
+}
+
+asio::awaitable<core::Result<EventHttpResponse>> LegacyStreamResponse(std::shared_ptr<std::atomic_bool> called) {
+  EventHttpResponse response;
+  response.response = Respond({}).value();
+  response.response.stream_writer = [called](HttpByteTransport&) {
+    called->store(true);
+    return core::Result<void>{};
+  };
+  response.stream = [called](std::shared_ptr<HttpEventStream>,
+                             engine::RequestExecutionContext) -> asio::awaitable<core::Result<void>> {
+    called->store(true);
+    co_return core::Result<void>{};
+  };
+  co_return response;
+}
+
+TEST(EventHttpServer, BlockingWriterIsRejectedWithoutInvokingEitherProducer) {
+  auto called = std::make_shared<std::atomic_bool>(false);
+  EventHttpServer::AsyncHandler handler = [called](HttpServerRequest, engine::RequestExecutionContext) {
+    return LegacyStreamResponse(called);
+  };
+  EventHttpServer server(std::move(handler));
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kCloseRequest));
+  EXPECT_NE(ReadToEnd(peer).find(kNotImplemented), std::string::npos);
+  EXPECT_FALSE(called->load());
+  server.Shutdown();
+  server.Join();
+}
+
+constexpr std::size_t kRejectedHeaderLimit = 32;
+
+TEST(EventHttpServer, RejectedStreamHeadersCancelNativeProducerBeforeShutdown) {
+  const auto backend = std::make_shared<LiveBackend>();
+  auto completed = backend->first_completed.get_future();
+  engine::AsyncRuntime runtime(backend);
+  EventHttpServerOptions options;
+  options.max_output_bytes = kRejectedHeaderLimit;
+  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kSubscribeRequest));
+  EXPECT_TRUE(ReadToEnd(peer).empty());
+  EXPECT_EQ(completed.wait_for(kTimeout), std::future_status::ready);
   server.Shutdown();
   server.Join();
   runtime.Shutdown();
@@ -308,11 +399,6 @@ TEST(EventHttpServer, IdleTimeoutAndOutputLimitReleaseConnections) {
   server.Shutdown();
   server.Join();
 }
-}  // namespace
-}  // namespace a2a::server
-
-namespace a2a::server {
-namespace {
 constexpr std::string_view kSlowRequest = "GET /slow HTTP/1.1\r\n\r\n";
 constexpr std::string_view kSlowTarget = "/slow";
 constexpr std::string_view kHeaderEnd = "\r\n\r\n";
@@ -382,11 +468,6 @@ TEST(EventHttpServer, SlowReaderDoesNotStallUnaryAndShutdownWakesPendingWrite) {
   EXPECT_EQ(finished.wait_for(kTimeout), std::future_status::ready);
   EXPECT_EQ(state->cleanup.load(), 1U);
 }
-}  // namespace
-}  // namespace a2a::server
-
-namespace a2a::server {
-namespace {
 constexpr std::string_view kMalformedRequest = "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n";
 constexpr std::string_view kBadRequestStatus = "400 Bad Request";
 
@@ -426,11 +507,6 @@ TEST(EventHttpServer, OptionsAndStartLifecycleAreValidated) {
   server.Shutdown();
   server.Join();
 }
-}  // namespace
-}  // namespace a2a::server
-
-namespace a2a::server {
-namespace {
 using SinkPromise = std::promise<std::shared_ptr<HttpEventStream>>;
 asio::awaitable<core::Result<void>> RetainSink(std::shared_ptr<SinkPromise> promise,
                                                std::shared_ptr<HttpEventStream> stream) {
@@ -448,9 +524,12 @@ asio::awaitable<core::Result<EventHttpResponse>> RetainedResponse(std::shared_pt
 }
 
 void ExpectRejectedWrite(asio::io_context& io, const std::shared_ptr<HttpEventStream>& stream) {
-  auto result = asio::co_spawn(io, stream->Write(std::string(kEvent)), asio::use_future);
-  (void)io.run();
-  EXPECT_FALSE(result.get().ok());
+  for (const auto bytes : {kEvent, std::string_view{}}) {
+    io.restart();
+    auto result = asio::co_spawn(io, stream->Write(std::string(bytes)), asio::use_future);
+    (void)io.run();
+    EXPECT_FALSE(result.get().ok());
+  }
 }
 
 TEST(EventHttpServer, RetainedStreamSinkRejectsWritesAfterListenerDestruction) {
@@ -505,17 +584,11 @@ TEST(EventHttpServer, CompletedStreamSinkCannotCorruptReusedConnection) {
   server.Join();
 }
 
-}  // namespace
-}  // namespace a2a::server
-
-namespace a2a::server {
-namespace {
 class DelayedBackend final : public engine::CoroutineAgentExecutor {
  public:
   asio::awaitable<core::Result<void>> SubscribeTask(
       lf::a2a::v1::GetTaskRequest /*request*/, engine::RequestExecutionContext /*context*/,
       std::shared_ptr<engine::AsyncServerStreamSession> /*stream*/) override {
-    // Reuse the controlled backend that finishes after logical cancellation.
     started.set_value();
     const auto result = co_await reply_.Wait();
     ++completed;

@@ -2,6 +2,7 @@
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 #include <boost/asio.hpp>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -12,6 +13,7 @@
 
 namespace {
 constexpr std::string_view kSmoke = "--smoke";
+constexpr std::string_view kUnknownFailure = "Unexpected server failure";
 constexpr std::string_view kRequest =
     "GET /a2a/tasks/example HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kTaskId = "example";
@@ -61,7 +63,11 @@ int Run(int argc, char** argv) {
 int main(int argc, char** argv) noexcept {
   try {
     return Run(argc, argv);
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return EXIT_FAILURE;
   } catch (...) {
+    std::cerr << kUnknownFailure << '\n';
     return EXIT_FAILURE;
   }
 }

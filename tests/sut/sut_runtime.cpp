@@ -138,8 +138,6 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
 }
 
 #ifdef A2A_SUT_ASYNC
-// Only the SUT's signal monitor polls; all socket scheduling belongs to the
-// installed SDK runtime, including accept, idle clients and live streams.
 class EventSutServer final {
  public:
   EventSutServer(server::EventHttpServer::AsyncHandler handler, const SutConfig& listener)

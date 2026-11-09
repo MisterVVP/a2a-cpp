@@ -1,4 +1,4 @@
-# Event-driven HTTP/1.1 server
+# Event-driven HTTP server
 
 `a2a::server::EventHttpServer` is an opt-in listener in `a2a::asio`. Build with
 `-DA2A_ENABLE_ASIO=ON`, using the repository's pinned Boost installation. Normal
@@ -7,6 +7,8 @@ SDK builds retain their existing dependency set and synchronous APIs.
 ```cpp
 #include <a2a/server/engine/async_runtime.h>
 #include <a2a/server/event_http_dispatcher.h>
+#include <stdexcept>
+#include <string>
 
 // executor implements CoroutineAgentExecutor; card describes your agent.
 a2a::server::engine::AsyncRuntime application(executor);
@@ -14,7 +16,10 @@ a2a::server::EventHttpServerOptions limits;
 limits.port = 8080;
 a2a::server::EventHttpServer listener(
     a2a::server::MakeEventHttpHandler(application.dispatcher(), card), limits);
-auto started = listener.Start(); // report started.error() if it fails
+auto started = listener.Start();
+if (!started.ok()) {
+    throw std::runtime_error(std::string(started.error().message()));
+}
 // ... application lifetime ...
 listener.Shutdown();
 listener.Join();
@@ -22,8 +27,8 @@ application.Shutdown();
 application.Join();
 ```
 
-The [installed example](../../../examples/apps/event_http_server/README.md)
-builds without source-tree include paths. `MakeEventHttpHandler` owns its REST,
+The [installed-consumer example](../examples/apps.md) in
+`examples/apps/event_http_server` builds without source-tree include paths. `MakeEventHttpHandler` owns its REST,
 JSON-RPC and agent-card transports, routing mux, and dispatcher reference.
 `ServerBindingsOptions` selects paths, extension requirements and discovery
 cache settings. The same preparation and completion code implements synchronous
@@ -141,33 +146,34 @@ Configure the listener before its single successful `Start()`. `port()` returns
 the bound port, including when port zero requested an ephemeral port.
 `Shutdown()` is thread-safe, wakes the network loop, closes admission and sockets,
 and posts cancellation off the network thread. `Join()` and destruction drain
-network/HTTP callbacks and release handler captures on application workers; call them outside runtime callbacks. Blocking
-legacy work must eventually return, and custom producers must honor cancellation.
+network/HTTP callbacks and release handler captures on application workers.
+Call them outside runtime callbacks. Blocking legacy work must eventually
+return, and custom producers must honor cancellation.
 The dispatcher and its executor must stay alive until the listener has drained.
 The application runtime's subsequent `Join()` drains native coroutine cleanup,
 which may outlive logical cancellation while a backend finishes.
-Retained stream sinks reject writes after stream completion, shutdown or listener destruction;
-their closed socket/timer services retain owned context storage until those
-application-held sinks are released.
+Retained stream sinks reject writes after stream completion, shutdown or
+listener destruction; their closed socket/timer services retain owned context
+storage until those application-held sinks are released.
 
-The runtime serves HTTP/1.1 over TCP. TLS termination, HTTP/2, request chunked
-transfer encoding, protocol upgrades and legacy blocking stream producers are
-outside this API. Put TLS termination in front of the listener when needed.
+The listener accepts HTTP/1.1 over TCP. For HTTPS or HTTP/2 clients, place a
+reverse proxy in front of it and forward requests to the listener using
+HTTP/1.1. Configure the proxy to forward SSE events promptly without buffering
+and to allow long-lived responses. Upstream requests must use Content-Length
+for their bodies. Native HTTP/2, TLS, request chunked transfer encoding, protocol
+upgrades and legacy blocking stream producers are outside this API.
 
 The async TCK SUT uses this same SDK runtime for HTTP+JSON, JSON-RPC, discovery,
 and SSE. Its signal monitor and test diagnostics remain fixture concerns. The
 synchronous SUT remains available as a compatibility baseline. Portable native
 socket tests run in the existing Linux, macOS and Windows Asio CI configurations.
 
-## Performance evidence
+## Measuring resource use
 
 `tests/performance/event_http_evidence.py` compares discovery, finite SSE and
 64 idle sockets against the synchronous SUT at c1/c16/c64. Build both binaries
-with identical optimized settings and dependencies; the performance README has
-the invocation and captured validation report. The measured event fixture used
-21 threads at every concurrency, while the synchronous fixture reached 73 at
-64 clients. Short c1 finite streams cost more executor hand-offs and awaited
-write completions: 2,986 versus 7,963 requests/s, completion p99 0.581 versus
-0.236 ms on a shared two-core container. This opt-in runtime provides bounded
-connections and backpressure; the report documents the throughput/latency costs
-alongside CPU, memory, errors and first-event percentiles.
+with identical optimized settings and dependencies, then follow the performance
+README. The runner records throughput, completion and first-event p95/p99,
+errors, CPU, resident memory and process threads. Short finite streams incur
+additional executor scheduling and awaited write acknowledgements; use the
+comparison to assess the tradeoff for your workload.

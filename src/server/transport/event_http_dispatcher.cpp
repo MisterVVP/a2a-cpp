@@ -22,9 +22,7 @@ constexpr std::string_view kCancelled = "HTTP dispatch cancelled";
 constexpr std::string_view kMissingDispatcher = "Event HTTP dispatcher is required";
 using StopCallback = std::stop_callback<std::function<void()>>;
 
-// A single-slot transport mailbox, independent of any io_context service. Both
-// immediate and deferred completions post to the awaiting coroutine's executor;
-// native producer cleanup never depends on an already-stopped HTTP executor.
+// Own no io_context services: native cleanup can outlive the HTTP executor.
 template <typename T>
 class Mailbox final : public std::enable_shared_from_this<Mailbox<T>> {
  public:
@@ -153,7 +151,6 @@ class StreamBridge final : public engine::AsyncServerStreamSession {
       terminal.error = result.error();
       demand->Close();
     }
-    // Cancellation/error overrides an event that has not yet been consumed.
     (void)events->Send(std::move(terminal), true);
   }
   const std::shared_ptr<Mailbox<StreamItem>> events = std::make_shared<Mailbox<StreamItem>>();
@@ -226,8 +223,6 @@ asio::awaitable<core::Result<void>> Produce(
       bridge->Cancel();
       co_return written.error();
     }
-    // Subsequent writes can await the socket sink directly from the dispatcher
-    // strand. Only the first event needs a header-selection handshake.
     bridge->Attach(stream);
     (void)bridge->demand->Send(true);
     auto next = co_await bridge->events->Receive(asio::use_awaitable);
@@ -281,8 +276,7 @@ asio::awaitable<core::Result<EventHttpResponse>> Streaming(std::shared_ptr<engin
     }
     co_return EventHttpResponse{.response = std::move(response.value()), .stream = {}};
   }
-  // Shared protocol completion constructs identical SSE headers/metadata. The
-  // empty legacy session is never polled by this event runtime.
+  // Reuse the protocol serializer's headers without running its blocking writer.
   auto response = plan.complete(DispatchResponse(std::make_unique<EmptySession>()));
   if (!response.ok()) {
     co_return response.error();
