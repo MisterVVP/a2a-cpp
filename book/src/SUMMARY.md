@@ -17,6 +17,7 @@
     - [Runtime and transport helpers](server/runtime-helpers.md)
   - [Native async gRPC](server/async-grpc.md)
     - [Coroutine streaming](server/async-streaming.md)
+  - [Event-driven HTTP server](server/event-http.md)
   - [REST Server](server/rest-server.md)
   - [JSON-RPC Server](server/json-rpc-server.md)
   - [Storage Backends](server/storage.md)

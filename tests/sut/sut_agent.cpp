@@ -49,7 +49,10 @@ bool AsyncTransportsSupported() {
   std::string_view names = configured == nullptr ? kGrpcTransport : configured;
   while (!names.empty()) {
     const auto comma = names.find(',');
-    if (names.substr(0, comma) != kGrpcTransport) {
+    constexpr std::string_view kJsonRpc = "jsonrpc";
+    constexpr std::string_view kHttpJson = "http_json";
+    const auto name = names.substr(0, comma);
+    if (name != kGrpcTransport && name != kJsonRpc && name != kHttpJson) {
       return false;
     }
     if (comma == std::string_view::npos) {
@@ -325,13 +328,6 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
           .WithPushNotifications(options.push_notifications)
           .WithExtendedAgentCard(options.extended_card_mode != kExtendedCardModeDisabled)
           .Build();
-  if (options.asynchronous) {
-    auto* interfaces = card.mutable_supported_interfaces();
-    const auto removed = std::ranges::remove_if(*interfaces, [](const auto& interface) {
-      return interface.protocol_binding() != core::protocol_bindings::kGrpc;
-    });
-    interfaces->erase(removed.begin(), removed.end());
-  }
   card.mutable_capabilities()->set_streaming(options.streaming);
   if (!options.auth_token.empty() || options.security) {
     auto& scheme = (*card.mutable_security_schemes())[std::string(kSecuritySchemeName)];
@@ -353,8 +349,7 @@ std::optional<lf::a2a::v1::AgentCard> ExtendedCard(const lf::a2a::v1::AgentCard&
 }  // namespace
 
 core::Result<SutAgentOptions> ReadSutAgentOptions(bool asynchronous) {
-  constexpr auto kUnsupportedTransports =
-      "Only grpc is implemented in the async SUT; jsonrpc and http_json are not enabled yet";
+  constexpr auto kUnsupportedTransports = "Async SUT transport selection must contain grpc, jsonrpc or http_json";
   if (asynchronous && !AsyncTransportsSupported()) {
     return core::Error::Validation(kUnsupportedTransports);
   }

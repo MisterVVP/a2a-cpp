@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
 #include "a2a/core/http_constants.h"
@@ -446,6 +447,63 @@ TEST(RestServerTransportTest, ExtendedAgentCardPreservesProviderErrorReason) {
   EXPECT_EQ(response.value().status_code, a2a::core::http::kStatusInternalServerError);
   EXPECT_NE(response.value().body.find(kExpectedReason), std::string::npos);
   EXPECT_EQ(response.value().body.find(kUnexpectedReason), std::string::npos);
+}
+
+constexpr std::string_view kMissingDispatcher = "REST transport dispatcher is not configured";
+
+a2a::server::HttpServerRequest ExtendedRequest(std::string_view target) {
+  return {.method = kGetMethod,
+          .target = std::string(target),
+          .headers = {{kVersionHeaderName, "1.0"}, {kExtensionsHeaderName, std::string(kRequiredExtension)}},
+          .body = {},
+          .remote_address = {}};
+}
+
+void ExpectMissingDispatcherBody(std::string_view body) {
+  google::protobuf::Struct error;
+  ASSERT_TRUE(a2a::core::JsonToMessage(body, &error).ok());
+  const auto& fields = error.fields().at(kErrorField).struct_value().fields();
+  EXPECT_EQ(fields.at(kStatusField).string_value(), "INTERNAL");
+  EXPECT_EQ(fields.at("code").number_value(), a2a::core::http::kStatusInternalServerError);
+  EXPECT_EQ(fields.at("message").string_value(), kMissingDispatcher);
+  EXPECT_EQ(fields.at("details").list_value().values(0).struct_value().fields().at("reason").string_value(),
+            "INTERNAL");
+}
+
+void ExpectMissingDispatcherResponse(const a2a::server::HttpServerResponse& response) {
+  EXPECT_EQ(response.status_code, a2a::core::http::kStatusInternalServerError);
+  EXPECT_EQ(response.headers.at(std::string(a2a::core::http::kContentTypeHeaderName)),
+            a2a::core::http::kContentTypeApplicationA2aJson);
+  EXPECT_EQ(response.headers.at(kVersionHeaderName), "1.0");
+  EXPECT_EQ(response.headers.at(kExtensionsHeaderName), kRequiredExtension);
+  ExpectMissingDispatcherBody(response.body);
+}
+
+TEST(RestServerTransportTest, MissingDispatcherPreservesExtendedCardWireErrorOnEveryRoute) {
+  a2a::server::RestServerTransport server(nullptr, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+  for (const std::string_view target : {"/extendedAgentCard", "/.well-known/agent-card.json?view=extended",
+                                        "/a2a/extendedAgentCard", "/a2a/tenant-1/extendedAgentCard"}) {
+    const auto response = server.Handle(ExtendedRequest(target));
+    ASSERT_TRUE(response.ok()) << target;
+    ExpectMissingDispatcherResponse(response.value());
+  }
+}
+
+TEST(RestServerTransportTest, MissingDispatcherPreservesUnaryResultError) {
+  a2a::server::RestServerTransport server(nullptr, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+  const auto response = server.Handle(ExtendedRequest("/a2a/tasks/task-7"));
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().message(), kMissingDispatcher);
+}
+
+TEST(RestServerTransportTest, PreparesExtendedCardWithoutSynchronousDispatcher) {
+  a2a::server::RestServerTransport server(nullptr, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+  const auto response = server.Prepare(ExtendedRequest("/extendedAgentCard"));
+  ASSERT_TRUE(response.ok());
+  const auto* const plan =
+      std::get_if<a2a::server::PreparedDispatch<a2a::server::HttpServerResponse>>(&response.value());
+  ASSERT_NE(plan, nullptr);
+  EXPECT_EQ(plan->request.operation, a2a::server::DispatcherOperation::kGetExtendedAgentCard);
 }
 
 TEST(RestQueryParserTest, ParsesUnescapedKnownParameters) {

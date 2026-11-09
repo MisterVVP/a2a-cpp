@@ -215,6 +215,8 @@ if(A2A_ENABLE_ASIO)
   find_package(Boost ${A2A_BOOST_VERSION} CONFIG REQUIRED)
   find_package(Threads REQUIRED)
   add_library(a2a_asio STATIC
+    server/transport/event_http_dispatcher.cpp
+    server/transport/event_http_server.cpp
     server/engine/async_dispatcher.cpp
     server/engine/async_task_subscription.cpp
     server/engine/async_push_notification_service.cpp
@@ -224,6 +226,9 @@ if(A2A_ENABLE_ASIO)
     server/engine/async_runtime.cpp
     server/transport/async_server_bindings.cpp
   )
+  if(WIN32)
+    target_link_libraries(a2a_asio PRIVATE ws2_32 mswsock)
+  endif()
   add_library(a2a::asio ALIAS a2a_asio)
   set_target_properties(a2a_asio PROPERTIES EXPORT_NAME asio)
   target_compile_definitions(a2a_asio PUBLIC A2A_HAS_ASYNC_SERVER=1)

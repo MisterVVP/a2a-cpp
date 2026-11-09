@@ -13,6 +13,7 @@
 
 #include "a2a/core/protocol_paths.h"
 #include "a2a/core/result.h"
+#include "a2a/server/prepared_dispatch.h"
 #include "a2a/server/required_extensions_validator.h"
 #include "a2a/server/rest_transport.h"
 #include "a2a/server/version_header_validator.h"
@@ -61,13 +62,14 @@ class RestServerTransport final {
   RestServerTransport(Dispatcher* dispatcher, lf::a2a::v1::AgentCard agent_card,
                       RestServerTransportOptions options = {});
 
+  [[nodiscard]] core::Result<PreparedResponse<HttpServerResponse>> Prepare(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> Handle(const HttpServerRequest& request) const;
 
  private:
   [[nodiscard]] core::Result<RestRequest> BuildRestRequest(const HttpServerRequest& request) const;
   [[nodiscard]] core::Result<HttpServerResponse> HandleAgentCard(const HttpServerRequest& request) const;
-  [[nodiscard]] core::Result<HttpServerResponse> HandleExtendedAgentCard(const HttpServerRequest& request,
-                                                                         std::string_view tenant) const;
+  [[nodiscard]] core::Result<PreparedResponse<HttpServerResponse>> PrepareExtendedAgentCard(
+      const HttpServerRequest& request, std::string_view tenant) const;
   [[nodiscard]] static HttpServerResponse ToHttpResponse(const RestResponse& response,
                                                          const std::vector<std::string>& activated_extensions);
 

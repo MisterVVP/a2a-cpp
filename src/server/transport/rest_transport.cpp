@@ -771,66 +771,88 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   return response;
 }
 
-core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) const {
-  if (dispatcher_ == nullptr) {
-    return core::Error::Internal(internal::messages::kMissingRestDispatcher);
-  }
-
+core::Result<PreparedResponse<RestResponse>> RestTransport::Prepare(const RestRequest& request) {
   if (request.method == core::http::kMethodGet || request.method == core::http::kMethodPost) {
     const auto subscribe_task_id = ParseTaskIdFromActionPath(request.path, RestEndpointPaths::kTaskSubscribeSuffix);
     if (subscribe_task_id.has_value()) {
       lf::a2a::v1::GetTaskRequest get_task_request;
       get_task_request.set_id(*subscribe_task_id);
       if (!ApplyHistoryLengthQuery(request, get_task_request)) {
-        return BuildErrorResponse(core::Error::Validation(internal::messages::kNoMatchingRestRoute)
-                                      .WithHttpStatus(core::http::kStatusNotFound));
+        return PreparedResponse<RestResponse>(
+            BuildErrorResponse(core::Error::Validation(internal::messages::kNoMatchingRestRoute)
+                                   .WithHttpStatus(core::http::kStatusNotFound)));
       }
-      RequestContext context = request.context;
-      auto dispatch_response = dispatcher_->Dispatch(
-          {.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, context);
-      if (!dispatch_response.ok()) {
-        return BuildErrorResponse(dispatch_response.error().WithTransport(internal::transport_names::kRest));
-      }
-      auto* stream = std::get_if<std::unique_ptr<ServerStreamSession>>(&dispatch_response.value().payload());
-      if (stream == nullptr || *stream == nullptr) {
-        return BuildErrorResponse(
-            core::Error::Internal(core::protocol_error_messages::ToString(
-                                      core::protocol_error_messages::kUnexpectedDispatchPayloadTypeForSubscribeToTask))
-                .WithTransport(internal::transport_names::kRest));
-      }
-      const auto subscribe_response = BuildSubscribeResponse(*stream);
-      if (!subscribe_response.ok()) {
-        return BuildErrorResponse(subscribe_response.error().WithTransport(internal::transport_names::kRest));
-      }
-      return subscribe_response.value();
+      return PreparedResponse<RestResponse>(
+          MakePlan({.operation = DispatcherOperation::kSubscribeTask, .payload = get_task_request}, request.context));
     }
   }
 
   if (const auto content_type_error = ValidateJsonRequestContentType(request); content_type_error.has_value()) {
-    return BuildErrorResponse(*content_type_error);
+    return PreparedResponse<RestResponse>(BuildErrorResponse(*content_type_error));
   }
 
   const auto dispatch_request = BuildDispatchRequest(request);
   if (!dispatch_request.has_value()) {
     if (request.method == core::http::kMethodGet && request.path == RestEndpointPaths::kTaskCollection) {
-      return BuildErrorResponse(core::Error::Validation(kInvalidListTasksParametersMessage));
+      return PreparedResponse<RestResponse>(
+          BuildErrorResponse(core::Error::Validation(kInvalidListTasksParametersMessage)));
     }
-    return BuildErrorResponse(
-        core::Error::Validation(internal::messages::kNoMatchingRestRoute).WithHttpStatus(core::http::kStatusNotFound));
+    return PreparedResponse<RestResponse>(BuildErrorResponse(
+        core::Error::Validation(internal::messages::kNoMatchingRestRoute).WithHttpStatus(core::http::kStatusNotFound)));
   }
 
-  RequestContext context = request.context;
-  auto dispatch_response = dispatcher_->Dispatch(dispatch_request.value(), context);
-  if (!dispatch_response.ok()) {
-    return BuildErrorResponse(dispatch_response.error().WithTransport(internal::transport_names::kRest));
-  }
+  return PreparedResponse<RestResponse>(MakePlan(*dispatch_request, request.context));
+}
 
-  const auto response = SerializeDispatchResponse(dispatch_request->operation, dispatch_response.value());
+PreparedDispatch<RestResponse> RestTransport::MakePlan(DispatchRequest request, RequestContext context) {
+  const auto operation = request.operation;
+  return {
+      .request = std::move(request),
+      .context = std::move(context),
+      .complete = [operation](core::Result<DispatchResponse> result) { return Complete(operation, std::move(result)); },
+      .encode_event = [](const lf::a2a::v1::StreamResponse& event) -> core::Result<std::string> {
+        std::string bytes;
+        const auto encoded = BuildSseEvent(bytes, event);
+        if (!encoded.ok()) {
+          return encoded.error();
+        }
+        return bytes;
+      },
+      .encode_error = [](const core::Error& error) -> core::Result<std::string> {
+        std::string bytes;
+        const auto encoded = BuildSseErrorEvent(bytes, error);
+        if (!encoded.ok()) {
+          return encoded.error();
+        }
+        return bytes;
+      }};
+}
+
+core::Result<RestResponse> RestTransport::Complete(DispatcherOperation operation,
+                                                   core::Result<DispatchResponse> result) {
+  if (!result.ok()) {
+    return BuildErrorResponse(result.error().WithTransport(internal::transport_names::kRest));
+  }
+  auto response = SerializeDispatchResponse(operation, result.value());
   if (!response.ok()) {
     return BuildErrorResponse(response.error().WithTransport(internal::transport_names::kRest));
   }
+  return response;
+}
 
-  return response.value();
+core::Result<RestResponse> RestTransport::Handle(const RestRequest& request) const {
+  if (dispatcher_ == nullptr) {
+    return core::Error::Internal(internal::messages::kMissingRestDispatcher);
+  }
+  auto prepared = Prepare(request);
+  if (!prepared.ok()) {
+    return prepared.error();
+  }
+  if (auto* response = std::get_if<RestResponse>(&prepared.value())) {
+    return std::move(*response);
+  }
+  auto& plan = std::get<PreparedDispatch<RestResponse>>(prepared.value());
+  return plan.complete(dispatcher_->Dispatch(plan.request, plan.context));
 }
 
 }  // namespace a2a::server

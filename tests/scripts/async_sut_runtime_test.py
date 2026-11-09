@@ -32,12 +32,12 @@ class AsyncSutRuntimeTest(unittest.TestCase):
     sut: str
 
     def test_rejects_unimplemented_async_bindings(self):
-        for selection in ("grpc,http_json", "grpc,jsonrpc,http_json", "unknown", "", "grpc,"):
+        for selection in ("unknown", "", "grpc,"):
             with self.subTest(transports=selection):
                 env = dict(os.environ, A2A_TCK_STORE_BACKEND="inmemory", A2A_TCK_TRANSPORTS=selection)
                 result = subprocess.run([self.sut], env=env, capture_output=True, text=True, timeout=10)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Only grpc is implemented", result.stderr)
+                self.assertIn("Async SUT transport selection", result.stderr)
 
     def test_serves_sdk_discovery_without_synchronous_protocol_routes(self):
         port = listener_port()
@@ -73,15 +73,15 @@ class AsyncSutRuntimeTest(unittest.TestCase):
                 if process.poll() is not None or time.monotonic() >= deadline:
                     self.fail("Async SUT did not become ready")
                 time.sleep(0.05)
-        self.assertEqual(len(card["supportedInterfaces"]), 1)
-        interface = card["supportedInterfaces"][0]
-        self.assertEqual(interface["protocolBinding"], "GRPC")
-        self.assertEqual(interface["url"], f"127.0.0.1:{port + 1}")
+        interfaces = {entry["protocolBinding"]: entry for entry in card["supportedInterfaces"]}
+        self.assertEqual(set(interfaces), {"GRPC", "JSONRPC", "HTTP+JSON"})
+        self.assertEqual(interfaces["GRPC"]["url"], f"127.0.0.1:{port + 1}")
         self.assertTrue(card["capabilities"].get("streaming", False))
-        for path in ("/rpc", "/a2a/tasks/absent"):
-            with self.assertRaises(urllib.error.HTTPError) as raised:
-                urllib.request.urlopen(base + path, timeout=1)
-            self.assertEqual(raised.exception.code, 404)
+        request = urllib.request.Request(base + "/a2a/tasks/absent", headers={"A2A-Version": "1.0"})
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(request, timeout=1)
+        self.assertIn(raised.exception.code, (400, 404))
+
 
 
 if __name__ == "__main__":

@@ -190,13 +190,14 @@ pending workload; they do not establish general database or network throughput.
 
 The existing `tck_sut` retains synchronous execution, streaming, and all three
 protocol bindings. A separate `tck_async_sut` provides one shared async setup for
-gRPC, JSON-RPC, and HTTP+JSON integration. Currently only gRPC is implemented;
-requesting an unavailable async binding fails at startup. The setup enables
-coroutine streaming and shared task subscriptions over gRPC.
+gRPC, JSON-RPC, and HTTP+JSON integration. Its HTTP bindings now use the shared
+[event-driven HTTP runtime](event-http.md), including finite and live SSE.
+The setup enables coroutine streaming and shared task subscriptions across
+all three bindings. Unknown transport names fail at startup.
 
 ```sh
-SUT_TARGET=tck_async_sut A2A_TCK_TRANSPORTS=grpc ./scripts/run_tck_sut.sh
-TCK_TRANSPORTS=grpc ./scripts/run_tck_mandatory.sh
+SUT_TARGET=tck_async_sut A2A_TCK_TRANSPORTS=grpc,jsonrpc,http_json ./scripts/run_tck_sut.sh
+TCK_TRANSPORTS=grpc,jsonrpc,http_json ./scripts/run_tck_mandatory.sh
 ./scripts/stop_tck_sut.sh
 ```
 
@@ -210,13 +211,14 @@ workers and does not provide asynchronous database or outbound network
 I/O. The separate network evidence above uses externally completed pending
 operations.
 
-The async card advertises only enabled bindings. HTTP serves SDK agent-card
-discovery and caching, without registering JSON-RPC or HTTP+JSON operation routes.
+The async card advertises all three enabled bindings. HTTP serves SDK agent-card
+discovery, caching, JSON-RPC and HTTP+JSON operation routes through the installed
+event runtime.
 CI runs the synchronous and async setups against both stores.
 
 Upstream registered requirements without tests remain a reported coverage gap;
 passing executable TCK tests is not a claim of complete specification coverage.
-The gRPC-only report also leaves requirements tested exclusively through other
+A gRPC-only report also leaves requirements tested exclusively through other
 bindings untested. Upstream console summaries group `NOT TESTED` under “Failed”;
 use the JSON requirement statuses and executable test results to distinguish
 coverage gaps from failures.

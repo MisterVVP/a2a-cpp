@@ -121,3 +121,8 @@ current executor with `this_coro::executor`; local timers then belong to their
 coroutine frames. Cancellation remains cooperative, and exactly-once completion,
 deadlines, metadata, interceptors, and separate active/physical-cleanup limits
 remain the engine's existing responsibilities.
+
+For native HTTP+JSON, JSON-RPC, and SSE listeners, use the optional
+[EventHttpServer and MakeEventHttpHandler](event-http.md) with the same async
+dispatcher. `ServerBindings` itself continues to own transport registrations
+for its existing hosting contracts.

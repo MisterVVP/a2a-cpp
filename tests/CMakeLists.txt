@@ -1395,3 +1395,24 @@ if(A2A_HAS_LIBCURL)
   add_test(NAME async_push_delivery_evidence COMMAND async_push_delivery_evidence)
   set_tests_properties(async_push_delivery_evidence PROPERTIES TIMEOUT 120)
 endif()
+
+add_executable(http_codec_test unit/http_codec_test.cpp)
+target_link_libraries(http_codec_test PRIVATE a2a::server GTest::gtest_main)
+gtest_discover_tests(http_codec_test)
+
+if(A2A_ENABLE_ASIO)
+  add_executable(event_http_server_test integration/event_http_server_test.cpp)
+  target_link_libraries(event_http_server_test PRIVATE a2a::asio GTest::gtest_main)
+  target_include_directories(event_http_server_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  gtest_discover_tests(event_http_server_test PROPERTIES LABELS tsan TIMEOUT 30)
+  add_executable(event_http_example_smoke ${PROJECT_SOURCE_DIR}/examples/apps/event_http_server/main.cpp)
+  target_link_libraries(event_http_example_smoke PRIVATE a2a::asio)
+  add_test(NAME event_http_example_smoke COMMAND event_http_example_smoke --smoke)
+endif()
+
+if(A2A_ENABLE_ASIO AND Python3_Interpreter_FOUND)
+  add_test(NAME installed_event_http_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app event_http_server)
+  set_tests_properties(installed_event_http_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+endif()
