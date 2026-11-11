@@ -173,12 +173,9 @@ For repository manifest builds, pass `-DVCPKG_MANIFEST_FEATURES=asio` together
 with `-DA2A_ENABLE_ASIO=ON` on the first CMake configure. Selecting the root
 manifest feature installs dependencies; it does not enable the CMake option.
 
-The v0.6.0 candidate overlay pins the full integrated source commit
-`2e92a3d082b0a1e1eb0cdff48aa835919b2e1ddf`, applies the narrow async-deadline timer fix, and stamps its CMake package
-version from the overlay manifest. It does not require an unpublished `v0.6.0` tag.
-For final publication, update the pin to the reviewed release commit and remove
-the candidate version stamp and the already-integrated deadline patch. Keep this source pin explicit when validating a
-candidate; a moving branch can silently select a different SDK.
+The overlay pins commit `fdb1d38c2fe5a506d59b71dee3ee339154f595d1`, which
+contains the v0.6.0 metadata and deadline fix. No release tag or source patches
+are required.
 
 ## Enable PostgreSQL store support
 

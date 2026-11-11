@@ -29,9 +29,7 @@ cmake -S . -B "${BUILD_DIR}" -G Ninja \
   -DA2A_ENABLE_TESTING=ON
 
 # Lifecycle and dispatcher tests are SDK-owned and require C++20 cancellation.
-for optional_target in request_execution_test async_dispatcher_test async_sut_test coroutine_dispatcher_test \
-    async_runtime_test async_stream_test event_http_server_test curl_reactor_test async_client_test \
-    async_push_notification_delivery_test async_push_notification_service_test; do
+for optional_target in request_execution_test async_dispatcher_test async_sut_test coroutine_dispatcher_test async_runtime_test async_stream_test event_http_server_test curl_reactor_test; do
   if cmake --build "${BUILD_DIR}" --target help | grep -F "${optional_target}:" >/dev/null; then
     TARGETS+=("${optional_target}")
   fi

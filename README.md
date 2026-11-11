@@ -101,39 +101,19 @@ See the [CMake integration](https://mistervvp.github.io/a2a-cpp/build/cmake.html
 
 ## Opt in to async APIs
 
-Async unary clients are available through `a2a::client` (built-in HTTP needs
-libcurl). Coroutine server execution, native async gRPC and the event-driven
-HTTP server require `-DA2A_ENABLE_ASIO=ON` when building the SDK and linking
-`a2a::asio`. Set that option before `FetchContent_MakeAvailable` for source
-consumers. Select the reviewed v0.6.0 candidate commit, or set
-`FETCHCONTENT_SOURCE_DIR_A2A_CPP` to your candidate checkout while its release
-tag is unpublished. The [consumer guide](https://mistervvp.github.io/a2a-cpp/build/consumers.html)
-shows that local path. For installed packages it is a build-time choice; setting it only in
-a downstream application cannot add the target to a synchronous SDK.
+Async unary clients link `a2a::client`. Coroutine servers, native async gRPC
+and the event-driven HTTP/SSE server additionally require Boost 1.92.0+,
+`-DA2A_ENABLE_ASIO=ON` when building the SDK, and `a2a::asio`.
+With the vcpkg overlay, select `a2a-cpp[asio]` or
+`a2a-cpp[asio,postgres-store]`. PostgreSQL store I/O remains synchronous.
 
-```bash
-cmake -S . -B build-asio -DCMAKE_BUILD_TYPE=Release -DA2A_ENABLE_ASIO=ON
-cmake --build build-asio --parallel
-cmake --install build-asio --prefix /tmp/a2a-cpp-asio
-cmake -S examples/installed_package_consumer -B build-event-example \
-  -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-asio -DA2A_EXAMPLE_APP=event_http_server
-cmake --build build-event-example --parallel
-./build-event-example/a2a_example --smoke
-```
-
-Make Boost discoverable via `CMAKE_PREFIX_PATH`; see the
-[build guide](https://mistervvp.github.io/a2a-cpp/build/cmake.html).
-The repository vcpkg overlay accepts `a2a-cpp[asio]` and
-`a2a-cpp[asio,postgres-store]`. Async execution is opt-in; this release does not
-make every transport or database operation asynchronous by default.
-
-Follow the [async client](https://mistervvp.github.io/a2a-cpp/client/async-unary.html),
-[coroutine runtime](https://mistervvp.github.io/a2a-cpp/server/asio-coroutines.html),
-[native gRPC](https://mistervvp.github.io/a2a-cpp/server/async-grpc.html),
-[streaming](https://mistervvp.github.io/a2a-cpp/server/async-streaming.html), and
-[event HTTP](https://mistervvp.github.io/a2a-cpp/server/event-http.html) guides.
-Review the [v0.6.0 migration notes](https://mistervvp.github.io/a2a-cpp/releases.html)
-for opaque pagination cursors, JSON parsing changes and dependency requirements.
+See [consumer setup](https://mistervvp.github.io/a2a-cpp/build/consumers.html)
+for installed and FetchContent examples, the
+[async client guide](https://mistervvp.github.io/a2a-cpp/client/async-unary.html),
+[coroutine guide](https://mistervvp.github.io/a2a-cpp/server/asio-coroutines.html),
+and [event HTTP guide](https://mistervvp.github.io/a2a-cpp/server/event-http.html).
+Review the [migration notes](https://mistervvp.github.io/a2a-cpp/releases.html)
+for pagination, JSON parsing and dependency changes.
 
 ## Examples
 

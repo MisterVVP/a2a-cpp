@@ -30,13 +30,8 @@ resolve enabled optional dependencies. The vcpkg overlay offers `asio` and
 **synchronous**; bounded blocking adapters do not turn database calls into
 nonblocking I/O. See [consumer setup](build/consumers.md).
 
-### Deadline completion reliability
-
-The completion timer now waits for notification when only non-expiring internal
-markers remain. This avoids overflowing steady-to-system-clock conversions in
-some standard libraries after deadline expiry, allowing callbacks and admission
-cleanup to complete. Regression coverage includes an unbounded call followed by
-expiry and a real HTTP request after timeout.
+The release also fixes a completion-timer stall after deadline expiry on some
+standard-library configurations.
 
 ### Migration and breaking changes
 

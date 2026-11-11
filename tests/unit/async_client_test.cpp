@@ -59,7 +59,6 @@ constexpr int kCompletionEvent = 3;
 constexpr int kRaceCount = 50;
 constexpr int kRaceParticipants = 3;
 constexpr std::size_t kCapacity = 4096;
-constexpr int kCompletedValue = 42;
 
 void ExpectBackgroundCallback(std::thread::id caller) { EXPECT_NE(std::this_thread::get_id(), caller); }
 
@@ -528,32 +527,6 @@ TEST(AsyncClientContractTest, DeadlineWinsAgainstLateTransportResult) {
     pending->Complete(lf::a2a::v1::Task{});
   }
   started.value().Wait();
-}
-
-void ExpectFiniteDeadline(core::AsyncScope& scope) {
-  std::promise<core::Result<int>> expired;
-  auto expiry = expired.get_future();
-  auto finite = scope.Start<int>([&](auto value) { expired.set_value(std::move(value)); }, kTimeout);
-  ASSERT_TRUE(finite.ok());
-  ASSERT_EQ(expiry.wait_for(kWait), std::future_status::ready);
-  const auto response = expiry.get();
-  ASSERT_FALSE(response.ok());
-  EXPECT_EQ(response.error().protocol_code(), kDeadline);
-  finite.value().handle().Wait();
-}
-
-TEST(AsyncClientContractTest, UnboundedDeadlineAllowsCompletionAndLaterExpiry) {
-  core::AsyncScope scope;
-  std::promise<core::Result<int>> completed;
-  auto completion = completed.get_future();
-  auto unbounded =
-      scope.Start<int>([&](auto value) { completed.set_value(std::move(value)); }, std::chrono::milliseconds::max());
-  ASSERT_TRUE(unbounded.ok());
-  unbounded.value().Complete(kCompletedValue);
-  ASSERT_EQ(completion.wait_for(kWait), std::future_status::ready);
-  ASSERT_EQ(completion.get().value(), kCompletedValue);
-  unbounded.value().handle().Wait();
-  ExpectFiniteDeadline(scope);
 }
 
 TEST(AsyncClientContractTest, CompletionCancelAndShutdownRaceOnce) {

@@ -10,17 +10,8 @@ vcpkg_check_features(
 vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH
     URL "https://github.com/MisterVVP/a2a-cpp.git"
-    # Integrated v0.6.0 candidate; no unpublished release tag is required.
-    REF 2e92a3d082b0a1e1eb0cdff48aa835919b2e1ddf
-    PATCHES fix-async-deadline-wait.patch
+    REF fdb1d38c2fe5a506d59b71dee3ee339154f595d1
 )
-
-# The pinned candidate predates the release metadata bump. Stamp the installed
-# CMake package with the overlay version too. Replace the pin with the final
-# release commit and remove this stamp and its integrated patch when publishing.
-vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt"
-    "project(a2a_cpp VERSION 0.5.2 LANGUAGES CXX)"
-    "project(a2a_cpp VERSION ${VERSION} LANGUAGES CXX)")
 
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
