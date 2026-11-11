@@ -26,9 +26,7 @@ full TCK compliance. Review reports for the specific commit you deploy.
 
 ## SDK v0.6.0 candidate
 
-The [integrated release validation record](../performance/release-v0.6.0.md)
-contains the current candidate's results and blockers. The local synchronous
-in-memory run against unmodified upstream TCK
+A local synchronous in-memory run against unmodified upstream TCK
 `104a7b4ae0d83f65c075e3793e322953a830eaba` reported **242 passed, 4 failed,
 17 skipped** across HTTP+JSON, JSON-RPC and gRPC. The failures correspond to
 `HTTP_JSON-ERR-001` and `CORE-SEND-003`, described below. This does not satisfy

@@ -50,7 +50,6 @@
   - [CMake Consumers](build/consumers.md)
   - [Packages and Release Artifacts](build/packaging.md)
 - [Performance Testing](performance/workloads.md)
-  - [SDK v0.6.0 integrated validation](performance/release-v0.6.0.md)
   - [Microbenchmarks](performance/microbenchmarks.md)
   - [Performance Driver](performance/driver.md)
   - [Benchmark Reports and Trends](performance/reports.md)

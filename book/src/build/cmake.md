@@ -189,8 +189,7 @@ rm -rf build-example-hello_agent
 
 ## SDK v0.6.0 candidate builds
 
-SDK v0.6.0 targets A2A protocol 1.0 (v1.0.1 specification). The v0.5.2 pin
-above is the previous stable SDK; its APIs predate the new coroutine servers.
+SDK v0.6.0 targets A2A protocol 1.0 (v1.0.1 specification).
 For candidate validation, use your reviewed checkout with
 `FETCHCONTENT_SOURCE_DIR_A2A_CPP`, or pin a full reviewed candidate commit.
 Do not require the `v0.6.0` tag before it is published. See

@@ -35,7 +35,6 @@ constexpr std::string_view kAsync = "async";
 constexpr auto kWait = std::chrono::seconds(30);
 constexpr std::size_t kPercentile50 = 50;
 constexpr std::size_t kPercentile95 = 95;
-constexpr std::size_t kPercentile99 = 99;
 constexpr std::size_t kPercentile100 = 100;
 constexpr std::size_t kMaxConcurrency = 512;
 constexpr auto kRequiredExtension = "urn:a2a:tck:required-extension";
@@ -50,7 +49,6 @@ constexpr auto kErrorsPrefix = ",\"errors\":";
 constexpr auto kThroughputPrefix = ",\"requests_per_second\":";
 constexpr auto kP50Prefix = ",\"p50_ms\":";
 constexpr auto kP95Prefix = ",\"p95_ms\":";
-constexpr auto kP99Prefix = ",\"p99_ms\":";
 constexpr auto kThreadCountPrefix = ",\"peak_sampled_client_threads\":";
 constexpr auto kReportEnd = "}\n";
 constexpr int kArguments = 6;
@@ -132,8 +130,7 @@ class Measurement final {
     std::cout << kTransportPrefix << transport << kModePrefix << mode << kConcurrencyPrefix << concurrency
               << kRequestsPrefix << latencies_.size() << kErrorsPrefix << errors_ << kThroughputPrefix
               << static_cast<double>(latencies_.size()) / seconds << kP50Prefix << percentile(kPercentile50)
-              << kP95Prefix << percentile(kPercentile95) << kP99Prefix << percentile(kPercentile99)
-              << kThreadCountPrefix << peak_threads_ << kReportEnd;
+              << kP95Prefix << percentile(kPercentile95) << kThreadCountPrefix << peak_threads_ << kReportEnd;
   }
   [[nodiscard]] bool ok() const { return errors_ == 0; }
 

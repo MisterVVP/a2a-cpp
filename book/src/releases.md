@@ -9,8 +9,7 @@ These notes describe SDK **v0.6.0**, targeting **A2A protocol 1.0
 is not a published stable release until tagged. The previous stable release is
 v0.5.2. Consult the [conformance statement](compatibility/conformance.md) for
 actual upstream TCK coverage; SDK integration tests do not imply full TCK
-conformance. [Integrated release validation](performance/release-v0.6.0.md)
-records evidence and outstanding environment-limited checks.
+conformance.
 
 ### Opt-in async execution
 
