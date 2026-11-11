@@ -153,6 +153,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       remote_ = endpoint.address().to_string();
     }
     Touch();
+    WaitForIdle();
     Read();
   }
 
@@ -310,11 +311,20 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     }
   }
 
-  void Touch() {
-    idle_.expires_after(runtime_->options.idle_timeout);
+  void Touch() { idle_deadline_ = asio::steady_timer::clock_type::now() + runtime_->options.idle_timeout; }
+
+  void WaitForIdle() {
+    // Activity only moves the deadline. Keep one wait instead of cancelling and
+    // allocating another timer handler for every read and write.
+    idle_.expires_at(idle_deadline_);
     idle_.async_wait([self = shared_from_this()](IoError error) {
-      if (!error) {
+      if (error || self->closed_) {
+        return;
+      }
+      if (self->idle_deadline_ <= asio::steady_timer::clock_type::now()) {
         self->Close(engine::RequestCancellationReason::kDeadlineExceeded);
+      } else {
+        self->WaitForIdle();
       }
     });
   }
@@ -482,6 +492,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   std::shared_ptr<Runtime> runtime_;
   Tcp::socket socket_;
   asio::steady_timer idle_;
+  asio::steady_timer::time_point idle_deadline_;
   asio::steady_timer heartbeat_;
   std::function<void(std::shared_ptr<Connection>)> remove_;
   HttpAdapter codec_;

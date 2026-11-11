@@ -206,6 +206,8 @@ constexpr std::string_view kEventEnd = "\n\n";
 constexpr std::size_t kLiveClients = 32;
 constexpr std::size_t kLargeBody = std::size_t{2} * 1024U * 1024U;
 constexpr auto kIdleDeadline = std::chrono::milliseconds(50);
+constexpr auto kActiveIdleDeadline = std::chrono::milliseconds(500);
+constexpr auto kActivityInterval = std::chrono::milliseconds(25);
 
 class LiveBackend final : public engine::CoroutineAgentExecutor {
  public:
@@ -496,6 +498,27 @@ TEST(EventHttpServer, IdleTimeoutAndOutputLimitReleaseConnections) {
   server.Shutdown();
   server.Join();
 }
+
+TEST(EventHttpServer, ActivityRefreshesIdleDeadlineBeforeConnectionEventuallyExpires) {
+  EventHttpServerOptions options;
+  options.idle_timeout = kActiveIdleDeadline;
+  EventHttpServer server(Respond, options);
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto socket = Connect(io, server);
+  const auto until = std::chrono::steady_clock::now() + kActiveIdleDeadline * 2;
+  do {
+    asio::write(socket, asio::buffer(kRequest));
+    std::string response;
+    asio::read_until(socket, asio::dynamic_buffer(response), kBody);
+    EXPECT_NE(response.find(kStatus), std::string::npos);
+    std::this_thread::sleep_for(kActivityInterval);
+  } while (std::chrono::steady_clock::now() < until);
+  EXPECT_TRUE(ReadToEnd(socket).empty());
+  server.Shutdown();
+  server.Join();
+}
+
 constexpr std::string_view kSlowRequest = "GET /slow HTTP/1.1\r\n\r\n";
 constexpr std::string_view kSlowTarget = "/slow";
 constexpr std::string_view kHeaderEnd = "\r\n\r\n";

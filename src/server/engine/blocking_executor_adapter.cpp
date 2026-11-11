@@ -97,13 +97,15 @@ boost::asio::awaitable<core::Result<Response>> BlockingExecutorAdapter::Submit(
     std::shared_ptr<State> state, Request request, RequestExecutionContext context,
     core::Result<Response> (AgentExecutor::*operation)(const Request&, RequestContext&)) {
   auto initiate = [state, request = std::move(request), context = std::move(context), operation](auto handler) mutable {
-    const auto completion = std::make_shared<decltype(handler)>(std::move(handler));
-    const auto scheduler = boost::asio::get_associated_executor(*completion);
-    const auto work =
-        std::make_shared<decltype(boost::asio::make_work_guard(scheduler))>(boost::asio::make_work_guard(scheduler));
-    auto deliver = [completion, scheduler, work](core::Result<Response> result) {
-      boost::asio::post(scheduler,
-                        [completion, work, result = std::move(result)]() mutable { (*completion)(std::move(result)); });
+    const auto scheduler = boost::asio::get_associated_executor(handler);
+    struct Completion final {
+      decltype(handler) callback;
+      decltype(boost::asio::make_work_guard(scheduler)) work;
+    };
+    const auto completion = std::make_shared<Completion>(std::move(handler), boost::asio::make_work_guard(scheduler));
+    auto deliver = [completion, scheduler](core::Result<Response> result) {
+      boost::asio::post(
+          scheduler, [completion, result = std::move(result)]() mutable { completion->callback(std::move(result)); });
     };
     const bool accepted = state->Schedule(
         [state, request = std::move(request), context = std::move(context), operation, deliver]() mutable {

@@ -350,6 +350,22 @@ TEST_P(AsyncUnaryTest, PreservesExecutorOrProviderErrorsAndRunsAfterOnce) {
 }
 INSTANTIATE_TEST_SUITE_P(UnaryOperations, AsyncUnaryTest, testing::ValuesIn(UnaryCases()));
 
+TEST(AsyncDispatcherTest, UnmodifiedMetadataRemainsOwnedWithoutHooks) {
+  auto executor = std::make_shared<FakeExecutor>();
+  boost::asio::thread_pool runtime(kWorkerCount);
+  AsyncDispatcher dispatcher(executor, runtime.get_executor());
+  FakeTransport transport;
+  RequestContext context;
+  context.request_id = kRequestId;
+  context.client_headers[kRequestId] = kTaskId;
+  ASSERT_TRUE(transport.Send(dispatcher, GetTaskRequest(), context).ok());
+  context.request_id = kInterceptedId;
+  context.client_headers.clear();
+  ASSERT_TRUE(transport.Receive().ok());
+  EXPECT_EQ(executor->last_metadata.request_id, kRequestId);
+  EXPECT_EQ(executor->last_metadata.client_headers.at(kRequestId), kTaskId);
+}
+
 TEST(AsyncDispatcherTest, InterceptorsObserveMutatedMetadataAndExactlyOneTerminalResult) {
   auto trace = std::make_shared<Trace>();
   auto executor = std::make_shared<FakeExecutor>();
