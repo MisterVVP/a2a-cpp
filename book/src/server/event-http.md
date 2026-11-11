@@ -70,6 +70,12 @@ own `AsyncRuntime` or supplied executor. Its existing admission and cancellation
 contracts remain authoritative; the HTTP runtime does not implement another
 application dispatcher.
 
+An async response may place already available SSE bytes in `response.body`.
+The listener sends this prefix before invoking the stream producer and combines
+it with the headers when both fit the output bound. The producer writes only
+the remaining events. If the combined write would exceed the bound, the prefix
+is sent separately with the same write acknowledgement and cancellation rules.
+
 A synchronous `Handler` may call existing REST/JSON-RPC transports or a mux.
 Such callbacks must support concurrent invocation, or set
 `application_threads = 1` to serialize legacy application work. Captured objects

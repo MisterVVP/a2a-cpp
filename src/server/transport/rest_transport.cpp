@@ -760,7 +760,7 @@ RestResponse RestTransport::BuildErrorResponse(const core::Error& error) {
   RestResponse response;
   response.http_status = http_status;
   response.headers[std::string(core::http::kContentTypeHeaderName)] =
-      std::string(core::http::kContentTypeApplicationA2aJson);
+      std::string(core::http::kContentTypeApplicationJson);
 
   const auto serialized = core::MessageToJson(envelope);
   if (serialized.ok()) {

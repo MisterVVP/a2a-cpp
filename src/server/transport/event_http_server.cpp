@@ -14,6 +14,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/recycling_allocator.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/write.hpp>
@@ -58,11 +59,12 @@ std::string Chunk(std::string_view bytes) {
   return result;
 }
 
-bool FitsOutput(const HttpServerResponse& response, std::size_t limit) {
+bool FitsOutput(const HttpServerResponse& response, std::size_t limit, bool streaming) {
   if (response.body.size() > limit) {
     return false;
   }
-  std::size_t remaining = limit - response.body.size();
+  // A stream prefix may be written separately from the response headers.
+  std::size_t remaining = streaming ? limit : limit - response.body.size();
   for (const auto& [name, value] : response.headers) {
     if (name.size() > remaining) {
       return false;
@@ -219,7 +221,8 @@ class Connection final : public std::enable_shared_from_this<Connection> {
           };
           auto executor = asio::get_associated_executor(complete);
           auto slot = asio::get_associated_cancellation_slot(complete);
-          auto completion = std::make_shared<PendingWrite>(std::move(complete));
+          auto completion =
+              std::allocate_shared<PendingWrite>(asio::recycling_allocator<PendingWrite>{}, std::move(complete));
           if (slot.is_connected()) {
             slot.assign([weak = std::weak_ptr(self), operation = std::weak_ptr(completion),
                          gate](asio::cancellation_type type) {
@@ -275,7 +278,8 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       return;
     }
     queued_bytes_ += bytes.size();
-    output_.push_back({std::make_shared<std::string>(std::move(bytes)), std::move(completion)});
+    output_.push_back({std::allocate_shared<std::string>(asio::recycling_allocator<std::string>{}, std::move(bytes)),
+                       std::move(completion)});
     if (output_.size() == 1U) {
       Flush();
     }
@@ -452,13 +456,23 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       event.stream = {};
     }
     const bool close = HttpAdapter::ShouldCloseConnection(request, event.response);
-    if (!FitsOutput(event.response, self->runtime_->options.max_output_bytes)) {
+    if (!FitsOutput(event.response, self->runtime_->options.max_output_bytes, static_cast<bool>(event.stream))) {
       throw std::runtime_error(std::string(kOutputLimit));
     }
     auto bytes = event.stream ? HttpAdapter::EncodeResponseHead(event.response, close, true)
                               : HttpAdapter::EncodeResponse(event.response, close);
     if (!bytes.ok()) {
       throw std::runtime_error(std::string(bytes.error().message()));
+    }
+    bool initial_sent = false;
+    if (event.stream && !event.response.body.empty()) {
+      auto initial = Chunk(event.response.body);
+      const auto limit = self->runtime_->options.max_output_bytes;
+      if (bytes.value().size() <= limit && initial.size() <= limit - bytes.value().size()) {
+        bytes.value().append(initial);
+        event.response.body.clear();
+        initial_sent = true;
+      }
     }
     const auto sent = co_await self->Send(std::move(bytes.value()));
     if (!sent.ok()) {
@@ -472,6 +486,12 @@ class Connection final : public std::enable_shared_from_this<Connection> {
         self->streaming_ = true;
         self->Heartbeat();
       });
+      if (!initial_sent && !event.response.body.empty()) {
+        const auto initial = co_await sink->Write(std::move(event.response.body));
+        if (!initial.ok()) {
+          throw std::runtime_error(std::string(initial.error().message()));
+        }
+      }
       const auto streamed = co_await event.stream(std::move(sink), context);
       if (!streamed.ok()) {
         throw std::runtime_error(std::string(streamed.error().message()));

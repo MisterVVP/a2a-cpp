@@ -212,19 +212,11 @@ asio::awaitable<core::Result<EventHttpResponse>> Unary(std::shared_ptr<engine::A
   co_return EventHttpResponse{.response = std::move(response.value()), .stream = {}};
 }
 
-asio::awaitable<core::Result<void>> Produce(
-    std::shared_ptr<StreamBridge> bridge, StreamItem item,
-    std::function<core::Result<std::string>(const lf::a2a::v1::StreamResponse&)> encode,
-    std::shared_ptr<HttpEventStream> stream, std::shared_ptr<engine::AsyncDispatcher> dispatcher,
-    std::function<core::Result<std::string>(const core::Error&)> encode_error) {
-  if (item.event) {
-    auto bytes = encode(*item.event);
-    auto written = bytes.ok() ? co_await stream->Write(std::move(bytes.value())) : core::Result<void>(bytes.error());
-    if (!written.ok()) {
-      dispatcher->Cancel(bridge->execution);
-      bridge->Cancel();
-      co_return written.error();
-    }
+asio::awaitable<core::Result<void>> Produce(std::shared_ptr<StreamBridge> bridge, bool initial_event,
+                                            std::shared_ptr<HttpEventStream> stream,
+                                            std::function<core::Result<std::string>(const core::Error&)> encode_error) {
+  StreamItem item;
+  if (initial_event) {
     bridge->Attach(stream);
     (void)bridge->demand->Send(true);
     auto next = co_await bridge->events->Receive(asio::use_awaitable);
@@ -246,7 +238,7 @@ asio::awaitable<core::Result<void>> Produce(
 asio::awaitable<core::Result<EventHttpResponse>> Streaming(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
                                                            PreparedDispatch<HttpServerResponse> plan,
                                                            engine::RequestExecutionContext context) {
-  const auto bridge = std::make_shared<StreamBridge>(plan.encode_event);
+  const auto bridge = std::make_shared<StreamBridge>(std::move(plan.encode_event));
   const auto execution =
       dispatcher->DispatchStream(std::move(plan.request), std::move(plan.context), bridge,
                                  [bridge](DispatchResult result, const engine::RequestExecutionContext& /*context*/) {
@@ -284,13 +276,21 @@ asio::awaitable<core::Result<EventHttpResponse>> Streaming(std::shared_ptr<engin
     co_return response.error();
   }
   response.value().stream_writer = {};
+  const bool initial_event = first.event.has_value();
+  if (initial_event) {
+    auto bytes = bridge->encode(*first.event);
+    if (!bytes.ok()) {
+      dispatcher->Cancel(bridge->execution);
+      bridge->Cancel();
+      co_return bytes.error();
+    }
+    response.value().body = std::move(bytes.value());
+  }
   co_return EventHttpResponse{.response = std::move(response.value()),
-                              .stream = [bridge, first = std::move(first), encode = std::move(plan.encode_event),
-                                         dispatcher, encode_error = std::move(plan.encode_error)](
+                              .stream = [bridge, initial_event, encode_error = std::move(plan.encode_error)](
                                             std::shared_ptr<HttpEventStream> stream,
                                             const engine::RequestExecutionContext& /*context*/) mutable {
-                                return Produce(bridge, std::move(first), encode, std::move(stream), dispatcher,
-                                               encode_error);
+                                return Produce(bridge, initial_event, std::move(stream), encode_error);
                               }};
 }
 

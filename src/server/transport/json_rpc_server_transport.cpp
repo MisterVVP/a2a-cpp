@@ -957,13 +957,17 @@ core::Result<PreparedResponse<HttpServerResponse>> JsonRpcServerTransport::Prepa
            activated_extensions](core::Result<DispatchResponse> dispatch) {
             return Complete(id, operation, activated_extensions, std::move(dispatch));
           },
-      .encode_event = [id = parsed.value().id](const lf::a2a::v1::StreamResponse& event) -> core::Result<std::string> {
-        const auto prefix = BuildSseJsonRpcPrefix(id.value());
-        if (!prefix.ok()) {
-          return prefix.error();
+      .encode_event = [id = parsed.value().id, prefix = std::string{}](
+                          const lf::a2a::v1::StreamResponse& event) mutable -> core::Result<std::string> {
+        if (prefix.empty()) {
+          auto encoded = BuildSseJsonRpcPrefix(id.value());
+          if (!encoded.ok()) {
+            return encoded.error();
+          }
+          prefix = std::move(encoded.value());
         }
         std::string bytes;
-        const auto encoded = BuildSseJsonRpcEvent(bytes, prefix.value(), event);
+        const auto encoded = BuildSseJsonRpcEvent(bytes, prefix, event);
         if (!encoded.ok()) {
           return encoded.error();
         }

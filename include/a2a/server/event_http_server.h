@@ -26,6 +26,7 @@ class HttpEventStream {
 };
 
 struct EventHttpResponse final {
+  // With a stream producer, body holds initial stream bytes sent before it runs.
   HttpServerResponse response;
   using Producer = std::function<boost::asio::awaitable<core::Result<void>>(std::shared_ptr<HttpEventStream>,
                                                                             engine::RequestExecutionContext)>;
