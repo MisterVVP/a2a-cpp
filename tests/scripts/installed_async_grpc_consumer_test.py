@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
-"""Build and run an async example against the installed SDK only."""
+"""Build and run external examples against installed or FetchContent SDK packages."""
 import argparse
 import os
 from pathlib import Path
@@ -18,7 +18,7 @@ def cache_values(build):
     return values
 
 
-def run_consumer(source, build, config, app):
+def run_consumer(source, build, config, app, integration="installed"):
     values = cache_values(build)
     # Windows build tools can retain directory handles after the smoke test exits.
     with tempfile.TemporaryDirectory(prefix="installed-async-grpc-", dir=build,
@@ -26,14 +26,18 @@ def run_consumer(source, build, config, app):
         root = Path(scratch)
         prefix = root / "sdk"
         consumer = root / "consumer"
-        subprocess.run(["cmake", "--install", str(build), "--config", config, "--prefix", str(prefix)], check=True)
+        if integration == "installed":
+            subprocess.run(["cmake", "--install", str(build), "--config", config, "--prefix", str(prefix)], check=True)
         inherited = values.get("CMAKE_PREFIX_PATH", os.environ.get("CMAKE_PREFIX_PATH", ""))
         # CMake cache variables always use semicolons, including on Unix.
         if "CMAKE_PREFIX_PATH" not in values and os.name != "nt":
             inherited = inherited.replace(os.pathsep, ";")
-        command = ["cmake", "-S", str(source / "examples" / "installed_package_consumer"), "-B", str(consumer),
+        command = ["cmake", "-S", str(source / "examples" / ("installed_package_consumer" if integration == "installed" else "fetch_content_consumer")), "-B", str(consumer),
                    "-DA2A_EXAMPLE_APP=" + app, "-DCMAKE_PREFIX_PATH=" + str(prefix) + ";" + inherited,
                    "-DCMAKE_BUILD_TYPE=" + config, "-G", values["CMAKE_GENERATOR"]]
+        if integration == "fetchcontent":
+            command.extend(["-DFETCHCONTENT_SOURCE_DIR_A2A_CPP=" + str(source),
+                            "-DA2A_ENABLE_ASIO=" + values.get("A2A_ENABLE_ASIO", "OFF")])
         if values.get("CMAKE_CONFIGURATION_TYPES"):
             # The SDK installation contains only the configuration under test.
             command.append("-DCMAKE_CONFIGURATION_TYPES=" + config)
@@ -68,9 +72,10 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--config", default="Debug")
-    parser.add_argument("--app", default="async_grpc_server", choices=["async_grpc_server", "asio_executor", "blocking_executor", "async_unary_client", "event_http_server"])
+    parser.add_argument("--app", default="async_grpc_server", choices=["hello_agent", "async_grpc_server", "asio_executor", "blocking_executor", "async_unary_client", "event_http_server"])
+    parser.add_argument("--integration", choices=["installed", "fetchcontent"], default="installed")
     args = parser.parse_args()
-    run_consumer(args.source, args.build, args.config, args.app)
+    run_consumer(args.source, args.build, args.config, args.app, args.integration)
 
 
 if __name__ == "__main__":

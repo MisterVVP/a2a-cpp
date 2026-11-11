@@ -5,7 +5,11 @@
 [![Documentation](https://img.shields.io/github/actions/workflow/status/MisterVVP/a2a-cpp/docs.yml?branch=main&label=docs)](https://github.com/MisterVVP/a2a-cpp/actions/workflows/docs.yml?query=branch%3Amain)
 [![License](https://img.shields.io/github/license/MisterVVP/a2a-cpp)](LICENSE)
 
-**a2a-cpp** is a C++20 SDK for building Agent2Agent (A2A) clients and servers.
+**a2a-cpp SDK v0.6.0** is a C++20 SDK for building Agent2Agent (A2A) clients and servers.
+It implements **A2A protocol 1.0 (v1.0.1 specification)**; protocol and SDK
+versions are independent. v0.6.0 is a release candidate until tagged. See the
+[conformance scope](https://mistervvp.github.io/a2a-cpp/compatibility/conformance.html)
+for measured coverage and release-gate limitations.
 
 It provides Agent Card discovery, task lifecycle operations, streaming, push
 notifications, authentication hooks, and HTTP+JSON, JSON-RPC, and gRPC transports.
@@ -18,7 +22,10 @@ notifications, authentication hooks, and HTTP+JSON, JSON-RPC, and gRPC transport
 - Agent Card discovery, preferred-interface resolution, and extended-card support.
 - Cancellable streaming with built-in SSE support for HTTP transports.
 - Authentication metadata, interceptors, and required-extension validation.
-- In-memory stores and optional PostgreSQL-backed stores.
+- Opt-in async unary clients, coroutine dispatch, native async gRPC and an
+  event-driven HTTP/SSE server; existing synchronous APIs remain available.
+- In-memory stores and optional PostgreSQL-backed stores. PostgreSQL store I/O
+  remains synchronous, including when called from coroutine applications.
 - Installable CMake targets under the `a2a::` namespace.
 - Continuous Linux, macOS, Windows, interoperability, benchmark, and
   [A2A TCK](https://github.com/MisterVVP/a2a-cpp/actions/workflows/tck.yml) validation.
@@ -29,6 +36,9 @@ notifications, authentication hooks, and HTTP+JSON, JSON-RPC, and gRPC transport
 - A C++20 compiler: GCC, Clang, AppleClang, or Visual Studio 2022.
 - Protobuf and gRPC C++.
 - libcurl for built-in HTTP+JSON, JSON-RPC, and SSE clients.
+- simdjson 3.0+ for SDK JSON parsing.
+- Boost 1.92.0+ only for `A2A_ENABLE_ASIO=ON` / the overlay `asio` feature.
+- OpenSSL 3.0+ only for optional Agent Card signing.
 - PostgreSQL client libraries only when PostgreSQL stores are enabled.
 
 See the platform-specific [installation guide](https://mistervvp.github.io/a2a-cpp/getting-started/installation.html).
@@ -38,7 +48,7 @@ See the platform-specific [installation guide](https://mistervvp.github.io/a2a-c
 On Debian, Ubuntu, or Windows Git Bash:
 
 ```bash
-git clone https://github.com/MisterVVP/a2a-cpp.git
+git clone --branch release/v0.6.0 https://github.com/MisterVVP/a2a-cpp.git
 cd a2a-cpp
 ./scripts/install_build_deps.sh
 ./scripts/run_examples.sh build-example hello_agent
@@ -60,14 +70,15 @@ set(A2A_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   a2a_cpp
   GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
-  GIT_TAG main
+  GIT_TAG release/v0.6.0
 )
 FetchContent_MakeAvailable(a2a_cpp)
 
 target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 ```
 
-Pin `GIT_TAG` to a [release](https://github.com/MisterVVP/a2a-cpp/releases) or
+The untagged candidate uses `release/v0.6.0`. Pin `GIT_TAG` to a
+[release](https://github.com/MisterVVP/a2a-cpp/releases) or
 reviewed commit for reproducible builds. See the complete
 [`FetchContent` consumer](examples/fetch_content_consumer/).
 
@@ -87,6 +98,42 @@ target_link_libraries(my_agent PRIVATE a2a::client a2a::server a2a::core)
 
 See the [CMake integration](https://mistervvp.github.io/a2a-cpp/build/cmake.html) and
 [vcpkg](https://mistervvp.github.io/a2a-cpp/build/vcpkg.html) guides for additional workflows.
+
+## Opt in to async APIs
+
+Async unary clients are available through `a2a::client` (built-in HTTP needs
+libcurl). Coroutine server execution, native async gRPC and the event-driven
+HTTP server require `-DA2A_ENABLE_ASIO=ON` when building the SDK and linking
+`a2a::asio`. Set that option before `FetchContent_MakeAvailable` for source
+consumers. Select the reviewed v0.6.0 candidate commit, or set
+`FETCHCONTENT_SOURCE_DIR_A2A_CPP` to your candidate checkout while its release
+tag is unpublished. The [consumer guide](https://mistervvp.github.io/a2a-cpp/build/consumers.html)
+shows that local path. For installed packages it is a build-time choice; setting it only in
+a downstream application cannot add the target to a synchronous SDK.
+
+```bash
+cmake -S . -B build-asio -DCMAKE_BUILD_TYPE=Release -DA2A_ENABLE_ASIO=ON
+cmake --build build-asio --parallel
+cmake --install build-asio --prefix /tmp/a2a-cpp-asio
+cmake -S examples/installed_package_consumer -B build-event-example \
+  -DCMAKE_PREFIX_PATH=/tmp/a2a-cpp-asio -DA2A_EXAMPLE_APP=event_http_server
+cmake --build build-event-example --parallel
+./build-event-example/a2a_example --smoke
+```
+
+Make Boost discoverable via `CMAKE_PREFIX_PATH`; see the
+[build guide](https://mistervvp.github.io/a2a-cpp/build/cmake.html).
+The repository vcpkg overlay accepts `a2a-cpp[asio]` and
+`a2a-cpp[asio,postgres-store]`. Async execution is opt-in; this release does not
+make every transport or database operation asynchronous by default.
+
+Follow the [async client](https://mistervvp.github.io/a2a-cpp/client/async-unary.html),
+[coroutine runtime](https://mistervvp.github.io/a2a-cpp/server/asio-coroutines.html),
+[native gRPC](https://mistervvp.github.io/a2a-cpp/server/async-grpc.html),
+[streaming](https://mistervvp.github.io/a2a-cpp/server/async-streaming.html), and
+[event HTTP](https://mistervvp.github.io/a2a-cpp/server/event-http.html) guides.
+Review the [v0.6.0 migration notes](https://mistervvp.github.io/a2a-cpp/releases.html)
+for opaque pagination cursors, JSON parsing changes and dependency requirements.
 
 ## Examples
 

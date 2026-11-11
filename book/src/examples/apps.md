@@ -57,9 +57,9 @@ Read-only GetTask application registered through the native gRPC callback servic
 Use the installed SDK built from a checkout containing this API; the v0.5.2
 fetch example above predates it. Select `-DA2A_EXAMPLE_APP=async_grpc_server`;
 `--smoke` starts a real server,
-performs one request and shuts it down. Without `--smoke`, press Enter to stop.
-The example requires `A2A_HAS_REQUEST_EXECUTION=1`; unsupported standard libraries
-report exit code 77. See [Native async gRPC](../server/async-grpc.md) for installed
+performs unary and finite-stream requests and shuts it down. Without `--smoke`, press Enter to stop.
+The example requires an SDK built with `A2A_ENABLE_ASIO=ON` and links
+`a2a::asio`; a package without that runtime reports exit code 77. See [Native async gRPC](../server/async-grpc.md) for installed
 consumers, lifecycle ownership and graceful shutdown.
 
 ## push-notifications
@@ -73,3 +73,21 @@ Push notification configuration, store, and delivery abstraction.
 Server-side auth metadata handling and policy shape.
 
 [Source](https://github.com/MisterVVP/a2a-cpp/blob/main/examples/apps/auth_policy_server/main.cpp).
+
+## SDK v0.6.0 async navigation
+
+The v0.5.2 pinned FetchContent command above intentionally selects the previous
+stable SDK. For all new async examples use the candidate checkout with
+[async consumer setup](../build/consumers.md#async-consumers-sdk-v060):
+
+| App | Target / build choice | Guide |
+|---|---|---|
+| `async_unary_client` | `a2a::client`, with built-in HTTP when libcurl is available | [Async unary calls](../client/async-unary.md) |
+| `asio_executor`, `blocking_executor` | `a2a::asio`, `A2A_ENABLE_ASIO=ON` | [Coroutine runtime](../server/asio-coroutines.md) |
+| `async_grpc_server` | `a2a::asio`, `A2A_ENABLE_ASIO=ON` | [Native async gRPC](../server/async-grpc.md) |
+| `event_http_server` | `a2a::asio`, `A2A_ENABLE_ASIO=ON` | [Event-driven HTTP/SSE](../server/event-http.md) |
+
+Installed packages must have been built with the required feature; a downstream
+CMake option cannot add missing SDK targets. All examples accept `--smoke` for
+finite validation. PostgreSQL-backed application work still performs synchronous
+store I/O.

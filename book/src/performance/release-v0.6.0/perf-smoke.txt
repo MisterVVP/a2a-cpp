@@ -1,0 +1,7 @@
+[perf] estimated_rows=54 estimated_operations=108 transports=2 stores=1 concurrency_levels=1 requests=2
+[perf] start in-process transport=grpc store=inmemory concurrency=1 requests=2
+[perf] done  in-process transport=grpc store=inmemory concurrency=1 rows=22 errors=0 elapsed=0.04s
+[perf] start wire transport=grpc store=inmemory concurrency=1 requests=2
+[perf] done  wire transport=grpc store=inmemory concurrency=1 rows=15 errors=0 elapsed=0.49s
+[perf] start wire transport=http_json store=inmemory concurrency=1 requests=2
+[perf] done  wire transport=http_json store=inmemory concurrency=1 rows=17 errors=0 elapsed=0.45s

@@ -136,7 +136,9 @@ class CompletionRuntime final : private NonCopyableOrMovable {
   void RunTimer() {
     std::unique_lock lock(mutex_);
     while (!stopping_) {
-      if (deadlines_.empty()) {
+      // max() also marks expired calls awaiting callback cleanup. Converting it
+      // to a system-clock timed wait can overflow on older standard libraries.
+      if (deadlines_.empty() || deadlines_.begin()->first == Clock::time_point::max()) {
         deadlines_changed_.wait(lock);
       } else if (deadlines_.begin()->first > Clock::now()) {
         const auto deadline = deadlines_.begin()->first;

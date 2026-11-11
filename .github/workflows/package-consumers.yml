@@ -1,0 +1,118 @@
+name: Installed package consumers
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'include/**'
+      - 'src/**'
+      - 'vcpkg*.json'
+      - 'vcpkg-overlay-ports/**'
+      - 'examples/installed_package_consumer/**'
+      - 'examples/apps/**'
+      - '.github/workflows/package-consumers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  overlay:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+        features: ['', 'asio', 'asio,postgres-store']
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install native build tools
+        if: runner.os != 'Windows'
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y ninja-build pkg-config autoconf automake libtool bison flex linux-libc-dev
+          else
+            brew install ninja autoconf automake libtool bison flex
+            echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+            echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Bootstrap vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          else
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+      - uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/vcpkg-binaries
+          key: overlay-${{ runner.os }}-${{ runner.arch }}-${{ matrix.features }}-${{ hashFiles('vcpkg*.json', 'vcpkg-overlay-ports/**') }}
+          restore-keys: overlay-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install overlay and build external consumers
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            Windows/*) triplet=x64-windows-static ;;
+            macOS/ARM64) triplet=arm64-osx ;;
+            macOS/*) triplet=x64-osx ;;
+            *) triplet=x64-linux ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/vcpkg-binaries" "$RUNNER_TEMP/overlay-smoke"
+          export VCPKG_BINARY_SOURCES="clear;files,$RUNNER_TEMP/vcpkg-binaries,readwrite"
+          repo="$PWD"
+          cmake_args=()
+          vcpkg_args=()
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cmake_args+=(-G "Visual Studio 17 2022" -A x64)
+          else
+            cmake_args+=(-G Ninja)
+          fi
+          if [[ "$RUNNER_OS" == macOS && "$FEATURES" == *asio* ]]; then
+            # Match the existing macOS Asio CI's supported libc++/stop-token setup.
+            brew install llvm
+            llvm_prefix="$(brew --prefix llvm)"
+            mkdir -p "$RUNNER_TEMP/overlay-triplets"
+            cat > "$RUNNER_TEMP/overlay-llvm.cmake" <<EOF
+          set(CMAKE_C_COMPILER "${llvm_prefix}/bin/clang" CACHE FILEPATH "")
+          set(CMAKE_CXX_COMPILER "${llvm_prefix}/bin/clang++" CACHE FILEPATH "")
+          set(CMAKE_CXX_FLAGS_INIT "-nostdinc++ -I${llvm_prefix}/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY")
+          set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${llvm_prefix}/lib/c++ -L${llvm_prefix}/lib/unwind -Wl,-rpath,${llvm_prefix}/lib/c++ -Wl,-rpath,${llvm_prefix}/lib/unwind -lunwind")
+          set(CMAKE_SHARED_LINKER_FLAGS_INIT "-L${llvm_prefix}/lib/c++ -L${llvm_prefix}/lib/unwind -Wl,-rpath,${llvm_prefix}/lib/c++ -Wl,-rpath,${llvm_prefix}/lib/unwind -lunwind")
+          EOF
+            cat > "$RUNNER_TEMP/overlay-triplets/$triplet.cmake" <<EOF
+          include("$RUNNER_TEMP/vcpkg/triplets/$triplet.cmake")
+          set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "$RUNNER_TEMP/overlay-llvm.cmake")
+          EOF
+            vcpkg_args+=("--overlay-triplets=$RUNNER_TEMP/overlay-triplets")
+            cmake_args+=(
+              "-DVCPKG_OVERLAY_TRIPLETS=$RUNNER_TEMP/overlay-triplets"
+              "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$RUNNER_TEMP/overlay-llvm.cmake"
+            )
+          fi
+          cd "$RUNNER_TEMP/overlay-smoke"
+          package=a2a-cpp
+          if [[ -n "$FEATURES" ]]; then package="a2a-cpp[$FEATURES]"; fi
+          "$RUNNER_TEMP/vcpkg/vcpkg" install "$package:$triplet" \
+            --host-triplet="$triplet" --overlay-ports="$repo/vcpkg-overlay-ports" \
+            --x-install-root="$RUNNER_TEMP/overlay-installed" "${vcpkg_args[@]}"
+          apps=(hello_agent async_unary_client)
+          if [[ "$FEATURES" == *asio* ]]; then apps+=(asio_executor async_grpc_server event_http_server); fi
+          for app in "${apps[@]}"; do
+            cmake -S "$repo/examples/installed_package_consumer" -B "consumer-$app" \
+              -DCMAKE_TOOLCHAIN_FILE="$RUNNER_TEMP/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+              -DVCPKG_TARGET_TRIPLET="$triplet" -DVCPKG_HOST_TRIPLET="$triplet" \
+              -DVCPKG_INSTALLED_DIR="$RUNNER_TEMP/overlay-installed" -DVCPKG_MANIFEST_MODE=OFF \
+              -DCMAKE_BUILD_TYPE=Release -DA2A_EXAMPLE_APP="$app" "${cmake_args[@]}"
+            cmake --build "consumer-$app" --config Release --parallel 2
+            binary="consumer-$app/a2a_example"
+            if [[ "$RUNNER_OS" == Windows ]]; then binary="consumer-$app/Release/a2a_example.exe"; fi
+            "$binary" --smoke
+          done

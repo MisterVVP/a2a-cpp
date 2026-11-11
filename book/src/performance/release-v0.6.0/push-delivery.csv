@@ -1,0 +1,7 @@
+mode,in_flight,threads_before,threads_pending,elapsed_us,errors
+sync,1,2,3,1504,0
+async,1,2,7,666,0
+sync,16,7,26,2625,0
+async,16,7,10,1801,0
+sync,64,7,74,35320,0
+async,64,7,10,5137,0

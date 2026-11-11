@@ -5,7 +5,7 @@
 1. **Manifest dependency mode** for building this repository with vcpkg-supplied third-party dependencies.
 2. **Overlay port mode** for consuming `a2a-cpp` itself as a vcpkg package before it is available from a public registry.
 
-The repository root `vcpkg.json` pins the dependency baseline and declares the SDK's third-party dependencies: protobuf, gRPC, and curl.
+The repository root `vcpkg.json` pins the dependency baseline and declares the SDK's third-party dependencies: protobuf, gRPC, curl, and simdjson 3.0+.
 
 ## Prerequisites
 
@@ -121,7 +121,7 @@ The repository includes an overlay port at `vcpkg-overlay-ports/a2a-cpp`. A down
 ```json
 {
   "name": "my-a2a-app",
-  "version-string": "0.5.2",
+  "version-string": "0.6.0",
   "dependencies": [
     "a2a-cpp"
   ]
@@ -151,6 +151,35 @@ target_link_libraries(my_a2a_app PRIVATE a2a::client a2a::server a2a::core)
 
 A complete example is available in `examples/installed_package_consumer/`.
 
+## Enable the optional async server runtime
+
+Synchronous packages remain the default. Add `asio` to the dependency's features
+for coroutine servers, native async gRPC and the event-driven HTTP/SSE listener:
+
+```json
+{
+  "name": "my-a2a-app",
+  "version-string": "0.6.0",
+  "dependencies": [{"name": "a2a-cpp", "features": ["asio"]}]
+}
+```
+
+The overlay installs Boost.Asio 1.92.0+ and builds with `A2A_ENABLE_ASIO=ON`.
+Link `a2a::asio`. Combine `"features": ["asio", "postgres-store"]` when needed;
+PostgreSQL I/O remains synchronous. Async unary clients need only `a2a::client`.
+See [consumer examples](consumers.md) and the [async guides](../server/asio-coroutines.md).
+
+For repository manifest builds, pass `-DVCPKG_MANIFEST_FEATURES=asio` together
+with `-DA2A_ENABLE_ASIO=ON` on the first CMake configure. Selecting the root
+manifest feature installs dependencies; it does not enable the CMake option.
+
+The v0.6.0 candidate overlay pins the full integrated source commit
+`2e92a3d082b0a1e1eb0cdff48aa835919b2e1ddf`, applies the narrow async-deadline timer fix, and stamps its CMake package
+version from the overlay manifest. It does not require an unpublished `v0.6.0` tag.
+For final publication, update the pin to the reviewed release commit and remove
+the candidate version stamp and the already-integrated deadline patch. Keep this source pin explicit when validating a
+candidate; a moving branch can silently select a different SDK.
+
 ## Enable PostgreSQL store support
 
 The overlay port exposes a `postgres-store` feature. Enable it in manifest mode when your application needs PostgreSQL-backed stores:
@@ -158,7 +187,7 @@ The overlay port exposes a `postgres-store` feature. Enable it in manifest mode 
 ```json
 {
   "name": "my-a2a-app",
-  "version-string": "0.5.2",
+  "version-string": "0.6.0",
   "dependencies": [
     {
       "name": "a2a-cpp",

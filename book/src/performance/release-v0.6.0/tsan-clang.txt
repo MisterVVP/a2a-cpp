@@ -1,0 +1,813 @@
+-- Found RE2 via CMake.
+-- libcurl found: default outbound HTTP support enabled
+-- StreamCancellationWatcher: std::jthread implementation selected for native build
+-- RequestExecution: C++20 cancellation is available
+-- Configuring done (1.0s)
+-- Generating done (1.1s)
+-- Build files have been written to: /workspace/a2a-cpp/work/build-tsan-clang
+[1/2] Building CXX object tests/CMakeFiles/async_push_notification_delivery_test.dir/unit/async_push_notification_delivery_test.cpp.o
+[2/2] Linking CXX executable tests/async_push_notification_delivery_test
+Test project /workspace/a2a-cpp/work/build-tsan-clang
+        Start   9: SharedHttpClientTest.RestoresCompiledCaBundleForDefaultAndReusedHandles
+  1/398 Test   #9: SharedHttpClientTest.RestoresCompiledCaBundleForDefaultAndReusedHandles ................................   Passed    4.08 sec
+        Start  10: SharedHttpClientTest.CapturesResponseHeaders
+  2/398 Test  #10: SharedHttpClientTest.CapturesResponseHeaders ...........................................................   Passed    0.05 sec
+        Start  11: SharedHttpClientTest.AttemptsHttpsThroughLibcurlTlsPath
+  3/398 Test  #11: SharedHttpClientTest.AttemptsHttpsThroughLibcurlTlsPath ................................................   Passed    1.05 sec
+        Start  12: SharedHttpClientTest.StreamRequestTimesOutOpenStream
+  4/398 Test  #12: SharedHttpClientTest.StreamRequestTimesOutOpenStream ...................................................   Passed    0.15 sec
+        Start  13: SharedHttpClientTest.LegacyCancellationPredicateIsEvaluatedByOnlyOneThread
+  5/398 Test  #13: SharedHttpClientTest.LegacyCancellationPredicateIsEvaluatedByOnlyOneThread .............................   Passed    0.12 sec
+        Start  14: SharedHttpClientTest.StreamRequestRejectsMissingCallbacks
+  6/398 Test  #14: SharedHttpClientTest.StreamRequestRejectsMissingCallbacks ..............................................   Passed    0.05 sec
+        Start  15: SharedHttpClientTest.PreservesDetailedTlsErrorsForUnaryAndStreamingRequests
+  7/398 Test  #15: SharedHttpClientTest.PreservesDetailedTlsErrorsForUnaryAndStreamingRequests ............................   Passed    0.06 sec
+        Start  16: SharedHttpClientTest.StreamRequestStopsPromptlyWhenCancellationCallbackChanges
+  8/398 Test  #16: SharedHttpClientTest.StreamRequestStopsPromptlyWhenCancellationCallbackChanges .........................   Passed    0.05 sec
+        Start  17: SharedHttpClientTest.StreamRequestDeliversMetadataBeforeFirstBodyByte
+  9/398 Test  #17: SharedHttpClientTest.StreamRequestDeliversMetadataBeforeFirstBodyByte ..................................   Passed    0.05 sec
+        Start  18: SharedHttpClientTest.StreamRequestSendsFullRequestAndHandlesFragmentedResponse
+ 10/398 Test  #18: SharedHttpClientTest.StreamRequestSendsFullRequestAndHandlesFragmentedResponse .........................   Passed    0.04 sec
+        Start  19: SharedHttpClientTest.ShutdownFromChunkCallbackDoesNotDeadlock
+ 11/398 Test  #19: SharedHttpClientTest.ShutdownFromChunkCallbackDoesNotDeadlock ..........................................   Passed    0.04 sec
+        Start  20: SharedHttpClientTest.SynchronousStreamRequestFromChunkCallbackIsRejected
+ 12/398 Test  #20: SharedHttpClientTest.SynchronousStreamRequestFromChunkCallbackIsRejected ...............................   Passed    0.05 sec
+        Start  21: SharedHttpClientTest.ConcurrentStartsUseBoundedProcessReactorPoolAfterShutdown
+ 13/398 Test  #21: SharedHttpClientTest.ConcurrentStartsUseBoundedProcessReactorPoolAfterShutdown .........................   Passed    0.05 sec
+        Start  22: SharedHttpClientTest.DispatchExecutorCleansUpPartiallyStartedWorkers
+ 14/398 Test  #22: SharedHttpClientTest.DispatchExecutorCleansUpPartiallyStartedWorkers ...................................   Passed    0.04 sec
+        Start  23: SharedHttpClientTest.DispatchExecutorLifetimeIsOwnedByProcessState
+ 15/398 Test  #23: SharedHttpClientTest.DispatchExecutorLifetimeIsOwnedByProcessState .....................................   Passed    0.04 sec
+        Start  24: SharedHttpClientTest.ReactorThreadStartupFailureDoesNotEscape
+ 16/398 Test  #24: SharedHttpClientTest.ReactorThreadStartupFailureDoesNotEscape ..........................................   Passed    0.04 sec
+        Start  25: SharedHttpClientTest.ReactorPoolShutdownJoinsReferencedReactorsAndTerminalCallbacks
+ 17/398 Test  #25: SharedHttpClientTest.ReactorPoolShutdownJoinsReferencedReactorsAndTerminalCallbacks ....................   Passed    0.04 sec
+        Start  26: SharedHttpClientTest.ReactorPoolDefersReleaseFromItsOwnThread
+ 18/398 Test  #26: SharedHttpClientTest.ReactorPoolDefersReleaseFromItsOwnThread ..........................................   Passed    0.04 sec
+        Start  27: SharedHttpClientTest.OneClientKeepsSixtyFourStreamsOnBoundedSharedThreads
+ 19/398 Test  #27: SharedHttpClientTest.OneClientKeepsSixtyFourStreamsOnBoundedSharedThreads ..............................   Passed    0.08 sec
+        Start  28: SharedHttpClientTest.SixtyFourClientsShareBoundedProcessReactorPool
+ 20/398 Test  #28: SharedHttpClientTest.SixtyFourClientsShareBoundedProcessReactorPool ....................................   Passed    0.09 sec
+        Start  29: SharedHttpClientTest.StreamRequestPassesNonSuccessJsonResponseToHandlers
+ 21/398 Test  #29: SharedHttpClientTest.StreamRequestPassesNonSuccessJsonResponseToHandlers ...............................   Passed    0.05 sec
+        Start  30: SharedHttpClientTest.StreamRequestPropagatesHandlerFailuresAndConnectionFailure
+ 22/398 Test  #30: SharedHttpClientTest.StreamRequestPropagatesHandlerFailuresAndConnectionFailure ........................   Passed    5.05 sec
+        Start  31: SharedHttpClientTest.EmptyStreamStillDeliversMetadata
+ 23/398 Test  #31: SharedHttpClientTest.EmptyStreamStillDeliversMetadata ..................................................   Passed    0.05 sec
+        Start  32: SharedHttpClientTest.SequentialFiniteStreamsReuseOneConnection
+ 24/398 Test  #32: SharedHttpClientTest.SequentialFiniteStreamsReuseOneConnection .........................................   Passed    0.05 sec
+        Start  33: SharedHttpClientTest.UnaryAndStreamRequestsReuseOneCurlMultiConnection
+ 25/398 Test  #33: SharedHttpClientTest.UnaryAndStreamRequestsReuseOneCurlMultiConnection .................................   Passed    0.05 sec
+        Start  34: SharedHttpClientTest.DestroyingCopiedClientKeepsSurvivingClientUsable
+ 26/398 Test  #34: SharedHttpClientTest.DestroyingCopiedClientKeepsSurvivingClientUsable ..................................   Passed    0.05 sec
+        Start  35: SharedHttpClientTest.MovingClientTransfersShutdownOwnership
+ 27/398 Test  #35: SharedHttpClientTest.MovingClientTransfersShutdownOwnership ............................................   Passed    0.05 sec
+        Start  36: SharedHttpClientTest.ConcurrentSendRequestsDoNotSerializeBehindSharedEasyHandle
+ 28/398 Test  #36: SharedHttpClientTest.ConcurrentSendRequestsDoNotSerializeBehindSharedEasyHandle ........................   Passed    0.05 sec
+        Start  37: SharedHttpClientTest.ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle
+ 29/398 Test  #37: SharedHttpClientTest.ConcurrentStreamsDoNotSerializeBehindSharedEasyHandle .............................   Passed    0.05 sec
+        Start  38: SharedHttpClientTest.SendRequestRejectsUnsupportedHttpVersionBeforeConnecting
+ 30/398 Test  #38: SharedHttpClientTest.SendRequestRejectsUnsupportedHttpVersionBeforeConnecting ..........................   Passed    0.04 sec
+        Start  39: DefaultHttpRequesterTest.RestTransportUsesSharedLibcurlRequester
+ 31/398 Test  #39: DefaultHttpRequesterTest.RestTransportUsesSharedLibcurlRequester .......................................   Passed    0.05 sec
+        Start  40: DefaultHttpRequesterTest.JsonRpcTransportUsesSharedLibcurlRequester
+ 32/398 Test  #40: DefaultHttpRequesterTest.JsonRpcTransportUsesSharedLibcurlRequester ....................................   Passed    0.05 sec
+        Start  41: DefaultHttpRequesterTest.RestIdleStreamCancellationWakesLibcurlPoll
+ 33/398 Test  #41: DefaultHttpRequesterTest.RestIdleStreamCancellationWakesLibcurlPoll ....................................   Passed    0.04 sec
+        Start  42: DefaultHttpRequesterTest.JsonRpcIdleStreamCancellationWakesLibcurlPoll
+ 34/398 Test  #42: DefaultHttpRequesterTest.JsonRpcIdleStreamCancellationWakesLibcurlPoll .................................   Passed    0.05 sec
+        Start  43: DefaultHttpRequesterTest.RestShutdownMarksRetainedStreamInactive
+ 35/398 Test  #43: DefaultHttpRequesterTest.RestShutdownMarksRetainedStreamInactive .......................................   Passed    0.05 sec
+        Start  44: DefaultHttpRequesterTest.JsonRpcShutdownMarksRetainedStreamInactive
+ 36/398 Test  #44: DefaultHttpRequesterTest.JsonRpcShutdownMarksRetainedStreamInactive ....................................   Passed    0.05 sec
+        Start  45: DefaultHttpFetcherTest.DiscoveryUsesSharedLibcurlFetcher
+ 37/398 Test  #45: DefaultHttpFetcherTest.DiscoveryUsesSharedLibcurlFetcher ...............................................   Passed    0.05 sec
+        Start  46: DefaultHttpTransportTest.LegacyEmptyStreamRequesterConstructionRemainsUnambiguous
+ 38/398 Test  #46: DefaultHttpTransportTest.LegacyEmptyStreamRequesterConstructionRemainsUnambiguous ......................   Passed    0.04 sec
+        Start  47: DefaultHttpTransportTest.HttpJsonAsyncUnaryAndStreamReuseOneConnection
+ 39/398 Test  #47: DefaultHttpTransportTest.HttpJsonAsyncUnaryAndStreamReuseOneConnection .................................   Passed    0.06 sec
+        Start  48: DefaultHttpTransportTest.JsonRpcAsyncUnaryAndStreamReuseOneConnection
+ 40/398 Test  #48: DefaultHttpTransportTest.JsonRpcAsyncUnaryAndStreamReuseOneConnection ..................................   Passed    0.06 sec
+        Start  49: DefaultHttpTransportTest.HttpJsonUnaryAndStreamReuseOneConnection
+ 41/398 Test  #49: DefaultHttpTransportTest.HttpJsonUnaryAndStreamReuseOneConnection ......................................   Passed    0.06 sec
+        Start  50: DefaultHttpTransportTest.JsonRpcUnaryAndDelayedStreamReuseOneConnection
+ 42/398 Test  #50: DefaultHttpTransportTest.JsonRpcUnaryAndDelayedStreamReuseOneConnection ................................   Passed    0.06 sec
+        Start  51: CurlReactorDeadlineTest.DisarmedWaitIsInfinite
+ 43/398 Test  #51: CurlReactorDeadlineTest.DisarmedWaitIsInfinite .........................................................   Passed    0.04 sec
+        Start  52: CurlReactorDeadlineTest.ImmediateTimerIsConsumedOnlyOnce
+ 44/398 Test  #52: CurlReactorDeadlineTest.ImmediateTimerIsConsumedOnlyOnce ...............................................   Passed    0.04 sec
+        Start  53: CurlReactorDeadlineTest.RoundsWaitUpAndExpiresAtDeadline
+ 45/398 Test  #53: CurlReactorDeadlineTest.RoundsWaitUpAndExpiresAtDeadline ...............................................   Passed    0.04 sec
+        Start  54: CurlReactorDeadlineTest.NegativeUpdateDisarmsPendingTimer
+ 46/398 Test  #54: CurlReactorDeadlineTest.NegativeUpdateDisarmsPendingTimer ..............................................   Passed    0.04 sec
+        Start  55: CurlReactorDeadlineTest.RearmReplacesEarlierDeadline
+ 47/398 Test  #55: CurlReactorDeadlineTest.RearmReplacesEarlierDeadline ...................................................   Passed    0.04 sec
+        Start  56: CurlReactorDeadlineTest.BoundsLongWaitToPollAbi
+ 48/398 Test  #56: CurlReactorDeadlineTest.BoundsLongWaitToPollAbi ........................................................   Passed    0.04 sec
+        Start  57: CurlReactorIntegrationTest.AddWakesAnAlreadyIdleReactor
+ 49/398 Test  #57: CurlReactorIntegrationTest.AddWakesAnAlreadyIdleReactor ................................................   Passed    0.05 sec
+        Start  58: CurlReactorIntegrationTest.SynchronousUnaryCompletesWhilePeerStreamRemainsIdle
+ 50/398 Test  #58: CurlReactorIntegrationTest.SynchronousUnaryCompletesWhilePeerStreamRemainsIdle .........................   Passed    0.05 sec
+        Start  59: CurlReactorIntegrationTest.LibcurlTimerCompletesIdleRequest
+ 51/398 Test  #59: CurlReactorIntegrationTest.LibcurlTimerCompletesIdleRequest ............................................   Passed    0.14 sec
+        Start  60: CurlReactorIntegrationTest.RepeatedConcurrentCancellationCompletesOnce
+ 52/398 Test  #60: CurlReactorIntegrationTest.RepeatedConcurrentCancellationCompletesOnce .................................   Passed    0.05 sec
+        Start  61: CurlReactorIntegrationTest.ServerCompletionRacesCancellation
+ 53/398 Test  #61: CurlReactorIntegrationTest.ServerCompletionRacesCancellation ...........................................   Passed    0.06 sec
+        Start  62: CurlReactorIntegrationTest.ConcurrentStartsAndShutdownDoNotLoseCompletion
+ 54/398 Test  #62: CurlReactorIntegrationTest.ConcurrentStartsAndShutdownDoNotLoseCompletion ..............................   Passed    0.06 sec
+        Start  63: CurlReactorIntegrationTest.ShutdownWakesIdleStreamsAndCancellationRemainsSafe
+ 55/398 Test  #63: CurlReactorIntegrationTest.ShutdownWakesIdleStreamsAndCancellationRemainsSafe ..........................   Passed    0.05 sec
+        Start  64: CurlReactorIntegrationTest.OneReactorOwnsMoreThanSixtyFourEstablishedTransfers
+ 56/398 Test  #64: CurlReactorIntegrationTest.OneReactorOwnsMoreThanSixtyFourEstablishedTransfers .........................   Passed    0.08 sec
+        Start  65: CurlReactorIntegrationTest.ShutdownCommandWakesAnEmptyReactor
+ 57/398 Test  #65: CurlReactorIntegrationTest.ShutdownCommandWakesAnEmptyReactor ..........................................   Passed    0.04 sec
+        Start  66: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/1
+ 58/398 Test  #66: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/1 ..........   Passed    0.05 sec
+        Start  67: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/16
+ 59/398 Test  #67: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/16 .........   Passed    0.05 sec
+        Start  68: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/64
+ 60/398 Test  #68: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/64 .........   Passed    0.08 sec
+        Start  69: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/96
+ 61/398 Test  #69: StreamCounts/CurlReactorScaleTest.EstablishedStreamsUseBoundedThreadsAndCancelIndependently/96 .........   Passed    0.09 sec
+        Start  70: Protocols/CurlStreamingTransportTest.RealSsePreservesOrderAndDispatchesOffReactor/1-byte object <00>
+ 62/398 Test  #70: Protocols/CurlStreamingTransportTest.RealSsePreservesOrderAndDispatchesOffReactor/1-byte object <00> ...   Passed    0.05 sec
+        Start  71: Protocols/CurlStreamingTransportTest.RealSsePreservesOrderAndDispatchesOffReactor/1-byte object <01>
+ 63/398 Test  #71: Protocols/CurlStreamingTransportTest.RealSsePreservesOrderAndDispatchesOffReactor/1-byte object <01> ...   Passed    0.05 sec
+        Start  72: Protocols/CurlStreamingTransportTest.IdleCancelIsPromptAndProducesNoObserverError/1-byte object <00>
+ 64/398 Test  #72: Protocols/CurlStreamingTransportTest.IdleCancelIsPromptAndProducesNoObserverError/1-byte object <00> ...   Passed    0.05 sec
+        Start  73: Protocols/CurlStreamingTransportTest.IdleCancelIsPromptAndProducesNoObserverError/1-byte object <01>
+ 65/398 Test  #73: Protocols/CurlStreamingTransportTest.IdleCancelIsPromptAndProducesNoObserverError/1-byte object <01> ...   Passed    0.06 sec
+        Start  78: StreamResponseCoroutineTest.ReturnsYieldedValueBeforeResumingCoroutine
+ 66/398 Test  #78: StreamResponseCoroutineTest.ReturnsYieldedValueBeforeResumingCoroutine .................................   Passed    0.04 sec
+        Start  79: TaskSubscriptionServiceTest.FirstEventIsCurrentTask
+ 67/398 Test  #79: TaskSubscriptionServiceTest.FirstEventIsCurrentTask ....................................................   Passed    0.04 sec
+        Start  80: TaskSubscriptionServiceTest.RejectsTerminalTask
+ 68/398 Test  #80: TaskSubscriptionServiceTest.RejectsTerminalTask ........................................................   Passed    0.04 sec
+        Start  81: TaskSubscriptionServiceTest.UsesLatestPublishedTaskWhenRegisteringSubscriber
+ 69/398 Test  #81: TaskSubscriptionServiceTest.UsesLatestPublishedTaskWhenRegisteringSubscriber ...........................   Passed    0.04 sec
+        Start  82: TaskSubscriptionServiceTest.TimedWaitKeepsSubscriptionOpen
+ 70/398 Test  #82: TaskSubscriptionServiceTest.TimedWaitKeepsSubscriptionOpen .............................................   Passed    0.04 sec
+        Start  83: TaskSubscriptionServiceTest.QueuedTerminalEventKeepsSubscriptionLiveUntilDrained
+ 71/398 Test  #83: TaskSubscriptionServiceTest.QueuedTerminalEventKeepsSubscriptionLiveUntilDrained .......................   Passed    0.04 sec
+        Start  84: TaskSubscriptionServiceTest.RejectsStaleSubscriptionAfterTerminalUpdate
+ 72/398 Test  #84: TaskSubscriptionServiceTest.RejectsStaleSubscriptionAfterTerminalUpdate ................................   Passed    0.04 sec
+        Start  85: TaskSubscriptionServiceTest.BroadcastsUpdatesToMultipleSubscribersAndClosesOnTerminalState
+ 73/398 Test  #85: TaskSubscriptionServiceTest.BroadcastsUpdatesToMultipleSubscribersAndClosesOnTerminalState .............   Passed    0.04 sec
+        Start  86: TaskSubscriptionServiceTest.ConcurrentPublishersPreserveOrderingAcrossSubscribers
+ 74/398 Test  #86: TaskSubscriptionServiceTest.ConcurrentPublishersPreserveOrderingAcrossSubscribers ......................   Passed    0.06 sec
+        Start  87: TaskSubscriptionServiceTest.RemovingOneSubscriberDoesNotAffectOthers
+ 75/398 Test  #87: TaskSubscriptionServiceTest.RemovingOneSubscriberDoesNotAffectOthers ...................................   Passed    0.04 sec
+        Start  88: TaskSubscriptionServiceTest.ConcurrentCancellationIsIdempotent
+ 76/398 Test  #88: TaskSubscriptionServiceTest.ConcurrentCancellationIsIdempotent .........................................   Passed    0.04 sec
+        Start  89: TaskSubscriptionServiceTest.ShutdownClosesActiveSubscriptions
+ 77/398 Test  #89: TaskSubscriptionServiceTest.ShutdownClosesActiveSubscriptions ..........................................   Passed    0.04 sec
+        Start  90: TaskSubscriptionServiceTest.SubscriptionCanOutliveService
+ 78/398 Test  #90: TaskSubscriptionServiceTest.SubscriptionCanOutliveService ..............................................   Passed    0.04 sec
+        Start  91: TaskSubscriptionServiceTest.PublicationRacingTimeoutDeliversEventExactlyOnce
+ 79/398 Test  #91: TaskSubscriptionServiceTest.PublicationRacingTimeoutDeliversEventExactlyOnce ...........................   Passed    0.05 sec
+        Start  92: TaskSubscriptionServiceTest.PublicationRacingCancellationClosesWithoutDuplicateDelivery
+ 80/398 Test  #92: TaskSubscriptionServiceTest.PublicationRacingCancellationClosesWithoutDuplicateDelivery ................   Passed    0.04 sec
+        Start  93: TaskSubscriptionServiceTest.ShutdownRacingPublicationClosesWithoutDuplicateDelivery
+ 81/398 Test  #93: TaskSubscriptionServiceTest.ShutdownRacingPublicationClosesWithoutDuplicateDelivery ....................   Passed    0.04 sec
+        Start  94: TaskSubscriptionServiceTest.DestroyingSuspendedSubscriptionPreventsLaterResume
+ 82/398 Test  #94: TaskSubscriptionServiceTest.DestroyingSuspendedSubscriptionPreventsLaterResume .........................   Passed    0.04 sec
+        Start  95: TaskSubscriptionServiceTest.DestructionRacingTerminalPublicationWaitsForResumeCleanup
+ 83/398 Test  #95: TaskSubscriptionServiceTest.DestructionRacingTerminalPublicationWaitsForResumeCleanup ..................   Passed    0.09 sec
+        Start  96: TaskSubscriptionServiceTest.ConcurrentSignalsResumeOnceAndPreserveBothEvents
+ 84/398 Test  #96: TaskSubscriptionServiceTest.ConcurrentSignalsResumeOnceAndPreserveBothEvents ...........................   Passed    0.04 sec
+        Start 100: StreamHandleLifecycleTest.CallbackIdleWaitDoesNotDependOnTerminalDispatch
+ 85/398 Test #100: StreamHandleLifecycleTest.CallbackIdleWaitDoesNotDependOnTerminalDispatch ..............................   Passed    0.05 sec
+        Start 101: StreamHandleLifecycleTest.IsActiveWhileWorkIsActiveAndCancelIsIdempotent
+ 86/398 Test #101: StreamHandleLifecycleTest.IsActiveWhileWorkIsActiveAndCancelIsIdempotent ...............................   Passed    0.05 sec
+        Start 102: StreamHandleLifecycleTest.DestroyReturnsPromptlyWithInjectedSynchronousRequester
+ 87/398 Test #102: StreamHandleLifecycleTest.DestroyReturnsPromptlyWithInjectedSynchronousRequester .......................   Passed    0.06 sec
+        Start 103: StreamHandleLifecycleTest.DestroyingActiveHandleCancelsAndJoinsSafely
+ 88/398 Test #103: StreamHandleLifecycleTest.DestroyingActiveHandleCancelsAndJoinsSafely ..................................   Passed    0.06 sec
+        Start 104: StreamHandleLifecycleTest.DestroyedHandleSuppressesLateRequesterCallbacks
+ 89/398 Test #104: StreamHandleLifecycleTest.DestroyedHandleSuppressesLateRequesterCallbacks ..............................   Passed    0.05 sec
+        Start 105: StreamHandleLifecycleTest.CompletionIsReportedAtMostOnce
+ 90/398 Test #105: StreamHandleLifecycleTest.CompletionIsReportedAtMostOnce ...............................................   Passed    0.06 sec
+        Start 106: StreamHandleLifecycleTest.ErrorAndCompletionAreMutuallyExclusive
+ 91/398 Test #106: StreamHandleLifecycleTest.ErrorAndCompletionAreMutuallyExclusive .......................................   Passed    0.06 sec
+        Start 107: StreamHandleLifecycleTest.EventAfterTerminalCallbacksIsIgnored
+ 92/398 Test #107: StreamHandleLifecycleTest.EventAfterTerminalCallbacksIsIgnored .........................................   Passed    0.04 sec
+        Start 108: StreamHandleLifecycleTest.CancellationFromOnEventDoesNotDeadlockOrSelfJoin
+ 93/398 Test #108: StreamHandleLifecycleTest.CancellationFromOnEventDoesNotDeadlockOrSelfJoin .............................   Passed    0.04 sec
+        Start 111: HttpJsonTransportUnitTest.GetTaskBuildsExpectedRequest
+ 94/398 Test #111: HttpJsonTransportUnitTest.GetTaskBuildsExpectedRequest .................................................   Passed    0.04 sec
+        Start 112: HttpJsonTransportUnitTest.ListTasksParsesResponseAndQuery
+ 95/398 Test #112: HttpJsonTransportUnitTest.ListTasksParsesResponseAndQuery ..............................................   Passed    0.04 sec
+        Start 113: HttpJsonTransportUnitTest.PushNotificationConfigCrudBuildsTaskScopedRestPaths
+ 96/398 Test #113: HttpJsonTransportUnitTest.PushNotificationConfigCrudBuildsTaskScopedRestPaths ..........................   Passed    0.04 sec
+        Start 114: HttpJsonTransportUnitTest.PushNotificationConfigCrudRequiresTaskId
+ 97/398 Test #114: HttpJsonTransportUnitTest.PushNotificationConfigCrudRequiresTaskId .....................................   Passed    0.04 sec
+        Start 115: HttpJsonTransportUnitTest.UnsupportedVersionHeaderReturnsError
+ 98/398 Test #115: HttpJsonTransportUnitTest.UnsupportedVersionHeaderReturnsError .........................................   Passed    0.04 sec
+        Start 116: HttpJsonTransportUnitTest.ListTasksRejectsWrongNextPageTokenType
+ 99/398 Test #116: HttpJsonTransportUnitTest.ListTasksRejectsWrongNextPageTokenType .......................................   Passed    0.04 sec
+        Start 117: HttpJsonTransportUnitTest.ListTasksRejectsNullBoundaryFields
+100/398 Test #117: HttpJsonTransportUnitTest.ListTasksRejectsNullBoundaryFields ...........................................   Passed    0.04 sec
+        Start 118: HttpJsonTransportUnitTest.ListTasksRejectsMalformedTask
+101/398 Test #118: HttpJsonTransportUnitTest.ListTasksRejectsMalformedTask ................................................   Passed    0.04 sec
+        Start 119: HttpJsonTransportUnitTest.GetTaskAppliesCredentialProvider
+102/398 Test #119: HttpJsonTransportUnitTest.GetTaskAppliesCredentialProvider .............................................   Passed    0.04 sec
+        Start 120: HttpJsonTransportUnitTest.DefaultStreamingRequesterRejectsMtls
+103/398 Test #120: HttpJsonTransportUnitTest.DefaultStreamingRequesterRejectsMtls .........................................   Passed    0.04 sec
+        Start 122: HttpJsonStreamingIntegrationTest.SendStreamingMessageParsesFragmentedEventsInOrder
+104/398 Test #122: HttpJsonStreamingIntegrationTest.SendStreamingMessageParsesFragmentedEventsInOrder .....................   Passed    0.05 sec
+        Start 123: HttpJsonStreamingIntegrationTest.MalformedFrameTriggersObserverError
+105/398 Test #123: HttpJsonStreamingIntegrationTest.MalformedFrameTriggersObserverError ...................................   Passed    0.05 sec
+        Start 124: HttpJsonStreamingIntegrationTest.CancelDuringActiveStreamStopsWithoutCompletion
+106/398 Test #124: HttpJsonStreamingIntegrationTest.CancelDuringActiveStreamStopsWithoutCompletion ........................   Passed    0.08 sec
+        Start 125: HttpJsonStreamingIntegrationTest.RemoteCloseWithoutTerminalEventCompletes
+107/398 Test #125: HttpJsonStreamingIntegrationTest.RemoteCloseWithoutTerminalEventCompletes ..............................   Passed    0.05 sec
+        Start 126: HttpJsonStreamingIntegrationTest.SubscribeTaskBuildsBodylessGetRequest
+108/398 Test #126: HttpJsonStreamingIntegrationTest.SubscribeTaskBuildsBodylessGetRequest .................................   Passed    0.05 sec
+        Start 127: HttpJsonStreamingIntegrationTest.RemoteErrorEventMapsToObserverProtocolError
+109/398 Test #127: HttpJsonStreamingIntegrationTest.RemoteErrorEventMapsToObserverProtocolError ...........................   Passed    0.05 sec
+        Start 128: HttpJsonStreamingIntegrationTest.NonSuccessHttpStatusPreservesJsonErrorBody
+110/398 Test #128: HttpJsonStreamingIntegrationTest.NonSuccessHttpStatusPreservesJsonErrorBody ............................   Passed    0.05 sec
+        Start 129: HttpJsonStreamingIntegrationTest.RejectsContentTypePrefixLookalike
+111/398 Test #129: HttpJsonStreamingIntegrationTest.RejectsContentTypePrefixLookalike .....................................   Passed    0.05 sec
+        Start 130: HttpJsonStreamingIntegrationTest.EmptyResponseWithoutMetadataCallbackStillCompletes
+112/398 Test #130: HttpJsonStreamingIntegrationTest.EmptyResponseWithoutMetadataCallbackStillCompletes ....................   Passed    0.05 sec
+        Start 131: HttpJsonStreamingIntegrationTest.ReturnedUnsupportedVersionIsValidatedForEmptyStream
+113/398 Test #131: HttpJsonStreamingIntegrationTest.ReturnedUnsupportedVersionIsValidatedForEmptyStream ...................   Passed    0.05 sec
+        Start 132: HttpJsonStreamingIntegrationTest.ReturnedMissingContentTypeIsValidatedForEmptyStream
+114/398 Test #132: HttpJsonStreamingIntegrationTest.ReturnedMissingContentTypeIsValidatedForEmptyStream ...................   Passed    0.05 sec
+        Start 133: HttpJsonStreamingIntegrationTest.SubscribeTaskWithoutIdReturnsValidationError
+115/398 Test #133: HttpJsonStreamingIntegrationTest.SubscribeTaskWithoutIdReturnsValidationError ..........................   Passed    0.04 sec
+        Start 134: HttpJsonStreamingIntegrationTest.MissingStreamRequesterReturnsInternalError
+116/398 Test #134: HttpJsonStreamingIntegrationTest.MissingStreamRequesterReturnsInternalError ............................   Passed    0.04 sec
+        Start 135: JsonRpcTransportUnitTest.UsesPostToResolvedJsonRpcUrl
+117/398 Test #135: JsonRpcTransportUnitTest.UsesPostToResolvedJsonRpcUrl ..................................................   Passed    0.04 sec
+        Start 136: JsonRpcTransportUnitTest.RespectsTimeoutOverrideFromCallOptions
+118/398 Test #136: JsonRpcTransportUnitTest.RespectsTimeoutOverrideFromCallOptions ........................................   Passed    0.04 sec
+        Start 137: JsonRpcTransportUnitTest.SerializesExpectedEnvelopeFields
+119/398 Test #137: JsonRpcTransportUnitTest.SerializesExpectedEnvelopeFields ..............................................   Passed    0.05 sec
+        Start 138: JsonRpcTransportUnitTest.ResponseIdMismatchReturnsRemoteProtocolError
+120/398 Test #138: JsonRpcTransportUnitTest.ResponseIdMismatchReturnsRemoteProtocolError ..................................   Passed    0.04 sec
+        Start 139: JsonRpcTransportUnitTest.MalformedEnvelopeReturnsSerializationError
+121/398 Test #139: JsonRpcTransportUnitTest.MalformedEnvelopeReturnsSerializationError ....................................   Passed    0.05 sec
+        Start 140: JsonRpcTransportUnitTest.InjectsApiKeyHeaderViaCredentialProvider
+122/398 Test #140: JsonRpcTransportUnitTest.InjectsApiKeyHeaderViaCredentialProvider ......................................   Passed    0.05 sec
+        Start 141: JsonRpcTransportUnitTest.InjectsBearerTokenAndMtlsConfiguration
+123/398 Test #141: JsonRpcTransportUnitTest.InjectsBearerTokenAndMtlsConfiguration ........................................   Passed    0.04 sec
+        Start 142: JsonRpcTransportUnitTest.InjectsCustomHeadersViaCredentialProvider
+124/398 Test #142: JsonRpcTransportUnitTest.InjectsCustomHeadersViaCredentialProvider .....................................   Passed    0.05 sec
+        Start 143: JsonRpcTransportUnitTest.ListTasksUsesListTasksMethodAndParsesResponse
+125/398 Test #143: JsonRpcTransportUnitTest.ListTasksUsesListTasksMethodAndParsesResponse .................................   Passed    0.05 sec
+        Start 144: JsonRpcTransportUnitTest.ListTasksRejectsMalformedTask
+126/398 Test #144: JsonRpcTransportUnitTest.ListTasksRejectsMalformedTask .................................................   Passed    0.05 sec
+        Start 145: JsonRpcTransportUnitTest.ListTasksScannerHandlesResultPositionsAndWhitespace
+127/398 Test #145: JsonRpcTransportUnitTest.ListTasksScannerHandlesResultPositionsAndWhitespace ...........................   Passed    0.04 sec
+        Start 146: JsonRpcTransportUnitTest.ListTasksAcceptsEscapedResultMemberName
+128/398 Test #146: JsonRpcTransportUnitTest.ListTasksAcceptsEscapedResultMemberName .......................................   Passed    0.04 sec
+        Start 147: JsonRpcTransportUnitTest.ListTasksFallbackErrorsPreserveMetadata
+129/398 Test #147: JsonRpcTransportUnitTest.ListTasksFallbackErrorsPreserveMetadata .......................................   Passed    0.05 sec
+        Start 148: JsonRpcTransportUnitTest.ListTasksRejectsNullBoundaryFields
+130/398 Test #148: JsonRpcTransportUnitTest.ListTasksRejectsNullBoundaryFields ............................................   Passed    0.04 sec
+        Start 149: JsonRpcTransportUnitTest.ListTasksScannerIgnoresNestedKeysAndStringContents
+131/398 Test #149: JsonRpcTransportUnitTest.ListTasksScannerIgnoresNestedKeysAndStringContents ............................   Passed    0.04 sec
+        Start 150: JsonRpcTransportUnitTest.ListTasksScannerHandlesTrailingFieldAndFinalResult
+132/398 Test #150: JsonRpcTransportUnitTest.ListTasksScannerHandlesTrailingFieldAndFinalResult ............................   Passed    0.04 sec
+        Start 151: JsonRpcTransportUnitTest.ListTasksScannerPreservesEnvelopeErrorValidation
+133/398 Test #151: JsonRpcTransportUnitTest.ListTasksScannerPreservesEnvelopeErrorValidation ..............................   Passed    0.04 sec
+        Start 152: JsonRpcTransportUnitTest.ListTasksRejectsStructurallyBalancedInvalidResultPayloads
+134/398 Test #152: JsonRpcTransportUnitTest.ListTasksRejectsStructurallyBalancedInvalidResultPayloads .....................   Passed    0.04 sec
+        Start 153: JsonRpcTransportUnitTest.RejectsNonSuccessHttpStatusEvenWithResultEnvelope
+135/398 Test #153: JsonRpcTransportUnitTest.RejectsNonSuccessHttpStatusEvenWithResultEnvelope .............................   Passed    0.05 sec
+        Start 154: JsonRpcTransportUnitTest.ListTasksChecksHttpStatusBeforeDecodingMalformedResult
+136/398 Test #154: JsonRpcTransportUnitTest.ListTasksChecksHttpStatusBeforeDecodingMalformedResult ........................   Passed    0.05 sec
+        Start 155: JsonRpcTransportUnitTest.ReturnsUnsupportedVersionOnInvalidA2AVersionHeader
+137/398 Test #155: JsonRpcTransportUnitTest.ReturnsUnsupportedVersionOnInvalidA2AVersionHeader ............................   Passed    0.04 sec
+        Start 156: JsonRpcTransportUnitTest.ParsesJsonRpcErrorObjectProtocolCodeAndMessage
+138/398 Test #156: JsonRpcTransportUnitTest.ParsesJsonRpcErrorObjectProtocolCodeAndMessage ................................   Passed    0.04 sec
+        Start 157: JsonRpcTransportUnitTest.RejectsEnvelopeWithBothResultAndError
+139/398 Test #157: JsonRpcTransportUnitTest.RejectsEnvelopeWithBothResultAndError .........................................   Passed    0.04 sec
+        Start 158: JsonRpcTransportUnitTest.ValidatesRequiredIdsForTaskAndPushConfigOperations
+140/398 Test #158: JsonRpcTransportUnitTest.ValidatesRequiredIdsForTaskAndPushConfigOperations ............................   Passed    0.04 sec
+        Start 159: JsonRpcTransportUnitTest.ReturnsInternalErrorWhenStreamingRequesterMissing
+141/398 Test #159: JsonRpcTransportUnitTest.ReturnsInternalErrorWhenStreamingRequesterMissing .............................   Passed    0.04 sec
+        Start 160: JsonRpcTransportUnitTest.PropagatesConfiguredRequestHeadersAndExtensions
+142/398 Test #160: JsonRpcTransportUnitTest.PropagatesConfiguredRequestHeadersAndExtensions ...............................   Passed    0.05 sec
+        Start 161: JsonRpcTransportUnitTest.IndependentStreamingRequestsUseUniqueIdsAndRejectCrossStreamResponses
+143/398 Test #161: JsonRpcTransportUnitTest.IndependentStreamingRequestsUseUniqueIdsAndRejectCrossStreamResponses .........   Passed    0.05 sec
+        Start 162: JsonRpcTransportUnitTest.SendStreamingMessageParsesJsonRpcSseEnvelope
+144/398 Test #162: JsonRpcTransportUnitTest.SendStreamingMessageParsesJsonRpcSseEnvelope ..................................   Passed    0.05 sec
+        Start 163: JsonRpcTransportUnitTest.StreamingJsonErrorEnvelopePreservesRemoteError
+145/398 Test #163: JsonRpcTransportUnitTest.StreamingJsonErrorEnvelopePreservesRemoteError ................................   Passed    0.05 sec
+        Start 164: JsonRpcTransportUnitTest.StreamingRejectsContentTypePrefixLookalike
+146/398 Test #164: JsonRpcTransportUnitTest.StreamingRejectsContentTypePrefixLookalike ....................................   Passed    0.05 sec
+        Start 165: JsonRpcTransportUnitTest.EmptyResponseWithoutMetadataCallbackStillCompletes
+147/398 Test #165: JsonRpcTransportUnitTest.EmptyResponseWithoutMetadataCallbackStillCompletes ............................   Passed    0.05 sec
+        Start 166: JsonRpcTransportUnitTest.EmptyStreamValidatesReturnedUnsupportedVersion
+148/398 Test #166: JsonRpcTransportUnitTest.EmptyStreamValidatesReturnedUnsupportedVersion ................................   Passed    0.05 sec
+        Start 167: JsonRpcTransportUnitTest.EmptyStreamValidatesReturnedNonSuccessStatus
+149/398 Test #167: JsonRpcTransportUnitTest.EmptyStreamValidatesReturnedNonSuccessStatus ..................................   Passed    0.05 sec
+        Start 168: JsonRpcTransportUnitTest.EmptyStreamValidatesReturnedMissingContentType
+150/398 Test #168: JsonRpcTransportUnitTest.EmptyStreamValidatesReturnedMissingContentType ................................   Passed    0.05 sec
+        Start 169: JsonRpcTransportUnitTest.StreamingMismatchedResponseIdReportsErrorOnce
+151/398 Test #169: JsonRpcTransportUnitTest.StreamingMismatchedResponseIdReportsErrorOnce .................................   Passed    0.05 sec
+        Start 170: JsonRpcTransportUnitTest.CancellationFromOnEventStopsCoalescedFrames
+152/398 Test #170: JsonRpcTransportUnitTest.CancellationFromOnEventStopsCoalescedFrames ...................................   Passed    0.05 sec
+        Start 171: JsonRpcTransportUnitTest.DefaultStreamingRequesterRejectsMtls
+153/398 Test #171: JsonRpcTransportUnitTest.DefaultStreamingRequesterRejectsMtls ..........................................   Passed    0.05 sec
+        Start 174: ServerDispatcherTest.DispatchesAllSupportedOperations
+154/398 Test #174: ServerDispatcherTest.DispatchesAllSupportedOperations ..................................................   Passed    0.04 sec
+        Start 175: ServerDispatcherTest.DispatchesGetExtendedAgentCardThroughProvider
+155/398 Test #175: ServerDispatcherTest.DispatchesGetExtendedAgentCardThroughProvider .....................................   Passed    0.04 sec
+        Start 176: ServerDispatcherTest.GetExtendedAgentCardReturnsNotConfiguredWithoutProvider
+156/398 Test #176: ServerDispatcherTest.GetExtendedAgentCardReturnsNotConfiguredWithoutProvider ...........................   Passed    0.04 sec
+        Start 177: ServerDispatcherTest.ReturnsValidationErrorForPayloadMismatch
+157/398 Test #177: ServerDispatcherTest.ReturnsValidationErrorForPayloadMismatch ..........................................   Passed    0.05 sec
+        Start 178: ServerDispatcherTest.PropagatesExecutorErrors
+158/398 Test #178: ServerDispatcherTest.PropagatesExecutorErrors ..........................................................   Passed    0.04 sec
+        Start 179: ServerDispatcherTest.ReturnsInternalErrorWithoutExecutor
+159/398 Test #179: ServerDispatcherTest.ReturnsInternalErrorWithoutExecutor ...............................................   Passed    0.04 sec
+        Start 180: ServerDispatcherTest.InterceptorsObserveOrderingAndCanMutateContext
+160/398 Test #180: ServerDispatcherTest.InterceptorsObserveOrderingAndCanMutateContext ....................................   Passed    0.04 sec
+        Start 181: ServerDispatcherTest.InterceptorFailureShortCircuitsDispatchAndTriggersAfterHooks
+161/398 Test #181: ServerDispatcherTest.InterceptorFailureShortCircuitsDispatchAndTriggersAfterHooks ......................   Passed    0.05 sec
+        Start 182: ServerDispatcherTest.DefaultSubscriptionStripsArtifactsAndHistory
+162/398 Test #182: ServerDispatcherTest.DefaultSubscriptionStripsArtifactsAndHistory ......................................   Passed    0.04 sec
+        Start 183: ServerDispatcherTest.GetTaskAppliesHistoryLengthLimit
+163/398 Test #183: ServerDispatcherTest.GetTaskAppliesHistoryLengthLimit ..................................................   Passed    0.04 sec
+        Start 194: StreamCancellationWatcherTest.PromptDestructionInterruptsTimedWait
+164/398 Test #194: StreamCancellationWatcherTest.PromptDestructionInterruptsTimedWait .....................................   Passed    0.05 sec
+        Start 195: StreamCancellationWatcherTest.ClientCancellationCancelsStreamOnce
+165/398 Test #195: StreamCancellationWatcherTest.ClientCancellationCancelsStreamOnce ......................................   Passed    0.09 sec
+        Start 196: StreamCancellationWatcherTest.DestructionWaitsForInProgressCancel
+166/398 Test #196: StreamCancellationWatcherTest.DestructionWaitsForInProgressCancel ......................................   Passed    0.09 sec
+        Start 197: StreamCancellationWatcherTest.NonLiveStreamDoesNotStartCancellationWorker
+167/398 Test #197: StreamCancellationWatcherTest.NonLiveStreamDoesNotStartCancellationWorker ..............................   Passed    0.04 sec
+        Start 198: StreamCancellationWatcherTest.ReportsSelectedCompilePath
+168/398 Test #198: StreamCancellationWatcherTest.ReportsSelectedCompilePath ...............................................   Passed    0.04 sec
+        Start 203: TimestampLimitTest.ReplacementFailsWithoutChangingTaskOrRevision
+169/398 Test #203: TimestampLimitTest.ReplacementFailsWithoutChangingTaskOrRevision .......................................   Passed    0.04 sec
+        Start 204: TimestampLimitTest.ConditionalReplacementFailsWithoutChangingTaskOrRevision
+170/398 Test #204: TimestampLimitTest.ConditionalReplacementFailsWithoutChangingTaskOrRevision ............................   Passed    0.04 sec
+        Start 205: TimestampLimitTest.CancellationFailsWithoutChangingTaskOrRevision
+171/398 Test #205: TimestampLimitTest.CancellationFailsWithoutChangingTaskOrRevision ......................................   Passed    0.04 sec
+        Start 206: TimestampLimitTest.HistoryAppendFailsWithoutChangingTaskOrRevision
+172/398 Test #206: TimestampLimitTest.HistoryAppendFailsWithoutChangingTaskOrRevision .....................................   Passed    0.04 sec
+        Start 207: TimestampLimitTest.DuplicateHistoryRemainsANonmutatingSuccess
+173/398 Test #207: TimestampLimitTest.DuplicateHistoryRemainsANonmutatingSuccess ..........................................   Passed    0.04 sec
+        Start 208: InMemoryTaskStoreUnitTest.LastAvailableTimestampIncrementSucceedsBeforeExhaustion
+174/398 Test #208: InMemoryTaskStoreUnitTest.LastAvailableTimestampIncrementSucceedsBeforeExhaustion ......................   Passed    0.04 sec
+        Start 209: InMemoryTaskStoreUnitTest.ValidatesInputAndReturnsNotFoundErrors
+175/398 Test #209: InMemoryTaskStoreUnitTest.ValidatesInputAndReturnsNotFoundErrors .......................................   Passed    0.04 sec
+        Start 210: InMemoryTaskStoreUnitTest.AppliesFilteringPaginationAndProjectionOptions
+176/398 Test #210: InMemoryTaskStoreUnitTest.AppliesFilteringPaginationAndProjectionOptions ...............................   Passed    0.04 sec
+        Start 211: InMemoryTaskStoreUnitTest.CancelUpdatesStateAndRejectsTerminalTasks
+177/398 Test #211: InMemoryTaskStoreUnitTest.CancelUpdatesStateAndRejectsTerminalTasks ....................................   Passed    0.04 sec
+        Start 212: InMemoryTaskStoreUnitTest.UpdatingTaskMovesItToMostRecentPosition
+178/398 Test #212: InMemoryTaskStoreUnitTest.UpdatingTaskMovesItToMostRecentPosition ......................................   Passed    0.04 sec
+        Start 213: InMemoryTaskStoreUnitTest.ProjectsArtifactsAndRequestedHistoryWithoutMutatingStoredTask
+179/398 Test #213: InMemoryTaskStoreUnitTest.ProjectsArtifactsAndRequestedHistoryWithoutMutatingStoredTask ................   Passed    0.04 sec
+        Start 214: InMemoryTaskStoreUnitTest.PaginatesFilteredAndUnfilteredResultsInUpdateOrder
+180/398 Test #214: InMemoryTaskStoreUnitTest.PaginatesFilteredAndUnfilteredResultsInUpdateOrder ...........................   Passed    0.04 sec
+        Start 215: InMemoryTaskStoreUnitTest.EqualUpdateTimesUseTaskIdAndMutationsAdvanceTime
+181/398 Test #215: InMemoryTaskStoreUnitTest.EqualUpdateTimesUseTaskIdAndMutationsAdvanceTime .............................   Passed    0.05 sec
+        Start 216: InMemoryTaskStoreUnitTest.AppendTaskHistoryAppliesDedupPoliciesAndPreservesOrder
+182/398 Test #216: InMemoryTaskStoreUnitTest.AppendTaskHistoryAppliesDedupPoliciesAndPreservesOrder .......................   Passed    0.06 sec
+        Start 217: InMemoryTaskStoreUnitTest.EmitsStructuredTelemetryForDedupedRetries
+183/398 Test #217: InMemoryTaskStoreUnitTest.EmitsStructuredTelemetryForDedupedRetries ....................................   Passed    0.05 sec
+        Start 218: InMemoryTaskStoreUnitTest.HandlesOutOfOrderAndMixedReplayScenarios
+184/398 Test #218: InMemoryTaskStoreUnitTest.HandlesOutOfOrderAndMixedReplayScenarios .....................................   Passed    0.05 sec
+        Start 219: ServerHelpersTest.ExtractAuthMetadataNormalizesAndCollectsSignals
+185/398 Test #219: ServerHelpersTest.ExtractAuthMetadataNormalizesAndCollectsSignals ......................................   Passed    0.05 sec
+        Start 220: ServerTaskUtilitiesTest.EmptyCursorTokenStartsTraversal
+186/398 Test #220: ServerTaskUtilitiesTest.EmptyCursorTokenStartsTraversal ................................................   Passed    0.04 sec
+        Start 221: ServerTaskUtilitiesTest.ValidatesVersionedCursorTokens
+187/398 Test #221: ServerTaskUtilitiesTest.ValidatesVersionedCursorTokens .................................................   Passed    0.04 sec
+        Start 222: ServerTaskUtilitiesTest.RoundTripsBinaryCursorIds
+188/398 Test #222: ServerTaskUtilitiesTest.RoundTripsBinaryCursorIds ......................................................   Passed    0.05 sec
+        Start 223: ServerTaskUtilitiesTest.RejectsMalformedCursorTokens
+189/398 Test #223: ServerTaskUtilitiesTest.RejectsMalformedCursorTokens ...................................................   Passed    0.04 sec
+        Start 224: ServerTaskUtilitiesTest.LifecycleServiceEnforcesTerminalStateGuard
+190/398 Test #224: ServerTaskUtilitiesTest.LifecycleServiceEnforcesTerminalStateGuard .....................................   Passed    0.04 sec
+        Start 225: ServerTaskUtilitiesTest.AppliesHistoryAndArtifactProjectionHelpers
+191/398 Test #225: ServerTaskUtilitiesTest.AppliesHistoryAndArtifactProjectionHelpers .....................................   Passed    0.05 sec
+        Start 226: ServerTaskUtilitiesTest.OrdersTasksByTimestampWithNanosTiebreaker
+192/398 Test #226: ServerTaskUtilitiesTest.OrdersTasksByTimestampWithNanosTiebreaker ......................................   Passed    0.04 sec
+        Start 227: ServerTaskUtilitiesTest.SerializesRequiredEmptyListTasksFields
+193/398 Test #227: ServerTaskUtilitiesTest.SerializesRequiredEmptyListTasksFields .........................................   Passed    0.05 sec
+        Start 228: ServerTaskUtilitiesTest.RejectsListTasksTotalSizeOutsideProtoRange
+194/398 Test #228: ServerTaskUtilitiesTest.RejectsListTasksTotalSizeOutsideProtoRange .....................................   Passed    0.04 sec
+        Start 237: ServerDispatcherTaskStoreIntegrationTest.ExecutesTaskLifecycleThroughDispatcher
+195/398 Test #237: ServerDispatcherTaskStoreIntegrationTest.ExecutesTaskLifecycleThroughDispatcher ........................   Passed    0.04 sec
+        Start 238: ServerDispatcherTaskStoreIntegrationTest.InterceptorsObserveRequestLifecycle
+196/398 Test #238: ServerDispatcherTaskStoreIntegrationTest.InterceptorsObserveRequestLifecycle ...........................   Passed    0.04 sec
+        Start 249: AsyncSutTest.AdvertisesEnabledBindingsAndCoroutineStreaming
+197/398 Test #249: AsyncSutTest.AdvertisesEnabledBindingsAndCoroutineStreaming ............................................   Passed    0.05 sec
+        Start 250: AsyncSutTest.AppliesSharedAuthorizationPolicyBeforeApplicationExecution
+198/398 Test #250: AsyncSutTest.AppliesSharedAuthorizationPolicyBeforeApplicationExecution ................................   Passed    0.05 sec
+        Start 251: AsyncSutTest.UsesSharedExtendedCardProviderWithoutNestedDispatch
+199/398 Test #251: AsyncSutTest.UsesSharedExtendedCardProviderWithoutNestedDispatch .......................................   Passed    0.05 sec
+        Start 252: AsyncSutTest.BoundedBackendWorkLeavesDispatcherAvailableForCardsAndShutdown
+200/398 Test #252: AsyncSutTest.BoundedBackendWorkLeavesDispatcherAvailableForCardsAndShutdown ............................   Passed    0.06 sec
+        Start 254: AsyncStreamTest.FiniteProducerOwnsEventsAndPreservesOrder
+201/398 Test #254: AsyncStreamTest.FiniteProducerOwnsEventsAndPreservesOrder ..............................................   Passed    0.05 sec
+        Start 255: AsyncStreamTest.DemandAcknowledgementPrecedesNextEventAndAfter
+202/398 Test #255: AsyncStreamTest.DemandAcknowledgementPrecedesNextEventAndAfter .........................................   Passed    0.04 sec
+        Start 256: AsyncStreamTest.WriteFailurePropagatesAndStopsProduction
+203/398 Test #256: AsyncStreamTest.WriteFailurePropagatesAndStopsProduction ...............................................   Passed    0.04 sec
+        Start 257: AsyncStreamTest.BackendErrorAfterEventsFinishesExactlyOnce
+204/398 Test #257: AsyncStreamTest.BackendErrorAfterEventsFinishesExactlyOnce .............................................   Passed    0.04 sec
+        Start 258: AsyncStreamTest.CancelWakesSuspendedDemandAndIgnoresLateAcknowledgement
+205/398 Test #258: AsyncStreamTest.CancelWakesSuspendedDemandAndIgnoresLateAcknowledgement ................................   Passed    0.05 sec
+        Start 259: AsyncStreamTest.ExpiredDeadlineNeverStartsProducer
+206/398 Test #259: AsyncStreamTest.ExpiredDeadlineNeverStartsProducer .....................................................   Passed    0.04 sec
+        Start 260: AsyncStreamTest.DeadlineDuringWriteWinsOverLateSuccess
+207/398 Test #260: AsyncStreamTest.DeadlineDuringWriteWinsOverLateSuccess .................................................   Passed    0.06 sec
+        Start 261: AsyncStreamTest.ShutdownClosesAdmissionAndCancelsSuspendedWrite
+208/398 Test #261: AsyncStreamTest.ShutdownClosesAdmissionAndCancelsSuspendedWrite ........................................   Passed    0.05 sec
+        Start 262: AsyncStreamTest.MixedSyncAndAsyncSubscriptionsShareOrderedPublication
+209/398 Test #262: AsyncStreamTest.MixedSyncAndAsyncSubscriptionsShareOrderedPublication ..................................   Passed    0.06 sec
+        Start 263: AsyncStreamTest.SlowSubscriberOverflowFailsWithoutHoldingPublisher
+210/398 Test #263: AsyncStreamTest.SlowSubscriberOverflowFailsWithoutHoldingPublisher .....................................   Passed    0.05 sec
+        Start 264: AsyncStreamTest.PublicationShutdownWakesIdleSubscription
+211/398 Test #264: AsyncStreamTest.PublicationShutdownWakesIdleSubscription ...............................................   Passed    0.06 sec
+        Start 265: AsyncStreamTest.CancellationWakesIdlePublicationWait
+212/398 Test #265: AsyncStreamTest.CancellationWakesIdlePublicationWait ...................................................   Passed    0.05 sec
+        Start 266: AsyncStreamTest.MismatchedPayloadSkipsApplication
+213/398 Test #266: AsyncStreamTest.MismatchedPayloadSkipsApplication ......................................................   Passed    0.05 sec
+        Start 267: AsyncStreamTest.RechecksTaskAuthorizationBeforeEachEvent
+214/398 Test #267: AsyncStreamTest.RechecksTaskAuthorizationBeforeEachEvent ...............................................   Passed    0.05 sec
+        Start 268: AsyncStreamTest.ConcurrentWritesFailRequestWithoutOverlappingTransportWrites
+215/398 Test #268: AsyncStreamTest.ConcurrentWritesFailRequestWithoutOverlappingTransportWrites ...........................   Passed    0.05 sec
+        Start 269: AsyncStreamTest.IgnoredTransportFailureStillDeterminesTerminalResult
+216/398 Test #269: AsyncStreamTest.IgnoredTransportFailureStillDeterminesTerminalResult ...................................   Passed    0.04 sec
+        Start 270: AsyncStreamConcurrency.PublicationAndCancellationOnIndependentThreadsCompleteOnce
+217/398 Test #270: AsyncStreamConcurrency.PublicationAndCancellationOnIndependentThreadsCompleteOnce ......................   Passed    0.07 sec
+        Start 271: AsyncDispatcherTest.InterceptorsObserveMutatedMetadataAndExactlyOneTerminalResult
+218/398 Test #271: AsyncDispatcherTest.InterceptorsObserveMutatedMetadataAndExactlyOneTerminalResult ......................   Passed    0.04 sec
+        Start 272: AsyncDispatcherTest.RejectedBeforeSkipsExecutorAndStillRunsAfter
+219/398 Test #272: AsyncDispatcherTest.RejectedBeforeSkipsExecutorAndStillRunsAfter .......................................   Passed    0.05 sec
+        Start 273: AsyncDispatcherTest.CancellationCompletesWithoutWaitingForApplicationAndIgnoresLateReplies
+220/398 Test #273: AsyncDispatcherTest.CancellationCompletesWithoutWaitingForApplicationAndIgnoresLateReplies .............   Passed    0.05 sec
+        Start 274: AsyncDispatcherTest.ExpiredDeadlineSkipsExecutorAndRunsAfter
+221/398 Test #274: AsyncDispatcherTest.ExpiredDeadlineSkipsExecutorAndRunsAfter ...........................................   Passed    0.06 sec
+        Start 275: AsyncDispatcherTest.ActiveDeadlineSignalWinsOverLateSuccess
+222/398 Test #275: AsyncDispatcherTest.ActiveDeadlineSignalWinsOverLateSuccess ............................................   Passed    0.04 sec
+        Start 276: AsyncDispatcherTest.CompletionVersusCancellationDeliversOnce
+223/398 Test #276: AsyncDispatcherTest.CompletionVersusCancellationDeliversOnce ...........................................   Passed    0.05 sec
+        Start 277: AsyncDispatcherTest.CallerDrainsCancelledCoroutinesAfterDispatcherDestruction
+224/398 Test #277: AsyncDispatcherTest.CallerDrainsCancelledCoroutinesAfterDispatcherDestruction ..........................   Passed    0.05 sec
+        Start 278: AsyncDispatcherTest.AdmissionIsBoundedAndShutdownRejectsNewRequests
+225/398 Test #278: AsyncDispatcherTest.AdmissionIsBoundedAndShutdownRejectsNewRequests ....................................   Passed    0.06 sec
+        Start 279: AsyncDispatcherTest.RequiredExtensionsUseSharedValidator
+226/398 Test #279: AsyncDispatcherTest.RequiredExtensionsUseSharedValidator ...............................................   Passed    0.05 sec
+        Start 280: AsyncDispatcherTest.StreamingIsRejectedAndHistoryProjectionMatchesSync
+227/398 Test #280: AsyncDispatcherTest.StreamingIsRejectedAndHistoryProjectionMatchesSync .................................   Passed    0.05 sec
+        Start 281: AsyncDispatcherTest.SecuritySeesFullHistoryAndAuthenticatedPrincipalBeforeProjection
+228/398 Test #281: AsyncDispatcherTest.SecuritySeesFullHistoryAndAuthenticatedPrincipalBeforeProjection ...................   Passed    0.04 sec
+        Start 282: AsyncDispatcherTest.PendingCallsDoNotOccupyWorkersAndQueueRemainsBounded
+229/398 Test #282: AsyncDispatcherTest.PendingCallsDoNotOccupyWorkersAndQueueRemainsBounded ...............................   Passed    0.05 sec
+        Start 283: AsyncDispatcherTest.CancelDuringBeforeWaitsForHookBeforeAfterAndSkipsExecution
+230/398 Test #283: AsyncDispatcherTest.CancelDuringBeforeWaitsForHookBeforeAfterAndSkipsExecution .........................   Passed    0.05 sec
+        Start 284: AsyncDispatcherTest.DuplicateSuccessCannotChangeFinalOutcome
+231/398 Test #284: AsyncDispatcherTest.DuplicateSuccessCannotChangeFinalOutcome ...........................................   Passed    0.04 sec
+        Start 285: AsyncDispatcherTest.DispatcherCanBeDestroyedFromItsOwnCompletion
+232/398 Test #285: AsyncDispatcherTest.DispatcherCanBeDestroyedFromItsOwnCompletion .......................................   Passed    0.05 sec
+        Start 286: AsyncDispatcherTest.ThrowingAfterHookDoesNotPreventOtherHooksOrCompletion
+233/398 Test #286: AsyncDispatcherTest.ThrowingAfterHookDoesNotPreventOtherHooksOrCompletion ..............................   Passed    0.04 sec
+        Start 287: AsyncDispatcherTest.InvalidConfigurationAndMissingCompletionFailImmediately
+234/398 Test #287: AsyncDispatcherTest.InvalidConfigurationAndMissingCompletionFailImmediately ............................   Passed    0.05 sec
+        Start 288: AsyncDispatcherTest.SecurityListUsesSameAuthorizedStorePath
+235/398 Test #288: AsyncDispatcherTest.SecurityListUsesSameAuthorizedStorePath ............................................   Passed    0.05 sec
+        Start 289: AsyncDispatcherTest.ExtendedCardProviderReceivesTenantAndOwnedMetadata
+236/398 Test #289: AsyncDispatcherTest.ExtendedCardProviderReceivesTenantAndOwnedMetadata .................................   Passed    0.05 sec
+        Start 290: AsyncDispatcherTest.SendMessageProjectsRequestedHistory
+237/398 Test #290: AsyncDispatcherTest.SendMessageProjectsRequestedHistory ................................................   Passed    0.04 sec
+        Start 291: AsyncDispatcherTest.ExecutorExceptionBecomesInternalFailureAndRunsAfter
+238/398 Test #291: AsyncDispatcherTest.ExecutorExceptionBecomesInternalFailureAndRunsAfter ................................   Passed    0.04 sec
+        Start 292: AsyncDispatcherTest.CancellationObserverCanDestroyDispatcherBeforeSdkStopCallback
+239/398 Test #292: AsyncDispatcherTest.CancellationObserverCanDestroyDispatcherBeforeSdkStopCallback ......................   Passed    0.04 sec
+        Start 293: AsyncDispatcherTest.TransportCancellationSchedulesObserversOffCallerThread
+240/398 Test #293: AsyncDispatcherTest.TransportCancellationSchedulesObserversOffCallerThread .............................   Passed    0.05 sec
+        Start 294: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/0
+241/398 Test #294: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/0 ...................................   Passed    0.04 sec
+        Start 295: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/2
+242/398 Test #295: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/2 ...................................   Passed    0.05 sec
+        Start 296: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/4
+243/398 Test #296: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/4 ...................................   Passed    0.04 sec
+        Start 297: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/5
+244/398 Test #297: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/5 ...................................   Passed    0.05 sec
+        Start 298: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/6
+245/398 Test #298: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/6 ...................................   Passed    0.05 sec
+        Start 299: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/7
+246/398 Test #299: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/7 ...................................   Passed    0.04 sec
+        Start 300: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/8
+247/398 Test #300: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/8 ...................................   Passed    0.05 sec
+        Start 301: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/9
+248/398 Test #301: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/9 ...................................   Passed    0.04 sec
+        Start 302: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/10
+249/398 Test #302: UnaryOperations/AsyncUnaryTest.RoutesEveryOperationOffCallerThread/10 ..................................   Passed    0.05 sec
+        Start 303: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/0
+250/398 Test #303: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/0 ...............................   Passed    0.04 sec
+        Start 304: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/2
+251/398 Test #304: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/2 ...............................   Passed    0.04 sec
+        Start 305: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/4
+252/398 Test #305: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/4 ...............................   Passed    0.04 sec
+        Start 306: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/5
+253/398 Test #306: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/5 ...............................   Passed    0.05 sec
+        Start 307: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/6
+254/398 Test #307: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/6 ...............................   Passed    0.05 sec
+        Start 308: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/7
+255/398 Test #308: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/7 ...............................   Passed    0.04 sec
+        Start 309: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/8
+256/398 Test #309: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/8 ...............................   Passed    0.05 sec
+        Start 310: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/9
+257/398 Test #310: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/9 ...............................   Passed    0.04 sec
+        Start 311: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/10
+258/398 Test #311: UnaryOperations/AsyncUnaryTest.RejectsMismatchedPayloadBeforeExecution/10 ..............................   Passed    0.05 sec
+        Start 312: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/0
+259/398 Test #312: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/0 .....................   Passed    0.04 sec
+        Start 313: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/2
+260/398 Test #313: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/2 .....................   Passed    0.05 sec
+        Start 314: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/4
+261/398 Test #314: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/4 .....................   Passed    0.05 sec
+        Start 315: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/5
+262/398 Test #315: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/5 .....................   Passed    0.04 sec
+        Start 316: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/6
+263/398 Test #316: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/6 .....................   Passed    0.04 sec
+        Start 317: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/7
+264/398 Test #317: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/7 .....................   Passed    0.05 sec
+        Start 318: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/8
+265/398 Test #318: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/8 .....................   Passed    0.04 sec
+        Start 319: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/9
+266/398 Test #319: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/9 .....................   Passed    0.04 sec
+        Start 320: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/10
+267/398 Test #320: UnaryOperations/AsyncUnaryTest.PreservesExecutorOrProviderErrorsAndRunsAfterOnce/10 ....................   Passed    0.05 sec
+        Start 325: BlockingExecutorAdapterTest.OwnsArgumentsAndReturnsResultOnAwaitingExecutor
+268/398 Test #325: BlockingExecutorAdapterTest.OwnsArgumentsAndReturnsResultOnAwaitingExecutor ............................   Passed    0.04 sec
+        Start 326: BlockingExecutorAdapterTest.ForwardsMessageTaskAndListResults
+269/398 Test #326: BlockingExecutorAdapterTest.ForwardsMessageTaskAndListResults ..........................................   Passed    0.05 sec
+        Start 327: BlockingExecutorAdapterTest.ForwardsPushConfigurationResultsIncludingVoid
+270/398 Test #327: BlockingExecutorAdapterTest.ForwardsPushConfigurationResultsIncludingVoid ..............................   Passed    0.05 sec
+        Start 328: BlockingExecutorAdapterTest.ReturnedAwaitableOwnsStateAfterAdapterDestruction
+271/398 Test #328: BlockingExecutorAdapterTest.ReturnedAwaitableOwnsStateAfterAdapterDestruction ..........................   Passed    0.04 sec
+        Start 329: BlockingExecutorAdapterTest.PreservesErrorsAndContainsBackendExceptions
+272/398 Test #329: BlockingExecutorAdapterTest.PreservesErrorsAndContainsBackendExceptions ................................   Passed    0.05 sec
+        Start 330: BlockingExecutorAdapterTest.BoundsAllPendingWorkAndClosesAdmissionWithoutWaiting
+273/398 Test #330: BlockingExecutorAdapterTest.BoundsAllPendingWorkAndClosesAdmissionWithoutWaiting .......................   Passed    0.05 sec
+        Start 331: BlockingExecutorAdapterTest.PreCancelledRequestNeverReachesBackend
+274/398 Test #331: BlockingExecutorAdapterTest.PreCancelledRequestNeverReachesBackend .....................................   Passed    0.05 sec
+        Start 332: BlockingExecutorAdapterTest.RejectsJoinFromBackendInsteadOfDeadlocking
+275/398 Test #332: BlockingExecutorAdapterTest.RejectsJoinFromBackendInsteadOfDeadlocking .................................   Passed    0.04 sec
+        Start 333: BlockingExecutorAdapterTest.ElapsedDeadlineNeverReachesBackend
+276/398 Test #333: BlockingExecutorAdapterTest.ElapsedDeadlineNeverReachesBackend .........................................   Passed    0.04 sec
+        Start 334: AsyncRuntimeTest.ShutdownFromCompletionDoesNotBlockOrReplaceSuccess
+277/398 Test #334: AsyncRuntimeTest.ShutdownFromCompletionDoesNotBlockOrReplaceSuccess ....................................   Passed    0.04 sec
+        Start 335: AsyncRuntimeTest.RejectsInvalidConfiguration
+278/398 Test #335: AsyncRuntimeTest.RejectsInvalidConfiguration ...........................................................   Passed    0.04 sec
+        Start 336: AsyncRuntimeTest.ShutdownCompletesLogicallyBeforeBackendCleanupAndJoinDrains
+279/398 Test #336: AsyncRuntimeTest.ShutdownCompletesLogicallyBeforeBackendCleanupAndJoinDrains ...........................   Passed    0.05 sec
+        Start 337: AsyncRuntimeTest.DestructionCancelsAndDrainsNativeSuspendingCoroutine
+280/398 Test #337: AsyncRuntimeTest.DestructionCancelsAndDrainsNativeSuspendingCoroutine ..................................   Passed    0.10 sec
+        Start 338: CoroutineDispatcherTest.ReturnsOwnedRequestAndMetadataThroughDispatcher
+281/398 Test #338: CoroutineDispatcherTest.ReturnsOwnedRequestAndMetadataThroughDispatcher ................................   Passed    0.06 sec
+        Start 339: CoroutineDispatcherTest.RoutesEveryUnaryOperationIncludingVoid
+282/398 Test #339: CoroutineDispatcherTest.RoutesEveryUnaryOperationIncludingVoid .........................................   Passed    0.05 sec
+        Start 340: CoroutineDispatcherTest.UnimplementedOperationsReturnUnsupported
+283/398 Test #340: CoroutineDispatcherTest.UnimplementedOperationsReturnUnsupported .......................................   Passed    0.05 sec
+        Start 341: CoroutineDispatcherTest.PreservesApplicationErrors
+284/398 Test #341: CoroutineDispatcherTest.PreservesApplicationErrors .....................................................   Passed    0.04 sec
+        Start 342: CoroutineDispatcherTest.ConvertsUnhandledExceptionsToInternalErrors
+285/398 Test #342: CoroutineDispatcherTest.ConvertsUnhandledExceptionsToInternalErrors ....................................   Passed    0.05 sec
+        Start 343: CoroutineDispatcherTest.CancellationAbortsSuspendedTimerAndCompletesOnce
+286/398 Test #343: CoroutineDispatcherTest.CancellationAbortsSuspendedTimerAndCompletesOnce ...............................   Passed    0.05 sec
+        Start 344: CoroutineDispatcherTest.DeadlineSignalReachesSuspendedOperation
+287/398 Test #344: CoroutineDispatcherTest.DeadlineSignalReachesSuspendedOperation ........................................   Passed    0.04 sec
+        Start 345: CoroutineDispatcherTest.ShutdownSchedulesCancellationWithoutRunningLoopInline
+288/398 Test #345: CoroutineDispatcherTest.ShutdownSchedulesCancellationWithoutRunningLoopInline ..........................   Passed    0.04 sec
+        Start 346: CoroutineDispatcherTest.CancellationBeforeEventLoopStartsSkipsApplication
+289/398 Test #346: CoroutineDispatcherTest.CancellationBeforeEventLoopStartsSkipsApplication ..............................   Passed    0.04 sec
+        Start 347: CoroutineDispatcherTest.SuspendedCoroutinesDoNotOccupyWorkers
+290/398 Test #347: CoroutineDispatcherTest.SuspendedCoroutinesDoNotOccupyWorkers ..........................................   Passed    0.05 sec
+        Start 348: CoroutineDispatcherTest.CapacityIncludesCancelledCoroutinesUntilCleanup
+291/398 Test #348: CoroutineDispatcherTest.CapacityIncludesCancelledCoroutinesUntilCleanup ................................   Passed    0.05 sec
+        Start 349: CoroutineDispatcherTest.CancellationReleasesActiveSlotButRetainsPendingReservation
+292/398 Test #349: CoroutineDispatcherTest.CancellationReleasesActiveSlotButRetainsPendingReservation .....................   Passed    0.05 sec
+        Start 350: CoroutineDispatcherTest.RetainsExecutorAfterDispatcherDestructionUntilCoroutineFinishes
+293/398 Test #350: CoroutineDispatcherTest.RetainsExecutorAfterDispatcherDestructionUntilCoroutineFinishes ................   Passed    0.05 sec
+        Start 351: CoroutineDispatcherTest.ThrowingCompletionDoesNotEscapeEventLoop
+294/398 Test #351: CoroutineDispatcherTest.ThrowingCompletionDoesNotEscapeEventLoop .......................................   Passed    0.04 sec
+        Start 352: CoroutineDispatcherTest.ConcurrentCancellationAndCompletionOnMultipleIoWorkers
+295/398 Test #352: CoroutineDispatcherTest.ConcurrentCancellationAndCompletionOnMultipleIoWorkers .........................   Passed    0.06 sec
+        Start 353: CoroutineDispatcherOptions.RejectsMissingApplicationSchedulerAndCapacity
+296/398 Test #353: CoroutineDispatcherOptions.RejectsMissingApplicationSchedulerAndCapacity ...............................   Passed    0.05 sec
+        Start 355: RequestExecutionTest.ContextOwnsUnchangedMetadataAfterOwnerDestruction
+297/398 Test #355: RequestExecutionTest.ContextOwnsUnchangedMetadataAfterOwnerDestruction .................................   Passed    0.04 sec
+        Start 356: RequestExecutionTest.DefaultIsPendingWithoutDeadlineOrCancellation
+298/398 Test #356: RequestExecutionTest.DefaultIsPendingWithoutDeadlineOrCancellation .....................................   Passed    0.04 sec
+        Start 357: RequestExecutionTest.PreCancellationNotifiesLateObserverOnce
+299/398 Test #357: RequestExecutionTest.PreCancellationNotifiesLateObserverOnce ...........................................   Passed    0.04 sec
+        Start 358: RequestExecutionTest.SuccessAndFailureAreTerminalWithoutCancellation
+300/398 Test #358: RequestExecutionTest.SuccessAndFailureAreTerminalWithoutCancellation ...................................   Passed    0.04 sec
+        Start 359: RequestExecutionTest.DeadlineDoesNotExpireEarly
+301/398 Test #359: RequestExecutionTest.DeadlineDoesNotExpireEarly ........................................................   Passed    0.05 sec
+        Start 360: RequestExecutionTest.DeadlineIsExplicitAndInclusive
+302/398 Test #360: RequestExecutionTest.DeadlineIsExplicitAndInclusive ....................................................   Passed    0.05 sec
+        Start 361: RequestExecutionTest.ExpiredCompletionPublishesDeadlineInsteadOfSuccessOrFailure
+303/398 Test #361: RequestExecutionTest.ExpiredCompletionPublishesDeadlineInsteadOfSuccessOrFailure .......................   Passed    0.04 sec
+        Start 362: RequestExecutionTest.CompletionBeforeDeadlineCannotBeOverwritten
+304/398 Test #362: RequestExecutionTest.CompletionBeforeDeadlineCannotBeOverwritten .......................................   Passed    0.04 sec
+        Start 363: RequestExecutionTest.TransportDeadlineAndShutdownHaveDistinctReasons
+305/398 Test #363: RequestExecutionTest.TransportDeadlineAndShutdownHaveDistinctReasons ...................................   Passed    0.05 sec
+        Start 364: RequestExecutionTest.CancellationObserverMayReenterAndReleaseOwner
+306/398 Test #364: RequestExecutionTest.CancellationObserverMayReenterAndReleaseOwner .....................................   Passed    0.04 sec
+        Start 365: RequestExecutionTest.ObserverCanReleaseLastContextAndOwnerDuringCancellation
+307/398 Test #365: RequestExecutionTest.ObserverCanReleaseLastContextAndOwnerDuringCancellation ...........................   Passed    0.05 sec
+        Start 366: RequestExecutionTest.DeregisteredObserverIsNotCalled
+308/398 Test #366: RequestExecutionTest.DeregisteredObserverIsNotCalled ...................................................   Passed    0.04 sec
+        Start 367: RequestExecutionTest.ObserverDestructionJoinsRunningCallback
+309/398 Test #367: RequestExecutionTest.ObserverDestructionJoinsRunningCallback ...........................................   Passed    0.05 sec
+        Start 368: RequestExecutionTest.CancellationAndCompletionHaveExactlyOneWinner
+310/398 Test #368: RequestExecutionTest.CancellationAndCompletionHaveExactlyOneWinner .....................................   Passed    0.06 sec
+        Start 369: RequestExecutionTest.ConcurrentCancellationReasonsNotifyOnlyOnce
+311/398 Test #369: RequestExecutionTest.ConcurrentCancellationReasonsNotifyOnlyOnce .......................................   Passed    0.04 sec
+        Start 370: AsyncClientContractTest.SendMessageCompletesOnceAwayFromCaller
+312/398 Test #370: AsyncClientContractTest.SendMessageCompletesOnceAwayFromCaller .........................................   Passed    0.05 sec
+        Start 371: AsyncClientContractTest.GetTaskCompletesOnceAwayFromCaller
+313/398 Test #371: AsyncClientContractTest.GetTaskCompletesOnceAwayFromCaller .............................................   Passed    0.05 sec
+        Start 372: AsyncClientContractTest.ListTasksCompletesOnceAwayFromCaller
+314/398 Test #372: AsyncClientContractTest.ListTasksCompletesOnceAwayFromCaller ...........................................   Passed    0.05 sec
+        Start 373: AsyncClientContractTest.CancelTaskCompletesOnceAwayFromCaller
+315/398 Test #373: AsyncClientContractTest.CancelTaskCompletesOnceAwayFromCaller ..........................................   Passed    0.05 sec
+        Start 374: AsyncClientContractTest.CreateTaskPushNotificationConfigCompletesOnceAwayFromCaller
+316/398 Test #374: AsyncClientContractTest.CreateTaskPushNotificationConfigCompletesOnceAwayFromCaller ....................   Passed    0.04 sec
+        Start 375: AsyncClientContractTest.GetTaskPushNotificationConfigCompletesOnceAwayFromCaller
+317/398 Test #375: AsyncClientContractTest.GetTaskPushNotificationConfigCompletesOnceAwayFromCaller .......................   Passed    0.05 sec
+        Start 376: AsyncClientContractTest.ListTaskPushNotificationConfigsCompletesOnceAwayFromCaller
+318/398 Test #376: AsyncClientContractTest.ListTaskPushNotificationConfigsCompletesOnceAwayFromCaller .....................   Passed    0.05 sec
+        Start 377: AsyncClientContractTest.DeleteTaskPushNotificationConfigCompletesOnceAwayFromCaller
+319/398 Test #377: AsyncClientContractTest.DeleteTaskPushNotificationConfigCompletesOnceAwayFromCaller ....................   Passed    0.06 sec
+        Start 378: AsyncClientContractTest.FacadeCopiesObserveOwnerDestructionAndCancelPendingCalls
+320/398 Test #378: AsyncClientContractTest.FacadeCopiesObserveOwnerDestructionAndCancelPendingCalls .......................   Passed    0.05 sec
+        Start 379: AsyncClientContractTest.InterceptorCanRegisterAnotherWithoutDeadlockOrUnpairedAfter
+321/398 Test #379: AsyncClientContractTest.InterceptorCanRegisterAnotherWithoutDeadlockOrUnpairedAfter ....................   Passed    0.04 sec
+        Start 380: AsyncClientContractTest.ThrowingAsyncProviderPairsInterceptorsWithoutCallingCompletion
+322/398 Test #380: AsyncClientContractTest.ThrowingAsyncProviderPairsInterceptorsWithoutCallingCompletion .................   Passed    0.05 sec
+        Start 381: AsyncClientContractTest.FacadeCanBeMovedAndReassigned
+323/398 Test #381: AsyncClientContractTest.FacadeCanBeMovedAndReassigned ..................................................   Passed    0.04 sec
+        Start 382: AsyncClientContractTest.CancellationPropagatesBeforeNetworkRegistration
+324/398 Test #382: AsyncClientContractTest.CancellationPropagatesBeforeNetworkRegistration ................................   Passed    0.05 sec
+        Start 383: AsyncClientContractTest.NonpositiveDeadlineSkipsTransportInitiation
+325/398 Test #383: AsyncClientContractTest.NonpositiveDeadlineSkipsTransportInitiation ....................................   Passed    0.04 sec
+        Start 384: AsyncClientContractTest.DeadlineWinsAgainstLateTransportResult
+326/398 Test #384: AsyncClientContractTest.DeadlineWinsAgainstLateTransportResult .........................................   Passed    0.05 sec
+        Start 385: AsyncClientContractTest.UnboundedDeadlineAllowsCompletionAndLaterExpiry
+327/398 Test #385: AsyncClientContractTest.UnboundedDeadlineAllowsCompletionAndLaterExpiry ................................   Passed    0.06 sec
+        Start 386: AsyncClientContractTest.CompletionCancelAndShutdownRaceOnce
+328/398 Test #386: AsyncClientContractTest.CompletionCancelAndShutdownRaceOnce ............................................   Passed    0.06 sec
+        Start 387: AsyncClientContractTest.DestroyDrainsInterceptorsBeforeCompletionAndRejectsNewCalls
+329/398 Test #387: AsyncClientContractTest.DestroyDrainsInterceptorsBeforeCompletionAndRejectsNewCalls ....................   Passed    0.05 sec
+        Start 388: AsyncClientContractTest.ConcurrentDestroyCallsBothDrainTheSameCallbacks
+330/398 Test #388: AsyncClientContractTest.ConcurrentDestroyCallsBothDrainTheSameCallbacks ................................   Passed    0.04 sec
+        Start 389: AsyncClientContractTest.CompletionCanDestroyClientAndThrow
+331/398 Test #389: AsyncClientContractTest.CompletionCanDestroyClientAndThrow .............................................   Passed    0.04 sec
+        Start 390: AsyncClientContractTest.DestructionContainsCustomShutdownExceptions
+332/398 Test #390: AsyncClientContractTest.DestructionContainsCustomShutdownExceptions ....................................   Passed    0.04 sec
+        Start 391: AsyncClientContractTest.CapacityIncludesPendingCallbacksAndRecovers
+333/398 Test #391: AsyncClientContractTest.CapacityIncludesPendingCallbacksAndRecovers ....................................   Passed    0.27 sec
+        Start 392: AsyncClientContractTest.ExpiredBatchCompletesOnceAndReleasesAdmission
+334/398 Test #392: AsyncClientContractTest.ExpiredBatchCompletesOnceAndReleasesAdmission ..................................   Passed    0.06 sec
+        Start 393: AsyncClientContractTest.ThrowingCancellationSignalDoesNotStopDeadlineThread
+335/398 Test #393: AsyncClientContractTest.ThrowingCancellationSignalDoesNotStopDeadlineThread ............................   Passed    0.06 sec
+        Start 394: AsyncClientContractTest.StreamCallbackShutdownDoesNotWaitOnUnaryCallback
+336/398 Test #394: AsyncClientContractTest.StreamCallbackShutdownDoesNotWaitOnUnaryCallback ...............................   Passed    0.04 sec
+        Start 395: AsyncClientContractTest.MissingCallbackAndClosedScopeRejectWithoutCompletion
+337/398 Test #395: AsyncClientContractTest.MissingCallbackAndClosedScopeRejectWithoutCompletion ...........................   Passed    0.04 sec
+        Start 396: AsyncDiscoveryTest.FetchVerifiesCachesAndSupportsExtendedDiscovery
+338/398 Test #396: AsyncDiscoveryTest.FetchVerifiesCachesAndSupportsExtendedDiscovery .....................................   Passed    0.05 sec
+        Start 397: AsyncDiscoveryTest.ThrowingVerifierCompletesWithInternalErrorWithoutWaitingForDeadline
+339/398 Test #397: AsyncDiscoveryTest.ThrowingVerifierCompletesWithInternalErrorWithoutWaitingForDeadline .................   Passed    0.04 sec
+        Start 398: AsyncDiscoveryTest.CacheHitRevalidatesWhenVerifierStartsThrowing
+340/398 Test #398: AsyncDiscoveryTest.CacheHitRevalidatesWhenVerifierStartsThrowing .......................................   Passed    0.05 sec
+        Start 399: AsyncDiscoveryTest.ShutdownWaitsForRunningVerification
+341/398 Test #399: AsyncDiscoveryTest.ShutdownWaitsForRunningVerification .................................................   Passed    0.07 sec
+        Start 400: AsyncDiscoveryTest.DestructionOfLastCopyWaitsForRunningVerification
+342/398 Test #400: AsyncDiscoveryTest.DestructionOfLastCopyWaitsForRunningVerification ....................................   Passed    0.06 sec
+        Start 401: AsyncDiscoveryTest.VerifierCanShutdownDiscoveryOnCacheHit
+343/398 Test #401: AsyncDiscoveryTest.VerifierCanShutdownDiscoveryOnCacheHit ..............................................   Passed    0.05 sec
+        Start 405: AsyncPushDeliveryTest.OwnsPayloadAndPreservesWireFormat
+344/398 Test #405: AsyncPushDeliveryTest.OwnsPayloadAndPreservesWireFormat ................................................   Passed    0.05 sec
+        Start 406: AsyncPushDeliveryTest.MapsNonSuccessAndNetworkErrors
+345/398 Test #406: AsyncPushDeliveryTest.MapsNonSuccessAndNetworkErrors ...................................................   Passed    0.05 sec
+        Start 407: AsyncPushDeliveryTest.ForwardsRequesterError
+346/398 Test #407: AsyncPushDeliveryTest.ForwardsRequesterError ...........................................................   Passed    0.05 sec
+        Start 408: AsyncPushDeliveryTest.ValidatesBeforeSending
+347/398 Test #408: AsyncPushDeliveryTest.ValidatesBeforeSending ...........................................................   Passed    0.04 sec
+        Start 409: AsyncPushDeliveryTest.CancellationWakesRequesterAndCompletesOnce
+348/398 Test #409: AsyncPushDeliveryTest.CancellationWakesRequesterAndCompletesOnce .......................................   Passed    0.05 sec
+        Start 410: AsyncPushDeliveryTest.TimeoutCancelsRequester
+349/398 Test #410: AsyncPushDeliveryTest.TimeoutCancelsRequester ..........................................................   Passed    0.07 sec
+        Start 411: AsyncPushDeliveryTest.ExpiredDeadlineDoesNotSend
+350/398 Test #411: AsyncPushDeliveryTest.ExpiredDeadlineDoesNotSend .......................................................   Passed    0.05 sec
+        Start 412: AsyncPushDeliveryTest.ZeroTimeoutExpiresWithoutSending
+351/398 Test #412: AsyncPushDeliveryTest.ZeroTimeoutExpiresWithoutSending .................................................   Passed    0.05 sec
+        Start 413: AsyncPushDeliveryTest.OmitsAuthorizationWithoutScheme
+352/398 Test #413: AsyncPushDeliveryTest.OmitsAuthorizationWithoutScheme ..................................................   Passed    0.05 sec
+        Start 414: AsyncPushDeliveryTest.ShutdownDrainsAndClosesAdmission
+353/398 Test #414: AsyncPushDeliveryTest.ShutdownDrainsAndClosesAdmission .................................................   Passed    0.05 sec
+        Start 415: AsyncPushDeliveryTest.MissingCallbackIsRejectedWithoutSending
+354/398 Test #415: AsyncPushDeliveryTest.MissingCallbackIsRejectedWithoutSending ..........................................   Passed    0.04 sec
+        Start 416: AsyncPushDeliveryTest.CancelCompleteRaceIsOnceOnly
+355/398 Test #416: AsyncPushDeliveryTest.CancelCompleteRaceIsOnceOnly .....................................................   Passed    0.05 sec
+        Start 417: AsyncPushContractTest.FallbackPreservesPayloadAndCancellation
+356/398 Test #417: AsyncPushContractTest.FallbackPreservesPayloadAndCancellation ..........................................   Passed    0.05 sec
+        Start 418: AsyncPushContractTest.MissingRequesterCompletesWithValidationError
+357/398 Test #418: AsyncPushContractTest.MissingRequesterCompletesWithValidationError .....................................   Passed    0.04 sec
+        Start 419: AsyncPushContractTest.InlinePrimaryCompletionCannotReplaceFallbackCancellation
+358/398 Test #419: AsyncPushContractTest.InlinePrimaryCompletionCannotReplaceFallbackCancellation .........................   Passed    0.05 sec
+        Start 420: AsyncPushContractTest.FallbackCanSucceedWithoutResettingDeadline
+359/398 Test #420: AsyncPushContractTest.FallbackCanSucceedWithoutResettingDeadline .......................................   Passed    0.05 sec
+        Start 421: AsyncPushContractTest.RequesterRejectionBecomesAsyncCompletion
+360/398 Test #421: AsyncPushContractTest.RequesterRejectionBecomesAsyncCompletion .........................................   Passed    0.05 sec
+        Start 422: AsyncPushContractTest.CallbackCanDestroyClient
+361/398 Test #422: AsyncPushContractTest.CallbackCanDestroyClient .........................................................   Passed    0.05 sec
+        Start 423: AsyncPushContractTest.InvalidFallbackVersionCompletesBeforeSending
+362/398 Test #423: AsyncPushContractTest.InvalidFallbackVersionCompletesBeforeSending .....................................   Passed    0.05 sec
+        Start 424: AsyncPushContractTest.RequesterExceptionBecomesInternalCompletion
+363/398 Test #424: AsyncPushContractTest.RequesterExceptionBecomesInternalCompletion ......................................   Passed    0.06 sec
+        Start 426: AsyncPushServiceTest.AwaitingDeliveryLeavesSingleAsioWorkerAvailable
+364/398 Test #426: AsyncPushServiceTest.AwaitingDeliveryLeavesSingleAsioWorkerAvailable ...................................   Passed    0.06 sec
+        Start 427: AsyncPushServiceTest.ContextCancellationStopsDelivery
+365/398 Test #427: AsyncPushServiceTest.ContextCancellationStopsDelivery ..................................................   Passed    0.05 sec
+        Start 428: AsyncPushServiceTest.DeadlineStopsDelivery
+366/398 Test #428: AsyncPushServiceTest.DeadlineStopsDelivery .............................................................   Passed    0.09 sec
+        Start 429: AsyncPushServiceTest.AsioCancellationCancelsOutboundHandle
+367/398 Test #429: AsyncPushServiceTest.AsioCancellationCancelsOutboundHandle .............................................   Passed    0.05 sec
+        Start 430: AsyncPushServiceTest.CancellationBeforeWaitDoesNotLeakOutboundDelivery
+368/398 Test #430: AsyncPushServiceTest.CancellationBeforeWaitDoesNotLeakOutboundDelivery .................................   Passed    0.07 sec
+        Start 431: AsyncPushServiceTest.FirstErrorStopsConfigFanout
+369/398 Test #431: AsyncPushServiceTest.FirstErrorStopsConfigFanout .......................................................   Passed    0.05 sec
+        Start 432: AsyncPushServiceTest.NoConfigsCompletesWithoutHttp
+370/398 Test #432: AsyncPushServiceTest.NoConfigsCompletesWithoutHttp .....................................................   Passed    0.04 sec
+        Start 433: AsyncPushServiceTest.AlreadyCancelledDoesNotSend
+371/398 Test #433: AsyncPushServiceTest.AlreadyCancelledDoesNotSend .......................................................   Passed    0.05 sec
+        Start 434: AsyncPushServiceTest.ClientShutdownResumesSuspendedCoroutine
+372/398 Test #434: AsyncPushServiceTest.ClientShutdownResumesSuspendedCoroutine ...........................................   Passed    0.05 sec
+        Start 435: AsyncPushServiceTest.RequestContextDeadlineLimitsDelivery
+373/398 Test #435: AsyncPushServiceTest.RequestContextDeadlineLimitsDelivery ..............................................   Passed    0.09 sec
+        Start 436: AsyncPushServiceTest.RejectsCustomDeliveryErrorMessage
+374/398 Test #436: AsyncPushServiceTest.RejectsCustomDeliveryErrorMessage .................................................   Passed    0.05 sec
+        Start 437: AsyncPushServiceTest.RejectsCustomNonSuccessStatus
+375/398 Test #437: AsyncPushServiceTest.RejectsCustomNonSuccessStatus .....................................................   Passed    0.04 sec
+        Start 439: EventHttpServer.FragmentationPipeliningAndHalfClose
+376/398 Test #439: EventHttpServer.FragmentationPipeliningAndHalfClose ....................................................   Passed    0.05 sec
+        Start 440: EventHttpServer.IdleConnectionsDoNotOccupyApplicationWorkers
+377/398 Test #440: EventHttpServer.IdleConnectionsDoNotOccupyApplicationWorkers ...........................................   Passed    0.08 sec
+        Start 441: EventHttpServer.FiniteStreamUsesChunksAndConnectionReuse
+378/398 Test #441: EventHttpServer.FiniteStreamUsesChunksAndConnectionReuse ...............................................   Passed    0.05 sec
+        Start 442: EventHttpServer.PendingWorkIsBoundedAndShutdownCancels
+379/398 Test #442: EventHttpServer.PendingWorkIsBoundedAndShutdownCancels .................................................   Passed    0.04 sec
+        Start 443: EventHttpServer.NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncoding
+380/398 Test #443: EventHttpServer.NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncoding ...........................   Passed    0.06 sec
+        Start 444: EventHttpServer.LiveStreamsSuspendAndShutdownCleansEachSessionOnce
+381/398 Test #444: EventHttpServer.LiveStreamsSuspendAndShutdownCleansEachSessionOnce .....................................   Passed    0.13 sec
+        Start 445: EventHttpServer.DisconnectCancelsLiveProducer
+382/398 Test #445: EventHttpServer.DisconnectCancelsLiveProducer ..........................................................   Passed    0.06 sec
+        Start 446: EventHttpServer.PeerResetCancelsLiveProducerBeforeShutdown
+383/398 Test #446: EventHttpServer.PeerResetCancelsLiveProducerBeforeShutdown .............................................   Passed    0.08 sec
+        Start 447: EventHttpServer.SendHalfCloseAfterFirstEventDrainsFiniteStream
+384/398 Test #447: EventHttpServer.SendHalfCloseAfterFirstEventDrainsFiniteStream .........................................   Passed    0.16 sec
+        Start 448: EventHttpServer.SendHalfCloseAfterFirstEventDrainsStreamAndPipeline
+385/398 Test #448: EventHttpServer.SendHalfCloseAfterFirstEventDrainsStreamAndPipeline ....................................   Passed    0.16 sec
+        Start 449: EventHttpServer.ProducerFailureSignalsCancellationAfterHeaders
+386/398 Test #449: EventHttpServer.ProducerFailureSignalsCancellationAfterHeaders .........................................   Passed    0.06 sec
+        Start 450: EventHttpServer.BlockingWriterIsRejectedWithoutInvokingEitherProducer
+387/398 Test #450: EventHttpServer.BlockingWriterIsRejectedWithoutInvokingEitherProducer ..................................   Passed    0.05 sec
+        Start 451: EventHttpServer.RejectedStreamHeadersCancelNativeProducerBeforeShutdown
+388/398 Test #451: EventHttpServer.RejectedStreamHeadersCancelNativeProducerBeforeShutdown ................................   Passed    0.05 sec
+        Start 452: EventHttpServer.IdleTimeoutAndOutputLimitReleaseConnections
+389/398 Test #452: EventHttpServer.IdleTimeoutAndOutputLimitReleaseConnections ............................................   Passed    0.11 sec
+        Start 453: EventHttpServer.SlowReaderDoesNotStallUnaryAndShutdownWakesPendingWrite
+390/398 Test #453: EventHttpServer.SlowReaderDoesNotStallUnaryAndShutdownWakesPendingWrite ................................   Passed    0.05 sec
+        Start 454: EventHttpServer.NativeCancellationWakesBackpressuredWriteBeforeListenerShutdown
+391/398 Test #454: EventHttpServer.NativeCancellationWakesBackpressuredWriteBeforeListenerShutdown ........................   Passed    0.25 sec
+        Start 455: EventHttpServer.NativeWriteCancellationRacesPeerReset
+392/398 Test #455: EventHttpServer.NativeWriteCancellationRacesPeerReset ..................................................   Passed    0.25 sec
+        Start 456: EventHttpServer.NativeWriteCancellationRacesListenerShutdown
+393/398 Test #456: EventHttpServer.NativeWriteCancellationRacesListenerShutdown ...........................................   Passed    0.25 sec
+        Start 457: EventHttpServer.ConnectionLimitAndMalformedInputRemainIsolated
+394/398 Test #457: EventHttpServer.ConnectionLimitAndMalformedInputRemainIsolated .........................................   Passed    0.04 sec
+        Start 458: EventHttpServer.OptionsAndStartLifecycleAreValidated
+395/398 Test #458: EventHttpServer.OptionsAndStartLifecycleAreValidated ...................................................   Passed    0.05 sec
+        Start 459: EventHttpServer.RetainedStreamSinkRejectsWritesAfterListenerDestruction
+396/398 Test #459: EventHttpServer.RetainedStreamSinkRejectsWritesAfterListenerDestruction ................................   Passed    0.05 sec
+        Start 460: EventHttpServer.CompletedStreamSinkCannotCorruptReusedConnection
+397/398 Test #460: EventHttpServer.CompletedStreamSinkCannotCorruptReusedConnection .......................................   Passed    0.05 sec
+        Start 461: EventHttpServer.NativeCleanupBeforeFirstEventMayOutliveListener
+398/398 Test #461: EventHttpServer.NativeCleanupBeforeFirstEventMayOutliveListener ........................................   Passed    0.07 sec
+
+100% tests passed out of 398
+
+Label Time Summary:
+tsan    =  30.83 sec*proc (398 tests)
+
+Total Test time (real) =  30.98 sec

@@ -1,0 +1,6 @@
+http_json send passed
+http_json subscribe passed
+http_json cancel passed
+jsonrpc send passed
+jsonrpc subscribe passed
+jsonrpc cancel passed

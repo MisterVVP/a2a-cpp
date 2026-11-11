@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <barrier>
+#include <cstddef>
 #include <stdexcept>
 #include <thread>
 
@@ -14,6 +15,7 @@ namespace {
 using namespace a2a;
 using namespace a2a::server;
 using namespace a2a::server::testing;
+constexpr std::size_t kSingleAttempt = 1;
 
 class AsyncPushDeliveryTest : public ::testing::Test {
  protected:
@@ -95,8 +97,17 @@ TEST_F(AsyncPushDeliveryTest, TimeoutCancelsRequester) {
   const auto result = probe.Get();
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().protocol_code(), core::AsyncHandle::kDeadlineExceeded);
-  fake.Token().handle().Wait();
+  // Startup/serialization can consume the deadline before a requester exists.
+  // If initiation won that race, the accepted request must still be cancelled.
+  const auto attempts = fake.Count();
+  ASSERT_LE(attempts, kSingleAttempt);
+  if (attempts == kSingleAttempt) {
+    const auto token = fake.Token();
+    token.handle().Wait();
+    EXPECT_FALSE(token.IsActive());
+  }
   operation.value().Wait();
+  EXPECT_EQ(probe.calls.load(), kSingleAttempt);
 }
 TEST_F(AsyncPushDeliveryTest, ExpiredDeadlineDoesNotSend) {
   auto operation =

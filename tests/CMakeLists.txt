@@ -1416,3 +1416,33 @@ if(A2A_ENABLE_ASIO AND Python3_Interpreter_FOUND)
       --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app event_http_server)
   set_tests_properties(installed_event_http_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
 endif()
+
+# Exercise the synchronous installed surface in both the default and Asio CI builds.
+if(Python3_Interpreter_FOUND)
+  add_test(NAME installed_sync_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG> --app hello_agent)
+  set_tests_properties(installed_sync_consumer_test PROPERTIES LABELS installed TIMEOUT 300)
+endif()
+
+# FetchContent rebuilds the entire SDK in a clean downstream build, unlike the
+# installed checks above. Allow for that compile on small CI runners.
+if(Python3_Interpreter_FOUND)
+  add_test(NAME fetchcontent_sync_consumer_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+      --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG>
+      --app hello_agent --integration fetchcontent)
+  set_tests_properties(fetchcontent_sync_consumer_test PROPERTIES LABELS installed TIMEOUT 900)
+  if(A2A_ENABLE_ASIO)
+    add_test(NAME fetchcontent_event_http_consumer_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/installed_async_grpc_consumer_test.py
+        --source ${PROJECT_SOURCE_DIR} --build ${PROJECT_BINARY_DIR} --config $<CONFIG>
+        --app event_http_server --integration fetchcontent)
+    set_tests_properties(fetchcontent_event_http_consumer_test PROPERTIES LABELS installed TIMEOUT 900)
+  endif()
+endif()
+
+if(UNIX AND NOT APPLE AND Python3_Interpreter_FOUND)
+  add_test(NAME release_validation_runner_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/release_validation_test.py)
+endif()

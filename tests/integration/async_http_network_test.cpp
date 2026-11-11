@@ -35,6 +35,8 @@ constexpr auto kCancelled = "CANCELLED";
 constexpr auto kDeadline = "DEADLINE_EXCEEDED";
 constexpr std::size_t kOverLimit = (std::size_t{16U} * 1024U * 1024U) + 1U;
 constexpr std::size_t kMixedRequests = 2;
+constexpr std::size_t kSingleRequest = 1;
+constexpr std::size_t kFirstRequestIndex = 0;
 constexpr std::size_t kStreamIndex = 0;
 constexpr std::size_t kUnaryIndex = 1;
 constexpr std::size_t kCalls = 64;
@@ -143,8 +145,22 @@ TEST(AsyncHttpNetworkTest, CancelStopsOpenResponseAndCompletesOnce) {
   operation.value().Wait();
 }
 
+void ExpectSuccessfulFollowUp(http::Client& client) {
+  CurlLoopbackServer follow_up_server(kSingleRequest, kTaskBody);
+  std::promise<core::Result<http::Response>> follow_up;
+  auto next = follow_up.get_future();
+  auto subsequent = client.SendRequestAsync(RequestFor(follow_up_server.url()),
+                                            [&](auto value) { follow_up.set_value(std::move(value)); });
+  ASSERT_TRUE(subsequent.ok());
+  ASSERT_TRUE(follow_up_server.WaitForStreams(kSingleRequest));
+  ASSERT_TRUE(follow_up_server.Finish(kFirstRequestIndex, kNoChunk));
+  ASSERT_EQ(next.wait_for(kWait), std::future_status::ready);
+  EXPECT_TRUE(next.get().ok());
+  subsequent.value().Wait();
+}
+
 TEST(AsyncHttpNetworkTest, DeadlineStopsOpenResponse) {
-  CurlLoopbackServer server(1, kTaskBody);
+  CurlLoopbackServer server(kSingleRequest, kTaskBody);
   http::Client client;
   std::promise<core::Result<http::Response>> result;
   auto future = result.get_future();
@@ -158,6 +174,9 @@ TEST(AsyncHttpNetworkTest, DeadlineStopsOpenResponse) {
   ASSERT_FALSE(response.ok());
   EXPECT_EQ(response.error().protocol_code(), kDeadline);
   operation.value().Wait();
+
+  // Expiry must release admission and leave the shared completion timer usable.
+  ExpectSuccessfulFollowUp(client);
 }
 
 TEST(AsyncHttpNetworkTest, ShutdownDrainsAndRejectsNewRequests) {

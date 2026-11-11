@@ -4,13 +4,23 @@ vcpkg_check_features(
     OUT_FEATURE_OPTIONS FEATURE_OPTIONS
     FEATURES
         postgres-store A2A_ENABLE_POSTGRES_STORE
+        asio A2A_ENABLE_ASIO
 )
 
 vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH
     URL "https://github.com/MisterVVP/a2a-cpp.git"
-    REF v0.5.2
+    # Integrated v0.6.0 candidate; no unpublished release tag is required.
+    REF 2e92a3d082b0a1e1eb0cdff48aa835919b2e1ddf
+    PATCHES fix-async-deadline-wait.patch
 )
+
+# The pinned candidate predates the release metadata bump. Stamp the installed
+# CMake package with the overlay version too. Replace the pin with the final
+# release commit and remove this stamp and its integrated patch when publishing.
+vcpkg_replace_string("${SOURCE_PATH}/CMakeLists.txt"
+    "project(a2a_cpp VERSION 0.5.2 LANGUAGES CXX)"
+    "project(a2a_cpp VERSION ${VERSION} LANGUAGES CXX)")
 
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"

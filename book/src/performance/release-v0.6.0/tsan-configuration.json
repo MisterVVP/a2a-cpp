@@ -1,0 +1,8 @@
+{
+  "CMAKE_CXX_COMPILER": "/workspace/.a2a-env/root/usr/bin/clang++-19",
+  "CMAKE_BUILD_TYPE": "Debug",
+  "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+  "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+  "A2A_ENABLE_ASIO": "ON",
+  "A2A_ENABLE_POSTGRES_STORE": "OFF"
+}

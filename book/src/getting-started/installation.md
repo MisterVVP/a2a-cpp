@@ -1,7 +1,10 @@
 # Installation and Build
 
-This page describes the current development build toward `v0.6.0`. In stable
+This page describes the SDK `v0.6.0` release candidate. In stable
 `v0.5.2`, simdjson is required only when signing is enabled.
+
+Check out `release/v0.6.0` or the full reviewed candidate commit before following
+the source-build instructions. The candidate does not require a `v0.6.0` tag.
 
 ## Choose an integration method
 
@@ -178,3 +181,41 @@ For documentation-only mdBook changes, build the book:
 ```bash
 mdbook build book
 ```
+
+## Optional async server package
+
+The SDK v0.6.0 candidate keeps synchronous builds as the default. Async unary
+clients are in `a2a::client`. Coroutine execution, native async gRPC, and the
+event-driven HTTP/SSE server additionally require Boost 1.92.0+,
+`-DA2A_ENABLE_ASIO=ON`, and linking `a2a::asio`. For a reproducible local Boost
+installation with the repository's checked archive hash:
+
+```bash
+cmake -DA2A_BOOST_INSTALL_PREFIX="$PWD/work/deps" -P cmake/InstallBoost.cmake
+cmake -S . -B build-asio -DA2A_ENABLE_ASIO=ON -DCMAKE_PREFIX_PATH="$PWD/work/deps"
+```
+
+Use the same prefix when configuring an external consumer. With vcpkg, select
+`a2a-cpp[asio]` or `a2a-cpp[asio,postgres-store]` from the repository overlay.
+See [async consumers](../build/consumers.md#async-consumers-sdk-v060) and
+[release migration notes](../releases.md). PostgreSQL I/O remains synchronous.
+
+On older AppleClang/libc++ installations, use a newer compiler **and** standard
+library for coroutine servers. The macOS Asio CI uses this Homebrew setup:
+
+```bash
+brew install boost llvm
+llvm_prefix="$(brew --prefix llvm)"
+cmake -S . -B build-asio -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DA2A_ENABLE_ASIO=ON \
+  -DCMAKE_CXX_COMPILER="$llvm_prefix/bin/clang++" \
+  -DCMAKE_CXX_FLAGS="-nostdinc++ -I$llvm_prefix/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY" \
+  -DCMAKE_EXE_LINKER_FLAGS="-L$llvm_prefix/lib/c++ -L$llvm_prefix/lib/unwind -Wl,-rpath,$llvm_prefix/lib/c++ -Wl,-rpath,$llvm_prefix/lib/unwind -lunwind" \
+  -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix curl)"
+cmake --build build-asio --parallel
+```
+
+Use the same compiler, libc++ include/link flags and runtime search paths when
+configuring an installed or FetchContent consumer. The optional
+[coroutine guide](../server/asio-coroutines.md) describes standard-library
+capability checks and the synchronous fallback.

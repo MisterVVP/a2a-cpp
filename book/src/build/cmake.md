@@ -7,6 +7,7 @@
 - CMake 3.25 or newer.
 - A C++20 compiler.
 - Protobuf and gRPC development packages.
+- simdjson 3.0+ for SDK JSON parsing, including builds with signing disabled.
 - Optional: libcurl for the default buffered outbound HTTP implementation.
 - Optional: Boost 1.92+ headers and CMake package configuration when `A2A_ENABLE_ASIO=ON`
   for [coroutine executors](../server/asio-coroutines.md).
@@ -21,7 +22,7 @@ On Ubuntu-like systems, the repository helper installs the dependencies used by 
 On macOS, install equivalent packages with Homebrew:
 
 ```bash
-brew install cmake ninja protobuf grpc re2 abseil curl
+brew install cmake ninja protobuf grpc re2 abseil curl simdjson
 ```
 
 On Windows, install Visual Studio 2022 with the **Desktop development with C++** workload and Git for Windows. Then run the repository dependency helper from Git Bash:
@@ -125,7 +126,9 @@ cmake --build build-app --parallel
 
 ## FetchContent consumer
 
-For application projects that prefer source integration, use CMake `FetchContent` and pin `GIT_TAG` to a release tag or reviewed commit:
+Source integration uses CMake `FetchContent`. This example selects the untagged
+candidate branch. Replace `GIT_TAG` with a full reviewed commit for reproducible
+builds, or a published release tag:
 
 ```cmake
 include(FetchContent)
@@ -138,7 +141,7 @@ set(A2A_ENABLE_POSTGRES_STORE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   a2a_cpp
   GIT_REPOSITORY https://github.com/MisterVVP/a2a-cpp.git
-  GIT_TAG v0.5.2
+  GIT_TAG release/v0.6.0
 )
 FetchContent_MakeAvailable(a2a_cpp)
 
@@ -183,3 +186,14 @@ rm -rf build-example-hello_agent
 - Linux CI configures with CMake and validates build, tests, examples, clang-format, clang-tidy, coverage, and selected sanitizer/interop flows.
 - macOS CI builds with Homebrew-provided dependencies and Ninja, then runs all registered CTest tests, including available Python-backed checks.
 - Windows CI and local Windows builds use vcpkg manifest dependencies and the Visual Studio 2022 generator. CI runs all registered C++ tests and the applicable Python-backed checks; three POSIX/compilation-database-dependent script tests are excluded with reasons documented in the workflow. See [vcpkg](vcpkg.md) for the helper script, manifest, triplet, and overlay details.
+
+## SDK v0.6.0 candidate builds
+
+SDK v0.6.0 targets A2A protocol 1.0 (v1.0.1 specification). The v0.5.2 pin
+above is the previous stable SDK; its APIs predate the new coroutine servers.
+For candidate validation, use your reviewed checkout with
+`FETCHCONTENT_SOURCE_DIR_A2A_CPP`, or pin a full reviewed candidate commit.
+Do not require the `v0.6.0` tag before it is published. See
+[async consumer setup](consumers.md#async-consumers-sdk-v060) for both installation
+paths, Boost setup and the event HTTP example. PostgreSQL store I/O remains
+synchronous even when coroutine execution is enabled.

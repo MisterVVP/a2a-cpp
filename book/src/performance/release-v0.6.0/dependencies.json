@@ -1,0 +1,11 @@
+{
+  "cxx-compiler": "2.0.0",
+  "libcurl": "8.23.0",
+  "libgrpc": "1.51.1",
+  "libprotobuf": "3.21.12",
+  "libstdcxx": "16.2.0",
+  "openssl": "3.6.5",
+  "postgresql": "16.15",
+  "boost": "1.92.0",
+  "simdjson": "4.6.11"
+}
