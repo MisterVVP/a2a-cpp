@@ -100,11 +100,43 @@ With the optional Boost.Asio dependencies installed (see the
 The runner configures Release with `A2A_ENABLE_ASIO=ON` and uses one
 `performance_sut` binary for both modes. Async mode selects the native async gRPC
 service and `EventHttpServer`/SSE handler; startup must confirm the requested
-mode. Both use the existing synchronous wire client and identical fixtures.
+mode. Both use identical fixtures and the synchronous wire client by default.
 The in-memory fixture runs ready operations on the coroutine executor and live
 subscriptions await native publication, labeled `native_coroutine`. Stores that
 need blocking work use `blocking_adapter`; PostgreSQL async measurements are
-outside the initial matrix. No async-client measurements are included.
+outside the initial matrix.
+
+Add `--client-modes sync,async` (`A2A_PERF_CLIENT_MODES`) to measure all four
+client/server combinations for `GetTask_ExistingTask`, `ListTasks_NoPagination`,
+and `ListTasks_WithPagination`. Async client lanes submit the next request from
+the completion callback, with the same concurrency limit as sync workers;
+they do not block one thread per request. Other workloads retain their existing
+client API. Streaming has one observer API and is measured once per server mode.
+PostgreSQL remains sync-only.
+
+For a sustained comparison of read-only calls and finite streams:
+
+```bash
+./scripts/run_performance_tests.sh --server-modes sync,async --client-modes sync,async \
+  --store-backends inmemory --transports grpc,http_json,jsonrpc \
+  --scenarios GetTask_ExistingTask,ListTasks_WithPagination,SendStreamingMessage_FiniteStream \
+  --requests 1000000 --duration-seconds 3 --warmup-seconds 0.25 \
+  --concurrency 1,64 --repetitions 3 --report-dir perf-artifacts/normal/sustained
+```
+
+Each wire run warms the actual measured clients through the selected API and
+retains their connections. Read-only sync/async client cases share the same
+fixtures and warmup concurrency. Both duration and request count are limits:
+use a generous request cap for a timed run. Comparison validation rejects runs
+that exhaust that cap before reaching the requested duration. Follow-up and
+delete workloads still require distinct preseeded fixtures per request; keep
+their request counts modest instead of using this sustained-load command.
+
+`--stream-hold-ms 100` (`A2A_PERF_STREAM_HOLD_MS`) holds established subscriptions
+in `IdleStream_ClientCancellationLatency` before cancelling them. This exercises
+waiting I/O at the selected concurrency, while reported cancellation latency
+still excludes the hold. The value is recorded in reports. The sustained CI
+step includes this workload as well as read-only calls and finite streams.
 
 The async matrix covers all supported in-memory wire workloads, including unary
 operations, push configuration, finite streams, subscriptions, and cancellation.

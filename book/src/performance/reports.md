@@ -16,6 +16,20 @@ streaming latency tables also pair modes in each cell as `sync / async`.
 Paired in-memory wire comparisons appear first. PostgreSQL wire results remain
 sync-only in separate tables. Raw repetitions are kept in JSON/CSV instead of
 repeated in the CI summary.
+
+The client column distinguishes synchronous unary calls from callback-driven
+async calls. Supported unary workloads run all four client/server combinations
+when `--client-modes sync,async` is selected. Streaming retains its common
+observer API. Throughput ranges show the minimum and maximum across repetitions;
+overlapping ranges warrant caution about small median differences.
+
+CI also runs a focused sustained matrix in `normal/sustained`, using at least 250 ms
+warmup on the measured clients, three-second measurements, concurrency 1/64,
+and three repetitions. The same job summary and artifact include these results.
+The broad normal matrix retains short coverage runs. Read the sustained results
+for performance conclusions; CPU/RSS/thread counters still include setup and
+warmup as described below.
+
 The throughput ratio is **async divided by sync**: above 1 is a gain,
 below 1 a regression, near 1 parity. These are medians of run percentiles, not
 percentiles pooled across repetitions. Unmatched cases show `n/a`. Errors,

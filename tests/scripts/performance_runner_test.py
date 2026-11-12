@@ -28,6 +28,53 @@ def load_runner_module():
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("A2A_PERF_TEST_ASIO") == "1", "requires Asio performance SUT")
+    def test_four_client_server_combinations_with_warmup(self):
+        runner = load_runner_module()
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run([str(RUNNER), "--server-modes", "sync,async", "--client-modes", "sync,async",
+                            "--repetitions", "1", "--transports", "grpc,http_json,jsonrpc",
+                            "--store-backends", "inmemory", "--scenarios", ",".join(runner.ASYNC_CLIENT_SCENARIOS),
+                            "--requests", "8", "--concurrency", "4", "--warmup-seconds", "0.01",
+                            "--report-dir", directory], cwd=ROOT, check=True, capture_output=True, text=True)
+            report = json.loads((Path(directory) / "results.json").read_text())
+            wire = [row for row in report["results"] if row["transport_path"] != "in_process"]
+            self.assertEqual(36, len(wire))
+            self.assertTrue(all(row["operations"] == row["success"] == 8 and row["errors"] == 0 for row in wire))
+            self.assertEqual({("sync", "sync"), ("sync", "async"), ("async", "sync"), ("async", "async")},
+                             {(row["client_execution_mode"], row["server_execution_mode"]) for row in wire})
+            self.assertEqual(18, len(report["sync_async_comparisons"]))
+            summary = (Path(directory) / "summary.md").read_text()
+            self.assertIn("| Client | Sync server ops/s |", summary)
+            self.assertIn("Ops/s range sync / async", summary)
+            self.assertTrue(all(row["throughput_ratio"] is not None for row in report["sync_async_comparisons"]))
+
+    def test_client_modes_preserve_streaming_and_postgres_coverage(self):
+        runner = load_runner_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = runner.parse_args(["--server-modes", "sync,async", "--client-modes", "sync,async"])
+            self.assertEqual(("sync", "async"), runner.wire_client_modes(config, "GetTask_ExistingTask", "inmemory"))
+            self.assertEqual(("sync",), runner.wire_client_modes(config, "GetTask_ExistingTask", "postgres"))
+            self.assertEqual(("sync",), runner.wire_client_modes(config, "SendStreamingMessage_FiniteStream", "inmemory"))
+            for args in (["--client-modes", "async"], ["--client-modes", "sync,async"],
+                         ["--client-modes", "sync,sync"]):
+                with self.subTest(args=args), self.assertRaises(ValueError):
+                    runner.parse_args(args)
+
+    @unittest.skipUnless(os.environ.get("A2A_PERF_TEST_ASIO") == "1", "requires Asio performance SUT")
+    def test_held_subscriptions_keep_cancellation_latency_separate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run([str(RUNNER), "--server-modes", "sync,async", "--repetitions", "1",
+                            "--transports", "grpc,http_json,jsonrpc", "--store-backends", "inmemory",
+                            "--scenarios", "IdleStream_ClientCancellationLatency", "--requests", "2",
+                            "--concurrency", "2", "--stream-hold-ms", "20", "--report-dir", directory],
+                           cwd=ROOT, check=True, capture_output=True, text=True)
+            report = json.loads((Path(directory) / "results.json").read_text())
+            self.assertEqual(6, len(report["results"]))
+            self.assertTrue(all(row["errors"] == 0 and row["success"] == 2 and row["stream_hold_ms"] == 20
+                                and row["measured_duration_seconds"] >= 0.02 for row in report["results"]))
+            self.assertEqual(20, report["metadata"]["stream_hold_ms"])
+
     def test_comparison_summary_pairs_modes_without_duplicate_raw_rows(self):
         runner = load_runner_module()
         rows = []
@@ -67,6 +114,8 @@ class PerformanceRunnerTest(unittest.TestCase):
         comparison = runner.sync_async_comparisons(rows, 3)[0]
         self.assertEqual(0.5, comparison["throughput_ratio"])
         self.assertEqual(20, comparison["modes"]["sync"]["throughput_ops_per_sec"])
+        self.assertEqual(10, comparison["modes"]["sync"]["throughput_min"])
+        self.assertEqual(100, comparison["modes"]["sync"]["throughput_max"])
         self.assertIsNone(comparison["modes"]["async"]["server_peak_threads"])
         self.assertTrue(all(row["async_vs_sync_throughput_ratio"] == 0.5 for row in rows))
         for change in ({"errors": 1}, {"success": 9}, {"operations": 9, "success": 9},
@@ -131,7 +180,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             subprocess.run([str(RUNNER), "--server-modes", "sync,async", "--repetitions", "2",
                             "--transports", "grpc,http_json,jsonrpc", "--store-backends", "inmemory",
                             "--scenarios", ",".join(load_runner_module().WIRE_SCENARIOS),
-                            "--requests", "2", "--concurrency", "1", "--warmup-seconds", "0",
+                            "--requests", "2", "--concurrency", "1", "--warmup-seconds", "0.001",
                             "--report-dir", directory], cwd=ROOT, check=True, capture_output=True, text=True)
             report = json.loads((Path(directory) / "results.json").read_text())
             wire = [row for row in report["results"] if row["transport_path"] != "in_process"]
@@ -232,7 +281,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         sut_context.__enter__.return_value = sut
         config = SimpleNamespace(scenarios=("SubscribeToTask_FirstEventLatency",), requests=1,
                                  warmup_seconds=0, duration_seconds=0, wire_driver_timeout_seconds=1,
-                                 report_dir=Path("."))
+                                 report_dir=Path("."), server_mode="sync", client_modes=("sync",))
         with mock.patch.dict(os.environ, {"A2A_SUBSCRIPTION_DIAGNOSTICS": "1"}), \
              mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
              mock.patch.object(runner, "SutProcess", return_value=sut_context), \
@@ -264,7 +313,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             contexts.append(context)
         config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
                                  duration_seconds=0, wire_driver_timeout_seconds=1,
-                                 report_dir=Path("."))
+                                 report_dir=Path("."), server_mode="sync", client_modes=("sync",))
 
         def driver_result(command, *_args, **_kwargs):
             scenario = command[command.index("--scenarios") + 1]
@@ -299,7 +348,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         context.__enter__.return_value = sut
         config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
                                  duration_seconds=0, wire_driver_timeout_seconds=1,
-                                 report_dir=Path("."))
+                                 report_dir=Path("."), server_mode="sync", client_modes=("sync",))
 
         def driver_result(command, *_args, **_kwargs):
             scenario = command[command.index("--scenarios") + 1]
@@ -324,7 +373,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         context.__enter__.return_value = sut
         config = SimpleNamespace(scenarios=scenarios, requests=1, warmup_seconds=0,
                                  duration_seconds=0, wire_driver_timeout_seconds=1,
-                                 report_dir=Path("."))
+                                 report_dir=Path("."), server_mode="sync", client_modes=("sync",))
         for returned_scenario in (scenarios[1], "unknown", None):
             with self.subTest(returned_scenario=returned_scenario), \
                  mock.patch.dict(os.environ, {}, clear=True), \
@@ -694,7 +743,7 @@ class PerformanceRunnerTest(unittest.TestCase):
 
     def test_run_wire_driver_skips_selection_without_wire_scenarios(self):
         runner = load_runner_module()
-        config = mock.Mock(server_modes=("sync",), server_mode="sync")
+        config = mock.Mock(server_modes=("sync",), server_mode="sync", client_modes=("sync",))
         config.scenarios = ("PushNotify_EndToEndManyConfigs",)
 
         with mock.patch.object(runner, "ensure_wire_driver") as ensure_wire_driver:
@@ -707,7 +756,7 @@ class PerformanceRunnerTest(unittest.TestCase):
 
     def test_run_wire_driver_requires_http_reuse_diagnostics(self):
         runner = load_runner_module()
-        config = mock.Mock(server_modes=("sync",), server_mode="sync")
+        config = mock.Mock(server_modes=("sync",), server_mode="sync", client_modes=("sync",))
         config.scenarios = ("GetTask_ExistingTask",)
         config.requests = 1
         config.warmup_seconds = 0.0
