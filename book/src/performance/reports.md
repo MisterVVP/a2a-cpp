@@ -11,7 +11,12 @@ counters, and `async_vs_sync_throughput_ratio`. Raw streaming latency fields
 remain available in both formats.
 
 Adjacent sync/async columns show median throughput and median per-run p95/p99
-latency. The throughput ratio is **async divided by sync**: above 1 is a gain,
+latency, with one row per workload/transport/store/concurrency. Resource and
+streaming latency tables also pair modes in each cell as `sync / async`.
+Paired in-memory wire comparisons appear first. PostgreSQL wire results remain
+sync-only in separate tables. Raw repetitions are kept in JSON/CSV instead of
+repeated in the CI summary.
+The throughput ratio is **async divided by sync**: above 1 is a gain,
 below 1 a regression, near 1 parity. These are medians of run percentiles, not
 percentiles pooled across repetitions. Unmatched cases show `n/a`. Errors,
 incomplete operation counts, missing repetitions, and duplicate repetitions

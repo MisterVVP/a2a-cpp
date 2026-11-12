@@ -93,8 +93,7 @@ With the optional Boost.Asio dependencies installed (see the
 ```bash
 ./scripts/run_performance_tests.sh --server-modes sync,async \
   --store-backends inmemory --transports grpc,http_json,jsonrpc \
-  --scenarios SendMessage_CreateTask,SendStreamingMessage_FiniteStream,SubscribeToTask_FirstEventLatency \
-  --requests 10000 --concurrency 1,4,16,64 --repetitions 3 \
+  --requests 1000 --concurrency 1,4,16,64 --repetitions 3 \
   --report-dir perf-artifacts/normal
 ```
 
@@ -107,10 +106,12 @@ subscriptions await native publication, labeled `native_coroutine`. Stores that
 need blocking work use `blocking_adapter`; PostgreSQL async measurements are
 outside the initial matrix. No async-client measurements are included.
 
-The initial async matrix covers the three in-memory scenarios above. Other
-scenarios and PostgreSQL retain synchronous coverage and show `n/a` for their
-async comparison. PostgreSQL storage is unchanged. In-process results remain
-separate. `--server-modes sync` preserves the default suite; the corresponding
+The async matrix covers all supported in-memory wire workloads, including unary
+operations, push configuration, finite streams, subscriptions, and cancellation.
+Use `--scenarios` to narrow a local run. PostgreSQL retains synchronous coverage
+and shows `n/a` for async; its storage is unchanged. In-process results remain
+separate because they bypass the gRPC/HTTP server transports.
+`--server-modes sync` preserves the default suite; the corresponding
 environment variables are `A2A_PERF_SERVER_MODES` and `A2A_PERF_REPETITIONS`.
 
 Comparison runs default to three repetitions, alternate server order, and start

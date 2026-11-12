@@ -12,6 +12,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "a2a/core/http_constants.h"
@@ -38,6 +39,8 @@ constexpr std::string_view kInitialHeader = "X-Initial";
 constexpr std::size_t kInitialHeaderPadding = 41;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 constexpr auto kTimeout = std::chrono::seconds(5);
+constexpr std::string_view kEchoCloseRequest = "POST / HTTP/1.1\r\nContent-Length: 4\r\nConnection: close\r\n\r\necho";
+constexpr std::string_view kEchoPayload = "echo";
 constexpr std::size_t kIdleClients = 64;
 
 core::Result<HttpServerResponse> Respond(const HttpServerRequest& /*request*/) {
@@ -73,6 +76,25 @@ TEST(EventHttpServer, FragmentationPipeliningAndHalfClose) {
   const auto first = response.find(kStatus);
   ASSERT_NE(first, std::string::npos);
   EXPECT_NE(response.find(kStatus, first + kStatus.size()), std::string::npos);
+  server.Shutdown();
+  server.Join();
+}
+
+TEST(EventHttpServer, OwnedRequestPreservesBodyAndConnectionClose) {
+  EventHttpServer server(EventHttpServer::AsyncHandler(
+      [](HttpServerRequest request,
+         const engine::RequestExecutionContext& /*context*/) -> asio::awaitable<core::Result<EventHttpResponse>> {
+        auto response = Respond(request).value();
+        response.body = std::move(request.body);
+        co_return EventHttpResponse{.response = std::move(response), .stream = {}};
+      }));
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kEchoCloseRequest));
+  const auto response = ReadToEnd(peer);
+  EXPECT_NE(response.find(kStatus), std::string::npos);
+  EXPECT_TRUE(response.ends_with(kEchoPayload));
   server.Shutdown();
   server.Join();
 }

@@ -127,11 +127,7 @@ WIRE_SCENARIOS = (
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
 WIRE_ONLY_SCENARIOS = ("IdleStream_ClientCancellationLatency", *SHARED_CLIENT_WIRE_SCENARIOS)
 SERVER_MODES = ("sync", "async")
-ASYNC_SCENARIOS = (
-    "SendMessage_CreateTask",
-    "SendStreamingMessage_FiniteStream",
-    "SubscribeToTask_FirstEventLatency",
-)
+ASYNC_SCENARIOS = WIRE_SCENARIOS
 RESOURCE_FIELDS = tuple(f"{side}_{metric}" for side in ("server", "client")
                         for metric in ("cpu_seconds", "peak_threads", "peak_rss_kib"))
 IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario not in WIRE_ONLY_SCENARIOS)
@@ -1337,20 +1333,23 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
             f"| {store_label(str(row['store']))} | {path_label(str(row['path']))} | {row['rows']} | "
             f"{row['operations']} | {row['success']} | {row['errors']} |"
         )
-    if aggregates is None:
-        sync_results = [row for row in results if row.get("server_execution_mode") != "async"]
-        append_grouped_result_sections(lines, sync_results)
-        # The existing cross-backend diagnostic uses one row per coordinate.
-        first_runs = [row for row in sync_results if row.get("repetition", 1) == 1]
-        append_cross_backend_markdown(lines, cross_backend_scaling(first_runs))
-    if "async" in metadata.get("server_modes", ()):
+    compare_modes = "async" in metadata.get("server_modes", ())
+    if compare_modes:
         lines.extend(["", f"CPU placement: server {metadata.get('server_cpus') or 'unavailable/shared'}, "
                       f"client {metadata.get('client_cpus') or 'unavailable/shared'}; "
                       f"cgroup cpu.max: {metadata.get('cpu_quota') or 'unavailable'}. "
                       "Disjoint sets reserve driver capacity; overlapping sets share CPU capacity."])
         append_sync_async_markdown(lines, results, int(metadata.get("repetitions", 1)))
-    append_streaming_latency_rollup(lines, results)
-    append_detailed_matrix(lines, results)
+    if aggregates is None:
+        sync_results = [row for row in results if row.get("server_execution_mode") != "async"]
+        grouped = [row for row in sync_results if row["transport_path"] == "in_process" or row["store_backend"] == "postgres"] if compare_modes else sync_results
+        append_grouped_result_sections(lines, grouped)
+        # The existing cross-backend diagnostic uses one row per coordinate.
+        first_runs = [row for row in sync_results if row.get("repetition", 1) == 1]
+        append_cross_backend_markdown(lines, cross_backend_scaling(first_runs))
+    if not compare_modes:
+        append_streaming_latency_rollup(lines, results)
+        append_detailed_matrix(lines, results)
     diagnostic_results = [result for result in results if "postgres_phase_latency_ms" in result]
     if diagnostic_results:
         lines.extend([
@@ -1660,7 +1659,7 @@ def sync_async_comparisons(results: list[dict[str, object]], repetitions: int) -
                      "client_execution_mode", "configured_requests", "configured_duration_seconds"))
         groups.setdefault(key, {}).setdefault(str(row.get("server_execution_mode", "sync")), []).append(row)
     comparisons = []
-    for key, modes in sorted(groups.items(), key=lambda item: str(item[0])):
+    for key, modes in sorted(groups.items(), key=lambda item: (str(item[0][:3]), int(item[0][3]), str(item[0][4:]))):
         comparison = dict(zip(("scenario", "transport", "store_backend", "concurrency", "postgres_pool_size",
                                "client_execution_mode", "configured_requests", "configured_duration_seconds"), key))
         comparison["throughput_ratio"] = None
@@ -1675,6 +1674,12 @@ def sync_async_comparisons(results: list[dict[str, object]], repetitions: int) -
             summary["throughput_ops_per_sec"] = statistics.median(float(row["throughput_ops_per_sec"]) for row in rows)
             for metric in ("p95", "p99"):
                 summary[f"{metric}_ms"] = statistics.median(float(row["latency_ms"][metric]) for row in rows)
+            for dimension, prefix in ((FIRST_EVENT_LATENCY_FIELD, "first_event"),
+                                      (STREAM_COMPLETION_LATENCY_FIELD, "stream_completion")):
+                for percentile in ("p50", "p95"):
+                    values = [float(row[dimension][percentile]) for row in rows
+                              if isinstance(row.get(dimension), dict) and percentile in row[dimension]]
+                    summary[f"{prefix}_{percentile}_ms"] = statistics.median(values) if len(values) == len(rows) else None
             for metric in RESOURCE_FIELDS:
                 values = [float(row[metric]) for row in rows if row.get(metric) is not None]
                 summary[metric] = statistics.median(values) if len(values) == len(rows) else None
@@ -1690,41 +1695,72 @@ def sync_async_comparisons(results: list[dict[str, object]], repetitions: int) -
     return comparisons
 
 
+def comparison_value(modes: dict, mode: str, metric: str, digits: int = 2) -> str:
+    data = modes.get(mode)
+    value = data.get(metric) if data is not None and data["valid"] else None
+    return "n/a" if value is None else f"{float(value):.{digits}f}"
+
+
+def comparison_pair(modes: dict, metric: str, digits: int = 2) -> str:
+    return " / ".join(comparison_value(modes, mode, metric, digits) for mode in SERVER_MODES)
+
+
+def comparison_coordinate(row: dict) -> str:
+    return f"| {row['scenario']} | {row['transport']} | {row['store_backend']} | {row['concurrency']} | "
+
+
 def append_sync_async_markdown(lines: list[str], results: list[dict[str, object]], repetitions: int) -> None:
     lines.extend(["", "## Sync / async server comparison", "",
-                  "Same synchronous client; medians of repeated runs. Ratio = async/sync ops/s: >1 gain, <1 regression, ~1 parity. "
-                  "Missing or invalid pairs are n/a; no speed thresholds. Executor labels distinguish native coroutine "
-                  "execution from blocking adapters; live subscriptions await native publication."])
+                  "Same existing client API; medians of repeated runs. Ratio = async/sync ops/s: >1 gain, <1 regression, ~1 parity. "
+                  "Missing or invalid pairs are n/a; no speed thresholds. All supported in-memory wire workloads run both modes. "
+                  "PostgreSQL async is n/a (not measured); its wire tables below are sync-only. "
+                  "In-process measurements bypass the gRPC/HTTP server transports. "
+                  "Raw repetitions remain in results.json and results.csv."])
     append_collapsible_start(lines, "Show sync/async throughput and latency")
     lines.extend(["",
                   "| Scenario | Transport | Store | c | Sync ops/s | Async ops/s | Ratio | Sync p95/p99 ms | Async p95/p99 ms | Errors sync/async |",
                   "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |"])
-    comparisons = sync_async_comparisons(results, repetitions)
+    comparisons = [row for row in sync_async_comparisons(results, repetitions) if row["store_backend"] == "inmemory"]
     for row in comparisons:
         modes = row["modes"]
-        def value(mode: str, metric: str) -> str:
-            data = modes.get(mode)
-            return "n/a" if data is None or not data["valid"] else f"{float(data[metric]):.2f}"
+        def latency(mode: str) -> str:
+            return "/".join(comparison_value(modes, mode, metric) for metric in ("p95_ms", "p99_ms"))
         errors = "/".join(str(modes[mode]["errors"]) if mode in modes else "n/a" for mode in SERVER_MODES)
-        lines.append(f"| {row['scenario']} | {row['transport']} | {row['store_backend']} | {row['concurrency']} | "
-                     f"{value('sync', 'throughput_ops_per_sec')} | {value('async', 'throughput_ops_per_sec')} | "
-                     f"{format_ratio(row['throughput_ratio'])} | {value('sync', 'p95_ms')}/{value('sync', 'p99_ms')} | "
-                     f"{value('async', 'p95_ms')}/{value('async', 'p99_ms')} | {errors} |")
+        lines.append(comparison_coordinate(row) +
+                     f"{comparison_value(modes, 'sync', 'throughput_ops_per_sec')} | "
+                     f"{comparison_value(modes, 'async', 'throughput_ops_per_sec')} | "
+                     f"{format_ratio(row['throughput_ratio'])} | {latency('sync')} | {latency('async')} | {errors} |")
     append_collapsible_end(lines)
+    append_paired_streaming_latency(lines, comparisons)
     lines.extend(["", "Resource medians cover each whole driver invocation, including setup/warmup. "
-                  "CPU seconds are process CPU time, threads are sampled peaks, RSS is process high-water KiB. "
-                  "Peaks can miss short-lived threads; unsupported counters are n/a. These are diagnostic costs, not request latency."])
+                  "Every resource cell shows sync / async. CPU seconds are process CPU time; threads are sampled peaks; "
+                  "RSS is process high-water KiB. Unsupported counters are n/a; short-lived threads may be missed."])
     append_collapsible_start(lines, "Show sync/async process resources")
     lines.extend(["",
-                  "| Scenario | Transport | Store | c | Server | Executor | Server CPU s | Client CPU s | Server threads | Client threads | Server RSS KiB | Client RSS KiB |",
-                  "| --- | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"])
+                  "| Scenario | Transport | Store | c | Server CPU s | Client CPU s | Server threads | Client threads | Server RSS KiB | Client RSS KiB | Executor sync/async |",
+                  "| --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |"])
     for row in comparisons:
-        for mode, data in row["modes"].items():
-            values = ["n/a" if data[field] is None else f"{data[field]:.2f}" for field in (
-                "server_cpu_seconds", "client_cpu_seconds", "server_peak_threads", "client_peak_threads",
-                "server_peak_rss_kib", "client_peak_rss_kib")]
-            lines.append(f"| {row['scenario']} | {row['transport']} | {row['store_backend']} | {row['concurrency']} | "
-                         f"{mode} | {data['executor_mode']} | " + " | ".join(values) + " |")
+        modes = row["modes"]
+        values = [comparison_pair(modes, metric, 2 if metric.endswith("cpu_seconds") else 0) for metric in (
+            "server_cpu_seconds", "client_cpu_seconds", "server_peak_threads", "client_peak_threads",
+            "server_peak_rss_kib", "client_peak_rss_kib")]
+        executors = " / ".join(str(modes[mode]["executor_mode"]) if mode in modes else "n/a" for mode in SERVER_MODES)
+        lines.append(comparison_coordinate(row) + " | ".join(values) + f" | {executors} |")
+    append_collapsible_end(lines)
+
+
+def append_paired_streaming_latency(lines: list[str], comparisons: list[dict[str, object]]) -> None:
+    fields = ("first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms")
+    streaming = [row for row in comparisons if any(data.get(field) is not None
+                 for data in row["modes"].values() for field in fields)]
+    if not streaming:
+        return
+    lines.extend(["", "## Streaming latency rollup", "", "Every latency cell shows sync / async medians in milliseconds."])
+    append_collapsible_start(lines, "Show paired streaming latencies")
+    lines.extend(["", "| Scenario | Transport | Store | c | First event p50 | First event p95 | Completion p50 | Completion p95 |",
+                  "| --- | --- | --- | ---: | --- | --- | --- | --- |"])
+    for row in streaming:
+        lines.append(comparison_coordinate(row) + " | ".join(comparison_pair(row["modes"], field, 4) for field in fields) + " |")
     append_collapsible_end(lines)
 
 

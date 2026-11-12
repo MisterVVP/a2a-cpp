@@ -443,7 +443,9 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       (void)execution->Cancel(engine::RequestCancellationReason::kServerShutdown);
       co_return true;
     }
-    auto response = co_await self->runtime_->handler(request, context);
+    // Retain connection policy while transferring the parsed request to the handler.
+    const bool reusable = HttpAdapter::IsConnectionReusable(request);
+    auto response = co_await self->runtime_->handler(std::move(request), context);
     if (!response.ok()) {
       response = EventHttpResponse{};
       response.value().response.status_code = core::http::kStatusInternalServerError;
@@ -455,7 +457,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       event.response.body = kBlockingStream;
       event.stream = {};
     }
-    const bool close = HttpAdapter::ShouldCloseConnection(request, event.response);
+    const bool close = !reusable || HttpAdapter::ShouldCloseConnection({}, event.response);
     if (!FitsOutput(event.response, self->runtime_->options.max_output_bytes, static_cast<bool>(event.stream))) {
       throw std::runtime_error(std::string(kOutputLimit));
     }

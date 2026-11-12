@@ -28,6 +28,33 @@ def load_runner_module():
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def test_comparison_summary_pairs_modes_without_duplicate_raw_rows(self):
+        runner = load_runner_module()
+        rows = []
+        for mode, throughput, threads in (("sync", 100, 10), ("async", 200, 5)):
+            row = self.make_result("inmemory", None, "wire_grpc", "grpc", 4, throughput, 2)
+            row.update(server_execution_mode=mode, client_execution_mode="sync", configured_requests=10,
+                       configured_duration_seconds=0, repetition=1, server_peak_threads=threads,
+                       executor_mode="native_coroutine" if mode == "async" else "synchronous",
+                       first_event_latency_ms={"p50": 0.5, "p95": 1})
+            rows.append(row)
+        metadata = {"sdk_commit_sha": "test", "host": {"os": "test", "cpu": "test"},
+                    "server_modes": ("sync", "async"), "repetitions": 1}
+        summary = runner.render_markdown_summary(rows, metadata)
+        self.assertIn("100.00 | 200.00 | 2.00×", summary)
+        self.assertIn("10 / 5", summary)
+        self.assertIn("0.5000 / 0.5000", summary)
+        self.assertNotIn("## Detailed matrix results", summary)
+        self.assertNotIn("## Wire results", summary)
+        self.assertEqual(3, summary.count("| scenario | grpc | inmemory | 4 |"))
+        postgres = {**rows[0], "store_backend": "postgres", "postgres_pool_size": 4}
+        summary = runner.render_markdown_summary([*rows, postgres], metadata)
+        self.assertIn("PostgreSQL async is n/a (not measured)", summary)
+        self.assertIn("## Wire results — PostgreSQL", summary)
+        self.assertNotIn("| scenario | grpc | postgres |", summary)
+        scaling = [{**row, "concurrency": concurrency} for row in rows for concurrency in (16, 1, 4)]
+        self.assertEqual([1, 4, 16], [row["concurrency"] for row in runner.sync_async_comparisons(scaling, 1)])
+
     def test_sync_async_medians_include_regressions_and_reject_invalid_pairs(self):
         runner = load_runner_module()
         rows = []
@@ -103,17 +130,17 @@ class PerformanceRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             subprocess.run([str(RUNNER), "--server-modes", "sync,async", "--repetitions", "2",
                             "--transports", "grpc,http_json,jsonrpc", "--store-backends", "inmemory",
-                            "--scenarios", "SendMessage_CreateTask,SendStreamingMessage_FiniteStream,SubscribeToTask_FirstEventLatency",
+                            "--scenarios", ",".join(load_runner_module().WIRE_SCENARIOS),
                             "--requests", "2", "--concurrency", "1", "--warmup-seconds", "0",
                             "--report-dir", directory], cwd=ROOT, check=True, capture_output=True, text=True)
             report = json.loads((Path(directory) / "results.json").read_text())
             wire = [row for row in report["results"] if row["transport_path"] != "in_process"]
-            self.assertEqual(36, len(wire))
+            self.assertEqual(196, len(wire))
             self.assertTrue(all(row["success"] == 2 and row["errors"] == 0 for row in wire))
             self.assertEqual({"sync", "async"}, {row["server_execution_mode"] for row in wire})
             self.assertEqual({"native_coroutine"}, {row["executor_mode"] for row in wire
                                                      if row["server_execution_mode"] == "async"})
-            self.assertEqual(9, len(report["sync_async_comparisons"]))
+            self.assertEqual(49, len(report["sync_async_comparisons"]))
             self.assertTrue(all(row["throughput_ratio"] is not None for row in report["sync_async_comparisons"]))
             with (Path(directory) / "results.csv").open() as csv_file:
                 csv_rows = list(csv.DictReader(csv_file))

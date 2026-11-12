@@ -6,6 +6,7 @@
 #include <grpc/support/time.h>
 
 #include <boost/asio/experimental/concurrent_channel.hpp>
+#include <boost/asio/recycling_allocator.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <chrono>
@@ -154,7 +155,8 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       static boost::asio::awaitable<core::Result<void>> WriteOwned(std::shared_ptr<Session> session,
                                                                    lf::a2a::v1::StreamResponse event) {
         const auto scheduler = co_await boost::asio::this_coro::executor;
-        auto ack = std::make_shared<Acknowledgement>(scheduler, 1);
+        auto ack =
+            std::allocate_shared<Acknowledgement>(boost::asio::recycling_allocator<Acknowledgement>{}, scheduler, 1);
         {
           std::lock_guard lock(session->mutex);
           if (session->reactor == nullptr || session->terminal.has_value() || session->writing) {
