@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import platform
 import re
@@ -21,9 +22,14 @@ import subprocess
 import threading
 import time
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 TRANSPORTS = ("grpc", "jsonrpc", "http_json")
 STORE_BACKENDS = ("inmemory", "postgres")
@@ -120,6 +126,11 @@ WIRE_SCENARIOS = (
 )
 WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc", "grpc": "wire_grpc"}
 WIRE_ONLY_SCENARIOS = ("IdleStream_ClientCancellationLatency", *SHARED_CLIENT_WIRE_SCENARIOS)
+SERVER_MODES = ("sync", "async")
+ASYNC_SCENARIOS = WIRE_SCENARIOS
+ASYNC_CLIENT_SCENARIOS = ("GetTask_ExistingTask", "ListTasks_NoPagination", "ListTasks_WithPagination")
+RESOURCE_FIELDS = tuple(f"{side}_{metric}" for side in ("server", "client")
+                        for metric in ("cpu_seconds", "peak_threads", "peak_rss_kib"))
 IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario not in WIRE_ONLY_SCENARIOS)
 SUT_READY_TIMEOUT_SECONDS = 30.0
 SUT_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10.0
@@ -189,6 +200,52 @@ class RunnerConfig:
     repetitions: int
     scenarios: tuple[str, ...] | None
     postgres_pool_sizes: tuple[int, ...]
+    server_modes: tuple[str, ...] = ("sync",)
+    cpu_placement: str = "auto"
+    server_mode: str = "sync"
+    client_modes: tuple[str, ...] = ("sync",)
+    client_mode: str = "sync"
+    stream_hold_ms: int = 0
+
+
+def cpu_quota() -> str | None:
+    path = Path("/sys/fs/cgroup/cpu.max")
+    return path.read_text(encoding="utf-8").strip() if path.exists() else None
+
+
+def cpu_assignment(config: RunnerConfig, side: str) -> tuple[int, ...]:
+    if not hasattr(os, "sched_getaffinity"):
+        return ()
+    available = sorted(os.sched_getaffinity(0))
+    quota = cpu_quota()
+    if quota and not quota.startswith("max"):
+        budget, period = map(int, quota.split())
+        available = available[:max(1, budget // period)]
+    if getattr(config, "server_modes", ("sync",)) == ("sync",) or config.cpu_placement == "shared":
+        return tuple(sorted(os.sched_getaffinity(0)))
+    if len(available) < 2:
+        return tuple(available)
+    split = (len(available) + 1) // 2
+    return tuple(available[split:] if side == "server" else available[:split])
+
+
+def place_command(command: list[str], config: RunnerConfig, side: str) -> list[str]:
+    cpus = cpu_assignment(config, side)
+    if cpus and getattr(config, "server_modes", ("sync",)) != ("sync",):
+        return ["taskset", "--cpu-list", ",".join(map(str, cpus)), *command]
+    return command
+
+
+def process_resources(pid: int) -> dict[str, float]:
+    """Linux process counters; unsupported/vanished processes remain unavailable."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
+        status = dict(line.split(":", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines())
+        return {"cpu_seconds": (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK"),
+                "peak_threads": float(status["Threads"].strip()),
+                "peak_rss_kib": float(status.get("VmHWM", status["VmRSS"]).split()[0])}
+    except (OSError, KeyError, ValueError, IndexError):
+        return {}
 
 
 def run_psql_json(dsn: str, sql: str) -> object:
@@ -368,7 +425,8 @@ def build_matches_subscription_diagnostics_mode(build_dir: Path, diagnostics_req
     return expected_entry in cache_path.read_text(encoding="utf-8")
 
 
-def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str) -> Path:
+def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, description: str,
+                      refresh: bool = False) -> Path:
     explicit = os.environ.get(env_name)
     if explicit:
         executable = Path(explicit)
@@ -378,8 +436,12 @@ def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, des
     diagnostics_requested = subscription_diagnostics_requested()
     build_dir = performance_build_dir(diagnostics_requested)
     executable = executable_path_from_build(build_dir, target_name)
-    if executable.exists() and build_matches_subscription_diagnostics_mode(build_dir, diagnostics_requested):
-        return executable
+    if not refresh and executable.exists() and build_matches_subscription_diagnostics_mode(build_dir, diagnostics_requested):
+        cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+        if "async" not in getattr(config, "server_modes", ()) or (
+            "A2A_ENABLE_ASIO:BOOL=ON" in cache and "CMAKE_BUILD_TYPE:STRING=Release" in cache
+        ):
+            return executable
     configure = [
         "cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release",
         "-DA2A_ENABLE_TESTING=ON",
@@ -387,6 +449,8 @@ def ensure_executable(config: RunnerConfig, env_name: str, target_name: str, des
     ]
     if "postgres" in config.store_backends:
         configure.append("-DA2A_ENABLE_POSTGRES_STORE=ON")
+    if "async" in getattr(config, "server_modes", ()):
+        configure.append("-DA2A_ENABLE_ASIO=ON")
     subprocess.run(configure, check=True)
     subprocess.run(["cmake", "--build", str(build_dir), "--target", target_name, "-j", str(os.cpu_count() or 2)], check=True)
     if not executable.exists():
@@ -501,11 +565,15 @@ class SutProcess:
         self.transport = transport
         self.concurrency = concurrency
         self.postgres_pool_size = postgres_pool_size
+        self.server_mode = getattr(config, "server_mode", "sync")
+        self.config = config
+        self.executor_mode = "synchronous"
 
     def __enter__(self) -> "SutProcess":
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["A2A_TCK_STORE_BACKEND"] = self.store_backend
+        env["A2A_PERF_SERVER_MODE"] = self.server_mode
         if self.store_backend == "postgres":
             if "A2A_TCK_POSTGRES_DSN" not in env and "A2A_TEST_POSTGRES_DSN" in env:
                 env["A2A_TCK_POSTGRES_DSN"] = env["A2A_TEST_POSTGRES_DSN"]
@@ -514,7 +582,7 @@ class SutProcess:
         log_file = self.log_path.open("w", encoding="utf-8")
         creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         self.process = subprocess.Popen(
-            [str(self.sut), f"{self.host}:{self.port}"],
+            place_command([str(self.sut), f"{self.host}:{self.port}"], self.config, "server"),
             cwd=Path(__file__).resolve().parents[1],
             env=env,
             stdout=log_file,
@@ -523,8 +591,18 @@ class SutProcess:
             creationflags=creation_flags,
         )
         log_file.close()
-        wait_for_port(self.host, self.port, self.process, self.log_path)
-        wait_for_port(self.host, self.grpc_port, self.process, self.log_path)
+        try:
+            wait_for_port(self.host, self.port, self.process, self.log_path)
+            wait_for_port(self.host, self.grpc_port, self.process, self.log_path)
+            if "async" in getattr(self.config, "server_modes", ()):
+                marker = re.search(r"A2A_PERFORMANCE_MODE server=(sync|async) executor=(\w+)",
+                                   self.log_path.read_text(encoding="utf-8"))
+                if marker is None or marker[1] != self.server_mode:
+                    raise ValueError("performance SUT did not confirm the requested execution mode")
+                self.executor_mode = marker[2]
+        except BaseException:
+            self.__exit__(*sys.exc_info())
+            raise
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -571,7 +649,10 @@ class SutProcess:
 def run_command_json(command: list[str], timeout_seconds: float, error_context: str,
                      log_path: Path | None = None,
                      env: dict[str, str] | None = None,
-                     health_check: Callable[[], None] | None = None) -> list[dict[str, object]]:
+                     health_check: Callable[[], None] | None = None,
+                     server_pid: int | None = None,
+                     resources: dict[str, object] | None = None) -> list[dict[str, object]]:
+    child_cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN) if resource is not None else None
     process = subprocess.Popen(
         command,
         cwd=Path(__file__).resolve().parents[1],
@@ -581,8 +662,26 @@ def run_command_json(command: list[str], timeout_seconds: float, error_context: 
         env=env,
     )
     deadline = time.monotonic() + timeout_seconds
+    resource_started = time.monotonic()
+    initial: dict[str, dict[str, float]] = {}
+    def sample_resources() -> None:
+        if resources is None:
+            return
+        for side, pid in (("client", process.pid), ("server", server_pid)):
+            if pid is None:
+                continue
+            sample = process_resources(pid)
+            first = initial.setdefault(side, sample) if sample else {}
+            for metric, value in sample.items():
+                key = f"{side}_{metric}"
+                if metric == "cpu_seconds":
+                    resources[key] = max(0.0, value - first[metric])
+                else:
+                    resources[key] = max(float(resources.get(key, 0)), value)
+    sample_resources()
     try:
         while True:
+            sample_resources()
             if health_check is not None:
                 health_check()
             remaining_seconds = deadline - time.monotonic()
@@ -597,6 +696,7 @@ def run_command_json(command: list[str], timeout_seconds: float, error_context: 
                 continue
         if health_check is not None:
             health_check()
+        sample_resources()
     except BaseException as exc:
         process.terminate()
         try:
@@ -617,6 +717,12 @@ def run_command_json(command: list[str], timeout_seconds: float, error_context: 
     payload = json.loads(stdout)
     if not isinstance(payload, list):
         raise ValueError(f"{error_context} returned malformed output")
+    if resources is not None:
+        resources["resource_window_seconds"] = time.monotonic() - resource_started
+        if resource is not None and child_cpu_before is not None:
+            usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+            resources["client_cpu_seconds"] = (usage.ru_utime + usage.ru_stime -
+                                                child_cpu_before.ru_utime - child_cpu_before.ru_stime)
     return payload
 
 
@@ -654,6 +760,7 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
     with SutProcess(config, store_backend, port, transport, concurrency, postgres_pool_size) as sut:
         payload = []
         for scenario in scenarios:
+            resources: dict[str, object] = {}
             command = [
                 str(wire_driver),
                 "--transport", transport,
@@ -664,12 +771,16 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
                 "--concurrency", str(concurrency),
                 "--warmup-seconds", str(config.warmup_seconds),
                 "--duration-seconds", str(config.duration_seconds),
+                "--client-mode", getattr(config, "client_mode", "sync"),
+                "--stream-hold-ms", str(getattr(config, "stream_hold_ms", 0)),
                 "--scenarios", scenario,
             ]
             scenario_payload = run_command_json(
-                command, config.wire_driver_timeout_seconds,
+                place_command(command, config, "client"), config.wire_driver_timeout_seconds,
                 f"wire performance driver for {transport}/{store_backend}/c{concurrency} scenario={scenario}",
                 sut.log_path, health_check=lambda scenario=scenario: sut.check_running(scenario),
+                server_pid=getattr(getattr(sut, "process", None), "pid", None),
+                resources=resources,
             )
             if len(scenario_payload) != 1:
                 raise ValueError(
@@ -678,12 +789,26 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
                 )
             if any(result.get("scenario") != scenario for result in scenario_payload):
                 raise ValueError("wire performance driver returned an unrequested scenario")
+            for result in scenario_payload:
+                if "async" in getattr(config, "server_modes", ()) and any(
+                    result.get(key) != expected for key, expected in (
+                        ("transport", transport), ("store_backend", store_backend),
+                        ("concurrency", concurrency), ("configured_requests", config.requests),
+                        ("configured_duration_seconds", config.duration_seconds))
+                ):
+                    raise ValueError("wire performance driver returned mismatched comparison coordinates")
+                result.update(resources)
+                client_mode = getattr(config, "client_mode", "sync")
+                if client_mode == "async" and result.get("client_execution_mode") != client_mode:
+                    raise ValueError("wire driver did not confirm the requested client mode")
+                result.update(client_execution_mode=client_mode, server_execution_mode=getattr(config, "server_mode", "sync"),
+                              executor_mode=getattr(sut, "executor_mode", "synchronous"))
             payload.extend(scenario_payload)
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
     server_subscription_diagnostics = read_subscription_diagnostics(sut.log_path)
     if os.environ.get("A2A_SUBSCRIPTION_DIAGNOSTICS") == "1" and not server_subscription_diagnostics:
         raise ValueError("subscription diagnostics were requested but the SUT did not report server diagnostics")
-    if transport in {"http_json", "jsonrpc"} and not diagnostics:
+    if transport in {"http_json", "jsonrpc"} and not diagnostics and getattr(config, "server_mode", "sync") == "sync":
         raise ValueError(
             f"wire performance driver for {transport}/{store_backend}/c{concurrency} "
             "did not emit HTTP reuse diagnostics"
@@ -708,10 +833,15 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
     if transport not in WIRE_TRANSPORT_PATHS:
         raise ValueError(f"unsupported wire transport: {transport}")
     wire_scenarios = wire_scenarios_for_transport(transport, config.scenarios)
+    if getattr(config, "server_mode", "sync") == "async":
+        wire_scenarios = tuple(scenario for scenario in wire_scenarios if scenario in ASYNC_SCENARIOS)
+        if store_backend != "inmemory":
+            return []
     if not wire_scenarios:
         return []
     wire_driver = ensure_wire_driver(config)
-    if not subscription_diagnostics_requested():
+    if (not subscription_diagnostics_requested() and "async" not in getattr(config, "server_modes", ())
+            and getattr(config, "client_modes", ("sync",)) == ("sync",)):
         return run_wire_scenarios(
             config, wire_driver, transport, store_backend, concurrency,
             postgres_pool_size, port, wire_scenarios,
@@ -719,12 +849,34 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
 
     results = []
     for index, scenario in enumerate(wire_scenarios):
-        scenario_port = port if index == 0 else find_available_sut_port()
-        results.extend(run_wire_scenarios(
-            config, wire_driver, transport, store_backend, concurrency,
-            postgres_pool_size, scenario_port, (scenario,),
-        ))
+        client_modes = wire_client_modes(config, scenario, store_backend)
+        if getattr(config, "server_mode", "sync") == "async":
+            client_modes = tuple(reversed(client_modes))
+        for client_mode in client_modes:
+            scenario_port = port if index == 0 else find_available_sut_port()
+            results.extend(run_wire_scenarios(
+                config if client_mode == "sync" else replace(config, client_mode=client_mode), wire_driver, transport, store_backend, concurrency,
+                postgres_pool_size, scenario_port, (scenario,),
+            ))
     return results
+
+
+def wire_client_modes(config: RunnerConfig, scenario: str, store_backend: str) -> tuple[str, ...]:
+    # Streaming has one observer API. Keep PostgreSQL's existing sync coverage.
+    if store_backend != "inmemory" or scenario not in ASYNC_CLIENT_SCENARIOS:
+        return ("sync",)
+    return config.client_modes
+
+
+def expected_wire_rows(config: RunnerConfig, server_mode: str) -> int:
+    if server_mode not in config.server_modes:
+        return 0
+    return sum(
+        len(wire_client_modes(config, scenario, store)) * (len(config.postgres_pool_sizes) if store == "postgres" else 1)
+        for transport in config.transports for store in config.store_backends
+        for scenario in wire_scenarios_for_transport(transport, config.scenarios)
+        if server_mode == "sync" or (store == "inmemory" and scenario in ASYNC_SCENARIOS)
+    ) * len(config.concurrency_levels) * config.repetitions
 
 
 def wire_scenarios_for_transport(transport: str, scenarios: tuple[str, ...] | None = None) -> tuple[str, ...]:
@@ -745,6 +897,12 @@ def in_process_scenarios(scenarios: tuple[str, ...] | None = None) -> tuple[str,
 def validate_runnable_plan(config: RunnerConfig) -> None:
     if config.profile in POSTGRES_PROFILES:
         return
+    if getattr(config, "server_modes", ()) == ("async",) and (
+        "inmemory" not in config.store_backends or not any(
+            set(wire_scenarios_for_transport(transport, config.scenarios)) & set(ASYNC_SCENARIOS)
+            for transport in config.transports)
+    ):
+        raise ValueError("selected transport/store/scenario combination has no async wire scenario")
     has_in_process = bool(in_process_scenarios(config.scenarios))
     has_wire = any(wire_scenarios_for_transport(transport, config.scenarios) for transport in config.transports)
     if not has_in_process and not has_wire:
@@ -784,6 +942,11 @@ def env_or_default(name: str, default: str) -> str:
 def parse_args(argv: list[str]) -> RunnerConfig:
     parser = argparse.ArgumentParser(description="Run report-only A2A performance scenarios.")
     parser.add_argument("--profile", choices=POSTGRES_PROFILES)
+    parser.add_argument("--server-modes", default=env_or_default("A2A_PERF_SERVER_MODES", "sync"))
+    parser.add_argument("--client-modes", default=env_or_default("A2A_PERF_CLIENT_MODES", "sync"))
+    parser.add_argument("--stream-hold-ms", type=int, default=int(env_or_default("A2A_PERF_STREAM_HOLD_MS", "0")))
+    parser.add_argument("--repetitions", type=int, default=os.environ.get("A2A_PERF_REPETITIONS"))
+    parser.add_argument("--cpu-placement", choices=("auto", "shared"), default="auto")
     parser.add_argument("--transports", default=env_or_default("A2A_PERF_TRANSPORTS", ",".join(TRANSPORTS)))
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
@@ -800,6 +963,8 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     args = parser.parse_args(argv)
     if args.requests <= 0:
         raise ValueError("requests must be positive")
+    if args.stream_hold_ms < 0:
+        raise ValueError("stream hold must be non-negative")
     if args.push_config_fanout <= 0:
         raise ValueError("push-config fanout must be positive")
     if args.warmup_seconds < 0 or args.duration_seconds < 0:
@@ -808,6 +973,18 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         raise ValueError("driver timeouts must be positive")
     profile = args.profile
     is_postgres_profile = profile in POSTGRES_PROFILES
+    server_modes = split_csv(args.server_modes, SERVER_MODES)
+    client_modes = split_csv(args.client_modes, SERVER_MODES)
+    if client_modes not in (("sync",), ("sync", "async")):
+        raise ValueError("client modes must be sync or sync,async")
+    if "async" in client_modes and (server_modes != ("sync", "async") or is_postgres_profile or subscription_diagnostics_requested()):
+        raise ValueError("client comparisons require --server-modes sync,async in the normal suite")
+    if len(set(server_modes)) != len(server_modes):
+        raise ValueError("server modes must not contain duplicates")
+    if args.repetitions is not None and args.repetitions <= 0:
+        raise ValueError("repetitions must be positive")
+    if "async" in server_modes and (is_postgres_profile or subscription_diagnostics_requested()):
+        raise ValueError("async comparisons require the normal suite with subscription diagnostics disabled")
     if args.postgres_pool_sizes is not None:
         postgres_pool_sizes = parse_positive_int_csv(args.postgres_pool_sizes, "PostgreSQL pool sizes")
     elif profile == POSTGRES_TAIL_PROFILE:
@@ -843,9 +1020,14 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         driver_timeout_seconds=args.driver_timeout_seconds,
         wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
         repetitions=(POSTGRES_WRITE_REPETITIONS if profile == POSTGRES_WRITE_PROFILE
-                     else POSTGRES_TAIL_REPETITIONS if profile in POSTGRES_TAIL_PROFILES else 1),
+                     else POSTGRES_TAIL_REPETITIONS if profile in POSTGRES_TAIL_PROFILES
+                     else args.repetitions or 1),
         scenarios=scenarios,
         postgres_pool_sizes=postgres_pool_sizes,
+        server_modes=server_modes,
+        client_modes=client_modes,
+        stream_hold_ms=args.stream_hold_ms,
+        cpu_placement=args.cpu_placement,
     )
 
 
@@ -856,6 +1038,13 @@ def commit_sha() -> str:
         return "unknown"
 
 
+def worktree_dirty() -> bool | None:
+    try:
+        return bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], text=True).strip())
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def host_metadata() -> dict[str, str]:
     return {"os": platform.platform(), "cpu": platform.processor() or platform.machine(), "python": platform.python_version()}
 
@@ -864,12 +1053,31 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
                   aggregates: list[dict[str, object]] | None = None,
                   query_plans: str | None = None) -> None:
     config.report_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = performance_build_dir(subscription_diagnostics_requested()) / "CMakeCache.txt"
+    cache = cache_path.read_text(encoding="utf-8") if cache_path.exists() else ""
+    build_type = re.search(r"^CMAKE_BUILD_TYPE:STRING=(.*)$", cache, re.MULTILINE)
     metadata = {
         "sdk_commit_sha": commit_sha(),
+        "worktree_dirty": worktree_dirty(),
         "host": host_metadata(),
         "push_config_fanout": config.push_config_fanout,
+        "server_modes": config.server_modes,
+        "client_modes": config.client_modes,
+        "stream_hold_ms": config.stream_hold_ms,
+        "repetitions": config.repetitions,
+        "build_type": ("external binaries (unverified)" if any(os.environ.get(name) for name in
+                       ("A2A_PERF_DRIVER", "A2A_PERF_WIRE_DRIVER", "A2A_PERF_SUT"))
+                       else build_type[1] if build_type else "unknown"),
+        "cpu_quota": cpu_quota(),
+        "server_cpus": cpu_assignment(config, "server"),
+        "client_cpus": cpu_assignment(config, "client"),
+        "memory_limit": (Path("/sys/fs/cgroup/memory.max").read_text().strip()
+                         if Path("/sys/fs/cgroup/memory.max").exists() else None),
+        "resource_scope": "whole driver invocation including setup/warmup; Linux thread/RSS peaks sampled at 100ms",
     }
     payload: dict[str, object] = {"metadata": metadata, "results": results}
+    if "async" in config.server_modes:
+        payload["sync_async_comparisons"] = sync_async_comparisons(results, config.repetitions)
     if aggregates is not None:
         payload["median_aggregates"] = aggregates
     if query_plans is not None:
@@ -885,6 +1093,9 @@ def write_reports(results: list[dict[str, object]], config: RunnerConfig,
 def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
     fieldnames = ["repetition", "scenario", "transport", "store_backend", "driver_type", "transport_path", "concurrency", "postgres_pool_size", "operations", "success", "errors", "throughput_ops_per_sec", "configured_requests", "push_config_fanout", "configured_duration_seconds", "measured_duration_seconds", "history_depth", "successful_deliveries", "failed_deliveries", "callback_count", "event_count", "first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms", "fanout_per_operation", "total_fanout_count", "fanout_count", "p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms"]
     fieldnames.extend((
+        "client_execution_mode", "server_execution_mode", "executor_mode",
+        "stream_hold_ms",
+        "async_vs_sync_throughput_ratio", "resource_window_seconds", *RESOURCE_FIELDS,
         "http_coordinate_accepted_connections",
         "http_coordinate_completed_unary_operations",
         "http_coordinate_operations_per_connection",
@@ -903,6 +1114,8 @@ def write_csv(results: list[dict[str, object]], csv_path: Path) -> None:
             latency = result["latency_ms"]
             assert isinstance(latency, dict)
             row = {key: result.get(key, 0) for key in fieldnames}
+            row.update({key: result.get(key) for key in (*RESOURCE_FIELDS, "resource_window_seconds",
+                        "async_vs_sync_throughput_ratio", "client_execution_mode", "server_execution_mode", "executor_mode")})
             first_event_latency = result.get("first_event_latency_ms", {})
             if not isinstance(first_event_latency, dict):
                 first_event_latency = {}
@@ -977,17 +1190,20 @@ def append_pivot_table(lines: list[str], results: list[dict[str, object]]) -> No
         for value in (f"c{concurrency} ops/s", f"c{concurrency} p95 ms")
     ) + " |"
     lines.extend(["", header, "| --- | " + " | ".join("---:" for _ in range(2 * len(concurrency_levels))) + " |"])
-    by_coordinate = {(str(result["scenario"]), int(result["concurrency"])): result for result in results}
+    by_coordinate: dict[tuple[str, int], list[dict[str, object]]] = {}
+    for result in results:
+        coordinate = (str(result["scenario"]), int(result["concurrency"]))
+        by_coordinate.setdefault(coordinate, []).append(result)
     for scenario in sorted({str(result["scenario"]) for result in results}):
         values = []
         for concurrency in concurrency_levels:
-            result = by_coordinate.get((scenario, concurrency))
-            if result is None:
+            selected = by_coordinate.get((scenario, concurrency))
+            if not selected:
                 values.extend(("—", "—"))
                 continue
-            latency = result["latency_ms"]
-            assert isinstance(latency, dict)
-            values.extend((f"{float(result['throughput_ops_per_sec']):.2f}", f"{float(latency['p95']):.4f}"))
+            throughput = statistics.median(float(row["throughput_ops_per_sec"]) for row in selected)
+            p95 = statistics.median(float(row["latency_ms"]["p95"]) for row in selected)
+            values.extend((f"{throughput:.2f}", f"{p95:.4f}"))
         lines.append(f"| {scenario} | " + " | ".join(values) + " |")
 
 
@@ -1070,6 +1286,12 @@ def append_cross_backend_markdown(lines: list[str], signals: list[dict[str, obje
     append_collapsible_end(lines)
 
 
+def execution_mode_label(row: dict[str, object]) -> str:
+    if "server_execution_mode" not in row:
+        return ""
+    return f" ({row.get('client_execution_mode', 'n/a')}/{row['server_execution_mode']})"
+
+
 def append_detailed_matrix(lines: list[str], results: list[dict[str, object]]) -> None:
     repeated = any(result.get("repetition") is not None for result in results)
     repetition_header = " Repetition |" if repeated else ""
@@ -1080,9 +1302,9 @@ def append_detailed_matrix(lines: list[str], results: list[dict[str, object]]) -
     for result in results:
         latency = result["latency_ms"]
         assert isinstance(latency, dict)
-        repetition = f" {result['repetition']} |" if repeated else ""
+        repetition = f" {result.get('repetition', 1)} |" if repeated else ""
         lines.append(
-            f"|{repetition} {result['scenario']} | {result['driver_type']} | {path_label(str(result['transport_path']))} | "
+            f"|{repetition} {result['scenario']} | {result['driver_type']}{execution_mode_label(result)} | {path_label(str(result['transport_path']))} | "
             f"{transport_label(result)} | {store_label(str(result['store_backend']))} | {result['concurrency']} | "
             f"{result.get('postgres_pool_size') or ''} | {result['success']} | {result['errors']} | "
             f"{float(result['throughput_ops_per_sec']):.2f} | {float(latency['p50']):.4f} | "
@@ -1122,7 +1344,7 @@ def append_streaming_latency_rollup(lines: list[str], results: list[dict[str, ob
         latency = result["latency_ms"]
         assert isinstance(latency, dict)
         lines.append(
-            f"| {result['scenario']} | {path_label(str(result['transport_path']))} | "
+            f"| {result['scenario']}{execution_mode_label(result)} | {path_label(str(result['transport_path']))} | "
             f"{transport_label(result)} | {store_label(str(result['store_backend']))} | "
             f"{result['concurrency']} | {float(latency['p95']):.4f} | "
             f"{format_latency_percentile(result, FIRST_EVENT_LATENCY_FIELD, 'p50')} | "
@@ -1145,6 +1367,7 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
         f"* Host: {host['os']} ({host['cpu']})",
         f"* Result rows: {len(results)}",
         f"* Push-config fanout fixture: {metadata.get('push_config_fanout', DEFAULT_PUSH_CONFIG_FANOUT)}",
+        f"* Idle subscription hold: {metadata.get('stream_hold_ms', 0)} ms before cancellation.",
         "* Mode: report-only; no performance thresholds are enforced.",
         "",
         "## Execution summary",
@@ -1157,11 +1380,24 @@ def render_markdown_summary(results: list[dict[str, object]], metadata: dict[str
             f"| {store_label(str(row['store']))} | {path_label(str(row['path']))} | {row['rows']} | "
             f"{row['operations']} | {row['success']} | {row['errors']} |"
         )
+    compare_modes = "async" in metadata.get("server_modes", ())
+    if compare_modes:
+        lines.extend(["", f"CPU placement: server {metadata.get('server_cpus') or 'unavailable/shared'}, "
+                      f"client {metadata.get('client_cpus') or 'unavailable/shared'}; "
+                      f"cgroup cpu.max: {metadata.get('cpu_quota') or 'unavailable'}. "
+                      "Disjoint sets reserve driver capacity; overlapping sets share CPU capacity."])
+        append_sync_async_markdown(lines, results, int(metadata.get("repetitions", 1)))
     if aggregates is None:
-        append_grouped_result_sections(lines, results)
-        append_cross_backend_markdown(lines, cross_backend_scaling(results))
-    append_streaming_latency_rollup(lines, results)
-    append_detailed_matrix(lines, results)
+        sync_results = [row for row in results if row.get("server_execution_mode") != "async"]
+        grouped = [row for row in sync_results if row["transport_path"] == "in_process" or row["store_backend"] == "postgres"] if compare_modes else sync_results
+        append_grouped_result_sections(lines, grouped)
+        # The existing cross-backend diagnostic uses one row per coordinate.
+        first_runs = [row for row in sync_results if row.get("repetition", 1) == 1
+                      and row.get("client_execution_mode", "sync") != "async"]
+        append_cross_backend_markdown(lines, cross_backend_scaling(first_runs))
+    if not compare_modes:
+        append_streaming_latency_rollup(lines, results)
+        append_detailed_matrix(lines, results)
     diagnostic_results = [result for result in results if "postgres_phase_latency_ms" in result]
     if diagnostic_results:
         lines.extend([
@@ -1429,8 +1665,7 @@ def log_workload_estimate(config: RunnerConfig) -> None:
     store_concurrency_rows = store_pool_count * len(config.concurrency_levels)
     selected_in_process_scenarios = in_process_scenarios(config.scenarios)
     in_process_rows = store_concurrency_rows * len(selected_in_process_scenarios)
-    wire_rows = sum(len(wire_scenarios_for_transport(transport, config.scenarios)) for transport in config.transports) * store_concurrency_rows
-    estimated_rows = in_process_rows + wire_rows
+    estimated_rows = in_process_rows * config.repetitions + sum(expected_wire_rows(config, mode) for mode in SERVER_MODES)
     estimated_operations = estimated_rows * config.requests
     log_progress(
         f"estimated_rows={estimated_rows} estimated_operations={estimated_operations} "
@@ -1441,6 +1676,144 @@ def log_workload_estimate(config: RunnerConfig) -> None:
 
 def result_error_count(result: dict[str, object]) -> int:
     return int(result.get("errors", 0))
+
+
+def valid_comparison_result(row: dict[str, object]) -> bool:
+    try:
+        operations, success, errors = (int(row[key]) for key in ("operations", "success", "errors"))
+        throughput = float(row["throughput_ops_per_sec"])
+        duration = float(row.get("configured_duration_seconds", 0))
+        complete = (float(row.get("measured_duration_seconds", 0)) >= duration if duration > 0
+                    else operations == int(row["configured_requests"]))
+        return (operations > 0 and success == operations and errors == 0 and complete and
+                math.isfinite(throughput) and throughput > 0 and
+                all(math.isfinite(float(row["latency_ms"][key])) and float(row["latency_ms"][key]) >= 0
+                    for key in ("p95", "p99")))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def sync_async_comparisons(results: list[dict[str, object]], repetitions: int) -> list[dict[str, object]]:
+    groups: dict[tuple, dict[str, list[dict[str, object]]]] = {}
+    for row in results:
+        if row.get("transport_path") == "in_process":
+            continue
+        key = tuple(row.get(field) for field in
+                    ("scenario", "transport", "store_backend", "concurrency", "postgres_pool_size",
+                     "client_execution_mode", "configured_requests", "configured_duration_seconds", "stream_hold_ms"))
+        groups.setdefault(key, {}).setdefault(str(row.get("server_execution_mode", "sync")), []).append(row)
+    comparisons = []
+    for key, modes in sorted(groups.items(), key=lambda item: (str(item[0][:3]), int(item[0][3]), str(item[0][4:]))):
+        comparison = dict(zip(("scenario", "transport", "store_backend", "concurrency", "postgres_pool_size",
+                               "client_execution_mode", "configured_requests", "configured_duration_seconds", "stream_hold_ms"), key))
+        comparison["throughput_ratio"] = None
+        summaries = {}
+        for mode, rows in modes.items():
+            complete = (len(rows) == repetitions and
+                        {row.get("repetition", 1) for row in rows} == set(range(1, repetitions + 1)) and
+                        all(valid_comparison_result(row) for row in rows))
+            summary = {"valid": complete, "repetitions": len(rows),
+                       "errors": sum(result_error_count(row) for row in rows),
+                       "executor_mode": rows[0].get("executor_mode", "unknown")}
+            summary["throughput_ops_per_sec"] = statistics.median(float(row["throughput_ops_per_sec"]) for row in rows)
+            summary["throughput_min"] = min(float(row["throughput_ops_per_sec"]) for row in rows)
+            summary["throughput_max"] = max(float(row["throughput_ops_per_sec"]) for row in rows)
+            for metric in ("p95", "p99"):
+                summary[f"{metric}_ms"] = statistics.median(float(row["latency_ms"][metric]) for row in rows)
+            for dimension, prefix in ((FIRST_EVENT_LATENCY_FIELD, "first_event"),
+                                      (STREAM_COMPLETION_LATENCY_FIELD, "stream_completion")):
+                for percentile in ("p50", "p95"):
+                    values = [float(row[dimension][percentile]) for row in rows
+                              if isinstance(row.get(dimension), dict) and percentile in row[dimension]]
+                    summary[f"{prefix}_{percentile}_ms"] = statistics.median(values) if len(values) == len(rows) else None
+            for metric in RESOURCE_FIELDS:
+                values = [float(row[metric]) for row in rows if row.get(metric) is not None]
+                summary[metric] = statistics.median(values) if len(values) == len(rows) else None
+            summaries[mode] = summary
+        comparison["modes"] = summaries
+        sync, asynchronous = summaries.get("sync"), summaries.get("async")
+        if sync and asynchronous and sync["valid"] and asynchronous["valid"]:
+            comparison["throughput_ratio"] = safe_ratio(asynchronous["throughput_ops_per_sec"], sync["throughput_ops_per_sec"])
+        for rows in modes.values():
+            for row in rows:
+                row["async_vs_sync_throughput_ratio"] = comparison["throughput_ratio"]
+        comparisons.append(comparison)
+    return comparisons
+
+
+def comparison_value(modes: dict, mode: str, metric: str, digits: int = 2) -> str:
+    data = modes.get(mode)
+    value = data.get(metric) if data is not None and data["valid"] else None
+    return "n/a" if value is None else f"{float(value):.{digits}f}"
+
+
+def comparison_pair(modes: dict, metric: str, digits: int = 2) -> str:
+    return " / ".join(comparison_value(modes, mode, metric, digits) for mode in SERVER_MODES)
+
+
+def comparison_coordinate(row: dict) -> str:
+    return f"| {row['scenario']} | {row['transport']} | {row['store_backend']} | {row['concurrency']} | {row.get('client_execution_mode', 'sync')} | "
+
+
+def append_sync_async_markdown(lines: list[str], results: list[dict[str, object]], repetitions: int) -> None:
+    measurement = ("Single measurement per mode; no variation estimate. " if repetitions == 1
+                   else "Medians of repeated runs. ")
+    lines.extend(["", "## Sync / async server comparison", "",
+                  measurement + "Client mode is explicit. Ratio = async/sync server ops/s: >1 gain, <1 regression, ~1 parity. "
+                  "Callback-driven async client coverage: GetTask and ListTasks. Streaming uses the common observer API and runs once per server mode. "
+                  "Missing or invalid pairs are n/a; no speed thresholds. All supported in-memory wire workloads run both modes. "
+                  "PostgreSQL async is n/a (not measured); its wire tables below are sync-only. "
+                  "In-process measurements bypass the gRPC/HTTP server transports. "
+                  "Raw repetitions remain in results.json and results.csv."])
+    append_collapsible_start(lines, "Show sync/async throughput and latency")
+    lines.extend(["",
+                  "| Scenario | Transport | Store | c | Client | Sync server ops/s | Async server ops/s | Ratio | Sync p95/p99 ms | Async p95/p99 ms | Ops/s range sync / async | Errors sync/async |",
+                  "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- | --- | --- | --- |"])
+    comparisons = [row for row in sync_async_comparisons(results, repetitions) if row["store_backend"] == "inmemory"]
+    for row in comparisons:
+        modes = row["modes"]
+        def latency(mode: str) -> str:
+            return "/".join(comparison_value(modes, mode, metric) for metric in ("p95_ms", "p99_ms"))
+        errors = "/".join(str(modes[mode]["errors"]) if mode in modes else "n/a" for mode in SERVER_MODES)
+        ranges = ("n/a" if repetitions == 1 else " / ".join(
+            f"{comparison_value(modes, mode, 'throughput_min', 0)}–{comparison_value(modes, mode, 'throughput_max', 0)}"
+            for mode in SERVER_MODES))
+        lines.append(comparison_coordinate(row) +
+                     f"{comparison_value(modes, 'sync', 'throughput_ops_per_sec')} | "
+                     f"{comparison_value(modes, 'async', 'throughput_ops_per_sec')} | "
+                     f"{format_ratio(row['throughput_ratio'])} | {latency('sync')} | {latency('async')} | {ranges} | {errors} |")
+    append_collapsible_end(lines)
+    append_paired_streaming_latency(lines, comparisons)
+    lines.extend(["", "Resources cover each whole driver invocation, including setup/warmup. "
+                  "Every resource cell shows sync / async. CPU seconds are process CPU time; threads are sampled peaks; "
+                  "RSS is process high-water KiB. Unsupported counters are n/a; short-lived threads may be missed."])
+    append_collapsible_start(lines, "Show sync/async process resources")
+    lines.extend(["",
+                  "| Scenario | Transport | Store | c | Client | Server CPU s | Client CPU s | Server threads | Client threads | Server RSS KiB | Client RSS KiB | Executor sync/async |",
+                  "| --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |"])
+    for row in comparisons:
+        modes = row["modes"]
+        values = [comparison_pair(modes, metric, 2 if metric.endswith("cpu_seconds") else 0) for metric in (
+            "server_cpu_seconds", "client_cpu_seconds", "server_peak_threads", "client_peak_threads",
+            "server_peak_rss_kib", "client_peak_rss_kib")]
+        executors = " / ".join(str(modes[mode]["executor_mode"]) if mode in modes else "n/a" for mode in SERVER_MODES)
+        lines.append(comparison_coordinate(row) + " | ".join(values) + f" | {executors} |")
+    append_collapsible_end(lines)
+
+
+def append_paired_streaming_latency(lines: list[str], comparisons: list[dict[str, object]]) -> None:
+    fields = ("first_event_p50_ms", "first_event_p95_ms", "stream_completion_p50_ms", "stream_completion_p95_ms")
+    streaming = [row for row in comparisons if any(data.get(field) is not None
+                 for data in row["modes"].values() for field in fields)]
+    if not streaming:
+        return
+    lines.extend(["", "## Streaming latency rollup", "", "Every latency cell shows sync / async in milliseconds; repeated runs use medians."])
+    append_collapsible_start(lines, "Show paired streaming latencies")
+    lines.extend(["", "| Scenario | Transport | Store | c | Client | First event p50 | First event p95 | Completion p50 | Completion p95 |",
+                  "| --- | --- | --- | ---: | --- | --- | --- | --- | --- |"])
+    for row in streaming:
+        lines.append(comparison_coordinate(row) + " | ".join(comparison_pair(row["modes"], field, 4) for field in fields) + " |")
+    append_collapsible_end(lines)
 
 
 def format_error_summary(results: list[dict[str, object]]) -> str:
@@ -1454,6 +1827,8 @@ def format_error_summary(results: list[dict[str, object]]) -> str:
             f"driver_type={result.get('driver_type')} "
             f"transport_path={result.get('transport_path')} "
             f"transport={result.get('transport')} "
+            f"client={result.get('client_execution_mode', 'unknown')} "
+            f"server={result.get('server_execution_mode', 'unknown')} "
             f"store={result.get('store_backend')} "
             f"concurrency={result.get('concurrency')} "
             f"success={result.get('success')} "
@@ -1481,6 +1856,11 @@ def main(argv: list[str]) -> int:
     try:
         config = parse_args(argv)
         validate_runnable_plan(config)
+        if "async" in config.server_modes:
+            # Refresh once per target; both modes then use these same binaries.
+            for env_name, target in (("A2A_PERF_DRIVER", DRIVER_NAME), ("A2A_PERF_WIRE_DRIVER", WIRE_DRIVER_NAME),
+                                     ("A2A_PERF_SUT", SUT_NAME)):
+                ensure_executable(config, env_name, target, target, refresh=True)
         results = []
         log_workload_estimate(config)
         in_process_transport = config.transports[0]
@@ -1510,7 +1890,7 @@ def main(argv: list[str]) -> int:
                                 ),
                                 in_process_transport, store_backend, concurrency, config.requests,
                             )
-                        if config.profile in POSTGRES_PROFILES:
+                        if config.profile in POSTGRES_PROFILES or config.repetitions > 1:
                             for result in run_results:
                                 result["repetition"] = repetition
                             last_schema = (f"{schema}_s{len(config.scenarios or ()) - 1}"
@@ -1522,16 +1902,27 @@ def main(argv: list[str]) -> int:
                     pool_sizes = config.postgres_pool_sizes if store_backend == "postgres" else (DEFAULT_POSTGRES_POOL_SIZE,)
                     for postgres_pool_size in pool_sizes:
                         for concurrency in config.concurrency_levels:
-                            results.extend(
-                                run_with_progress(
-                                    "wire",
-                                    lambda: run_wire_driver(
-                                        config, transport, store_backend, concurrency, postgres_pool_size,
-                                        find_available_sut_port()
-                                    ),
-                                    transport, store_backend, concurrency, config.requests,
-                                )
-                            )
+                            for repetition in range(1, config.repetitions + 1):
+                                # Alternate order to reduce first/second-run bias.
+                                modes = config.server_modes if repetition % 2 else tuple(reversed(config.server_modes))
+                                for mode in modes:
+                                    mode_config = replace(config, server_mode=mode)
+                                    rows = run_with_progress(
+                                        f"wire server={mode} repetition={repetition}" if "async" in config.server_modes else "wire",
+                                        lambda: run_wire_driver(
+                                            mode_config, transport, store_backend, concurrency, postgres_pool_size,
+                                            find_available_sut_port()
+                                        ),
+                                        transport, store_backend, concurrency, config.requests,
+                                    )
+                                    for row in rows:
+                                        if config.repetitions > 1:
+                                            row["repetition"] = repetition
+                                    results.extend(rows)
+        for row in results:
+            row.setdefault("client_execution_mode", "n/a" if row["transport_path"] == "in_process" else "sync")
+            row.setdefault("server_execution_mode", "in_process" if row["transport_path"] == "in_process" else "sync")
+            row.setdefault("executor_mode", "synchronous")
         results.sort(key=lambda result: (str(result["scenario"]), str(result["store_backend"]), str(result["driver_type"]), str(result["transport_path"]), str(result["transport"]), int(result["concurrency"]), int(result.get("postgres_pool_size") or 0), int(result.get("repetition", 0))))
         aggregates = None
         query_plans = None
@@ -1551,6 +1942,17 @@ def main(argv: list[str]) -> int:
         if any(result_error_count(result) > 0 for result in results):
             print(f"error: {format_error_summary(results)}", file=sys.stderr)
             return 2
+        if "async" in config.server_modes:
+            invalid = [row for row in results if row["transport_path"] != "in_process" and not valid_comparison_result(row)]
+            comparisons = sync_async_comparisons(results, config.repetitions)
+            incomplete = any(not data["valid"] for row in comparisons for data in row["modes"].values())
+            expected_async = expected_wire_rows(config, "async")
+            actual_async = sum(row.get("server_execution_mode") == "async" for row in results)
+            expected_sync = expected_wire_rows(config, "sync")
+            actual_sync = sum(row.get("server_execution_mode") == "sync" for row in results)
+            if invalid or incomplete or actual_async != expected_async or actual_sync != expected_sync:
+                raise ValueError(f"performance comparison has {len(invalid)} invalid rows; "
+                                 f"sync rows {actual_sync}/{expected_sync}, async rows {actual_async}/{expected_async}")
         return 0
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

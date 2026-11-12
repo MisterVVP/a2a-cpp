@@ -228,14 +228,21 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install deps
         run: ./scripts/install_build_deps.sh
+      - name: Install async I/O dependencies
+        run: |
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallBoost.cmake
+          cmake -DA2A_SIMDJSON_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallSimdjson.cmake
       - name: Run report-only performance suite
         env:
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-deps
+          A2A_PERF_SERVER_MODES: sync,async
+          A2A_PERF_REPETITIONS: 1
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory,postgres
           A2A_PERF_REQUESTS: 1000
           A2A_PERF_POSTGRES_POOL_SIZES: "64"
           A2A_PERF_CONCURRENCY: 1,4,16,64
-          A2A_PERF_WARMUP_SECONDS: 0
+          A2A_PERF_WARMUP_SECONDS: 0.1
           A2A_PERF_REPORT_DIR: perf-artifacts/normal
         run: ./scripts/run_performance_tests.sh
       - name: Validate normal performance reports
@@ -245,6 +252,24 @@ jobs:
           test -s perf-artifacts/normal/summary.md
           python3 -m json.tool perf-artifacts/normal/results.json >/dev/null
           cat perf-artifacts/normal/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Compare warmed client and server APIs under sustained load
+        env:
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-deps
+          A2A_PERF_SERVER_MODES: sync,async
+          A2A_PERF_CLIENT_MODES: sync,async
+          A2A_PERF_REPETITIONS: 1
+          A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
+          A2A_PERF_STORE_BACKENDS: inmemory
+          A2A_PERF_SCENARIOS: GetTask_ExistingTask,ListTasks_WithPagination,SendStreamingMessage_FiniteStream,IdleStream_ClientCancellationLatency
+          A2A_PERF_REQUESTS: 1000000
+          A2A_PERF_CONCURRENCY: 1,64
+          A2A_PERF_WARMUP_SECONDS: 0.25
+          A2A_PERF_DURATION_SECONDS: 3
+          A2A_PERF_STREAM_HOLD_MS: 100
+          A2A_PERF_REPORT_DIR: perf-artifacts/normal/sustained
+        run: |
+          ./scripts/run_performance_tests.sh
+          cat perf-artifacts/normal/sustained/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload normal performance artifacts
         if: always()
         uses: actions/upload-artifact@v6

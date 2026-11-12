@@ -26,6 +26,7 @@ using namespace a2a::test;
 constexpr auto kShortStreamDeadline = std::chrono::milliseconds(500);
 constexpr auto kStreamRaceParticipants = 2;
 constexpr auto kMinimumStreamLookaheadBytes = 5;
+constexpr std::size_t kBurstStreamEvents = 128;
 class NativeStreamAfter final : public ServerInterceptor {
  public:
   void AfterDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/,
@@ -34,8 +35,8 @@ class NativeStreamAfter final : public ServerInterceptor {
   }
   std::atomic_size_t count = 0;
 };
-void ExpectOrderedNativeEvents(NativeStream& call) {
-  for (std::size_t index = 0; index < kStreamEvents; ++index) {
+void ExpectOrderedNativeEvents(NativeStream& call, std::size_t event_count = kStreamEvents) {
+  for (std::size_t index = 0; index < event_count; ++index) {
     ASSERT_TRUE(call.Read());
     EXPECT_EQ(call.event.message().message_id(), std::to_string(index));
   }
@@ -54,6 +55,16 @@ TEST(AsyncStreamGrpc, SendsOrderedFiniteEventsAndExtensionTrailers) {
   EXPECT_TRUE(call->Finish().ok());
   const auto& trailers = call->context.GetServerTrailingMetadata();
   EXPECT_EQ(trailers.count(kStreamExtensionKey), 1);
+}
+TEST(AsyncStreamGrpc, RepeatedWritesAcknowledgeEachEventAndFinishInOrder) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  server.application->event_count = kBurstStreamEvents;
+  const auto call = server.Start();
+  ExpectOrderedNativeEvents(*call, kBurstStreamEvents);
+  EXPECT_FALSE(call->Read());
+  EXPECT_TRUE(call->Finish().ok());
+  EXPECT_EQ(server.application->acknowledged, kBurstStreamEvents);
 }
 TEST(AsyncStreamGrpc, SubscriptionConvertsTenantAndPropagatesOwnedMetadata) {
   NativeStreamServer server;

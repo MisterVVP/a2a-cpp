@@ -85,6 +85,82 @@ For the canonical wrapper and generated summary artifacts, prefer:
 ./scripts/run_performance_tests.sh --store-backends inmemory --requests 1000 --concurrency 1,4
 ```
 
+### Compare synchronous and async servers
+
+With the optional Boost.Asio dependencies installed (see the
+[installation guide](../getting-started/installation.md)), run the same driver against both server modes:
+
+```bash
+./scripts/run_performance_tests.sh --server-modes sync,async \
+  --store-backends inmemory --transports grpc,http_json,jsonrpc \
+  --requests 1000 --concurrency 1,4,16,64 \
+  --report-dir perf-artifacts/normal
+```
+
+The runner configures Release with `A2A_ENABLE_ASIO=ON` and uses one
+`performance_sut` binary for both modes. Async mode selects the native async gRPC
+service and `EventHttpServer`/SSE handler; startup must confirm the requested
+mode. Both use identical fixtures and the synchronous wire client by default.
+The in-memory fixture runs ready operations on the coroutine executor and live
+subscriptions await native publication, labeled `native_coroutine`. Stores that
+need blocking work use `blocking_adapter`; PostgreSQL async measurements are
+outside the initial matrix.
+
+Add `--client-modes sync,async` (`A2A_PERF_CLIENT_MODES`) to measure all four
+client/server combinations for `GetTask_ExistingTask`, `ListTasks_NoPagination`,
+and `ListTasks_WithPagination`. Async client lanes submit the next request from
+the completion callback, with the same concurrency limit as sync workers;
+they do not block one thread per request. Other workloads retain their existing
+client API. Streaming has one observer API and is measured once per server mode.
+PostgreSQL remains sync-only.
+
+For a sustained comparison of read-only calls and finite streams:
+
+```bash
+./scripts/run_performance_tests.sh --server-modes sync,async --client-modes sync,async \
+  --store-backends inmemory --transports grpc,http_json,jsonrpc \
+  --scenarios GetTask_ExistingTask,ListTasks_WithPagination,SendStreamingMessage_FiniteStream \
+  --requests 1000000 --duration-seconds 3 --warmup-seconds 0.25 \
+  --concurrency 1,64 --report-dir perf-artifacts/normal/sustained
+```
+
+Each wire run warms the actual measured clients through the selected API and
+retains their connections. Read-only sync/async client cases share the same
+fixtures and warmup concurrency. Both duration and request count are limits:
+use a generous request cap for a timed run. Comparison validation rejects runs
+that exhaust that cap before reaching the requested duration. Follow-up and
+delete workloads still require distinct preseeded fixtures per request; keep
+their request counts modest instead of using this sustained-load command.
+
+`--stream-hold-ms 100` (`A2A_PERF_STREAM_HOLD_MS`) holds established subscriptions
+in `IdleStream_ClientCancellationLatency` before cancelling them. This exercises
+waiting I/O at the selected concurrency, while reported cancellation latency
+still excludes the hold. The value is recorded in reports. The sustained CI
+step includes this workload as well as read-only calls and finite streams.
+
+The async matrix covers all supported in-memory wire workloads, including unary
+operations, push configuration, finite streams, subscriptions, and cancellation.
+Use `--scenarios` to narrow a local run. PostgreSQL retains synchronous coverage
+and shows `n/a` for async; its storage is unchanged. In-process results remain
+separate because they bypass the gRPC/HTTP server transports.
+`--server-modes sync` preserves the default suite; the corresponding
+environment variables are `A2A_PERF_SERVER_MODES` and `A2A_PERF_REPETITIONS`.
+
+Comparison runs default to one measurement per mode and start a fresh SUT for
+each scenario/mode. CI also uses one pass for both the broad and sustained
+matrices. Use `--repetitions` explicitly for local variance analysis; repeated
+runs alternate server order. On Linux, automatic CPU placement divides
+the available CPU budget between driver and server, taking the cgroup v2 quota
+into account and giving the driver the extra CPU for odd budgets. Both server modes receive the
+same CPU set. Reports record placement and quota; fewer than two CPUs and
+platforms without affinity support share CPU capacity. `--cpu-placement shared`
+disables separation. Check this metadata before interpreting results on a
+shared or throttled machine.
+
+When supplying `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_PERF_SUT`, build
+all three from the same revision with Release and matching optional dependencies.
+The runner cannot verify the provenance of external binaries.
+
 ## PostgreSQL tail validation
 
 Run the focused tail-validation matrix against a local PostgreSQL instance with:

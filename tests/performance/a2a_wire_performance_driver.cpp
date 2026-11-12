@@ -5,6 +5,7 @@
 #include <grpcpp/security/credentials.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -16,8 +17,10 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
+#include "a2a/client/async_client.h"
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/grpc_transport.h"
@@ -43,6 +46,9 @@ constexpr int kEndpointReserveSlack = 32;
 constexpr int kListFixtureTaskCount = 20;
 constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
 constexpr int kFocusedListConfigCount = 3;
+constexpr std::string_view kSyncClient = "sync";
+constexpr std::string_view kAsyncClient = "async";
+constexpr int kWarmupRequestLimit = 1000000;
 constexpr std::string_view kScenarioSendStreamingMessageFiniteStreamSharedClient =
     "SendStreamingMessage_FiniteStream_SharedClient";
 constexpr std::string_view kScenarioSubscribeToTaskFirstEventLatencySharedClient =
@@ -139,6 +145,8 @@ struct WireOptions final {
   int concurrency = kDefaultConcurrency;
   double warmup_seconds = 0.0;
   double duration_seconds = 0.0;
+  std::string client_mode = std::string(kSyncClient);
+  int stream_hold_ms = 0;
   std::vector<std::string> scenarios;
 };
 
@@ -282,7 +290,7 @@ OperationOutcome ExecuteWireSubscribeFirstEvent(a2a::client::A2AClient* client, 
 }
 
 OperationOutcome ExecuteIdleStreamClientCancellation(a2a::client::A2AClient* client, int index,
-                                                     const a2a::client::CallOptions& call_options) {
+                                                     const a2a::client::CallOptions& call_options, int hold_ms) {
   const std::string task_id = SeedTask(client, BuildId("wire-idle-cancel-seed", index), call_options);
   if (task_id.empty()) {
     return {};
@@ -298,6 +306,9 @@ OperationOutcome ExecuteIdleStreamClientCancellation(a2a::client::A2AClient* cli
     return {};
   }
 
+  // Hold established subscriptions to exercise waiting I/O; cancellation timing
+  // still starts immediately before Cancel().
+  std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms));
   const auto cancellation_started = std::chrono::steady_clock::now();
   stream.value()->Cancel();
   const auto cancellation_duration = std::chrono::steady_clock::now() - cancellation_started;
@@ -408,7 +419,8 @@ std::string SeedTaskAtHistoryDepth(a2a::client::A2AClient* client, std::string_v
 }
 
 OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_view scenario, int index,
-                                 const FocusedWireFixture& fixture, std::string_view follow_up_task_id = {}) {
+                                 const FocusedWireFixture& fixture, std::string_view follow_up_task_id = {},
+                                 int stream_hold_ms = 0) {
   const a2a::client::CallOptions call_options = MakeCallOptions();
   if (scenario == kScenarioSendMessageCreateTask) {
     return MakeOutcome(client->SendMessage(MakeSendRequest(BuildId("wire-create", index)), call_options).ok());
@@ -456,7 +468,7 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
     return ExecuteWireSubscribeFirstEvent(client, index, call_options);
   }
   if (scenario == kScenarioIdleStreamClientCancellationLatency) {
-    return ExecuteIdleStreamClientCancellation(client, index, call_options);
+    return ExecuteIdleStreamClientCancellation(client, index, call_options, stream_hold_ms);
   }
   if (scenario == kScenarioPushConfigCreate) {
     return MakeOutcome(ExecuteWirePushCreate(client, index, fixture.task_id, call_options));
@@ -501,44 +513,181 @@ std::vector<std::unique_ptr<a2a::client::A2AClient>> MakeMeasuredClients(const W
   return clients;
 }
 
+bool SupportsAsyncClient(std::string_view scenario) {
+  return IsListScenario(scenario) || scenario == kScenarioGetTaskExistingTask;
+}
+
+// Each lane has one outstanding callback, matching the sync driver's in-flight
+// budget without dedicating a blocked worker thread to every request.
+class AsyncWireMeasurement final {
+ public:
+  AsyncWireMeasurement(const WireOptions& options, const std::string& scenario,
+                       const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
+                       const FocusedWireFixture& fixture)
+      : options_(options),
+        scenario_(scenario),
+        clients_(clients),
+        fixture_(fixture),
+        lanes_(clients.size()),
+        next_(static_cast<int>(clients.size())) {}
+
+  ScenarioResult Run() {
+    const auto started = std::chrono::steady_clock::now();
+    deadline_ = started + std::chrono::duration<double>(options_.duration_seconds);
+    for (std::size_t lane = 0; lane < lanes_.size(); ++lane) {
+      lanes_[lane].latencies.reserve(static_cast<std::size_t>(options_.requests) / lanes_.size());
+      Start(lane, true);
+    }
+    {
+      std::unique_lock lock(mutex_);
+      ready_.wait(lock, [this] { return retired_ == lanes_.size(); });
+    }
+    ScenarioResult result;
+    result.scenario = scenario_;
+    result.measured_duration_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    for (auto& lane : lanes_) {
+      result.success += static_cast<int>(lane.latencies.size());
+      result.errors += lane.errors;
+      result.latencies.insert(result.latencies.end(), lane.latencies.begin(), lane.latencies.end());
+    }
+    result.operations = result.success + result.errors;
+    result.event_count = result.success;
+    result.throughput =
+        static_cast<double>(result.success) / std::max(result.measured_duration_seconds, kMinElapsedSeconds);
+    std::ranges::sort(result.latencies);
+    return result;
+  }
+
+ private:
+  struct Lane final {
+    std::vector<double> latencies;
+    int errors = 0;
+  };
+
+  void Record(std::size_t lane, std::chrono::steady_clock::time_point started, bool ok) {
+    if (ok) {
+      lanes_[lane].latencies.push_back(
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+    } else {
+      ++lanes_[lane].errors;
+    }
+  }
+
+  a2a::core::Result<a2a::core::AsyncHandle> Submit(std::size_t lane, std::chrono::steady_clock::time_point started) {
+    auto completion = [this, lane, started](auto result) {
+      Record(lane, started, result.ok());
+      Start(lane);
+    };
+    auto client = clients_[lane]->Async();
+    if (scenario_ == kScenarioGetTaskExistingTask) {
+      lf::a2a::v1::GetTaskRequest request;
+      request.set_id(fixture_.task_id);
+      return client.GetTask(request, completion, MakeCallOptions());
+    }
+    a2a::client::ListTasksRequest request;
+    if (scenario_ == kScenarioListTasksWithPagination) {
+      request.page_size = kListPageSize;
+    }
+    return client.ListTasks(request, completion, MakeCallOptions());
+  }
+
+  void Start(std::size_t lane, bool first = false) {
+    for (;;) {
+      if (!first && ((options_.duration_seconds > 0.0 && std::chrono::steady_clock::now() >= deadline_) ||
+                     next_.fetch_add(1, std::memory_order_relaxed) >= options_.requests)) {
+        std::lock_guard lock(mutex_);
+        ++retired_;
+        ready_.notify_one();
+        return;
+      }
+      first = false;
+      const auto started = std::chrono::steady_clock::now();
+      if (Submit(lane, started).ok()) {
+        return;
+      }
+      Record(lane, started, false);
+    }
+  }
+
+  const WireOptions& options_;
+  const std::string& scenario_;
+  const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients_;
+  const FocusedWireFixture& fixture_;
+  std::vector<Lane> lanes_;
+  std::atomic<int> next_;
+  std::chrono::time_point<std::chrono::steady_clock, std::chrono::duration<double>> deadline_;
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  std::size_t retired_ = 0;
+};
+
 OperationOutcome ExecuteMeasuredWireOperation(const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
                                               const std::string& scenario,
                                               const std::vector<std::string>& follow_up_task_ids,
                                               const FocusedWireFixture& focused_fixture,
-                                              bool use_shared_http_stream_client, int worker_index, int index) {
+                                              bool use_shared_http_stream_client, int worker_index, int index,
+                                              int stream_hold_ms) {
   const std::string_view task_id =
       follow_up_task_ids.empty() ? std::string_view{} : follow_up_task_ids[static_cast<std::size_t>(index)];
   const std::size_t client_index = use_shared_http_stream_client ? 0U : static_cast<std::size_t>(worker_index);
-  return ExecuteScenario(clients[client_index].get(), scenario, index, focused_fixture, task_id);
+  return ExecuteScenario(clients[client_index].get(), scenario, index, focused_fixture, task_id, stream_hold_ms);
 }
 
-ScenarioResult RunWireScenario(const WireOptions& options, const std::string& scenario) {
+void WarmSyncClients(const WireOptions& options, const std::string& scenario,
+                     const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients) {
   const auto warmup_end = std::chrono::steady_clock::now() + std::chrono::duration<double>(options.warmup_seconds);
   int warmup_index = -1;
-  auto warmup_client = MakeClient(options);
-  while (std::chrono::steady_clock::now() < warmup_end) {
+  std::size_t warmed_clients = 0;
+  while (options.client_mode == kSyncClient && options.warmup_seconds > 0.0 &&
+         (warmed_clients < clients.size() || std::chrono::steady_clock::now() < warmup_end)) {
+    auto* warmup_client = clients[warmed_clients % clients.size()].get();
+    ++warmed_clients;
     const auto call_options = MakeCallOptions();
     FocusedWireFixture warmup_fixture;
-    if (!PrepareFocusedWireFixture(warmup_client.get(), scenario, 1, BuildId("wire-warmup-fixture", warmup_index),
+    if (!PrepareFocusedWireFixture(warmup_client, scenario, 1, BuildId("wire-warmup-fixture", warmup_index),
                                    call_options, &warmup_fixture)) {
       break;
     }
     const int history_depth = ScenarioHistoryDepth(scenario);
     if (history_depth > 0) {
-      const std::string task_id = SeedTaskAtHistoryDepth(
-          warmup_client.get(), BuildId("wire-follow-warmup", warmup_index), history_depth, call_options);
-      (void)ExecuteScenario(warmup_client.get(), scenario, warmup_index, warmup_fixture, task_id);
+      const std::string task_id = SeedTaskAtHistoryDepth(warmup_client, BuildId("wire-follow-warmup", warmup_index),
+                                                         history_depth, call_options);
+      (void)ExecuteScenario(warmup_client, scenario, warmup_index, warmup_fixture, task_id);
     } else {
       const int operation_index = scenario == kScenarioPushConfigDelete ? 0 : warmup_index;
-      (void)ExecuteScenario(warmup_client.get(), scenario, operation_index, warmup_fixture);
+      (void)ExecuteScenario(warmup_client, scenario, operation_index, warmup_fixture, {}, options.stream_hold_ms);
     }
     --warmup_index;
   }
+}
 
+ScenarioResult RunPreparedWireScenario(const WireOptions& options, const std::string& scenario,
+                                       const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
+                                       const FocusedWireFixture& focused_fixture,
+                                       const std::vector<std::string>& follow_up_task_ids,
+                                       bool use_shared_http_client) {
+  if (options.client_mode == kAsyncClient) {
+    return AsyncWireMeasurement(options, scenario, clients, focused_fixture).Run();
+  }
+  return RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
+                             [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_client,
+                              &options](int worker_index, int index) {
+                               return ExecuteMeasuredWireOperation(clients, scenario, follow_up_task_ids,
+                                                                   focused_fixture, use_shared_http_client,
+                                                                   worker_index, index, options.stream_hold_ms);
+                             });
+}
+
+ScenarioResult RunWireScenario(const WireOptions& options, const std::string& scenario) {
   const int worker_count = std::min(options.concurrency, options.requests);
   const bool use_shared_http_client = UsesSharedHttpClient(scenario) && options.transport != kGrpcTransport;
   const int client_count = use_shared_http_client ? 1 : worker_count;
   auto clients = MakeMeasuredClients(options, client_count);
+  if (!SupportsAsyncClient(scenario)) {
+    WarmSyncClients(options, scenario, clients);
+  }
+
   const a2a::client::CallOptions fixture_call_options = MakeCallOptions();
   FocusedWireFixture focused_fixture;
   if (!PrepareFocusedWireFixture(clients.front().get(), scenario, options.requests, "wire-measured-fixture",
@@ -565,7 +714,7 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     follow_up_task_ids.reserve(static_cast<std::size_t>(options.requests));
     const a2a::client::CallOptions call_options = MakeCallOptions();
     for (int index = 0; index < options.requests; ++index) {
-      std::string task_id = SeedTaskAtHistoryDepth(warmup_client.get(), BuildId("wire-follow-fixture", index),
+      std::string task_id = SeedTaskAtHistoryDepth(clients.front().get(), BuildId("wire-follow-fixture", index),
                                                    history_depth, call_options);
       if (task_id.empty()) {
         ScenarioResult failed;
@@ -578,9 +727,23 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  // Everything above this point is warmup or fixture preparation. Release its
-  // resources and reset both processes before observing measured operations.
-  warmup_client.reset();
+  if (SupportsAsyncClient(scenario) && options.warmup_seconds > 0.0) {
+    // Even a very short warmup must visit every measured connection.
+    if (options.client_mode == kSyncClient) {
+      for (const auto& client : clients) {
+        (void)ExecuteScenario(client.get(), scenario, 0, focused_fixture);
+      }
+    }
+    auto warmup_options = options;
+    warmup_options.requests = kWarmupRequestLimit;
+    warmup_options.duration_seconds = options.warmup_seconds;
+    auto warmup = RunPreparedWireScenario(warmup_options, scenario, clients, focused_fixture, follow_up_task_ids,
+                                          use_shared_http_client);
+    if (warmup.errors != 0) {
+      return warmup;
+    }
+  }
+  // Keep warmed clients alive; fixture setup and warmup are outside timing.
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   if (!ResetServerSubscriptionDiagnostics(options)) {
     ScenarioResult failed;
@@ -592,12 +755,7 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
   (void)a2a::core::subscription_diagnostics::TakeSnapshot();
 #endif
   ScenarioResult result =
-      RunMeasuredScenario(scenario, options.requests, options.concurrency, options.duration_seconds,
-                          [&clients, &scenario, &follow_up_task_ids, &focused_fixture, use_shared_http_client](
-                              int worker_index, int index) {
-                            return ExecuteMeasuredWireOperation(clients, scenario, follow_up_task_ids, focused_fixture,
-                                                                use_shared_http_client, worker_index, index);
-                          });
+      RunPreparedWireScenario(options, scenario, clients, focused_fixture, follow_up_task_ids, use_shared_http_client);
 #if defined(__linux__)
   result.client_process_thread_count = static_cast<int>(
       std::distance(std::filesystem::directory_iterator("/proc/self/task"), std::filesystem::directory_iterator{}));
@@ -634,6 +792,18 @@ bool ParseScenarios(std::string_view value, WireOptions* options) {
   return true;
 }
 
+bool ValidateOptions(const WireOptions& options) {
+  for (const std::string& scenario : options.scenarios) {
+    if (!IsWireScenario(scenario, options.transport) ||
+        (options.client_mode == kAsyncClient && !SupportsAsyncClient(scenario))) {
+      std::cerr << "unsupported wire scenario: " << scenario << '\n';
+      return false;
+    }
+  }
+  return options.requests > 0 && options.concurrency > 0 && options.port > 0 && options.stream_hold_ms >= 0 &&
+         (options.client_mode == kSyncClient || options.client_mode == kAsyncClient);
+}
+
 bool ParseArgs(int argc, char** argv, WireOptions* options) {
   for (int index = 1; index < argc; ++index) {
     const std::string_view arg(argv[index]);
@@ -655,6 +825,10 @@ bool ParseArgs(int argc, char** argv, WireOptions* options) {
       options->requests = std::atoi(raw_value);
     } else if (arg == "--concurrency") {
       options->concurrency = std::atoi(raw_value);
+    } else if (arg == "--client-mode") {
+      options->client_mode = value;
+    } else if (arg == "--stream-hold-ms") {
+      options->stream_hold_ms = std::atoi(raw_value);
     } else if (arg == "--warmup-seconds") {
       options->warmup_seconds = std::atof(raw_value);
     } else if (arg == "--duration-seconds") {
@@ -668,18 +842,16 @@ bool ParseArgs(int argc, char** argv, WireOptions* options) {
       return false;
     }
   }
-  for (const std::string& scenario : options->scenarios) {
-    if (!IsWireScenario(scenario, options->transport)) {
-      std::cerr << "unsupported wire scenario: " << scenario << '\n';
-      return false;
-    }
-  }
-  return options->requests > 0 && options->concurrency > 0 && options->port > 0;
+  return ValidateOptions(*options);
 }
 
 std::vector<std::string> SelectedScenarios(const WireOptions& options) {
   if (!options.scenarios.empty()) {
     return options.scenarios;
+  }
+  if (options.client_mode == kAsyncClient) {
+    return {std::string(kScenarioGetTaskExistingTask), std::string(kScenarioListTasksNoPagination),
+            std::string(kScenarioListTasksWithPagination)};
   }
   std::vector<std::string> scenarios = {std::string(kScenarioListTasksNoPagination),
                                         std::string(kScenarioListTasksWithPagination),
@@ -723,6 +895,8 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
                              result);
   SetIntegerField(&object, "configured_requests", options.requests);
+  SetStringField(&object, "client_execution_mode", options.client_mode);
+  SetIntegerField(&object, "stream_hold_ms", options.stream_hold_ms);
   const int history_depth = ScenarioHistoryDepth(result.scenario);
   if (history_depth > 0) {
     SetIntegerField(&object, "history_depth", history_depth);
