@@ -1021,7 +1021,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
         wire_driver_timeout_seconds=args.wire_driver_timeout_seconds,
         repetitions=(POSTGRES_WRITE_REPETITIONS if profile == POSTGRES_WRITE_PROFILE
                      else POSTGRES_TAIL_REPETITIONS if profile in POSTGRES_TAIL_PROFILES
-                     else args.repetitions or (3 if len(server_modes) > 1 else 1)),
+                     else args.repetitions or 1),
         scenarios=scenarios,
         postgres_pool_sizes=postgres_pool_sizes,
         server_modes=server_modes,
@@ -1756,8 +1756,10 @@ def comparison_coordinate(row: dict) -> str:
 
 
 def append_sync_async_markdown(lines: list[str], results: list[dict[str, object]], repetitions: int) -> None:
+    measurement = ("Single measurement per mode; no variation estimate. " if repetitions == 1
+                   else "Medians of repeated runs. ")
     lines.extend(["", "## Sync / async server comparison", "",
-                  "Client mode is explicit; server columns show medians of repeated runs. Ratio = async/sync server ops/s: >1 gain, <1 regression, ~1 parity. "
+                  measurement + "Client mode is explicit. Ratio = async/sync server ops/s: >1 gain, <1 regression, ~1 parity. "
                   "Callback-driven async client coverage: GetTask and ListTasks. Streaming uses the common observer API and runs once per server mode. "
                   "Missing or invalid pairs are n/a; no speed thresholds. All supported in-memory wire workloads run both modes. "
                   "PostgreSQL async is n/a (not measured); its wire tables below are sync-only. "
@@ -1773,14 +1775,16 @@ def append_sync_async_markdown(lines: list[str], results: list[dict[str, object]
         def latency(mode: str) -> str:
             return "/".join(comparison_value(modes, mode, metric) for metric in ("p95_ms", "p99_ms"))
         errors = "/".join(str(modes[mode]["errors"]) if mode in modes else "n/a" for mode in SERVER_MODES)
-        ranges = " / ".join(f"{comparison_value(modes, mode, 'throughput_min', 0)}–{comparison_value(modes, mode, 'throughput_max', 0)}" for mode in SERVER_MODES)
+        ranges = ("n/a" if repetitions == 1 else " / ".join(
+            f"{comparison_value(modes, mode, 'throughput_min', 0)}–{comparison_value(modes, mode, 'throughput_max', 0)}"
+            for mode in SERVER_MODES))
         lines.append(comparison_coordinate(row) +
                      f"{comparison_value(modes, 'sync', 'throughput_ops_per_sec')} | "
                      f"{comparison_value(modes, 'async', 'throughput_ops_per_sec')} | "
                      f"{format_ratio(row['throughput_ratio'])} | {latency('sync')} | {latency('async')} | {ranges} | {errors} |")
     append_collapsible_end(lines)
     append_paired_streaming_latency(lines, comparisons)
-    lines.extend(["", "Resource medians cover each whole driver invocation, including setup/warmup. "
+    lines.extend(["", "Resources cover each whole driver invocation, including setup/warmup. "
                   "Every resource cell shows sync / async. CPU seconds are process CPU time; threads are sampled peaks; "
                   "RSS is process high-water KiB. Unsupported counters are n/a; short-lived threads may be missed."])
     append_collapsible_start(lines, "Show sync/async process resources")
@@ -1803,7 +1807,7 @@ def append_paired_streaming_latency(lines: list[str], comparisons: list[dict[str
                  for data in row["modes"].values() for field in fields)]
     if not streaming:
         return
-    lines.extend(["", "## Streaming latency rollup", "", "Every latency cell shows sync / async medians in milliseconds."])
+    lines.extend(["", "## Streaming latency rollup", "", "Every latency cell shows sync / async in milliseconds; repeated runs use medians."])
     append_collapsible_start(lines, "Show paired streaming latencies")
     lines.extend(["", "| Scenario | Transport | Store | c | Client | First event p50 | First event p95 | Completion p50 | Completion p95 |",
                   "| --- | --- | --- | ---: | --- | --- | --- | --- | --- |"])
@@ -1823,6 +1827,8 @@ def format_error_summary(results: list[dict[str, object]]) -> str:
             f"driver_type={result.get('driver_type')} "
             f"transport_path={result.get('transport_path')} "
             f"transport={result.get('transport')} "
+            f"client={result.get('client_execution_mode', 'unknown')} "
+            f"server={result.get('server_execution_mode', 'unknown')} "
             f"store={result.get('store_backend')} "
             f"concurrency={result.get('concurrency')} "
             f"success={result.get('success')} "
@@ -1933,6 +1939,9 @@ def main(argv: list[str]) -> int:
                 raise ValueError("A2A_TEST_POSTGRES_DSN must be set for postgres-tail")
             query_plans = explain_postgres_queries(dsn, last_schema, config.push_config_fanout)
         write_reports(results, config, aggregates, query_plans)
+        if any(result_error_count(result) > 0 for result in results):
+            print(f"error: {format_error_summary(results)}", file=sys.stderr)
+            return 2
         if "async" in config.server_modes:
             invalid = [row for row in results if row["transport_path"] != "in_process" and not valid_comparison_result(row)]
             comparisons = sync_async_comparisons(results, config.repetitions)
@@ -1944,9 +1953,6 @@ def main(argv: list[str]) -> int:
             if invalid or incomplete or actual_async != expected_async or actual_sync != expected_sync:
                 raise ValueError(f"performance comparison has {len(invalid)} invalid rows; "
                                  f"sync rows {actual_sync}/{expected_sync}, async rows {actual_async}/{expected_async}")
-        if any(result_error_count(result) > 0 for result in results):
-            print(f"error: {format_error_summary(results)}", file=sys.stderr)
-            return 2
         return 0
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

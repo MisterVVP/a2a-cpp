@@ -89,6 +89,8 @@ class PerformanceRunnerTest(unittest.TestCase):
                     "server_modes": ("sync", "async"), "repetitions": 1}
         summary = runner.render_markdown_summary(rows, metadata)
         self.assertIn("100.00 | 200.00 | 2.00×", summary)
+        self.assertIn("Single measurement per mode; no variation estimate", summary)
+        self.assertNotIn("100–100", summary)
         self.assertIn("10 / 5", summary)
         self.assertIn("0.5000 / 0.5000", summary)
         self.assertNotIn("## Detailed matrix results", summary)
@@ -135,7 +137,8 @@ class PerformanceRunnerTest(unittest.TestCase):
         runner = load_runner_module()
         with mock.patch.dict(os.environ, {}, clear=True):
             config = runner.parse_args(["--server-modes", "sync,async"])
-            self.assertEqual(3, config.repetitions)
+            self.assertEqual(1, config.repetitions)
+            self.assertEqual(3, runner.parse_args(["--server-modes", "sync,async", "--repetitions", "3"]).repetitions)
             with self.assertRaisesRegex(ValueError, "no async wire scenario"):
                 runner.validate_runnable_plan(runner.parse_args([
                     "--server-modes", "async", "--store-backends", "postgres"]))
@@ -151,7 +154,7 @@ class PerformanceRunnerTest(unittest.TestCase):
 
     def test_main_fails_for_incomplete_operations_or_missing_planned_modes(self):
         runner = load_runner_module()
-        for failure in ("incomplete", "missing_sync", "missing_async"):
+        for failure in ("incomplete", "missing_sync", "missing_async", "operation_error"):
             def wire_results(config, *_args):
                 mode = config.server_mode
                 if failure == f"missing_{mode}":
@@ -161,6 +164,8 @@ class PerformanceRunnerTest(unittest.TestCase):
                            client_execution_mode="sync", configured_requests=10, configured_duration_seconds=0)
                 if failure == "incomplete" and mode == "async":
                     row.update(success=9, operations=9)
+                if failure == "operation_error" and mode == "async":
+                    row.update(success=9, errors=1)
                 return [row]
             with self.subTest(failure=failure), \
                  mock.patch.object(runner, "ensure_executable"), \
@@ -168,10 +173,13 @@ class PerformanceRunnerTest(unittest.TestCase):
                  mock.patch.object(runner, "run_wire_driver", side_effect=wire_results), \
                  mock.patch.object(runner, "write_reports"), \
                  mock.patch.object(runner, "find_available_sut_port", return_value=1234), \
-                 mock.patch("sys.stderr", io.StringIO()):
+                 mock.patch("sys.stderr", io.StringIO()) as stderr:
                 self.assertEqual(2, runner.main(["--server-modes", "sync,async", "--repetitions", "1",
                     "--transports", "grpc", "--store-backends", "inmemory", "--concurrency", "1",
                     "--requests", "10", "--scenarios", runner.ASYNC_SCENARIOS[0]]))
+                if failure == "operation_error":
+                    self.assertIn("1 operation errors", stderr.getvalue())
+                    self.assertIn(f"scenario={runner.ASYNC_SCENARIOS[0]}", stderr.getvalue())
 
     @unittest.skipUnless(os.environ.get("A2A_PERF_TEST_ASIO") == "1", "requires Asio performance SUT")
     def test_sync_async_wire_reports(self):

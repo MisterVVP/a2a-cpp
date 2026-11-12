@@ -93,7 +93,7 @@ With the optional Boost.Asio dependencies installed (see the
 ```bash
 ./scripts/run_performance_tests.sh --server-modes sync,async \
   --store-backends inmemory --transports grpc,http_json,jsonrpc \
-  --requests 1000 --concurrency 1,4,16,64 --repetitions 3 \
+  --requests 1000 --concurrency 1,4,16,64 \
   --report-dir perf-artifacts/normal
 ```
 
@@ -121,7 +121,7 @@ For a sustained comparison of read-only calls and finite streams:
   --store-backends inmemory --transports grpc,http_json,jsonrpc \
   --scenarios GetTask_ExistingTask,ListTasks_WithPagination,SendStreamingMessage_FiniteStream \
   --requests 1000000 --duration-seconds 3 --warmup-seconds 0.25 \
-  --concurrency 1,64 --repetitions 3 --report-dir perf-artifacts/normal/sustained
+  --concurrency 1,64 --report-dir perf-artifacts/normal/sustained
 ```
 
 Each wire run warms the actual measured clients through the selected API and
@@ -146,8 +146,10 @@ separate because they bypass the gRPC/HTTP server transports.
 `--server-modes sync` preserves the default suite; the corresponding
 environment variables are `A2A_PERF_SERVER_MODES` and `A2A_PERF_REPETITIONS`.
 
-Comparison runs default to three repetitions, alternate server order, and start
-a fresh SUT for each scenario/mode. On Linux, automatic CPU placement divides
+Comparison runs default to one measurement per mode and start a fresh SUT for
+each scenario/mode. CI also uses one pass for both the broad and sustained
+matrices. Use `--repetitions` explicitly for local variance analysis; repeated
+runs alternate server order. On Linux, automatic CPU placement divides
 the available CPU budget between driver and server, taking the cgroup v2 quota
 into account and giving the driver the extra CPU for odd budgets. Both server modes receive the
 same CPU set. Reports record placement and quota; fewer than two CPUs and

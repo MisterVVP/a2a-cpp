@@ -236,7 +236,7 @@ jobs:
         env:
           CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-deps
           A2A_PERF_SERVER_MODES: sync,async
-          A2A_PERF_REPETITIONS: 3
+          A2A_PERF_REPETITIONS: 1
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory,postgres
           A2A_PERF_REQUESTS: 1000
@@ -257,7 +257,7 @@ jobs:
           CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-deps
           A2A_PERF_SERVER_MODES: sync,async
           A2A_PERF_CLIENT_MODES: sync,async
-          A2A_PERF_REPETITIONS: 3
+          A2A_PERF_REPETITIONS: 1
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory
           A2A_PERF_SCENARIOS: GetTask_ExistingTask,ListTasks_WithPagination,SendStreamingMessage_FiniteStream,IdleStream_ClientCancellationLatency
