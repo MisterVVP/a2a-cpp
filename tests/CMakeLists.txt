@@ -949,6 +949,9 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   target_compile_definitions(performance_sut PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
 else()
   target_link_libraries(performance_sut PRIVATE sut_runtime)
+  if(A2A_ENABLE_ASIO)
+    target_compile_definitions(performance_sut PRIVATE A2A_PERFORMANCE_ASIO=1)
+  endif()
 endif()
 
 if(A2A_ENABLE_POSTGRES_STORE)
@@ -1074,6 +1077,11 @@ if(Python3_Interpreter_FOUND)
     NAME performance_runner_script_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/performance_runner_test.py
   )
+  set_tests_properties(performance_runner_script_test PROPERTIES ENVIRONMENT
+    "A2A_PERF_DRIVER=$<TARGET_FILE:a2a_performance_driver>;A2A_PERF_WIRE_DRIVER=$<TARGET_FILE:a2a_wire_performance_driver>;A2A_PERF_SUT=$<TARGET_FILE:performance_sut>")
+  if(A2A_ENABLE_ASIO AND NOT A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
+    set_property(TEST performance_runner_script_test APPEND PROPERTY ENVIRONMENT "A2A_PERF_TEST_ASIO=1")
+  endif()
   set(SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT)
   if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
     set(SUT_ENTRYPOINTS_TEST_DIAGNOSTICS_ARGUMENT --expect-subscription-diagnostics)

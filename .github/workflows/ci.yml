@@ -228,8 +228,15 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install deps
         run: ./scripts/install_build_deps.sh
+      - name: Install async I/O dependencies
+        run: |
+          cmake -DA2A_BOOST_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallBoost.cmake
+          cmake -DA2A_SIMDJSON_INSTALL_PREFIX=${{ runner.temp }}/a2a-deps -P cmake/InstallSimdjson.cmake
       - name: Run report-only performance suite
         env:
+          CMAKE_PREFIX_PATH: ${{ runner.temp }}/a2a-deps
+          A2A_PERF_SERVER_MODES: sync,async
+          A2A_PERF_REPETITIONS: 3
           A2A_PERF_TRANSPORTS: grpc,jsonrpc,http_json
           A2A_PERF_STORE_BACKENDS: inmemory,postgres
           A2A_PERF_REQUESTS: 1000
