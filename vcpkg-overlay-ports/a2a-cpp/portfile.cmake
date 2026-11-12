@@ -4,12 +4,13 @@ vcpkg_check_features(
     OUT_FEATURE_OPTIONS FEATURE_OPTIONS
     FEATURES
         postgres-store A2A_ENABLE_POSTGRES_STORE
+        asio A2A_ENABLE_ASIO
 )
 
 vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH
     URL "https://github.com/MisterVVP/a2a-cpp.git"
-    REF v0.5.2
+    REF fdb1d38c2fe5a506d59b71dee3ee339154f595d1
 )
 
 vcpkg_cmake_configure(

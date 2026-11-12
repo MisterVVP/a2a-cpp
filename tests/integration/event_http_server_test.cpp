@@ -30,6 +30,12 @@ constexpr std::string_view kStatus = "HTTP/1.1 200 OK";
 constexpr std::string_view kOverload = "503 Service Unavailable";
 constexpr std::string_view kBody = "ok";
 constexpr std::string_view kEvent = "data: hello\n\n";
+constexpr std::string_view kInitialEvent = "data: initial";
+constexpr std::string_view kEventEnd = "\n\n";
+constexpr std::size_t kInitialPadding = 64;
+constexpr std::size_t kInitialOutputLimit = 128;
+constexpr std::string_view kInitialHeader = "X-Initial";
+constexpr std::size_t kInitialHeaderPadding = 41;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 constexpr auto kTimeout = std::chrono::seconds(5);
 constexpr std::size_t kIdleClients = 64;
@@ -113,6 +119,34 @@ TEST(EventHttpServer, FiniteStreamUsesChunksAndConnectionReuse) {
   EXPECT_NE(response.find(kStatus, end), std::string::npos);
   server.Shutdown();
   server.Join();
+}
+
+TEST(EventHttpServer, InitialBodyPrecedesProducerWithinOutputBound) {
+  std::string initial(kInitialEvent);
+  initial.append(kInitialPadding, 'x');
+  initial.append(kEventEnd);
+  for (const auto limit : {EventHttpServerOptions::kDefaultBufferBytes, kInitialOutputLimit}) {
+    EventHttpServer::AsyncHandler handler =
+        [initial](HttpServerRequest request,
+                  engine::RequestExecutionContext context) -> asio::awaitable<core::Result<EventHttpResponse>> {
+      auto response = co_await StreamResponse(std::move(request), std::move(context));
+      response.value().response.body = initial;
+      response.value().response.headers[std::string(kInitialHeader)] = std::string(kInitialHeaderPadding, 'x');
+      co_return response;
+    };
+    EventHttpServer server(std::move(handler), {.max_output_bytes = limit});
+    ASSERT_TRUE(server.Start().ok());
+    asio::io_context io;
+    auto socket = Connect(io, server);
+    asio::write(socket, asio::buffer(kCloseRequest));
+    const auto response = ReadToEnd(socket);
+    const auto first = response.find(initial);
+    ASSERT_NE(first, std::string::npos);
+    EXPECT_NE(response.find(kEvent, first + initial.size()), std::string::npos);
+    EXPECT_NE(response.find(kFinalChunk), std::string::npos);
+    server.Shutdown();
+    server.Join();
+  }
 }
 
 TEST(EventHttpServer, PendingWorkIsBoundedAndShutdownCancels) {
@@ -202,10 +236,11 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   runtime.Join();
 }
 constexpr std::string_view kSubscribeRequest = "GET /a2a/tasks/native:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
-constexpr std::string_view kEventEnd = "\n\n";
 constexpr std::size_t kLiveClients = 32;
 constexpr std::size_t kLargeBody = std::size_t{2} * 1024U * 1024U;
 constexpr auto kIdleDeadline = std::chrono::milliseconds(50);
+constexpr auto kActiveIdleDeadline = std::chrono::milliseconds(500);
+constexpr auto kActivityInterval = std::chrono::milliseconds(25);
 
 class LiveBackend final : public engine::CoroutineAgentExecutor {
  public:
@@ -496,6 +531,27 @@ TEST(EventHttpServer, IdleTimeoutAndOutputLimitReleaseConnections) {
   server.Shutdown();
   server.Join();
 }
+
+TEST(EventHttpServer, ActivityRefreshesIdleDeadlineBeforeConnectionEventuallyExpires) {
+  EventHttpServerOptions options;
+  options.idle_timeout = kActiveIdleDeadline;
+  EventHttpServer server(Respond, options);
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto socket = Connect(io, server);
+  const auto until = std::chrono::steady_clock::now() + kActiveIdleDeadline * 2;
+  do {
+    asio::write(socket, asio::buffer(kRequest));
+    std::string response;
+    asio::read_until(socket, asio::dynamic_buffer(response), kBody);
+    EXPECT_NE(response.find(kStatus), std::string::npos);
+    std::this_thread::sleep_for(kActivityInterval);
+  } while (std::chrono::steady_clock::now() < until);
+  EXPECT_TRUE(ReadToEnd(socket).empty());
+  server.Shutdown();
+  server.Join();
+}
+
 constexpr std::string_view kSlowRequest = "GET /slow HTTP/1.1\r\n\r\n";
 constexpr std::string_view kSlowTarget = "/slow";
 constexpr std::string_view kHeaderEnd = "\r\n\r\n";

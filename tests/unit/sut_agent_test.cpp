@@ -25,7 +25,7 @@ constexpr std::string_view kAuthToken = "unit-sut-token";
 constexpr std::string_view kWrongToken = "other-unit-token";
 constexpr std::string_view kBearerKey = "bearer_token";
 constexpr std::size_t kBindingCount = 3;
-constexpr std::string_view kUnsupportedMediaType = "application/x-unsupported-sut-type";
+constexpr std::string_view kOpaqueMediaType = "application/x-opaque-sut-type";
 constexpr std::string_view kRawContent = "sut";
 constexpr char kMessageId[] = "media-type-message";
 
@@ -90,17 +90,20 @@ TEST(SutAgentTest, AdvertisedInputModesAreAccepted) {
   }
 }
 
-TEST(SutAgentTest, UnsupportedMessagePartMediaTypesAreRejected) {
+TEST(SutAgentTest, OpaqueMessagePartsAreRetainedWithoutDecoding) {
   const auto agent = MakeAgent();
   a2a::server::RequestContext context;
-  for (const auto operation :
-       {a2a::server::DispatcherOperation::kSendMessage, a2a::server::DispatcherOperation::kSendStreamingMessage}) {
-    const auto result =
-        agent->dispatcher().Dispatch({.operation = operation, .payload = MediaRequest(kUnsupportedMediaType)}, context);
-    ASSERT_FALSE(result.ok());
-    EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kContentTypeNotSupported);
-    EXPECT_EQ(result.error().http_status(), a2a::core::http::kStatusBadRequest);
-  }
+  const auto result = agent->dispatcher().Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = MediaRequest(kOpaqueMediaType)},
+      context);
+  ASSERT_TRUE(result.ok());
+  const auto& response = std::get<lf::a2a::v1::SendMessageResponse>(result.value().payload());
+  ASSERT_TRUE(response.has_task());
+  ASSERT_GT(response.task().history_size(), 0);
+  ASSERT_EQ(response.task().history(0).parts_size(), 1);
+  const auto& part = response.task().history(0).parts(0);
+  EXPECT_EQ(part.media_type(), kOpaqueMediaType);
+  EXPECT_EQ(part.raw(), kRawContent);
 }
 
 TEST(SutAgentTest, SharedAuthorizationPolicyRejectsMissingAndIncorrectCredentials) {

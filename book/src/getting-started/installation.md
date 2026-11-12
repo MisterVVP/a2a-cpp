@@ -1,7 +1,10 @@
 # Installation and Build
 
-This page describes the current development build toward `v0.6.0`. In stable
+This page describes the SDK `v0.6.0` release candidate. In stable
 `v0.5.2`, simdjson is required only when signing is enabled.
+
+Check out `release/v0.6.0` or the full reviewed candidate commit before following
+the source-build instructions. The candidate does not require a `v0.6.0` tag.
 
 ## Choose an integration method
 
@@ -178,3 +181,15 @@ For documentation-only mdBook changes, build the book:
 ```bash
 mdbook build book
 ```
+
+## Optional async server package
+
+The SDK v0.6.0 candidate keeps synchronous builds as the default. Async unary
+clients are in `a2a::client`. Coroutine execution, native async gRPC, and the
+event-driven HTTP/SSE server additionally require Boost 1.92.0+,
+`-DA2A_ENABLE_ASIO=ON`, and linking `a2a::asio`.
+
+With vcpkg, select `a2a-cpp[asio]` or `a2a-cpp[asio,postgres-store]` from the
+repository overlay. See [async consumers](../build/consumers.md#async-consumers-sdk-v060)
+and the [coroutine guide](../server/asio-coroutines.md) for dependency and
+standard-library requirements. PostgreSQL I/O remains synchronous.

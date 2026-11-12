@@ -70,12 +70,12 @@ constexpr auto kConcurrentWrite = "Only one stream write may be outstanding";
 class CheckedStream final : public AsyncServerStreamSession {
  public:
   CheckedStream(std::shared_ptr<AsyncServerStreamSession> sink, std::shared_ptr<RequestExecution> source,
-                std::shared_ptr<const DispatchSecurity> security, RequestContext context,
+                std::shared_ptr<const DispatchSecurity> security, const RequestContext& context,
                 const DispatchRequest& request)
       : sink_(std::move(sink)),
         source_(std::move(source)),
         security_(std::move(security)),
-        context_(std::move(context)) {
+        context_(security_ != nullptr ? context : RequestContext{}) {
     if (const auto* get = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload)) {
       task_id_ = get->id();
     } else if (const auto* send = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload)) {
@@ -215,7 +215,11 @@ struct AsyncDispatcher::State final {
           } else if (auto handled = call->session.Handle()) {
             response = std::move(*handled);
           } else {
-            auto view = call->source->Context().WithMetadata(call->context);
+            // Without security or interceptors the immutable ingress view is
+            // already current; avoid copying its headers into another allocation.
+            auto view = call->pipeline.security == nullptr && call->pipeline.interceptors.empty()
+                            ? call->source->Context()
+                            : call->source->Context().WithMetadata(call->context);
             const auto prepared = call->session.Prepare();
             if (call->stream != nullptr) {
               response = co_await call->RunStream(*state->executor, view);

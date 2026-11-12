@@ -116,7 +116,7 @@ std::string ErrorBody(const ErrorBodySpec& spec) {
 HttpServerResponse BuildJsonErrorResponse(int status_code, std::string_view message, std::string_view reason) {
   return HttpServerResponseBuilder()
       .WithStatus(status_code)
-      .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
+      .WithJsonContentType()
       .WithA2aVersion()
       .WithBody(ErrorBody({.status_code = status_code, .message = message, .reason = reason}))
       .Build();
@@ -126,7 +126,7 @@ HttpServerResponse BuildValidatedErrorResponse(int status_code, std::string_view
                                                const std::vector<std::string>& activated_extensions) {
   return HttpServerResponseBuilder()
       .WithStatus(status_code)
-      .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
+      .WithJsonContentType()
       .WithA2aVersion()
       .WithActivatedExtensions(activated_extensions)
       .WithBody(ErrorBody({.status_code = status_code, .message = message, .reason = reason}))

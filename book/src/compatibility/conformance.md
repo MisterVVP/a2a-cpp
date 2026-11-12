@@ -24,6 +24,21 @@ Independent SDK C++ tests verify additional binding, version and security behavi
 they do not increase upstream TCK percentages. This snapshot is not a claim of
 full TCK compliance. Review reports for the specific commit you deploy.
 
+## SDK v0.6.0 candidate
+
+A local async in-memory run against unmodified upstream TCK
+`104a7b4ae0d83f65c075e3793e322953a830eaba` across HTTP+JSON, JSON-RPC and gRPC
+reported **215 passed, 14 skipped, no failures** when selecting the `must`
+category; 34 other cases were deselected. The complete compatibility suite
+reported **244 passed, 1 failed, 18 skipped**. The remaining failure is the
+`HTTP_JSON-SVC-001` SHOULD check described below. These results do not change
+the historical v0.5.2 snapshot above or establish full conformance for v0.6.0.
+
+The generic conformance agent advertises `*/*` input support and preserves
+opaque message parts without decoding them. Its supported-media negative probe
+is therefore skipped by TCK. HTTP+JSON error envelopes use `application/json`,
+as required by the mandatory `HTTP_JSON-ERR-001` check.
+
 ## Reproduce the upstream suite
 
 
@@ -31,12 +46,13 @@ Use the same workflow as `.github/workflows/tck.yml`. CI checks out upstream
 `main` and runs its assertions without local TCK patches. Upstream requires
 Python 3.15 or newer; CI installs that runtime independently of the SDK tools.
 
-At upstream revision `104a7b4ae0d83f65c075e3793e322953a830eaba`, two assertion
-defects remain: [CORE-SEND-003 lacks its expected error](https://github.com/a2aproject/a2a-tck/issues/202),
-and the [mandatory AIP-193 structure test](https://github.com/a2aproject/a2a-tck/blob/70f6f73c30208e80c889141907e094899e6e9f05/tests/compatibility/core_operations/test_error_handling.py#L777)
-requires legacy `application/json` while the separate media-type test expects
-`application/a2a+json`. These failures remain visible in the upstream results;
-the SDK does not alter their assertions, skip them, or override their exit status.
+At upstream revision `104a7b4ae0d83f65c075e3793e322953a830eaba`, the mandatory
+AIP-193 structure test requires `application/json` for errors while the separate
+`HTTP_JSON-SVC-001` SHOULD test expects `application/a2a+json` for the same
+response. The SDK follows the mandatory expectation and reports the optional
+failure. The full upstream runner's nonzero exit status is preserved. To run
+only the mandatory category, select `must` with pytest's `-m must` option.
+No upstream assertions or requirement definitions are modified.
 Registered requirements without upstream tests remain `NOT TESTED`.
 
 ```bash

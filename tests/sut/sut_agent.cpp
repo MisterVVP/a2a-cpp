@@ -37,6 +37,7 @@ constexpr std::string_view kInvalidCallerTokens = "security profile requires two
 constexpr std::string_view kAgentName = "TCK SUT";
 constexpr std::string_view kAgentRelease = "0.1.0";
 constexpr std::string_view kAgentDescription = "Conformance-focused local SUT for A2A";
+constexpr std::string_view kAnyInputMediaType = "*/*";
 constexpr std::string_view kExtendedDescription = "Extended conformance-focused local SUT card for A2A";
 constexpr std::string_view kBearerTokenKey = "bearer_token";
 constexpr std::string_view kSecuritySchemeName = "sut_bearer";
@@ -292,7 +293,7 @@ class SutPolicy final : public server::ServerInterceptor {
   [[nodiscard]] bool SupportsInput(const lf::a2a::v1::Message& message) const {
     return std::ranges::all_of(message.parts(), [this](const auto& part) {
       return part.media_type().empty() || std::ranges::any_of(input_modes_, [&part](const auto& mode) {
-               return core::http::IsMediaType(part.media_type(), mode);
+               return mode == kAnyInputMediaType || core::http::IsMediaType(part.media_type(), mode);
              });
     });
   }
@@ -325,6 +326,8 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
       core::AgentCardBuilder::ConformancePreset(
           {.rest_url = endpoints.rest_url, .json_rpc_url = endpoints.json_rpc_url, .grpc_url = endpoints.grpc_url},
           kAgentName, kAgentRelease, kAgentDescription)
+          // The generic agent retains opaque parts without decoding their media.
+          .AddDefaultInputMode(kAnyInputMediaType)
           .WithPushNotifications(options.push_notifications)
           .WithExtendedAgentCard(options.extended_card_mode != kExtendedCardModeDisabled)
           .Build();

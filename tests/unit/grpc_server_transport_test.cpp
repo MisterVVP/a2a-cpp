@@ -33,8 +33,6 @@
 
 namespace {
 
-constexpr char kErrorCodeMetadataKey[] = "a2a-error-code";
-constexpr char kStatusDetailsMetadataKey[] = "grpc-status-details-bin";
 constexpr char kTextPlainContentType[] = "text/plain";
 constexpr int64_t kStatusTimestampSeconds = 10;
 constexpr int32_t kStatusTimestampNanos = 5;
@@ -44,6 +42,8 @@ constexpr std::string_view kTaskIdTwo = "task-2";
 constexpr std::string_view kSubscribeTaskId = "sub-task";
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 #if A2A_HAS_SERVER_CONTEXT_TEST_SPOUSE
+constexpr char kErrorCodeMetadataKey[] = "a2a-error-code";
+constexpr char kStatusDetailsMetadataKey[] = "grpc-status-details-bin";
 constexpr std::string_view kGrpcExtensionsMetadataKey = "a2a-extensions";
 #endif
 constexpr std::string_view kUnusedChannelTarget = "127.0.0.1:1";

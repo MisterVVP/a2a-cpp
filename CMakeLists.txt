@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(a2a_cpp VERSION 0.5.2 LANGUAGES CXX)
+project(a2a_cpp VERSION 0.6.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
