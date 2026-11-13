@@ -6,7 +6,7 @@ streams. The backend guide documents lifecycle ownership and validation workload
 
 Streaming is exposed through `A2AClient::SendStreamingMessage` and `A2AClient::SubscribeTask` for all production client transports:
 
-- gRPC uses native server streaming;
+- channel-backed gRPC clients use native read reactors and shared gRPC callback threads;
 - HTTP+JSON uses `text/event-stream` responses from the REST streaming and task-subscription endpoints;
 - JSON-RPC over HTTP posts a JSON-RPC request envelope and receives JSON-RPC response envelopes inside SSE `data:` fields.
 
@@ -29,7 +29,7 @@ worker. A slow callback can occupy one shared worker, so keep callbacks bounded
 and hand expensive processing to an application executor. Custom synchronous
 stream requesters retain a per-stream `StreamHandle`-owned worker compatibility path.
 
-Each stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
+Each HTTP stream's dispatch backlog is limited to 256 pending callbacks or 4 MiB of
 pending body data. The reactor never waits for callback capacity: exceeding a
 limit fails and cancels only that stream. There is no fixed SDK limit on the
 number of active streams; network, server, and process resource limits still

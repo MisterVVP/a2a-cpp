@@ -111,6 +111,7 @@ GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface, std::shared_p
                              std::chrono::milliseconds default_timeout)
     : GrpcTransport(resolved_interface, std::make_unique<StubRpcClient>(lf::a2a::v1::A2AService::NewStub(channel)),
                     default_timeout) {
+  native_streams_ = std::make_shared<grpc_internal::NativeStreams>(channel);
   async_transport_ =
       grpc_internal::MakeAsyncTransport(std::move(resolved_interface), std::move(channel), default_timeout);
 }
@@ -124,6 +125,9 @@ GrpcTransport::GrpcTransport(ResolvedInterface resolved_interface, std::unique_p
 
 core::Result<void> GrpcTransport::Shutdown() {
   async_transport_->Shutdown();
+  if (native_streams_) {
+    native_streams_->Shutdown();
+  }
   return {};
 }
 
@@ -285,6 +289,14 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SendStreamingMessage(
     return context_result.error();
   }
 
+  if (native_streams_) {
+    auto started = native_streams_->Start(request, observer, std::move(context_result.value()));
+    if (!started.ok()) {
+      return started.error();
+    }
+    return std::unique_ptr<StreamHandle>(new StreamHandle(std::move(started.value())));
+  }
+
   auto state = std::make_shared<StreamHandle::State>();
   auto rpc_client = rpc_client_;
   auto context = std::shared_ptr<::grpc::ClientContext>(std::move(context_result.value()));
@@ -344,6 +356,14 @@ core::Result<std::unique_ptr<StreamHandle>> GrpcTransport::SubscribeTask(const l
 
   lf::a2a::v1::SubscribeToTaskRequest subscribe_request;
   subscribe_request.set_id(request.id());
+
+  if (native_streams_) {
+    auto started = native_streams_->Start(subscribe_request, observer, std::move(context_result.value()));
+    if (!started.ok()) {
+      return started.error();
+    }
+    return std::unique_ptr<StreamHandle>(new StreamHandle(std::move(started.value())));
+  }
 
   auto state = std::make_shared<StreamHandle::State>();
   auto rpc_client = rpc_client_;

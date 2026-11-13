@@ -123,6 +123,7 @@ set(A2A_CLIENT_SOURCES
   client/client.cpp
   client/discovery.cpp
   client/transport/grpc_async_transport.cpp
+  client/transport/grpc_client_streaming.cpp
   client/transport/grpc_transport_internal.cpp
   client/transport/grpc_transport.cpp
   client/transport/http_json_streaming.cpp
