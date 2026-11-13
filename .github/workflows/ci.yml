@@ -117,7 +117,9 @@ jobs:
           --target subscription_diagnostics_test a2a_performance_driver
           a2a_wire_performance_driver tck_sut performance_sut -j"$(nproc)"
       - name: Test subscription diagnostics aggregation
-        run: ./build-subscription-diagnostics/tests/subscription_diagnostics_test
+        run: >-
+          ctest --test-dir build-subscription-diagnostics --output-on-failure
+          --no-tests=error -R '^SubscriptionDiagnosticsTest\.'
       - name: Verify SUT diagnostics isolation
         run: ctest --test-dir build-subscription-diagnostics --output-on-failure -R sut_entrypoints_test
       - name: Run subscription diagnostics smoke
