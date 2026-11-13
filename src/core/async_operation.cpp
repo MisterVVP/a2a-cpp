@@ -72,6 +72,7 @@ class CompletionRuntime final : private NonCopyableOrMovable {
     const auto maximum = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::time_point::max() - now);
     const auto expires =
         timeout >= maximum ? Clock::time_point::max() : now + std::max(timeout, std::chrono::milliseconds::zero());
+    const auto previous_deadline = deadlines_.empty() ? Clock::time_point::max() : deadlines_.begin()->first;
     auto deadline = deadlines_.emplace(expires, operation);
     try {
       operations_.emplace(operation.get(), deadline);
@@ -80,7 +81,9 @@ class CompletionRuntime final : private NonCopyableOrMovable {
       deadlines_.erase(deadline);
       throw;
     }
-    deadlines_changed_.notify_one();
+    if (expires < previous_deadline) {
+      deadlines_changed_.notify_one();
+    }
     return true;
   }
   void Submit(std::function<void()> task) {
@@ -92,12 +95,16 @@ class CompletionRuntime final : private NonCopyableOrMovable {
   }
   void Release(async_detail::Operation* operation) {
     std::lock_guard lock(mutex_);
+    const auto previous_deadline = deadlines_.empty() ? Clock::time_point::max() : deadlines_.begin()->first;
     const auto found = operations_.find(operation);
     if (found != operations_.end()) {
       deadlines_.erase(found->second);
       operations_.erase(found);
     }
-    deadlines_changed_.notify_one();
+    const auto next_deadline = deadlines_.empty() ? Clock::time_point::max() : deadlines_.begin()->first;
+    if (next_deadline != previous_deadline) {
+      deadlines_changed_.notify_one();
+    }
   }
 
  private:

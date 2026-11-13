@@ -23,7 +23,8 @@ Install these tools before configuring the repository:
 - A C++20 compiler: GCC, Clang, AppleClang, or Visual Studio 2022.
 - Protobuf with `protoc`.
 - simdjson 3.0 or newer (required even with signing disabled).
-- gRPC C++ with `grpc_cpp_plugin`.
+- gRPC C++ with `grpc_cpp_plugin`. Windows requires gRPC 1.38 or newer;
+  earlier versions cannot drive native client streaming callbacks on Windows.
 - libcurl when using the built-in HTTP, JSON-RPC, or SSE clients.
 - `clang-format` and `clang-tidy` for contributor validation.
 - Optional: Doxygen for API reference generation.

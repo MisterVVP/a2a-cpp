@@ -161,6 +161,33 @@ When supplying `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_PERF_SUT`, bui
 all three from the same revision with Release and matching optional dependencies.
 The runner cannot verify the provenance of external binaries.
 
+## Subscription callback scheduling
+
+`SubscribeToTask_FirstEventLatency` reports three different intervals. The main
+`latency_ms` includes task creation, subscription setup, cancellation, and stream
+completion. `first_event_latency_ms` measures subscription setup to the first
+observer event; `stream_completion_latency_ms` measures subscription setup to
+completion. Compare these separately when investigating p99.
+
+Build with `A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON` and run with
+`A2A_SUBSCRIPTION_DIAGNOSTICS=1` to include `client_callback_queue_wait` in the
+client diagnostics. It measures enqueue-to-execution delay for HTTP metadata,
+body-chunk, and completion callbacks, including callbacks waiting behind earlier
+work on the same stream. The existing observer and completion phases measure
+callback execution time. These aggregates report counts, totals, and maxima,
+not percentiles; use the workload latency distributions for p99. Profiling is
+compiled into separate development libraries, including the HTTP library, and
+does not add clocks or diagnostic symbols to normal SDK builds.
+
+HTTP streams share four callback workers. Each stream runs at most 16 queued
+callbacks per worker turn before rejoining the executor queue. This bounds a
+busy stream's turn while preserving per-stream ordering, queue limits, and
+terminal completion. It does not preempt a blocking application callback.
+
+The shared deadline timer wakes when admission introduces an earlier deadline
+or release changes the earliest deadline. Later admissions and non-head releases
+do not interrupt its wait; maximum-timeout and expired cleanup entries are inert.
+
 ## PostgreSQL tail validation
 
 Run the focused tail-validation matrix against a local PostgreSQL instance with:

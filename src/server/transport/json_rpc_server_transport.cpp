@@ -851,7 +851,8 @@ core::Result<void> StreamFiniteJsonRpcSseEvents(const google::protobuf::Value& i
 }
 
 core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value& id,
-                                                  std::unique_ptr<ServerStreamSession>& session) {
+                                                  std::unique_ptr<ServerStreamSession>& session,
+                                                  const std::vector<std::string>& activated_extensions) {
   if (session == nullptr) {
     return core::Error::Internal(kMissingStreamSessionMessage);
   }
@@ -861,6 +862,7 @@ core::Result<HttpServerResponse> BuildSseResponse(const google::protobuf::Value&
                       .WithSseContentType()
                       .WithCacheControlNoCache()
                       .WithA2aVersion()
+                      .WithActivatedExtensions(activated_extensions)
                       .Build();
 
   if (session->IsLive()) {
@@ -1012,15 +1014,13 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Complete(const Response
       return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), id, error,
                                             HttpStatusFromError(error));
     }
-    const auto sse = BuildSseResponse(id.value(), *session);
+    auto sse = BuildSseResponse(id.value(), *session, activated_extensions);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport(internal::transport_names::kJsonRpc);
       return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), id, error,
                                             HttpStatusFromError(error));
     }
-    return HttpServerResponseBuilder::FromHttpResponse(sse.value())
-        .WithActivatedExtensions(activated_extensions)
-        .Build();
+    return sse;
   }
 
   if (is_subscribe) {
@@ -1032,15 +1032,13 @@ core::Result<HttpServerResponse> JsonRpcServerTransport::Complete(const Response
       return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), id, error,
                                             HttpStatusFromError(error));
     }
-    const auto sse = BuildSseResponse(id.value(), *session);
+    auto sse = BuildSseResponse(id.value(), *session, activated_extensions);
     if (!sse.ok()) {
       const auto error = sse.error().WithTransport(internal::transport_names::kJsonRpc);
       return build_validated_error_response(JsonRpcCodeFromError(error), error.message(), id, error,
                                             HttpStatusFromError(error));
     }
-    return HttpServerResponseBuilder::FromHttpResponse(sse.value())
-        .WithActivatedExtensions(activated_extensions)
-        .Build();
+    return sse;
   }
 
   if (operation == DispatcherOperation::kListTasks) {

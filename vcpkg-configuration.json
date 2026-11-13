@@ -5,9 +5,15 @@
       "repository": "https://github.com/microsoft/vcpkg",
       "baseline": "664933b8d385dfc01f4e0cdff4c7c74e71f6a740",
       "packages": [
+        "abseil",
         "boost-*",
+        "c-ares",
+        "grpc",
         "openssl",
+        "protobuf",
+        "re2",
         "simdjson",
+        "utf8-range",
         "vcpkg-*"
       ]
     }
