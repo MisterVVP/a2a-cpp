@@ -7,7 +7,7 @@
     "protobuf",
     {
       "name": "grpc",
-      "version>=": "1.38.0"
+      "version>=": "1.41.0"
     },
     "curl",
     {
