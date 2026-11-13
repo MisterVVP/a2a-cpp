@@ -91,8 +91,9 @@ owner of the async component; releasing its last owner drains outstanding calls.
 unary calls. Shutdown from outside SDK callbacks drains their callbacks.
 Reentrant shutdown from an SDK callback cancels calls and lets already queued
 callbacks finish with owned state. Keep observer-owned state alive until any
-concurrent `StreamObserver` callbacks return as well. The gRPC transport also
-drains native unary cleanup; contexts, messages and stubs stay alive through native completion.
+concurrent `StreamObserver` callbacks return as well. External gRPC shutdown also
+drains native unary and streaming cleanup; contexts, messages and stubs stay alive
+through native completion.
 Simultaneous async initiations and `Destroy()` are supported. As with other C++
 objects, callers must keep the client object alive while invoking its methods.
 

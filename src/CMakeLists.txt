@@ -77,7 +77,7 @@ if(A2A_ENABLE_SIGNING)
   target_compile_definitions(a2a_signing PUBLIC A2A_HAS_AGENT_CARD_SIGNING=1)
 endif()
 
-add_library(a2a_http STATIC
+set(A2A_HTTP_SOURCES
   http/curl_stream_reactor.cpp
   http/curl_windows_readiness.cpp
   http/http_client_async.cpp
@@ -85,36 +85,42 @@ add_library(a2a_http STATIC
   http/http_client_curl.cpp
   http/http_client_streaming.cpp
 )
+add_library(a2a_http STATIC ${A2A_HTTP_SOURCES})
 add_library(a2a::http ALIAS a2a_http)
 set_target_properties(a2a_http PROPERTIES EXPORT_NAME http)
 
-target_include_directories(a2a_http
-  PUBLIC
-    $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-)
-
-target_link_libraries(a2a_http
-  PUBLIC
-    a2a::core
-)
-
-if(A2A_HAS_LIBCURL)
-  if(WIN32)
-    target_link_libraries(a2a_http PRIVATE ws2_32)
-  endif()
-  if(A2A_TEST_CURL_PORTABLE_REACTOR)
-    target_compile_definitions(a2a_http PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
-  endif()
-  target_link_libraries(a2a_http
-    PRIVATE
-      CURL::libcurl
-  )
-  target_compile_definitions(a2a_http
+function(a2a_configure_http_target target core_target)
+  target_include_directories(${target}
     PUBLIC
-      A2A_HAS_LIBCURL=1
+      $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   )
-endif()
+
+  target_link_libraries(${target}
+    PUBLIC
+      ${core_target}
+  )
+
+  if(A2A_HAS_LIBCURL)
+    if(WIN32)
+      target_link_libraries(${target} PRIVATE ws2_32)
+    endif()
+    if(A2A_TEST_CURL_PORTABLE_REACTOR)
+      target_compile_definitions(${target} PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
+    endif()
+    target_link_libraries(${target}
+      PRIVATE
+        CURL::libcurl
+    )
+    target_compile_definitions(${target}
+      PUBLIC
+        A2A_HAS_LIBCURL=1
+    )
+  endif()
+
+endfunction()
+
+a2a_configure_http_target(a2a_http a2a::core)
 
 set(A2A_CLIENT_SOURCES
   client/async_transport.cpp
@@ -123,6 +129,7 @@ set(A2A_CLIENT_SOURCES
   client/client.cpp
   client/discovery.cpp
   client/transport/grpc_async_transport.cpp
+  client/transport/grpc_client_streaming.cpp
   client/transport/grpc_transport_internal.cpp
   client/transport/grpc_transport.cpp
   client/transport/http_json_streaming.cpp
@@ -244,16 +251,19 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   target_include_directories(a2a_core_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
   target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf Threads::Threads PRIVATE simdjson::simdjson)
 
+  add_library(a2a_http_diagnostics STATIC ${A2A_HTTP_SOURCES})
+  a2a_configure_http_target(a2a_http_diagnostics a2a_core_diagnostics)
+
   add_library(a2a_client_diagnostics STATIC ${A2A_CLIENT_SOURCES})
   target_include_directories(a2a_client_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
+  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a_http_diagnostics PRIVATE simdjson::simdjson)
 
   add_library(a2a_server_diagnostics STATIC ${A2A_SERVER_SOURCES})
   target_compile_definitions(a2a_server_diagnostics PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
   target_include_directories(a2a_server_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
+  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a_http_diagnostics PRIVATE simdjson::simdjson)
 
-  foreach(diagnostics_target IN ITEMS a2a_core_diagnostics a2a_client_diagnostics a2a_server_diagnostics)
+  foreach(diagnostics_target IN ITEMS a2a_core_diagnostics a2a_http_diagnostics a2a_client_diagnostics a2a_server_diagnostics)
     target_include_directories(${diagnostics_target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(${diagnostics_target} PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
   endforeach()

@@ -42,7 +42,11 @@ static_assert(!std::is_copy_constructible_v<core::AsyncScope>);
 static_assert(!std::is_move_constructible_v<core::AsyncScope>);
 constexpr auto kWait = std::chrono::seconds(5);
 constexpr auto kTimeout = std::chrono::milliseconds(10);
+constexpr auto kLongDeadline = kWait * 2;
+constexpr auto kRemovalDeadline = std::chrono::seconds(1);
+constexpr auto kRemainingDeadline = kRemovalDeadline * 2;
 constexpr auto kVerifierWait = std::chrono::seconds(1);
+constexpr int kCompletedValue = 1;
 constexpr std::size_t kDeadlineBatch = 64;
 constexpr int kCardRefetchRequests = 2;
 constexpr auto kCancelled = "CANCELLED";
@@ -676,6 +680,100 @@ void ExpectDeadline(const core::Result<int>& result) {
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().protocol_code(), kDeadline);
 }
+
+TEST(AsyncClientContractTest, EarlierDeadlinePreemptsLongTimerWait) {
+  std::promise<core::Result<int>> result;
+  auto future = result.get_future();
+  core::AsyncScope scope;
+  auto later = scope.Start<int>([](auto value) { (void)value; }, kLongDeadline);
+  ASSERT_TRUE(later.ok());
+  std::this_thread::sleep_for(kTimeout);
+
+  auto earlier = scope.Start<int>([&](auto value) { result.set_value(std::move(value)); }, kTimeout);
+  ASSERT_TRUE(earlier.ok());
+  ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
+  ExpectDeadline(future.get());
+  earlier.value().handle().Wait();
+  EXPECT_TRUE(later.value().IsActive());
+}
+
+TEST(AsyncClientContractTest, RemovingHeadPreservesRemainingDeadline) {
+  std::promise<core::Result<int>> result;
+  auto future = result.get_future();
+  core::AsyncScope scope;
+  auto head = scope.Start<int>([](auto value) { EXPECT_TRUE(value.ok()); }, kRemovalDeadline);
+  ASSERT_TRUE(head.ok());
+  auto remaining = scope.Start<int>([&](auto value) { result.set_value(std::move(value)); }, kRemainingDeadline);
+  ASSERT_TRUE(remaining.ok());
+
+  head.value().Complete(kCompletedValue);
+  head.value().handle().Wait();
+  ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
+  ExpectDeadline(future.get());
+  remaining.value().handle().Wait();
+}
+
+TEST(AsyncClientContractTest, RemovingNonheadPreservesEarliestDeadline) {
+  std::promise<core::Result<int>> result;
+  auto future = result.get_future();
+  core::AsyncScope scope;
+  auto earliest = scope.Start<int>([&](auto value) { result.set_value(std::move(value)); }, kRemovalDeadline);
+  ASSERT_TRUE(earliest.ok());
+  auto later = scope.Start<int>([](auto value) { EXPECT_TRUE(value.ok()); }, kLongDeadline);
+  ASSERT_TRUE(later.ok());
+
+  later.value().Complete(kCompletedValue);
+  later.value().handle().Wait();
+  ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
+  ExpectDeadline(future.get());
+  earliest.value().handle().Wait();
+}
+
+TEST(AsyncClientContractTest, MaximumTimeoutDoesNotHideFiniteDeadline) {
+  std::promise<core::Result<int>> result;
+  auto future = result.get_future();
+  core::AsyncScope scope;
+  auto untimed = scope.Start<int>([](auto value) { (void)value; }, std::chrono::milliseconds::max());
+  ASSERT_TRUE(untimed.ok());
+  std::this_thread::sleep_for(kTimeout);
+
+  auto finite = scope.Start<int>([&](auto value) { result.set_value(std::move(value)); }, kTimeout);
+  ASSERT_TRUE(finite.ok());
+  ASSERT_EQ(future.wait_for(kWait), std::future_status::ready);
+  ExpectDeadline(future.get());
+  finite.value().handle().Wait();
+  EXPECT_TRUE(untimed.value().IsActive());
+}
+
+TEST(AsyncClientContractTest, ExpiredSentinelDoesNotHideFiniteDeadline) {
+  std::promise<void> entered;
+  auto entered_future = entered.get_future();
+  std::promise<void> release;
+  auto release_future = release.get_future();
+  std::promise<core::Result<int>> result;
+  auto future = result.get_future();
+  core::AsyncScope scope;
+  auto expired = scope.Start<int>(
+      [&](auto value) {
+        ExpectDeadline(value);
+        entered.set_value();
+        release_future.wait();
+      },
+      kTimeout);
+  ASSERT_TRUE(expired.ok());
+  EXPECT_EQ(entered_future.wait_for(kWait), std::future_status::ready);
+  std::this_thread::sleep_for(kTimeout);
+
+  auto finite = scope.Start<int>([&](auto value) { result.set_value(std::move(value)); }, kTimeout);
+  const auto finite_status = future.wait_for(kWait);
+  release.set_value();
+  ASSERT_TRUE(finite.ok());
+  ASSERT_EQ(finite_status, std::future_status::ready);
+  ExpectDeadline(future.get());
+  expired.value().handle().Wait();
+  finite.value().handle().Wait();
+}
+
 TEST(AsyncClientContractTest, ExpiredBatchCompletesOnceAndReleasesAdmission) {
   std::atomic<std::size_t> expired{0};
   core::AsyncScope scope;

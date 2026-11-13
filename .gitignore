@@ -44,3 +44,18 @@
 build*
 vcpkg_installed*
 .vcpkg
+
+# Generated documentation and validation artifacts
+/book-build/
+/perf-artifacts*/
+/tck-artifacts/
+/tck-repo/
+
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local benchmark-runner executable
+/tools/bench_runner/a2a-bench-runner

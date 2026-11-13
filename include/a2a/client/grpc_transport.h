@@ -21,6 +21,9 @@
 #endif
 
 namespace a2a::client {
+namespace grpc_internal {
+class NativeStreams;
+}
 
 class GrpcTransport final : public ClientTransport {
  public:
@@ -130,6 +133,7 @@ class GrpcTransport final : public ClientTransport {
   [[nodiscard]] static core::Error BuildGrpcError(const ::grpc::Status& status);
 
   std::shared_ptr<AsyncClientTransport> async_transport_;
+  std::shared_ptr<grpc_internal::NativeStreams> native_streams_;
   ResolvedInterface resolved_interface_;
   std::shared_ptr<RpcClient> rpc_client_;
   std::chrono::milliseconds default_timeout_;

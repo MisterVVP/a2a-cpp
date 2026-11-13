@@ -38,6 +38,10 @@ endif()
 
 find_package(Threads REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
+if(WIN32 AND gRPC_VERSION VERSION_LESS 1.38)
+  message(FATAL_ERROR
+    "Windows requires gRPC 1.38 or newer for native client callback completion queues")
+endif()
 find_package(simdjson CONFIG REQUIRED)
 if(simdjson_VERSION VERSION_LESS 3.0)
   message(FATAL_ERROR "SDK JSON parsing requires simdjson 3.0 or newer")

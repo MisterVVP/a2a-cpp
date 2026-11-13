@@ -24,6 +24,7 @@
 
 #include "a2a/core/error.h"
 #include "http_client_internal.h"
+#include "serial_stream_dispatch.h"
 
 namespace a2a::http {
 namespace {
@@ -41,8 +42,6 @@ constexpr long kHttpResponseCodeUnset = 0;
 constexpr std::string_view kStreamCancelledMessage = "HTTP stream was cancelled";
 constexpr std::string_view kAsyncStreamCallbacksRequiredMessage = "HTTP asynchronous stream callbacks are required";
 constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
-constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
-constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
 constexpr std::size_t kStreamDispatchWorkerCount = 4U;
 constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
 constexpr std::string_view kDispatchInitializationFailureMessage = "failed to initialize HTTP stream callback executor";
@@ -206,60 +205,6 @@ core::Result<void> EnsureStreamDispatchExecutor() {
   return {};
 }
 
-class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStreamDispatch> {
- public:
-  using Task = std::function<void()>;
-
-  bool Enqueue(Task task, std::size_t pending_bytes = 0U, bool terminal = false) {
-    bool schedule = false;
-    {
-      std::lock_guard lock(mutex_);
-      const std::size_t bounded_pending_bytes =
-          pending_bytes < kMaximumPendingDispatchBytes ? pending_bytes : kMaximumPendingDispatchBytes;
-      if (!terminal && (tasks_.size() >= kMaximumPendingDispatchTasks ||
-                        pending_bytes_ > kMaximumPendingDispatchBytes - bounded_pending_bytes)) {
-        return false;
-      }
-      tasks_.push_back(QueuedTask{.task = std::move(task), .pending_bytes = pending_bytes});
-      pending_bytes_ += pending_bytes;
-      schedule = !scheduled_;
-      scheduled_ = true;
-    }
-    if (schedule) {
-      GetStreamDispatchExecutor().Submit([self = shared_from_this()] { self->Drain(); });
-    }
-    return true;
-  }
-
- private:
-  void Drain() {
-    while (true) {
-      QueuedTask queued;
-      {
-        std::lock_guard lock(mutex_);
-        if (tasks_.empty()) {
-          scheduled_ = false;
-          return;
-        }
-        queued = std::move(tasks_.front());
-        tasks_.pop_front();
-        pending_bytes_ -= queued.pending_bytes;
-      }
-      queued.task();
-    }
-  }
-
-  struct QueuedTask final {
-    Task task;
-    std::size_t pending_bytes = 0U;
-  };
-
-  std::mutex mutex_;
-  std::deque<QueuedTask> tasks_;
-  std::size_t pending_bytes_ = 0U;
-  bool scheduled_ = false;
-};
-
 struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamState> {
   std::shared_ptr<detail::ClientState> client_state;
   std::shared_ptr<detail::CurlStreamReactor> reactor;
@@ -276,7 +221,8 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   std::function<core::Result<void>(std::string_view)> chunk_handler;
   std::function<bool()> is_cancelled;
   Client::StreamCompletion completion;
-  std::shared_ptr<SerialStreamDispatch> dispatch = std::make_shared<SerialStreamDispatch>();
+  std::shared_ptr<detail::SerialStreamDispatch> dispatch = std::make_shared<detail::SerialStreamDispatch>(
+      [](detail::SerialStreamDispatch::Task task) { GetStreamDispatchExecutor().Submit(std::move(task)); });
   std::mutex error_mutex;
   std::optional<core::Error> dispatch_error;
   bool registered = false;
