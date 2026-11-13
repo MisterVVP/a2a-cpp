@@ -164,7 +164,7 @@ core::Result<std::shared_ptr<StreamHandle::State>> NativeStreams::Start(
     const lf::a2a::v1::SendMessageRequest& request, StreamObserver& observer,
     std::unique_ptr<::grpc::ClientContext> context) {
   return StartStream(state_, request, observer, std::move(context),
-                     [](auto* stub, auto* rpc_context, const auto* input, auto* reactor) {
+                     [](auto* stub, auto* rpc_context, auto* input, auto* reactor) {
                        stub->SendStreamingMessage(rpc_context, input, reactor);
                      });
 }
@@ -173,7 +173,7 @@ core::Result<std::shared_ptr<StreamHandle::State>> NativeStreams::Start(
     const lf::a2a::v1::SubscribeToTaskRequest& request, StreamObserver& observer,
     std::unique_ptr<::grpc::ClientContext> context) {
   return StartStream(state_, request, observer, std::move(context),
-                     [](auto* stub, auto* rpc_context, const auto* input, auto* reactor) {
+                     [](auto* stub, auto* rpc_context, auto* input, auto* reactor) {
                        stub->SubscribeToTask(rpc_context, input, reactor);
                      });
 }

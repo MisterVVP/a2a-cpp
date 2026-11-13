@@ -286,6 +286,18 @@ lf::a2a::v1::GetTaskRequest SdkSubscriptionRequest() {
   return request;
 }
 
+void ExpectOrderedSdkEvents(SdkStreamObserver& observer) {
+  const auto ids = observer.Ids();
+  ASSERT_EQ(ids.size(), kBurstStreamEvents);
+  for (std::size_t index = 0; index < ids.size(); ++index) {
+    EXPECT_EQ(ids[index], std::to_string(index));
+  }
+}
+void ExpectCancelledSdkStream(const client::StreamHandle& stream, const SdkStreamObserver& observer) {
+  EXPECT_FALSE(stream.IsActive());
+  EXPECT_EQ(observer.terminals, 0);
+}
+
 TEST(AsyncStreamGrpc, SdkCallbackReaderPreservesBurstOrderAndRemoteErrors) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());
@@ -297,11 +309,7 @@ TEST(AsyncStreamGrpc, SdkCallbackReaderPreservesBurstOrderAndRemoteErrors) {
   ASSERT_TRUE(stream.ok());
   EXPECT_FALSE(observer.Finished());
   EXPECT_EQ(observer.terminals, 1);
-  const auto ids = observer.Ids();
-  ASSERT_EQ(ids.size(), kBurstStreamEvents);
-  for (std::size_t index = 0; index < ids.size(); ++index) {
-    EXPECT_EQ(ids[index], std::to_string(index));
-  }
+  ExpectOrderedSdkEvents(observer);
   EXPECT_EQ(observer.ProtocolCode(), std::to_string(static_cast<int>(::grpc::StatusCode::INVALID_ARGUMENT)));
 }
 
@@ -338,9 +346,8 @@ TEST(AsyncStreamGrpc, SdkHandleCanCancelFromItsOwnCallback) {
   handle.set_value(stream.value().get());
   EXPECT_EQ(done.wait_for(kCoroutineWait), std::future_status::ready);
   EXPECT_TRUE(sdk->Destroy().ok());
-  EXPECT_FALSE(stream.value()->IsActive());
+  ExpectCancelledSdkStream(*stream.value(), observer);
   EXPECT_EQ(observer.Count(), 1);
-  EXPECT_EQ(observer.terminals, 0);
 }
 
 TEST(AsyncStreamGrpc, SdkOwnerCanBeDestroyedFromStreamCallback) {
@@ -367,6 +374,17 @@ TEST(AsyncStreamGrpc, SdkOwnerCanBeDestroyedFromStreamCallback) {
   EXPECT_EQ(observer.terminals, 0);
 }
 
+void ExpectCancellationWaits(client::StreamHandle& stream, SdkStreamObserver& observer, std::promise<void>& release) {
+  const bool entered = observer.WaitEvents(1);
+  EXPECT_TRUE(entered);
+  auto cancelled = std::async(std::launch::async, [&] { stream.Cancel(); });
+  if (entered) {
+    EXPECT_EQ(cancelled.wait_for(kPumpInterval), std::future_status::timeout);
+  }
+  release.set_value();
+  EXPECT_EQ(cancelled.wait_for(kCoroutineWait), std::future_status::ready);
+}
+
 TEST(AsyncStreamGrpc, SdkExternalCancellationWaitsForExecutingObserver) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());
@@ -377,14 +395,7 @@ TEST(AsyncStreamGrpc, SdkExternalCancellationWaitsForExecutingObserver) {
   observer.on_event = [allowed] { allowed.wait(); };
   auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), observer, SdkStreamOptions());
   ASSERT_TRUE(stream.ok());
-  const bool entered = observer.WaitEvents(1);
-  EXPECT_TRUE(entered);
-  auto cancelled = std::async(std::launch::async, [&] { stream.value()->Cancel(); });
-  if (entered) {
-    EXPECT_EQ(cancelled.wait_for(kPumpInterval), std::future_status::timeout);
-  }
-  release.set_value();
-  EXPECT_EQ(cancelled.wait_for(kCoroutineWait), std::future_status::ready);
+  ExpectCancellationWaits(*stream.value(), observer, release);
   EXPECT_TRUE(sdk->Destroy().ok());
   EXPECT_EQ(observer.terminals, 0);
 }
@@ -415,6 +426,18 @@ std::size_t StreamClientThreads() {
 #endif
 }
 
+void StartIdleSdkSubscriptions(client::A2AClient& sdk, std::vector<std::unique_ptr<SdkStreamObserver>>& observers,
+                               std::vector<std::unique_ptr<client::StreamHandle>>& streams) {
+  for (std::size_t index = 0; index < kStreamConcurrency; ++index) {
+    auto observer = std::make_unique<SdkStreamObserver>();
+    auto stream = sdk.SubscribeTask(SdkSubscriptionRequest(), *observer, SdkStreamOptions());
+    ASSERT_TRUE(stream.ok());
+    EXPECT_TRUE(observer->WaitEvents(1));
+    observers.push_back(std::move(observer));
+    streams.push_back(std::move(stream.value()));
+  }
+}
+
 TEST(AsyncStreamGrpc, SdkIdleSubscriptionsDoNotOwnReaderThreadsAndShutdownDrainsThem) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());
@@ -423,23 +446,13 @@ TEST(AsyncStreamGrpc, SdkIdleSubscriptionsDoNotOwnReaderThreadsAndShutdownDrains
   const auto baseline = StreamClientThreads();
   std::vector<std::unique_ptr<SdkStreamObserver>> observers;
   std::vector<std::unique_ptr<client::StreamHandle>> streams;
-  for (std::size_t index = 0; index < kStreamConcurrency; ++index) {
-    auto observer = std::make_unique<SdkStreamObserver>();
-    auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), *observer, SdkStreamOptions());
-    ASSERT_TRUE(stream.ok());
-    EXPECT_TRUE(observer->WaitEvents(1));
-    observers.push_back(std::move(observer));
-    streams.push_back(std::move(stream.value()));
-  }
+  StartIdleSdkSubscriptions(*sdk, observers, streams);
   if (baseline != 0) {
     EXPECT_LT(StreamClientThreads(), baseline + kIdleThreadAllowance);
   }
   EXPECT_TRUE(sdk->Destroy().ok());
-  for (const auto& stream : streams) {
-    EXPECT_FALSE(stream->IsActive());
-  }
-  for (const auto& observer : observers) {
-    EXPECT_EQ(observer->terminals, 0);
+  for (std::size_t index = 0; index < streams.size(); ++index) {
+    ExpectCancelledSdkStream(*streams[index], *observers[index]);
   }
 }
 
