@@ -135,6 +135,11 @@ heartbeats never accumulate behind a stalled write. Finite completion writes a
 final chunk and permits connection reuse. A request's `Connection: close` still
 closes after its chunked response completes.
 
+Ready socket writes can complete immediately on the network executor, with
+application acknowledgements delivered off that thread. Chunk framing reuses
+owned event buffers where capacity permits. These paths retain the same output
+bounds and socket-acceptance acknowledgement contract.
+
 Disconnect and shutdown wake mailbox waits and socket writes, and call the
 existing dispatcher's cancellation entrypoint. `RequestExecution` arbitrates
 completion/cancellation races and runs application cleanup exactly once. Server

@@ -62,8 +62,13 @@ after a result has been selected does not replace it.
 
 Callbacks can run before the initiating method returns. Calls may complete in any
 order, and callbacks for different operations may run concurrently. Application
-completion callbacks and `AfterCall` run on shared completion workers, away from libcurl reactors and native gRPC callback threads. Callback
-exceptions are contained. Keep captures alive until callback completion; dropping
+completion callbacks and `AfterCall` run on shared completion workers, away from
+libcurl reactors and native gRPC callback threads. Internal HTTP adapter stages
+can continue on an existing completion worker instead of queueing final delivery
+again. Initiation still defers callbacks, including calls started from another
+callback. The HTTP client and SDK retain separate scopes for their independent
+shutdown and deadline ownership. Callback exceptions are contained.
+Keep captures alive until callback completion; dropping
 an `AsyncHandle` leaves the operation running. The SDK owns the request's network
 storage, the callback, and the copied options needed by interceptors. Callback
 code can start more calls or destroy its client. Avoid blocking the shared

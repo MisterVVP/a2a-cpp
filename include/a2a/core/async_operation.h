@@ -19,6 +19,14 @@ template <typename T>
 using Completion = std::function<void(Result<T>)>;
 
 namespace async_detail {
+enum class CompletionDelivery { kDeferred, kContinuation };
+// Prevent a transport continuation from invoking a callback inside initiation,
+// including a new request started reentrantly by another completion callback.
+class InitiationScope final : private NonCopyableOrMovable {
+ public:
+  InitiationScope() noexcept;
+  ~InitiationScope();
+};
 void EnterCallback() noexcept;
 void LeaveCallback() noexcept;
 [[nodiscard]] bool IsCallbackThread() noexcept;
@@ -35,7 +43,7 @@ class Operation : public std::enable_shared_from_this<Operation>, private NonCop
 
  protected:
   bool Claim();
-  void Dispatch(std::function<void()> callback);
+  void Dispatch(std::function<void()> callback, CompletionDelivery delivery);
 
  private:
   mutable std::mutex mutex_;
@@ -50,10 +58,10 @@ template <typename T>
 class TypedOperation final : public Operation {
  public:
   explicit TypedOperation(Completion<T> callback) : callback_(std::move(callback)) {}
-  void Complete(Result<T> result) {
+  void Complete(Result<T> result, CompletionDelivery delivery = CompletionDelivery::kDeferred) {
     if (Claim()) {
-      Dispatch(
-          [callback = std::move(callback_), result = std::move(result)]() mutable { callback(std::move(result)); });
+      Dispatch([callback = std::move(callback_), result = std::move(result)]() mutable { callback(std::move(result)); },
+               delivery);
     }
   }
   void Fail(Error error) override { Complete(std::move(error)); }
@@ -90,6 +98,11 @@ template <typename T>
 class AsyncCompletion final {
  public:
   void Complete(Result<T> result) const { state_->Complete(std::move(result)); }
+  // Reuse an existing SDK completion worker for an internal adapter stage.
+  // Falls back to queued delivery during initiation or outside those workers.
+  void CompleteContinuation(Result<T> result) const {
+    state_->Complete(std::move(result), async_detail::CompletionDelivery::kContinuation);
+  }
   void RegisterCancellation(const std::function<void()>& cancel) const { state_->RegisterCancellation(cancel); }
   [[nodiscard]] bool IsActive() const { return state_->IsActive(); }
   [[nodiscard]] AsyncHandle handle() const { return AsyncHandle(state_); }
