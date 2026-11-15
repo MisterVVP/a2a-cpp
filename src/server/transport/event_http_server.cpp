@@ -2,11 +2,13 @@
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 #include "a2a/server/event_http_server.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
+#include <boost/asio/bind_immediate_executor.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/error.hpp>
@@ -57,6 +59,16 @@ std::string Chunk(std::string_view bytes) {
   result.append(bytes);
   result.append(core::http::kLineTerminator);
   return result;
+}
+
+std::string ChunkOwned(std::string bytes) {
+  std::array<char, kHexBytes + core::http::kLineTerminator.size()> prefix{};
+  const auto converted = std::to_chars(prefix.data(), prefix.data() + kHexBytes, bytes.size(), 16);
+  const auto* end = std::ranges::copy(core::http::kLineTerminator, converted.ptr).out;
+  // Retain spare capacity from SSE encoding rather than allocate another frame.
+  bytes.insert(0, prefix.data(), static_cast<std::size_t>(end - prefix.data()));
+  bytes.append(core::http::kLineTerminator);
+  return bytes;
 }
 
 bool FitsOutput(const HttpServerResponse& response, std::size_t limit, bool streaming) {
@@ -189,7 +201,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     if (bytes.size() > self->max_output_bytes_ - kHexBytes - 4U) {
       co_return core::Error::Validation(std::string(kOutputLimit));
     }
-    co_return co_await self->Send(Chunk(bytes), std::move(gate));
+    co_return co_await self->Send(ChunkOwned(std::move(bytes)), std::move(gate));
   }
 
  private:
@@ -287,7 +299,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
 
   void Flush() {
     auto bytes = output_.front().bytes;
-    asio::async_write(socket_, asio::buffer(*bytes), [self = shared_from_this(), bytes](IoError error, std::size_t) {
+    auto finished = [self = shared_from_this(), bytes](IoError error, std::size_t) {
       if (self->closed_) {
         return;
       }
@@ -304,7 +316,10 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       if (!self->output_.empty()) {
         self->Flush();
       }
-    });
+    };
+    // A ready write can finish on this network thread without another queued hop.
+    asio::async_write(socket_, asio::buffer(*bytes),
+                      asio::bind_immediate_executor(runtime_->network.get_executor(), std::move(finished)));
   }
 
   void FailQueued() {

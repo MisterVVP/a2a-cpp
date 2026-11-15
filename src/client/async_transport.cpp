@@ -19,6 +19,7 @@ core::Result<core::AsyncHandle> StartTransportCall(core::AsyncScope& scope, core
   auto token = std::move(started.value());
   try {
     if (token.IsActive()) {
+      const core::async_detail::InitiationScope initiation;
       initiate(token);
     }
   } catch (...) {

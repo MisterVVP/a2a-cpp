@@ -86,15 +86,15 @@ class JsonRpcAsyncTransport final : public AsyncClientTransport {
     auto started = async_requester_(
         http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
           if (!response.ok()) {
-            completion.Complete(response.error());
+            completion.CompleteContinuation(response.error());
             return;
           }
           const auto version = ValidateResponseVersion(response.value());
           if (!version.ok()) {
-            completion.Complete(version.error());
+            completion.CompleteContinuation(version.error());
             return;
           }
-          completion.Complete(decode(response.value()));
+          completion.CompleteContinuation(decode(response.value()));
         });
     if (!started.ok()) {
       completion.Complete(started.error());

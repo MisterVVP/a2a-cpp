@@ -78,15 +78,15 @@ class HttpJsonAsyncTransport final : public AsyncClientTransport {
         async_requester_(http_request.value(), [completion, decode = plan.decode, endpoint = std::move(plan.endpoint)](
                                                    core::Result<HttpClientResponse> response) {
           if (!response.ok()) {
-            completion.Complete(response.error());
+            completion.CompleteContinuation(response.error());
             return;
           }
           const auto version = ValidateResponseVersion(response.value());
           if (!version.ok()) {
-            completion.Complete(version.error());
+            completion.CompleteContinuation(version.error());
             return;
           }
-          completion.Complete(decode(response.value(), endpoint));
+          completion.CompleteContinuation(decode(response.value(), endpoint));
         });
     if (!started.ok()) {
       completion.Complete(started.error());

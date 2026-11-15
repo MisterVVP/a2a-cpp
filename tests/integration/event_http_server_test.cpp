@@ -31,6 +31,7 @@ constexpr std::string_view kStatus = "HTTP/1.1 200 OK";
 constexpr std::string_view kOverload = "503 Service Unavailable";
 constexpr std::string_view kBody = "ok";
 constexpr std::string_view kEvent = "data: hello\n\n";
+constexpr std::string_view kChunkedEvent = "d\r\ndata: hello\n\n\r\n";
 constexpr std::string_view kInitialEvent = "data: initial";
 constexpr std::string_view kEventEnd = "\n\n";
 constexpr std::size_t kInitialPadding = 64;
@@ -135,7 +136,7 @@ TEST(EventHttpServer, FiniteStreamUsesChunksAndConnectionReuse) {
   asio::write(socket, asio::buffer(kRequest));
   asio::write(socket, asio::buffer(kCloseRequest));
   const auto response = ReadToEnd(socket);
-  EXPECT_NE(response.find(kEvent), std::string::npos);
+  EXPECT_NE(response.find(kChunkedEvent), std::string::npos);
   const auto end = response.find(kFinalChunk);
   ASSERT_NE(end, std::string::npos);
   EXPECT_NE(response.find(kStatus, end), std::string::npos);

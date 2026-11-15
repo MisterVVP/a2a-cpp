@@ -26,6 +26,7 @@ constexpr auto kCancellationCode = AsyncHandle::kCancelled;
 constexpr auto kDeadlineCode = AsyncHandle::kDeadlineExceeded;
 thread_local bool g_completion_worker = false;
 thread_local std::size_t g_callback_depth = 0;
+thread_local std::size_t g_initiation_depth = 0;
 using Clock = std::chrono::steady_clock;
 
 void InvokeCallback(const std::function<void()>& callback) noexcept {
@@ -72,7 +73,6 @@ class CompletionRuntime final : private NonCopyableOrMovable {
     const auto maximum = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::time_point::max() - now);
     const auto expires =
         timeout >= maximum ? Clock::time_point::max() : now + std::max(timeout, std::chrono::milliseconds::zero());
-    const auto previous_deadline = deadlines_.empty() ? Clock::time_point::max() : deadlines_.begin()->first;
     auto deadline = deadlines_.emplace(expires, operation);
     try {
       operations_.emplace(operation.get(), deadline);
@@ -81,7 +81,8 @@ class CompletionRuntime final : private NonCopyableOrMovable {
       deadlines_.erase(deadline);
       throw;
     }
-    if (expires < previous_deadline) {
+    // A removed deadline can leave an earlier, still-safe wait in progress.
+    if (expires < timer_deadline_) {
       deadlines_changed_.notify_one();
     }
     return true;
@@ -95,16 +96,13 @@ class CompletionRuntime final : private NonCopyableOrMovable {
   }
   void Release(async_detail::Operation* operation) {
     std::lock_guard lock(mutex_);
-    const auto previous_deadline = deadlines_.empty() ? Clock::time_point::max() : deadlines_.begin()->first;
     const auto found = operations_.find(operation);
     if (found != operations_.end()) {
       deadlines_.erase(found->second);
       operations_.erase(found);
     }
-    const auto next_deadline = deadlines_.empty() ? Clock::time_point::max() : deadlines_.begin()->first;
-    if (next_deadline != previous_deadline) {
-      deadlines_changed_.notify_one();
-    }
+    // Removing a deadline cannot advance expiry. RunTimer keeps a value, so its
+    // existing wait remains safe even when the corresponding node is removed.
   }
 
  private:
@@ -146,10 +144,11 @@ class CompletionRuntime final : private NonCopyableOrMovable {
       // max() also marks expired calls awaiting callback cleanup. Converting it
       // to a system-clock timed wait can overflow on older standard libraries.
       if (deadlines_.empty() || deadlines_.begin()->first == Clock::time_point::max()) {
+        timer_deadline_ = Clock::time_point::max();
         deadlines_changed_.wait(lock);
       } else if (deadlines_.begin()->first > Clock::now()) {
-        const auto deadline = deadlines_.begin()->first;
-        deadlines_changed_.wait_until(lock, deadline);
+        timer_deadline_ = deadlines_.begin()->first;
+        deadlines_changed_.wait_until(lock, timer_deadline_);
       } else {
         auto node = deadlines_.extract(deadlines_.begin());
         const auto operation = node.mapped();
@@ -171,6 +170,7 @@ class CompletionRuntime final : private NonCopyableOrMovable {
   std::condition_variable deadlines_changed_;
   std::deque<std::function<void()>> tasks_;
   std::multimap<Clock::time_point, std::shared_ptr<async_detail::Operation>> deadlines_;
+  Clock::time_point timer_deadline_ = Clock::time_point::max();
   std::unordered_map<async_detail::Operation*, decltype(deadlines_)::iterator> operations_;
   std::array<std::thread, kCompletionWorkers> workers_;
   std::thread timer_;
@@ -183,6 +183,8 @@ CompletionRuntime& Runtime() {
 }  // namespace
 
 namespace async_detail {
+InitiationScope::InitiationScope() noexcept { ++g_initiation_depth; }
+InitiationScope::~InitiationScope() { --g_initiation_depth; }
 void EnterCallback() noexcept { ++g_callback_depth; }
 void LeaveCallback() noexcept { --g_callback_depth; }
 bool IsCallbackThread() noexcept { return g_completion_worker || g_callback_depth != 0U; }
@@ -203,8 +205,8 @@ bool Operation::Claim() {
   cancel_ = {};
   return true;
 }
-void Operation::Dispatch(std::function<void()> callback) {
-  Runtime().Submit([self = shared_from_this(), callback = std::move(callback)] {
+void Operation::Dispatch(std::function<void()> callback, CompletionDelivery delivery) {
+  auto deliver = [self = shared_from_this(), callback = std::move(callback)] {
     InvokeCallback(callback);
     if (auto scope = self->owner.lock()) {
       {
@@ -219,7 +221,12 @@ void Operation::Dispatch(std::function<void()> callback) {
       self->callback_finished_ = true;
     }
     self->finished_.notify_all();
-  });
+  };
+  if (delivery == CompletionDelivery::kContinuation && g_completion_worker && g_initiation_depth == 0U) {
+    deliver();
+  } else {
+    Runtime().Submit(std::move(deliver));
+  }
 }
 void Operation::Cancel(Error error) {
   std::function<void()> cancel;
