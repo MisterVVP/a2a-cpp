@@ -20,8 +20,6 @@ using Completion = std::function<void(Result<T>)>;
 
 namespace async_detail {
 enum class CompletionDelivery { kDeferred, kContinuation };
-// Prevent a transport continuation from invoking a callback inside initiation,
-// including a new request started reentrantly by another completion callback.
 class InitiationScope final : private NonCopyableOrMovable {
  public:
   InitiationScope() noexcept;
@@ -98,8 +96,6 @@ template <typename T>
 class AsyncCompletion final {
  public:
   void Complete(Result<T> result) const { state_->Complete(std::move(result)); }
-  // Reuse an existing SDK completion worker for an internal adapter stage.
-  // Falls back to queued delivery during initiation or outside those workers.
   void CompleteContinuation(Result<T> result) const {
     state_->Complete(std::move(result), async_detail::CompletionDelivery::kContinuation);
   }

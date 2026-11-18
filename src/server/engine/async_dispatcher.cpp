@@ -232,6 +232,7 @@ struct AsyncDispatcher::State final {
       } catch (...) {
         response = CoroutineError(std::current_exception());
       }
+
       call->Finish(std::move(response));
     }
 

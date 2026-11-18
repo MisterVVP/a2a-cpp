@@ -46,7 +46,6 @@ class ReadReactor final : public ::grpc::ClientReadReactor<lf::a2a::v1::StreamRe
 
   ~ReadReactor() override {
     if (registered_) {
-      // Release native resources before allowing an external shutdown to return.
       context_.reset();
       {
         std::lock_guard lock(owner_->mutex);
@@ -90,8 +89,6 @@ class ReadReactor final : public ::grpc::ClientReadReactor<lf::a2a::v1::StreamRe
         return;
       }
     }
-    // End the observer scope before a new read can invoke the next reaction.
-    // One read at a time preserves ordering and backpressure without a frame queue.
     if (!Suppressed()) {
       this->StartRead(&event_);
     }
@@ -108,13 +105,11 @@ class ReadReactor final : public ::grpc::ClientReadReactor<lf::a2a::v1::StreamRe
             observer_.OnError(BuildGrpcError(status));
           }
         } catch (...) {
-          // Application exceptions must not escape gRPC or prevent native cleanup.
           stream_->cancel_requested.store(true);
         }
       }
       stream_->active.store(false);
     }
-    // gRPC guarantees OnDone runs after all other reactions have returned.
     delete this;
   }
 
@@ -147,7 +142,6 @@ core::Result<std::shared_ptr<StreamHandle::State>> StartStream(const std::shared
     return core::Error::Network(kStreamsClosed);
   }
   call->Prepare(invoke);
-  // Transfer ownership before StartCall: OnDone may delete the reactor immediately.
   auto* active = call.release();
   active->StartCall();
   return stream;

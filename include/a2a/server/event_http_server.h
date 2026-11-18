@@ -14,7 +14,15 @@
 #include "a2a/server/engine/request_execution.h"
 #include "a2a/server/http_adapter.h"
 
+namespace lf::a2a::v1 {
+class AgentCard;
+}  // namespace lf::a2a::v1
+
 namespace a2a::server {
+namespace engine {
+class AsyncDispatcher;
+}  // namespace engine
+struct ServerBindingsOptions;
 
 // Await each write before producing another event. Consumption means the socket
 // accepted the bytes, not that the peer application read them. Cancellation wakes
@@ -65,6 +73,8 @@ class EventHttpServer final : private core::NonCopyableOrMovable {
       HttpServerRequest, engine::RequestExecutionContext)>;
   explicit EventHttpServer(Handler handler, EventHttpServerOptions options = {});
   explicit EventHttpServer(AsyncHandler handler, EventHttpServerOptions options = {});
+  EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
+                  const ServerBindingsOptions& bindings, EventHttpServerOptions options = {});
   ~EventHttpServer();
   [[nodiscard]] core::Result<void> Start();
   [[nodiscard]] std::uint16_t port() const noexcept;

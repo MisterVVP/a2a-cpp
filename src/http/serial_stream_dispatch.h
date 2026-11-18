@@ -87,7 +87,6 @@ class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStr
         return;
       }
     }
-    // Keep scheduled_ set so enqueueing cannot start a concurrent drain.
     Schedule();
   }
 

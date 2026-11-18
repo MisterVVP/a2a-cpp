@@ -149,9 +149,6 @@ struct AsyncRequest final : private core::NonCopyableOrMovable {
 core::Result<core::AsyncHandle> Client::SendRequestAsync(Request request, core::Completion<Response> completion) const {
   const auto client_state = state_;
   if (completion) {
-    // Keep client state alive through callback destruction. A canceled transfer
-    // can otherwise release the last state on a reactor while a callback still
-    // runs, making that reactor wait for application code during scope teardown.
     completion = [lifetime = client_state, callback = std::move(completion)](core::Result<Response> response) mutable {
       (void)lifetime;
       callback(std::move(response));
@@ -184,10 +181,10 @@ core::Result<core::AsyncHandle> Client::SendRequestAsync(Request request, core::
   transfer->on_complete = [operation](CURLcode code) {
     auto result = operation->Result(code);
     detail::ReleaseRequestSlot(*operation->client_state, std::move(operation->slot));
+
     operation->completion.Complete(std::move(result));
   };
   auto reactor = operation->slot->reactor;
-  // Add precedes cancellation registration, including cancellation before start.
   reactor->Add(transfer);
   token.RegisterCancellation([reactor, weak_transfer = std::weak_ptr(transfer)] {
     if (auto active = weak_transfer.lock()) {

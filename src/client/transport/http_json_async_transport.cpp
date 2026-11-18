@@ -25,8 +25,8 @@ using http_json_internal::ValidateResponseVersion;
 constexpr const char* kMissingAsyncRequester = "HTTP async requester is not configured";
 class HttpJsonAsyncTransport final : public AsyncClientTransport {
  public:
-  HttpJsonAsyncTransport(ResolvedInterface resolved_interface, HttpAsyncRequester requester,
-                         std::chrono::milliseconds timeout)
+  HttpJsonAsyncTransport(ResolvedInterface resolved_interface,
+                         http_transport_internal::OwnedHttpAsyncRequester requester, std::chrono::milliseconds timeout)
       : resolved_interface_(std::move(resolved_interface)),
         async_requester_(std::move(requester)),
         default_timeout_(timeout) {}
@@ -74,20 +74,20 @@ class HttpJsonAsyncTransport final : public AsyncClientTransport {
       completion.Complete(core::Error::Validation(kMissingAsyncRequester));
       return;
     }
-    auto started =
-        async_requester_(http_request.value(), [completion, decode = plan.decode, endpoint = std::move(plan.endpoint)](
-                                                   core::Result<HttpClientResponse> response) {
-          if (!response.ok()) {
-            completion.CompleteContinuation(response.error());
-            return;
-          }
-          const auto version = ValidateResponseVersion(response.value());
-          if (!version.ok()) {
-            completion.CompleteContinuation(version.error());
-            return;
-          }
-          completion.CompleteContinuation(decode(response.value(), endpoint));
-        });
+    auto started = async_requester_(std::move(http_request.value()),
+                                    [completion, decode = plan.decode,
+                                     endpoint = std::move(plan.endpoint)](core::Result<HttpClientResponse> response) {
+                                      if (!response.ok()) {
+                                        completion.CompleteContinuation(response.error());
+                                        return;
+                                      }
+                                      const auto version = ValidateResponseVersion(response.value());
+                                      if (!version.ok()) {
+                                        completion.CompleteContinuation(version.error());
+                                        return;
+                                      }
+                                      completion.CompleteContinuation(decode(response.value(), endpoint));
+                                    });
     if (!started.ok()) {
       completion.Complete(started.error());
       return;
@@ -101,7 +101,7 @@ class HttpJsonAsyncTransport final : public AsyncClientTransport {
                                                  options);
   }
   ResolvedInterface resolved_interface_;
-  HttpAsyncRequester async_requester_;
+  http_transport_internal::OwnedHttpAsyncRequester async_requester_;
   std::chrono::milliseconds default_timeout_;
 };
 void HttpJsonAsyncTransport::StartSendMessage(
@@ -144,7 +144,7 @@ void HttpJsonAsyncTransport::StartDeleteTaskPushNotificationConfig(
 }  // namespace
 namespace http_json_internal {
 std::shared_ptr<AsyncClientTransport> MakeAsyncTransport(ResolvedInterface resolved_interface,
-                                                         HttpAsyncRequester requester,
+                                                         http_transport_internal::OwnedHttpAsyncRequester requester,
                                                          std::chrono::milliseconds default_timeout) {
   return std::make_shared<HttpJsonAsyncTransport>(std::move(resolved_interface), std::move(requester), default_timeout);
 }

@@ -81,7 +81,6 @@ class CompletionRuntime final : private NonCopyableOrMovable {
       deadlines_.erase(deadline);
       throw;
     }
-    // A removed deadline can leave an earlier, still-safe wait in progress.
     if (expires < timer_deadline_) {
       deadlines_changed_.notify_one();
     }
@@ -101,8 +100,6 @@ class CompletionRuntime final : private NonCopyableOrMovable {
       deadlines_.erase(found->second);
       operations_.erase(found);
     }
-    // Removing a deadline cannot advance expiry. RunTimer keeps a value, so its
-    // existing wait remains safe even when the corresponding node is removed.
   }
 
  private:

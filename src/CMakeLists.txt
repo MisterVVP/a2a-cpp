@@ -132,6 +132,7 @@ set(A2A_CLIENT_SOURCES
   client/transport/grpc_client_streaming.cpp
   client/transport/grpc_transport_internal.cpp
   client/transport/grpc_transport.cpp
+  client/transport/http_transport_internal.cpp
   client/transport/http_json_streaming.cpp
   client/transport/http_json_async_transport.cpp
   client/transport/http_json_transport.cpp
@@ -222,7 +223,8 @@ if(A2A_ENABLE_ASIO)
   find_package(Boost ${A2A_BOOST_VERSION} CONFIG REQUIRED)
   find_package(Threads REQUIRED)
   add_library(a2a_asio STATIC
-    server/transport/event_http_dispatcher.cpp
+    server/transport/event_http_native_handler.cpp
+    server/transport/event_http_listener.cpp
     server/transport/event_http_server.cpp
     server/engine/async_dispatcher.cpp
     server/engine/async_task_subscription.cpp

@@ -64,7 +64,7 @@ AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assiste
 - Treat warnings as actionable; keep warning count at zero for touched code.
 - Keep diffs small and reviewable.
 - Do not suppress linter findings with `NOLINT` unless there is a documented, reviewer-approved justification in code comments and the PR description. Prefer structural refactors that eliminate the warning.
-- Document non-obvious decisions with short comments near the code.
+- Do not add inline implementation comments or comments that narrate the code. Use descriptive names, explicit control flow, and ownership scopes to make the implementation self-explanatory. Document public contracts and design rationale in API documentation or the relevant SDK guide. Preserve license notices and required formatter or tool directives.
 - **Magic strings are forbidden** in production and test code. Use named `constexpr` constants (or equivalent strongly typed constants) and centralize protocol literals in shared headers where possible.
 - Code must be both readable and efficient: prefer straightforward, maintainable constructs first, then use measured/pre-allocated optimizations for hot paths without obscuring intent.
 - Prioritize performance and algorithmic efficiency:

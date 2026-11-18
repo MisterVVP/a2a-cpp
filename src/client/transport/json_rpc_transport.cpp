@@ -26,6 +26,7 @@
 namespace a2a::client {
 namespace {
 
+using http_transport_internal::MakeHttpRequesterForClient;
 using json_rpc_internal::BuildJsonRpcEnvelope;
 using json_rpc_internal::BuildJsonRpcEnvelopeError;
 using json_rpc_internal::JoinUrl;
@@ -45,22 +46,6 @@ constexpr const char* kCancelTaskIdRequired = "CancelTaskRequest.id is required"
 constexpr const char* kGetPushConfigIdRequired = "GetTaskPushNotificationConfigRequest.id is required";
 constexpr const char* kDeletePushConfigIdRequired = "DeleteTaskPushNotificationConfigRequest.id is required";
 constexpr const char* kMissingRequester = "HTTP requester is not configured";
-constexpr std::string_view kDefaultMtlsUnsupportedMessage =
-    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
-
-HttpRequester MakeHttpRequesterForClient(std::shared_ptr<a2a::http::Client> client) {
-  return [client = std::move(client)](const HttpRequest& request) -> core::Result<HttpClientResponse> {
-    if (request.mtls.has_value()) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    auto response = client->SendRequest(ToSharedHttpRequest(request));
-    if (!response.ok()) {
-      return response.error();
-    }
-    return ToClientHttpResponse(std::move(response.value()));
-  };
-}
-
 std::string BuildDefaultRequestId() {
   static std::atomic<std::uint64_t> sequence{0};
   const auto current = sequence.fetch_add(1, std::memory_order_relaxed);
@@ -91,24 +76,12 @@ std::unique_ptr<JsonRpcTransport> JsonRpcTransport::CreateDefault(ResolvedInterf
                                                                   std::chrono::milliseconds default_timeout,
                                                                   RequestIdGenerator id_generator) {
   auto default_http_client = std::make_shared<a2a::http::Client>();
-  auto async_requester = [client = default_http_client](
-                             const HttpRequest& request,
-                             core::Completion<HttpClientResponse> completion) -> core::Result<core::AsyncHandle> {
-    if (request.mtls) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    return client->SendRequestAsync(ToSharedHttpRequest(request),
-                                    [completion = std::move(completion)](core::Result<http::Response> response) {
-                                      if (!response.ok()) {
-                                        completion(response.error());
-                                      } else {
-                                        completion(ToClientHttpResponse(std::move(response.value())));
-                                      }
-                                    });
-  };
-  auto transport = std::make_unique<JsonRpcTransport>(
-      std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client), HttpStreamRequester{},
-      default_timeout, std::move(id_generator), std::move(async_requester));
+  auto transport =
+      std::make_unique<JsonRpcTransport>(std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client),
+                                         HttpStreamRequester{}, default_timeout, std::move(id_generator));
+  transport->async_transport_ = json_rpc_internal::MakeAsyncTransport(
+      transport->resolved_interface_, http_transport_internal::MakeOwnedHttpAsyncRequester(default_http_client),
+      default_timeout, transport->id_generator_);
   transport->default_async_stream_client_ = std::move(default_http_client);
   return transport;
 }

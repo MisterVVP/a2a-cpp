@@ -140,8 +140,10 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
 #ifdef A2A_SUT_ASYNC
 class EventSutServer final {
  public:
-  EventSutServer(server::EventHttpServer::AsyncHandler handler, const SutConfig& listener)
-      : server_(std::move(handler), {.address = listener.host, .port = static_cast<std::uint16_t>(listener.port)}) {}
+  EventSutServer(std::shared_ptr<server::engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
+                 const SutConfig& listener)
+      : server_(std::move(dispatcher), std::move(card), BindingOptions(),
+                {.address = listener.host, .port = static_cast<std::uint16_t>(listener.port)}) {}
   bool Start() { return server_.Start().ok(); }
   static void AcceptConnections(const volatile std::sig_atomic_t& keep_running) {
     constexpr auto kSignalInterval = std::chrono::milliseconds(10);
@@ -163,8 +165,7 @@ int RunAsync(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOpt
   execution.task_store = agent.task_store();
   server::engine::AsyncRuntime engine(std::make_shared<SutCoroutineExecutor>(agent), std::move(execution));
   server::ServerBindings bindings(engine.dispatcher(), agent.agent_card(), BindingOptions());
-  EventSutServer http(server::MakeEventHttpHandler(engine.dispatcher(), agent.agent_card(), BindingOptions()),
-                      config.listener);
+  EventSutServer http(engine.dispatcher(), agent.agent_card(), config.listener);
   return Serve(agent, config, options, bindings, http);
 }
 #endif

@@ -15,7 +15,7 @@ a2a::server::engine::AsyncRuntime application(executor);
 a2a::server::EventHttpServerOptions limits;
 limits.port = 8080;
 a2a::server::EventHttpServer listener(
-    a2a::server::MakeEventHttpHandler(application.dispatcher(), card), limits);
+    application.dispatcher(), card, a2a::server::ServerBindingsOptions{}, limits);
 auto started = listener.Start();
 if (!started.ok()) {
     throw std::runtime_error(std::string(started.error().message()));
@@ -66,7 +66,11 @@ of this codec.
 The listener owns a fixed application `io_context` pool, separate from its
 network thread. Every handler, stream producer and cancellation observer runs
 off the network thread. Native dispatcher execution runs on the application's
-own `AsyncRuntime` or supplied executor. Its existing admission and cancellation
+own `AsyncRuntime` or supplied executor. With the dispatcher-backed listener
+constructor, the dispatcher serializes replies and submits their writes
+directly to the network executor. A stream's first event can share the write
+that commits the response headers. `MakeEventHttpHandler` remains available
+for callers composing their own handler. Its existing admission and cancellation
 contracts remain authoritative; the HTTP runtime does not implement another
 application dispatcher.
 
@@ -193,3 +197,8 @@ README. The runner records throughput, completion and first-event p95/p99,
 errors, CPU, resident memory and process threads. Short finite streams incur
 additional executor scheduling and awaited write acknowledgements; use the
 comparison to assess the tradeoff for your workload.
+
+The network executor completes each request after the socket accepts the unary
+response or final stream chunk. It then releases the pending request slot and
+can process the next request on that connection. Stream producers still await
+socket acceptance of each event.

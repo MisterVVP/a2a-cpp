@@ -81,6 +81,22 @@ TEST(EventHttpServer, FragmentationPipeliningAndHalfClose) {
   server.Join();
 }
 
+TEST(EventHttpServer, TerminalWriteReleasesPendingSlotBeforePipelinedRequest) {
+  EventHttpServer server(Respond, {.max_pending_requests = 1});
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  const std::string requests = std::string(kRequest).append(kCloseRequest);
+  asio::write(peer, asio::buffer(requests));
+  const auto response = ReadToEnd(peer);
+  const auto first = response.find(kStatus);
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_NE(response.find(kStatus, first + kStatus.size()), std::string::npos);
+  EXPECT_EQ(response.find(kOverload), std::string::npos);
+  server.Shutdown();
+  server.Join();
+}
+
 TEST(EventHttpServer, OwnedRequestPreservesBodyAndConnectionClose) {
   EventHttpServer server(EventHttpServer::AsyncHandler(
       [](HttpServerRequest request,
@@ -241,7 +257,7 @@ std::string Post(std::string_view path, std::string_view body) {
 
 TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncoding) {
   engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   const std::vector<std::string> requests{std::string(kRestTask), Post(kRpcPath, kRpcBody),
@@ -305,7 +321,7 @@ TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
   engine::AsyncRuntime runtime(backend, {}, {.threads = 1});
   EventHttpServerOptions options;
   options.application_threads = 1;
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   std::vector<Tcp::socket> sockets;
@@ -328,7 +344,7 @@ TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
 TEST(EventHttpServer, DisconnectCancelsLiveProducer) {
   const auto backend = std::make_shared<LiveBackend>();
   engine::AsyncRuntime runtime(backend);
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   auto socket = Connect(io, server);
@@ -347,7 +363,7 @@ TEST(EventHttpServer, PeerResetCancelsLiveProducerBeforeShutdown) {
   const auto backend = std::make_shared<LiveBackend>();
   auto completed = backend->first_completed.get_future();
   engine::AsyncRuntime runtime(backend);
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   auto peer = Connect(io, server);
@@ -520,7 +536,7 @@ TEST(EventHttpServer, RejectedStreamHeadersCancelNativeProducerBeforeShutdown) {
   engine::AsyncRuntime runtime(backend);
   EventHttpServerOptions options;
   options.max_output_bytes = kRejectedHeaderLimit;
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   auto peer = Connect(io, server);
@@ -720,7 +736,7 @@ void ExpectNativeWriteCancellation(ConcurrentClose close) {
   EventHttpServerOptions options;
   options.application_threads = 1;
   options.heartbeat_interval = std::chrono::milliseconds::zero();
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   Tcp::socket peer(io);
@@ -901,7 +917,7 @@ TEST(EventHttpServer, NativeCleanupBeforeFirstEventMayOutliveListener) {
   engine::AsyncRuntime runtime(backend);
   asio::io_context io;
   {
-    EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+    EventHttpServer server(runtime.dispatcher(), {}, {});
     ASSERT_TRUE(server.Start().ok());
     auto peer = Connect(io, server);
     asio::write(peer, asio::buffer(kSubscribeRequest));

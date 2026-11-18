@@ -13,7 +13,6 @@
 #include "a2a/core/non_copyable.h"
 
 namespace a2a::client::grpc_internal {
-// Native channel streams share gRPC's callback workers instead of owning a reader thread.
 class NativeStreams final : private core::NonCopyableOrMovable {
  public:
   explicit NativeStreams(const std::shared_ptr<::grpc::Channel>& channel);
