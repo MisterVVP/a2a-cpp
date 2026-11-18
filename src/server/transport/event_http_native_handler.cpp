@@ -351,19 +351,27 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
       : serialize_(std::move(plan.complete)), done_(std::move(done)) {}
 
   void Deliver(DispatchResult result) {
-    auto done = Claim();
+    const auto done = Claim();
     if (done) {
-      core::Result<HttpServerResponse> response = core::Error::Internal(kDispatchResponseEncodingFailed);
-      try {
-        response = serialize_(std::move(result));
-      } catch (...) {
-        response = core::Error::Internal(kDispatchResponseEncodingFailed);
-      }
-      if (response.ok()) {
-        done(std::move(response.value()));
-      } else {
-        done(response.error());
-      }
+      done(Encode(std::move(result)));
+    }
+  }
+
+  void Schedule(DispatchResult result, const NativeHttpWorkQueue& work) {
+    const auto done = Claim();
+    if (!done) {
+      return;
+    }
+    if (work.pending.load(std::memory_order_relaxed) <= 1) {
+      done(Encode(std::move(result)));
+      return;
+    }
+    try {
+      asio::post(work.executor, [self = shared_from_this(), done, result = std::move(result)]() mutable {
+        done(self->Encode(std::move(result)));
+      });
+    } catch (...) {
+      done(core::Error::Internal(kDispatchResponseEncodingFailed));
     }
   }
 
@@ -391,6 +399,14 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
  private:
   static constexpr auto kDispatchResponseEncodingFailed = "HTTP dispatch response encoding failed";
 
+  core::Result<HttpServerResponse> Encode(DispatchResult result) {
+    try {
+      return serialize_(std::move(result));
+    } catch (...) {
+      return core::Error::Internal(kDispatchResponseEncodingFailed);
+    }
+  }
+
   decltype(PreparedDispatch<HttpServerResponse>::complete) serialize_;
   std::mutex mutex_;
   NativeHttpCompletion done_;
@@ -398,11 +414,12 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
 };
 
 void DirectUnary(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher, PreparedDispatch<HttpServerResponse> plan,
-                 engine::RequestExecutionContext context, NativeHttpCompletion done) {
+                 engine::RequestExecutionContext context, NativeHttpCompletion done, const NativeHttpWorkQueue& work) {
   const auto reply = std::make_shared<NativeReply>(plan, std::move(done));
-  auto execution = dispatcher->Dispatch(
-      std::move(plan.request), std::move(plan.context),
-      [reply](DispatchResult result, const engine::RequestExecutionContext&) { reply->Deliver(std::move(result)); });
+  auto execution = dispatcher->Dispatch(std::move(plan.request), std::move(plan.context),
+                                        [reply, work](DispatchResult result, const engine::RequestExecutionContext&) {
+                                          reply->Schedule(std::move(result), work);
+                                        });
   if (!execution.ok()) {
     reply->Deliver(execution.error());
     return;
@@ -493,7 +510,8 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
   }
   const auto bindings = std::make_shared<Bindings>(std::move(dispatcher), std::move(card), options);
   return [bindings](const HttpServerRequest& request, engine::RequestExecutionContext context,
-                    NativeHttpCompletion done, const NativeHttpStreamFactory& stream_factory) {
+                    NativeHttpCompletion done, const NativeHttpStreamFactory& stream_factory,
+                    const NativeHttpWorkQueue& work) {
     auto prepared = bindings->mux.PrepareRequest(request);
     if (!prepared.ok()) {
       done(prepared.error());
@@ -519,7 +537,7 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
       }
       return;
     }
-    DirectUnary(bindings->dispatcher, std::move(plan), std::move(context), std::move(done));
+    DirectUnary(bindings->dispatcher, std::move(plan), std::move(context), std::move(done), work);
   };
 }
 }  // namespace a2a::server::http_runtime

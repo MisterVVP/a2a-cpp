@@ -326,8 +326,8 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
       core::AgentCardBuilder::ConformancePreset(
           {.rest_url = endpoints.rest_url, .json_rpc_url = endpoints.json_rpc_url, .grpc_url = endpoints.grpc_url},
           kAgentName, kAgentRelease, kAgentDescription)
-          // The generic agent retains opaque parts without decoding their media.
-          .AddDefaultInputMode(kAnyInputMediaType)
+          .AddDefaultInputMode(options.allow_opaque_input ? kAnyInputMediaType
+                                                          : core::http::kContentTypeApplicationJson)
           .WithPushNotifications(options.push_notifications)
           .WithExtendedAgentCard(options.extended_card_mode != kExtendedCardModeDisabled)
           .Build();

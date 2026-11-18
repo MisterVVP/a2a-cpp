@@ -47,6 +47,7 @@ struct SutRuntimeOptions final {
   std::string_view display_name;
   SutRuntimeObserver* observer = nullptr;
   bool asynchronous = false;
+  bool allow_opaque_input = false;
 };
 
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options);

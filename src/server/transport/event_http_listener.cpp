@@ -99,7 +99,7 @@ struct Runtime final {
   asio::executor_work_guard<asio::io_context::executor_type> application_work{application.get_executor()};
   asio::executor_work_guard<asio::io_context::executor_type> network_work{network.get_executor()};
   Tcp::acceptor acceptor;
-  std::size_t pending = 0;
+  std::atomic_size_t pending{0};
   std::atomic_bool stopping{false};
   bool finishing_shutdown = false;
 };
@@ -417,13 +417,14 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       }
       return;
     }
-    if (runtime_->pending >= runtime_->options.max_pending_requests) {
+    const auto pending = runtime_->pending.load(std::memory_order_relaxed);
+    if (pending >= runtime_->options.max_pending_requests) {
       ErrorResponse(core::http::kStatusServiceUnavailable);
       return;
     }
     input_.erase(0, consumed);
     processing_ = true;
-    ++runtime_->pending;
+    runtime_->pending.store(pending + 1, std::memory_order_relaxed);
     execution_ = std::make_shared<engine::RequestExecution>();
     auto self = shared_from_this();
     auto execution = execution_;
@@ -444,10 +445,12 @@ class Connection final : public std::enable_shared_from_this<Connection> {
           }
         };
         try {
-          self->runtime_->native_handler(std::move(request), execution->Context(), std::move(complete),
-                                         [self, execution, reusable] {
-                                           return std::make_shared<NativeConnectionStream>(self, execution, reusable);
-                                         });
+          self->runtime_->native_handler(
+              std::move(request), execution->Context(), std::move(complete),
+              [self, execution, reusable] {
+                return std::make_shared<NativeConnectionStream>(self, execution, reusable);
+              },
+              {.executor = self->runtime_->application.get_executor(), .pending = self->runtime_->pending});
         } catch (...) {
           self->PostTerminalResponse(execution, std::current_exception(), {});
         }
@@ -477,8 +480,9 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   }
 
   void FinishRequest(bool close) {
-    --runtime_->pending;
-    if (runtime_->stopping && runtime_->pending == 0) {
+    const auto pending = runtime_->pending.load(std::memory_order_relaxed) - 1;
+    runtime_->pending.store(pending, std::memory_order_relaxed);
+    if (runtime_->stopping && pending == 0) {
       DrainRuntime(runtime_);
     }
     execution_.reset();
@@ -720,7 +724,7 @@ struct EventHttpListener::Impl final {
     for (const auto& connection : active) {
       connection->Close(engine::RequestCancellationReason::kServerShutdown);
     }
-    if (runtime->pending == 0) {
+    if (runtime->pending.load(std::memory_order_relaxed) == 0) {
       DrainRuntime(runtime);
     }
   }

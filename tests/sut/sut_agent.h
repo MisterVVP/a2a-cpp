@@ -58,6 +58,7 @@ struct SutAgentOptions final {
   std::string signing_key_id = {};
   std::string signing_private_key = {};
   std::string extended_card_mode = std::string(kExtendedCardModeConfigured);
+  bool allow_opaque_input = false;
 };
 
 [[nodiscard]] core::Result<SutAgentOptions> ReadSutAgentOptions(bool asynchronous = false);

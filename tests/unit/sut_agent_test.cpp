@@ -90,8 +90,21 @@ TEST(SutAgentTest, AdvertisedInputModesAreAccepted) {
   }
 }
 
-TEST(SutAgentTest, OpaqueMessagePartsAreRetainedWithoutDecoding) {
+TEST(SutAgentTest, UnsupportedPartRejectsTheWholeConformanceRequest) {
   const auto agent = MakeAgent();
+  auto request = MediaRequest(a2a::core::http::kContentTypeApplicationJson);
+  *request.mutable_message()->add_parts() = MediaRequest(kOpaqueMediaType).message().parts(0);
+  a2a::server::RequestContext context;
+  const auto result = agent->dispatcher().Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = std::move(request)}, context);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kContentTypeNotSupported);
+}
+
+TEST(SutAgentTest, OpaqueMessagePartsAreRetainedWithoutDecoding) {
+  a2a::tests::sut::SutAgentOptions options;
+  options.allow_opaque_input = true;
+  const auto agent = MakeAgent(std::move(options));
   a2a::server::RequestContext context;
   const auto result = agent->dispatcher().Dispatch(
       {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = MediaRequest(kOpaqueMediaType)},

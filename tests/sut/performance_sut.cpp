@@ -45,9 +45,11 @@ int main(int argc, char** argv) noexcept {
     }
     std::cerr << "A2A_PERFORMANCE_MODE server=" << mode << " executor=" << executor << '\n';
     a2a::tests::sut::PerformanceSutDiagnostics diagnostics;
-    return a2a::tests::sut::RunSutRuntime(
-        argc, argv,
-        {.display_name = kPerformanceSutName, .observer = &diagnostics, .asynchronous = mode == kAsyncMode});
+    return a2a::tests::sut::RunSutRuntime(argc, argv,
+                                          {.display_name = kPerformanceSutName,
+                                           .observer = &diagnostics,
+                                           .asynchronous = mode == kAsyncMode,
+                                           .allow_opaque_input = true});
   } catch (const std::exception& ex) {
     std::cerr << "Unhandled performance SUT exception: " << ex.what() << '\n';
     return 1;

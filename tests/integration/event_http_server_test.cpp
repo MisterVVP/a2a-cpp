@@ -895,19 +895,33 @@ TEST(EventHttpServer, CompletedStreamSinkCannotCorruptReusedConnection) {
 
 class DelayedBackend final : public engine::CoroutineAgentExecutor {
  public:
+  asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(
+      lf::a2a::v1::GetTaskRequest request, [[maybe_unused]] engine::RequestExecutionContext context) override {
+    const auto ready = co_await WaitForRelease();
+    if (!ready.ok()) {
+      co_return ready.error();
+    }
+    lf::a2a::v1::Task task;
+    task.set_id(request.id());
+    co_return task;
+  }
+
   asio::awaitable<core::Result<void>> SubscribeTask(
-      lf::a2a::v1::GetTaskRequest /*request*/, engine::RequestExecutionContext /*context*/,
-      std::shared_ptr<engine::AsyncServerStreamSession> /*stream*/) override {
-    started.set_value();
-    const auto result = co_await reply_.Wait();
-    ++completed;
-    co_return result;
+      [[maybe_unused]] lf::a2a::v1::GetTaskRequest request, [[maybe_unused]] engine::RequestExecutionContext context,
+      [[maybe_unused]] std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
+    co_return co_await WaitForRelease();
   }
   void Release() { reply_.Resolve(core::Result<void>{}); }
   std::promise<void> started;
   std::atomic_size_t completed{0};
 
  private:
+  asio::awaitable<core::Result<void>> WaitForRelease() {
+    started.set_value();
+    const auto result = co_await reply_.Wait();
+    ++completed;
+    co_return result;
+  }
   test::CoroutineReply<void> reply_{true};
 };
 
@@ -928,6 +942,26 @@ TEST(EventHttpServer, NativeCleanupBeforeFirstEventMayOutliveListener) {
   }
   backend->Release();
   runtime.Shutdown();
+  runtime.Join();
+  EXPECT_EQ(backend->completed.load(), 1U);
+}
+
+TEST(EventHttpServer, NativeUnaryCleanupMayOutliveListener) {
+  const auto backend = std::make_shared<DelayedBackend>();
+  auto started = backend->started.get_future();
+  engine::AsyncRuntime runtime(backend);
+  asio::io_context io;
+  {
+    EventHttpServer server(runtime.dispatcher(), {}, {});
+    ASSERT_TRUE(server.Start().ok());
+    auto peer = Connect(io, server);
+    asio::write(peer, asio::buffer(kRestTask));
+    EXPECT_EQ(started.wait_for(kTimeout), std::future_status::ready);
+    server.Shutdown();
+    server.Join();
+    EXPECT_EQ(backend->completed.load(), 0U);
+  }
+  backend->Release();
   runtime.Join();
   EXPECT_EQ(backend->completed.load(), 1U);
 }

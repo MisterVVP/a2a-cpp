@@ -181,6 +181,7 @@ int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options) {
     }
     return 1;
   }
+  agent_options.value().allow_opaque_input = options.allow_opaque_input;
   SutAgent agent(std::move(stores.value()), config.value().endpoints, std::move(agent_options.value()));
 #ifdef A2A_SUT_ASYNC
   if (options.asynchronous) {

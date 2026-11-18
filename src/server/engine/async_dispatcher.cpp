@@ -135,14 +135,20 @@ struct AdmissionCounts final {
   std::atomic_size_t pending = 0;
 };
 
-// Active admission ends at transport completion; pending admission belongs to
-// the coroutine frame until cleanup. Construction failures release both slots.
+struct RollbackAdmission final {
+  void operator()(AdmissionCounts* counts) const noexcept {
+    counts->active.fetch_sub(1);
+    counts->pending.fetch_sub(1);
+  }
+};
+
+using PendingAdmission = std::unique_ptr<AdmissionCounts, RollbackAdmission>;
+
 class AdmissionReservation final : private core::NonCopyableOrMovable {
  public:
-  explicit AdmissionReservation(std::shared_ptr<AdmissionCounts> counts) noexcept : counts_(std::move(counts)) {
-    counts_->active.fetch_add(1);
-    counts_->pending.fetch_add(1);
-  }
+  AdmissionReservation(std::shared_ptr<AdmissionCounts> counts, PendingAdmission& pending) noexcept
+      : counts_(std::move(counts), pending.release()) {}
+
   ~AdmissionReservation() {
     ReleaseActive();
     counts_->pending.fetch_sub(1);
@@ -162,18 +168,18 @@ class AdmissionReservation final : private core::NonCopyableOrMovable {
 
 struct AsyncDispatcher::State final {
   struct Call final : std::enable_shared_from_this<Call> {
-    Call(const boost::asio::any_io_executor& scheduler, std::shared_ptr<AdmissionCounts> counts,
-         DispatchRequest request, RequestContext metadata, TransportCompletion completion,
-         std::optional<RequestExecution::Clock::time_point> deadline, DispatchPipeline pipeline,
+    Call(const boost::asio::any_io_executor& scheduler, const std::shared_ptr<AdmissionCounts>& counts,
+         PendingAdmission& pending, DispatchRequest request, RequestContext metadata, TransportCompletion completion,
+         std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<const DispatchPipeline> pipeline,
          std::shared_ptr<AsyncServerStreamSession> stream)
         : strand(boost::asio::make_strand(scheduler)),
-          admission(std::move(counts)),
+          admission(counts, pending),
           request(std::move(request)),
           context(metadata),
           source(std::make_shared<RequestExecution>(std::move(metadata), deadline)),
           completion(std::move(completion)),
           pipeline(std::move(pipeline)),
-          session(this->pipeline, this->request, context),
+          session(*this->pipeline, this->request, context),
           stream(std::move(stream)) {}
 
     void ObserveStop() {
@@ -207,7 +213,7 @@ struct AsyncDispatcher::State final {
         } else {
           const auto before = call->session.Before();
           (void)call->source->ExpireDeadline();
-          call->ObserveShutdown(*state);
+          call->ObserveShutdown(state->closed.load());
           if (!before.ok()) {
             response = before.error();
           } else if (call->source->Context().StopToken().stop_requested()) {
@@ -215,9 +221,7 @@ struct AsyncDispatcher::State final {
           } else if (auto handled = call->session.Handle()) {
             response = std::move(*handled);
           } else {
-            // Without security or interceptors the immutable ingress view is
-            // already current; avoid copying its headers into another allocation.
-            auto view = call->pipeline.security == nullptr && call->pipeline.interceptors.empty()
+            auto view = call->pipeline->security == nullptr && call->pipeline->interceptors.empty()
                             ? call->source->Context()
                             : call->source->Context().WithMetadata(call->context);
             const auto prepared = call->session.Prepare();
@@ -238,7 +242,7 @@ struct AsyncDispatcher::State final {
 
     boost::asio::awaitable<core::Result<DispatchResponse>> RunStream(CoroutineAgentExecutor& application,
                                                                      RequestExecutionContext view) {
-      auto checked = std::make_shared<CheckedStream>(stream, source, pipeline.security, context, request);
+      auto checked = std::make_shared<CheckedStream>(stream, source, pipeline->security, context, request);
       core::Result<DispatchResponse> result = core::Error::Validation(kMissingStream);
       if (request.operation == DispatcherOperation::kSendStreamingMessage) {
         result = co_await RoutePayload<lf::a2a::v1::SendMessageRequest>(
@@ -259,12 +263,7 @@ struct AsyncDispatcher::State final {
       co_return result;
     }
 
-    void ObserveShutdown(State& state) {
-      bool closed = false;
-      {
-        std::lock_guard lock(state.mutex);
-        closed = state.closed;
-      }
+    void ObserveShutdown(bool closed) {
       if (closed) {
         (void)source->Cancel(RequestCancellationReason::kServerShutdown);
       }
@@ -305,7 +304,7 @@ struct AsyncDispatcher::State final {
     RequestContext context;
     std::shared_ptr<RequestExecution> source;
     TransportCompletion completion;
-    DispatchPipeline pipeline;
+    const std::shared_ptr<const DispatchPipeline> pipeline;
     DispatchSession session;
     const std::shared_ptr<AsyncServerStreamSession> stream;
     std::weak_ptr<State> owner;
@@ -321,22 +320,37 @@ struct AsyncDispatcher::State final {
         scheduler(std::move(scheduler)),
         capacity(options.max_in_flight),
         max_pending(options.max_pending),
-        pipeline{
+        pipeline(std::make_shared<const DispatchPipeline>(DispatchPipeline{
             .security = options.security_policy != nullptr
                             ? std::make_shared<DispatchSecurity>(std::move(options.security_policy), options.task_store)
                             : nullptr,
             .interceptors = std::move(options.interceptors),
-            .agent_card_provider = std::move(options.agent_card_provider)},
+            .agent_card_provider = std::move(options.agent_card_provider)})),
         extensions(std::move(options.required_extensions)) {}
+
+  core::Result<PendingAdmission> Reserve() {
+    std::lock_guard lock(admission_mutex);
+    if (closed.load()) {
+      return core::Error::Network(kAdmissionClosed);
+    }
+    if (admission->active.load() >= capacity) {
+      return core::Error::Network(kAdmissionFull);
+    }
+    if (admission->pending.load() >= max_pending) {
+      return core::Error::Network(kPendingFull);
+    }
+    admission->active.fetch_add(1);
+    admission->pending.fetch_add(1);
+    return PendingAdmission(admission.get());
+  }
 
   void Shutdown() {
     std::vector<std::shared_ptr<Call>> active;
     {
       std::lock_guard lock(mutex);
-      if (closed) {
+      if (closed.exchange(true)) {
         return;
       }
-      closed = true;
       active.reserve(calls.size());
       for (const auto& [key, call] : calls) {
         active.push_back(call);
@@ -353,11 +367,12 @@ struct AsyncDispatcher::State final {
   const std::size_t capacity;
   const std::size_t max_pending;
   const std::shared_ptr<AdmissionCounts> admission = std::make_shared<AdmissionCounts>();
-  DispatchPipeline pipeline;
+  const std::shared_ptr<const DispatchPipeline> pipeline;
   RequiredExtensionsValidator extensions;
+  std::mutex admission_mutex;
   std::mutex mutex;
   std::unordered_map<Call*, std::shared_ptr<Call>> calls;
-  bool closed = false;
+  std::atomic_bool closed = false;
 };
 
 AsyncDispatcher::AsyncDispatcher(std::shared_ptr<CoroutineAgentExecutor> executor,
@@ -405,20 +420,19 @@ core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchImpl(
     return core::Error::Validation(kMissingCompletion);
   }
   const auto state = state_;
-  std::lock_guard lock(state->mutex);
-  if (state->closed) {
-    return core::Error::Network(kAdmissionClosed);
+  auto reserved = state->Reserve();
+  if (!reserved.ok()) {
+    return reserved.error();
   }
-  if (state->admission->active.load() >= state->capacity) {
-    return core::Error::Network(kAdmissionFull);
-  }
-  if (state->admission->pending.load() >= state->max_pending) {
-    return core::Error::Network(kPendingFull);
-  }
-  auto call = std::make_shared<State::Call>(state->scheduler, state->admission, std::move(request), std::move(metadata),
-                                            std::move(completion), deadline, state->pipeline, std::move(stream));
+  auto call = std::make_shared<State::Call>(state->scheduler, state->admission, reserved.value(), std::move(request),
+                                            std::move(metadata), std::move(completion), deadline, state->pipeline,
+                                            std::move(stream));
   call->owner = state;
   call->ObserveStop();
+  std::lock_guard lock(state->mutex);
+  if (state->closed.load()) {
+    return core::Error::Network(kAdmissionClosed);
+  }
   state->calls.emplace(call.get(), call);
   try {
     boost::asio::post(call->strand, [state, call] {
