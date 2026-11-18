@@ -43,7 +43,7 @@ constexpr std::string_view kFailedPreconditionStatus = "FAILED_PRECONDITION";
 void ExpectProtocolPrecondition(const a2a::server::HttpServerResponse& response) {
   EXPECT_EQ(response.status_code, a2a::core::http::kStatusBadRequest);
   EXPECT_EQ(response.headers.at(std::string(a2a::core::http::kContentTypeHeaderName)),
-            a2a::core::http::kContentTypeApplicationJson);
+            a2a::core::http::kContentTypeApplicationA2aJson);
   google::protobuf::Struct error;
   ASSERT_TRUE(a2a::core::JsonToMessage(response.body, &error).ok());
   EXPECT_EQ(error.fields().at(kErrorField).struct_value().fields().at(kStatusField).string_value(),
@@ -473,7 +473,7 @@ void ExpectMissingDispatcherBody(std::string_view body) {
 void ExpectMissingDispatcherResponse(const a2a::server::HttpServerResponse& response) {
   EXPECT_EQ(response.status_code, a2a::core::http::kStatusInternalServerError);
   EXPECT_EQ(response.headers.at(std::string(a2a::core::http::kContentTypeHeaderName)),
-            a2a::core::http::kContentTypeApplicationJson);
+            a2a::core::http::kContentTypeApplicationA2aJson);
   EXPECT_EQ(response.headers.at(kVersionHeaderName), "1.0");
   EXPECT_EQ(response.headers.at(kExtensionsHeaderName), kRequiredExtension);
   ExpectMissingDispatcherBody(response.body);

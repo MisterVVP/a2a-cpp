@@ -16,8 +16,7 @@
 #include "a2a/core/http_utils.h"
 #include "a2a/server/event_http_dispatcher.h"
 
-namespace a2a::server {
-namespace http_runtime {
+namespace a2a::server::http_runtime {
 namespace {
 namespace asio = boost::asio;
 using DispatchResult = core::Result<DispatchResponse>;
@@ -358,6 +357,7 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
       try {
         response = serialize_(std::move(result));
       } catch (...) {
+        response = core::Error::Internal(kDispatchResponseEncodingFailed);
       }
       if (response.ok()) {
         done(std::move(response.value()));
@@ -492,8 +492,8 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
     return {};
   }
   const auto bindings = std::make_shared<Bindings>(std::move(dispatcher), std::move(card), options);
-  return [bindings](HttpServerRequest request, engine::RequestExecutionContext context, NativeHttpCompletion done,
-                    NativeHttpStreamFactory stream_factory) {
+  return [bindings](const HttpServerRequest& request, engine::RequestExecutionContext context,
+                    NativeHttpCompletion done, const NativeHttpStreamFactory& stream_factory) {
     auto prepared = bindings->mux.PrepareRequest(request);
     if (!prepared.ok()) {
       done(prepared.error());
@@ -522,8 +522,7 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
     DirectUnary(bindings->dispatcher, std::move(plan), std::move(context), std::move(done));
   };
 }
-}  // namespace http_runtime
-}  // namespace a2a::server
+}  // namespace a2a::server::http_runtime
 
 namespace a2a::server {
 EventHttpServer::AsyncHandler MakeEventHttpHandler(std::shared_ptr<engine::AsyncDispatcher> dispatcher,

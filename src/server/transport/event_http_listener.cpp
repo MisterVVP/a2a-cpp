@@ -506,19 +506,19 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       Queue(std::move(chunk),
             [self = shared_from_this(), response = std::move(response)](const core::Result<void>& result) mutable {
               if (result.ok()) {
-                self->WriteTerminalBytes(std::move(response), true);
+                self->WriteTerminalBytes(std::move(response));
               } else {
                 self->FinishRequest(true);
               }
             });
       return;
     }
-    WriteTerminalBytes(std::move(response), stream);
+    WriteTerminalBytes(std::move(response));
   }
 
-  void WriteTerminalBytes(TerminalResponse response, bool stream) {
+  void WriteTerminalBytes(TerminalResponse response) {
     Queue(std::move(response.bytes),
-          [self = shared_from_this(), close = response.close, stream](const core::Result<void>& result) {
+          [self = shared_from_this(), close = response.close](const core::Result<void>& result) {
             if (result.ok()) {
               (void)self->execution_->TryComplete(engine::RequestCompletion::kSucceeded);
             }
@@ -756,8 +756,13 @@ EventHttpListener::EventHttpListener(EventHttpServer::AsyncHandler handler, Nati
     : impl_(std::make_unique<Impl>(std::move(handler), std::move(native_handler), std::move(options))) {}
 
 EventHttpListener::~EventHttpListener() {
-  Shutdown();
-  Join();
+  try {
+    Shutdown();
+    Join();
+  } catch (...) {
+    // Destruction must drain the owned threads; failure cannot leave them running.
+    std::terminate();
+  }
 }
 
 core::Result<void> EventHttpListener::Start() {
