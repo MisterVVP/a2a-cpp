@@ -94,6 +94,13 @@ AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assiste
 - Do not hardcode secrets; use secure configuration and secret management.
 - Keep dependencies current and remove unused dependencies.
 
+## Dependency discovery and updates
+
+- Search the host for installed dependencies before attempting any download. Check system packages, existing CMake caches, and configured or known local installation prefixes. For dependencies such as simdjson and Boost.Asio, verify the installed version and the path CMake resolves, and reuse a compatible installation.
+- Do not download dependencies until the host search is complete.
+- Outside CI, if a dependency is missing or incompatible, prefer asking the user to install or update it on the host over downloading a temporary copy into `/tmp`. Explain which dependency and version the build or validation requires.
+- Apply the same host-first approach to validation tools such as mdBook. Reuse a compatible host installation if available. Outside CI, obtain the user's approval before installing a missing or incompatible tool on the host.
+
 ## Validation checklist for contributors
 Before submitting changes:
 1. Format the code by running `./scripts/run_clang_format.sh`
