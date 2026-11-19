@@ -437,22 +437,26 @@ TEST(NativeGetTaskIngress, ExcludesOtherOperationsAndAmbiguousPaths) {
   EXPECT_FALSE(ingress.Accepts(IngressRequest(kEmptyTaskTarget)));
 }
 
+http_runtime::NativeHttpHandler BorrowedIngressHandler(asio::thread_pool::executor_type executor,
+                                                       std::future<void>& released, std::atomic_bool& returned) {
+  return [executor, &released, &returned](
+             HttpServerRequest request, engine::RequestExecutionContext, http_runtime::NativeHttpCompletion complete,
+             const http_runtime::NativeHttpStreamFactory&, const http_runtime::NativeHttpWorkQueue&) {
+    EXPECT_TRUE(executor.running_in_this_thread());
+    complete(Respond(request));
+    released.wait();
+    returned = true;
+  };
+}
+
 TEST(EventHttpServer, JoinDrainsBorrowedGetTaskAfterItsResponseFinishes) {
   asio::thread_pool pool(engine::AsyncRuntimeOptions::kDefaultThreads);
   std::promise<void> release;
   auto released = release.get_future();
   std::atomic_bool returned = false;
   const auto executor = pool.get_executor();
-  http_runtime::NativeHttpHandler handler =
-      [executor, &released, &returned](
-          HttpServerRequest request, engine::RequestExecutionContext, http_runtime::NativeHttpCompletion complete,
-          const http_runtime::NativeHttpStreamFactory&, const http_runtime::NativeHttpWorkQueue&) {
-        EXPECT_TRUE(executor.running_in_this_thread());
-        complete(Respond(request));
-        released.wait();
-        returned = true;
-      };
-  http_runtime::EventHttpListener listener({}, std::move(handler), {.idle_timeout = kTimeout},
+  http_runtime::EventHttpListener listener({}, BorrowedIngressHandler(executor, released, returned),
+                                           {.idle_timeout = kTimeout},
                                            {executor, ServerBindingsOptions::kDefaultRestPath});
   ASSERT_TRUE(listener.Start().ok());
   asio::io_context io;
@@ -512,6 +516,34 @@ class LiveBackend final : public engine::CoroutineAgentExecutor {
   std::atomic_bool wrong_thread{false};
   std::promise<void> first_completed;
 };
+
+TEST(EventHttpServer, NativePendingLimitAppliesAcrossConnections) {
+  constexpr std::size_t kPendingLimit = 1;
+  constexpr std::size_t kIdlePeers = 4;
+  const auto backend = std::make_shared<LiveBackend>();
+  engine::AsyncRuntime runtime(backend);
+  EventHttpServer server(runtime.dispatcher(), {}, {},
+                         {.max_pending_requests = kPendingLimit, .idle_timeout = kTimeout});
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  std::vector<Tcp::socket> idle;
+  idle.reserve(kIdlePeers);
+  for (std::size_t index = 0; index < kIdlePeers; ++index) {
+    idle.push_back(Connect(io, server));
+  }
+  auto stream = Connect(io, server);
+  asio::write(stream, asio::buffer(kSubscribeRequest));
+  std::string event;
+  asio::read_until(stream, asio::dynamic_buffer(event), kEventEnd);
+  EXPECT_NE(event.find(kNativeId), std::string::npos);
+  auto unary = Connect(io, server);
+  asio::write(unary, asio::buffer(kRestTask));
+  EXPECT_NE(ReadToEnd(unary).find(kOverload), std::string::npos);
+  server.Shutdown();
+  server.Join();
+  runtime.Join();
+  EXPECT_EQ(backend->completed.load(), kPendingLimit);
+}
 
 TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
   const auto backend = std::make_shared<LiveBackend>();

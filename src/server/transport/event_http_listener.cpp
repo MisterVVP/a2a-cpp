@@ -44,7 +44,9 @@ constexpr std::size_t kReadBytes = 8192;
 constexpr std::size_t kHexBytes = sizeof(std::size_t) * 2U;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 constexpr std::string_view kHeartbeat = ": heartbeat\n\n";
-constexpr std::size_t kIngressShutdownHold = 1;
+constexpr unsigned kDualNetworkMinimumCpus = 4;
+constexpr std::size_t kSecondNetworkConnectionThreshold = 4;
+constexpr int kNetworkConcurrency = 1;
 constexpr std::string_view kRootPath = "/";
 constexpr std::string_view kTaskIdDelimiters = "/:%#";
 constexpr std::string_view kExtendedCardPathSegment = core::protocol_paths::kExtendedAgentCard.substr(1);
@@ -95,51 +97,65 @@ bool FitsOutput(const HttpServerResponse& response, std::size_t limit, bool stre
   return true;
 }
 
+class Connection;
+
+struct NetworkLoop final {
+  asio::io_context context{kNetworkConcurrency};
+  asio::executor_work_guard<asio::io_context::executor_type> work{context.get_executor()};
+  std::unordered_set<std::shared_ptr<Connection>> connections;
+  std::size_t pending = 0;
+  bool stopping = false;
+};
+
 struct Runtime final {
   Runtime(EventHttpServer::AsyncHandler callback, EventHttpServerOptions settings,
-          http_runtime::NativeGetTaskIngress native_ingress)
+          http_runtime::NativeGetTaskIngress native_ingress, bool use_second_loop)
       : handler(std::move(callback)),
         options(std::move(settings)),
         ingress(std::move(native_ingress)),
-        acceptor(network) {}
+        secondary(use_second_loop ? std::make_unique<NetworkLoop>() : nullptr),
+        acceptor(network.context),
+        drains(secondary ? 2U : 1U) {}
+
+  bool ReserveRequest() noexcept {
+    auto count = pending.load(std::memory_order_relaxed);
+    while (count < options.max_pending_requests) {
+      if (pending.compare_exchange_weak(count, count + 1, std::memory_order_relaxed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   EventHttpServer::AsyncHandler handler;
   std::shared_ptr<const http_runtime::NativeHttpHandler> native_handler;
   EventHttpServerOptions options;
   const http_runtime::NativeGetTaskIngress ingress;
-  asio::io_context network;
+  NetworkLoop network;
+  const std::unique_ptr<NetworkLoop> secondary;
   asio::io_context application;
   asio::executor_work_guard<asio::io_context::executor_type> application_work{application.get_executor()};
-  asio::executor_work_guard<asio::io_context::executor_type> network_work{network.get_executor()};
   Tcp::acceptor acceptor;
+  std::atomic_size_t active_connections{0};
   std::atomic_size_t pending{0};
   std::atomic_bool stopping{false};
-  std::atomic_size_t ingress_work{kIngressShutdownHold};
-  bool finishing_shutdown = false;
+  std::atomic_size_t drains;
 };
 
-void FinishRuntime(std::shared_ptr<Runtime> runtime) {
-  auto& state = *runtime;
-  auto native_handler = std::move(state.native_handler);
-  state.network_work.reset();
-  asio::post(state.application, [runtime = std::move(runtime), native_handler = std::move(native_handler)]() mutable {
-    // Handler destruction may release blocking application objects.
-    runtime->handler = {};
-    native_handler.reset();
-    runtime->application_work.reset();
-  });
-}
-
-void DrainRuntime(const std::shared_ptr<Runtime>& runtime) {
-  if (runtime->finishing_shutdown) {
-    return;
-  }
-  runtime->finishing_shutdown = true;
-  if (runtime->ingress_work.fetch_sub(kIngressShutdownHold) == kIngressShutdownHold) {
-    FinishRuntime(runtime);
+void ReleaseRuntime(const std::shared_ptr<Runtime>& runtime) {
+  if (runtime->drains.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    asio::post(runtime->application, [runtime] {
+      runtime->handler = {};
+      runtime->native_handler.reset();
+      runtime->application_work.reset();
+    });
+    runtime->network.work.reset();
+    if (runtime->secondary) {
+      runtime->secondary->work.reset();
+    }
   }
 }
 
-class Connection;
 struct StreamGate final {};
 class ConnectionStream final : public HttpEventStream {
  public:
@@ -174,13 +190,12 @@ class NativeConnectionStream final : public http_runtime::NativeHttpStream {
 
 class Connection final : public std::enable_shared_from_this<Connection> {
  public:
-  Connection(std::shared_ptr<Runtime> runtime, Tcp::socket socket,
-             std::function<void(std::shared_ptr<Connection>)> remove)
+  Connection(std::shared_ptr<Runtime> runtime, NetworkLoop& loop, Tcp::socket socket)
       : runtime_(std::move(runtime)),
+        loop_(loop),
         socket_(std::move(socket)),
-        idle_(runtime_->network),
-        heartbeat_(runtime_->network),
-        remove_(std::move(remove)),
+        idle_(loop_.context),
+        heartbeat_(loop_.context),
         codec_(runtime_->options.codec),
         max_output_bytes_(runtime_->options.max_output_bytes) {}
 
@@ -215,7 +230,8 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       asio::post(runtime_->application, [execution = execution_, reason] { (void)execution->Cancel(reason); });
     }
     FailQueued();
-    remove_(shared_from_this());
+    loop_.connections.erase(shared_from_this());
+    runtime_->active_connections.fetch_sub(1, std::memory_order_relaxed);
   }
 
   static asio::awaitable<core::Result<void>> WriteEvent(std::shared_ptr<Connection> self, std::string bytes,
@@ -260,7 +276,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
               }
               std::lock_guard lock(connection->write_mutex_);
               if (!connection->closed_) {
-                asio::post(connection->runtime_->network, [connection, operation, gate] {
+                asio::post(connection->loop_.context, [connection, operation, gate] {
                   const auto pending = operation.lock();
                   if (pending && pending->pending && (!gate || gate == connection->active_stream_)) {
                     // A partially written chunk cannot be reused safely.
@@ -283,8 +299,8 @@ class Connection final : public std::enable_shared_from_this<Connection> {
             finish(core::Error::Network(std::string(kStopped)));
             return;
           }
-          asio::post(self->runtime_->network, [self, bytes = std::move(bytes), gate = std::move(gate),
-                                               finish = std::move(finish), starts_stream]() mutable {
+          asio::post(self->loop_.context, [self, bytes = std::move(bytes), gate = std::move(gate),
+                                           finish = std::move(finish), starts_stream]() mutable {
             if (starts_stream && !self->closed_) {
               self->ActivateStream(gate);
             }
@@ -340,7 +356,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       }
     };
     asio::async_write(socket_, asio::buffer(*bytes),
-                      asio::bind_immediate_executor(runtime_->network.get_executor(), std::move(finished)));
+                      asio::bind_immediate_executor(loop_.context.get_executor(), std::move(finished)));
   }
 
   void FailQueued() {
@@ -427,6 +443,10 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     if (closed_ || processing_) {
       return;
     }
+    if (runtime_->stopping.load(std::memory_order_relaxed)) {
+      Close(engine::RequestCancellationReason::kServerShutdown);
+      return;
+    }
     std::size_t consumed = 0;
     auto request = codec_.ParseRequest(input_, codec_state_, consumed, remote_);
     if (!request.ok()) {
@@ -440,14 +460,13 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       }
       return;
     }
-    const auto pending = runtime_->pending.load(std::memory_order_relaxed);
-    if (pending >= runtime_->options.max_pending_requests) {
+    if (!runtime_->ReserveRequest()) {
       ErrorResponse(core::http::kStatusServiceUnavailable);
       return;
     }
     input_.erase(0, consumed);
     processing_ = true;
-    runtime_->pending.store(pending + 1, std::memory_order_relaxed);
+    ++loop_.pending;
     execution_ = std::make_shared<engine::RequestExecution>();
     if (auto native_handler = runtime_->native_handler) {
       StartNative(std::move(parsed.value()), std::move(native_handler));
@@ -472,12 +491,10 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       asio::post(runtime_->application, std::move(invoke));
       return;
     }
-    runtime_->ingress_work.fetch_add(1);
+    runtime_->drains.fetch_add(1, std::memory_order_relaxed);
     asio::post(runtime_->ingress.executor(), [runtime = runtime_, invoke = std::move(invoke)]() mutable {
       invoke();
-      if (runtime->ingress_work.fetch_sub(1) == 1) {
-        asio::post(runtime->network, [runtime] { FinishRuntime(runtime); });
-      }
+      ReleaseRuntime(runtime);
     });
   }
 
@@ -521,23 +538,23 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     if (exception) {
       (void)execution->Cancel();
     }
-    asio::post(runtime_->network, [self = shared_from_this(), response = std::move(response)]() mutable {
+    asio::post(loop_.context, [self = shared_from_this(), response = std::move(response)]() mutable {
       self->WriteTerminalResponse(std::move(response));
     });
   }
 
   void FinishRequest(bool close) {
-    const auto pending = runtime_->pending.load(std::memory_order_relaxed) - 1;
-    runtime_->pending.store(pending, std::memory_order_relaxed);
-    if (runtime_->stopping && pending == 0) {
-      DrainRuntime(runtime_);
-    }
+    runtime_->pending.fetch_sub(1, std::memory_order_relaxed);
+    --loop_.pending;
     execution_.reset();
     if (close || closed_) {
       Close();
     } else {
       processing_ = false;
       Process();
+    }
+    if (loop_.stopping && loop_.pending == 0) {
+      ReleaseRuntime(runtime_);
     }
   }
 
@@ -654,7 +671,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     }
     auto gate = std::make_shared<StreamGate>();
     auto sink = std::make_shared<ConnectionStream>(self, gate);
-    asio::post(self->runtime_->network, [self, gate = std::move(gate)] { self->ActivateStream(gate); });
+    asio::post(self->loop_.context, [self, gate = std::move(gate)] { self->ActivateStream(gate); });
     if (!initial_sent && !event.response.body.empty()) {
       const auto initial = co_await sink->Write(std::move(event.response.body));
       if (!initial.ok()) {
@@ -670,11 +687,11 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   }
 
   std::shared_ptr<Runtime> runtime_;
+  NetworkLoop& loop_;
   Tcp::socket socket_;
   asio::steady_timer idle_;
   asio::steady_timer::time_point idle_deadline_;
   asio::steady_timer heartbeat_;
-  std::function<void(std::shared_ptr<Connection>)> remove_;
   HttpAdapter codec_;
   HttpConnectionState codec_state_;
   std::array<char, kReadBytes> read_{};
@@ -777,51 +794,79 @@ bool NativeGetTaskIngress::Accepts(const HttpServerRequest& request) const noexc
 struct EventHttpListener::Impl final {
   Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options,
        NativeGetTaskIngress ingress)
-      : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options), std::move(ingress))) {
+      : runtime(std::make_shared<Runtime>(
+            std::move(handler), std::move(options), std::move(ingress),
+            native_handler && std::thread::hardware_concurrency() >= kDualNetworkMinimumCpus)) {
     if (native_handler) {
       runtime->native_handler = std::make_shared<const NativeHttpHandler>(std::move(native_handler));
     }
   }
-  void Stop() {
-    if (runtime->stopping) {
-      return;
-    }
-    runtime->stopping = true;
-    IoError ignored;
-    ignored = runtime->acceptor.close(ignored);
-    auto active = connections;
-    for (const auto& connection : active) {
+  static void StopLoop(const std::shared_ptr<Runtime>& runtime, NetworkLoop& loop) {
+    while (!loop.connections.empty()) {
+      const auto connection = *loop.connections.begin();
       connection->Close(engine::RequestCancellationReason::kServerShutdown);
     }
-    if (runtime->pending.load(std::memory_order_relaxed) == 0) {
-      DrainRuntime(runtime);
+    loop.stopping = true;
+    if (loop.pending == 0) {
+      ReleaseRuntime(runtime);
+    }
+  }
+  void Stop() {
+    if (runtime->stopping.exchange(true)) {
+      return;
+    }
+    IoError ignored;
+    ignored = runtime->acceptor.close(ignored);
+    if (runtime->secondary) {
+      asio::post(runtime->secondary->context, [state = runtime] { StopLoop(state, *state->secondary); });
+    }
+    StopLoop(runtime, runtime->network);
+  }
+  void StartConnection(NetworkLoop& loop, Tcp::socket socket) {
+    runtime->active_connections.fetch_add(1, std::memory_order_relaxed);
+    auto start = [state = runtime, &loop, socket = std::move(socket)]() mutable {
+      if (state->stopping.load(std::memory_order_relaxed)) {
+        state->active_connections.fetch_sub(1, std::memory_order_relaxed);
+        return;
+      }
+      auto connection = std::make_shared<Connection>(state, loop, std::move(socket));
+      loop.connections.insert(connection);
+      connection->Start();
+    };
+    if (&loop == &runtime->network) {
+      start();
+    } else {
+      asio::post(loop.context, std::move(start));
     }
   }
   void Accept() {
-    runtime->acceptor.async_accept([this](IoError error, Tcp::socket socket) {
+    const auto active = runtime->active_connections.load(std::memory_order_relaxed);
+    auto& loop = runtime->secondary && active >= kSecondNetworkConnectionThreshold && accept_to_secondary
+                     ? *runtime->secondary
+                     : runtime->network;
+    accept_to_secondary = !accept_to_secondary;
+    runtime->acceptor.async_accept(loop.context, [this, &loop](IoError error, Tcp::socket socket) {
       if (error) {
         Stop();
         return;
       }
-      if (!runtime->stopping && connections.size() < runtime->options.max_connections) {
-        auto connection = std::make_shared<Connection>(runtime, std::move(socket),
-                                                       [this](const auto& item) { connections.erase(item); });
-        connections.insert(connection);
-        connection->Start();
-      }
       if (!runtime->stopping) {
+        if (runtime->active_connections.load(std::memory_order_relaxed) < runtime->options.max_connections) {
+          StartConnection(loop, std::move(socket));
+        }
         Accept();
       }
     });
   }
   std::shared_ptr<Runtime> runtime;
-  std::unordered_set<std::shared_ptr<Connection>> connections;
   std::thread network_thread;
+  std::thread secondary_thread;
   std::vector<std::thread> application_threads;
   std::mutex lifecycle;
   std::atomic<std::uint16_t> bound_port{0};
   bool started = false;
   bool shutdown_posted = false;
+  bool accept_to_secondary = false;
 };
 
 EventHttpListener::EventHttpListener(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler,
@@ -880,18 +925,20 @@ core::Result<void> EventHttpListener::Start() {
     for (std::size_t index = 0; index < options.application_threads; ++index) {
       impl_->application_threads.emplace_back([this] { (void)impl_->runtime->application.run(); });
     }
-    impl_->network_thread = std::thread([this] { (void)impl_->runtime->network.run(); });
+    if (rt.secondary) {
+      impl_->secondary_thread = std::thread([&rt] { (void)rt.secondary->context.run(); });
+    }
+    impl_->network_thread = std::thread([&rt] { (void)rt.network.context.run(); });
   } catch (const std::system_error&) {
     rt.stopping = true;
     rt.application.stop();
-    rt.network.stop();
+    rt.network.context.stop();
+    if (rt.secondary) {
+      rt.secondary->context.stop();
+    }
     IoError ignored;
     ignored = rt.acceptor.close(ignored);
-    for (auto& thread : impl_->application_threads) {
-      if (thread.joinable()) {
-        thread.join();
-      }
-    }
+    Join();
     return core::Error::Internal(std::string(kThreadFailure));
   }
   return {};
@@ -903,11 +950,14 @@ void EventHttpListener::Shutdown() {
     return;
   }
   impl_->shutdown_posted = true;
-  asio::post(impl_->runtime->network, [this] { impl_->Stop(); });
+  asio::post(impl_->runtime->network.context, [this] { impl_->Stop(); });
 }
 void EventHttpListener::Join() {
   if (impl_->network_thread.joinable()) {
     impl_->network_thread.join();
+  }
+  if (impl_->secondary_thread.joinable()) {
+    impl_->secondary_thread.join();
   }
   for (auto& worker : impl_->application_threads) {
     if (worker.joinable()) {

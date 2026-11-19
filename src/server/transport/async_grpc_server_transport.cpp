@@ -153,16 +153,19 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       static boost::asio::awaitable<core::Result<void>> WriteOwned(std::shared_ptr<Session> session,
                                                                    lf::a2a::v1::StreamResponse event) {
         const auto scheduler = co_await boost::asio::this_coro::executor;
-        auto ack =
-            std::allocate_shared<Acknowledgement>(boost::asio::recycling_allocator<Acknowledgement>{}, scheduler, 1);
+        std::shared_ptr<Acknowledgement> ack;
         {
           std::lock_guard lock(session->mutex);
           if (session->reactor == nullptr || session->terminal.has_value() || session->writing) {
             co_return core::Error::Network(kStreamClosed);
           }
+          if (session->acknowledgement == nullptr) {
+            session->acknowledgement = std::allocate_shared<Acknowledgement>(
+                boost::asio::recycling_allocator<Acknowledgement>{}, scheduler, 1);
+          }
+          ack = session->acknowledgement;
           session->writing = true;
           session->current = std::move(event);
-          session->acknowledgement = ack;
           session->reactor->StartWrite(&session->current);
         }
         const bool ok = co_await ack->async_receive(boost::asio::use_awaitable);
@@ -201,6 +204,7 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
         session->terminal = ::grpc::Status(::grpc::StatusCode::CANCELLED, status.error_message());
         context_.TryCancel();
       } else {
+        session->acknowledgement.reset();
         Finish(status);
       }
     }
@@ -208,12 +212,10 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       const auto session = session_;
       std::lock_guard lock(session->mutex);
       session->writing = false;
-      auto ack = std::exchange(session->acknowledgement, nullptr);
-      if (ack != nullptr) {
-        (void)ack->try_send(boost::system::error_code{}, ok);
-      }
+      (void)session->acknowledgement->try_send(boost::system::error_code{}, ok);
       const auto terminal = session->terminal;
       if (terminal.has_value()) {
+        session->acknowledgement.reset();
         Finish(terminal.value());
       }
     }
