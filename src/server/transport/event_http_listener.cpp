@@ -92,7 +92,7 @@ struct Runtime final {
   explicit Runtime(EventHttpServer::AsyncHandler callback, EventHttpServerOptions settings)
       : handler(std::move(callback)), options(std::move(settings)), acceptor(network) {}
   EventHttpServer::AsyncHandler handler;
-  http_runtime::NativeHttpHandler native_handler;
+  std::shared_ptr<const http_runtime::NativeHttpHandler> native_handler;
   EventHttpServerOptions options;
   asio::io_context network;
   asio::io_context application;
@@ -110,11 +110,12 @@ void DrainRuntime(std::shared_ptr<Runtime> runtime) {
   }
   runtime->finishing_shutdown = true;
   auto& state = *runtime;
+  auto native_handler = std::move(state.native_handler);
   state.network_work.reset();
-  asio::post(state.application, [runtime = std::move(runtime)] {
+  asio::post(state.application, [runtime = std::move(runtime), native_handler = std::move(native_handler)]() mutable {
     // Handler destruction may release blocking application objects.
     runtime->handler = {};
-    runtime->native_handler = {};
+    native_handler.reset();
     runtime->application_work.reset();
   });
 }
@@ -291,7 +292,8 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     queued_bytes_ += bytes.size();
     output_.push_back({std::allocate_shared<std::string>(asio::recycling_allocator<std::string>{}, std::move(bytes)),
                        std::move(completion)});
-    if (output_.size() == 1U) {
+    if (!writing_) {
+      writing_ = true;
       Flush();
     }
   }
@@ -312,8 +314,10 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       }
       self->Touch();
       item.completion({});
-      if (!self->output_.empty()) {
+      if (!self->closed_ && !self->output_.empty()) {
         self->Flush();
+      } else {
+        self->writing_ = false;
       }
     };
     asio::async_write(socket_, asio::buffer(*bytes),
@@ -428,8 +432,9 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     execution_ = std::make_shared<engine::RequestExecution>();
     auto self = shared_from_this();
     auto execution = execution_;
-    if (runtime_->native_handler) {
-      asio::post(runtime_->application, [self, execution, request = std::move(parsed.value())]() mutable {
+    if (auto native_handler = runtime_->native_handler) {
+      asio::post(runtime_->application, [self, execution, native_handler = std::move(native_handler),
+                                         request = std::move(parsed.value())]() mutable {
         if (self->runtime_->stopping.load() || execution->Context().StopToken().stop_requested()) {
           (void)execution->Cancel(engine::RequestCancellationReason::kServerShutdown);
           self->PostTerminalResponse(execution, {}, {});
@@ -445,7 +450,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
           }
         };
         try {
-          self->runtime_->native_handler(
+          (*native_handler)(
               std::move(request), execution->Context(), std::move(complete),
               [self, execution, reusable] {
                 return std::make_shared<NativeConnectionStream>(self, execution, reusable);
@@ -639,6 +644,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   const std::size_t max_output_bytes_;
   std::mutex write_mutex_;
   std::size_t queued_bytes_ = 0;
+  bool writing_ = false;
   bool closed_ = false;
   bool processing_ = false;
   bool streaming_ = false;
@@ -711,7 +717,9 @@ namespace http_runtime {
 struct EventHttpListener::Impl final {
   Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options)
       : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options))) {
-    runtime->native_handler = std::move(native_handler);
+    if (native_handler) {
+      runtime->native_handler = std::make_shared<const NativeHttpHandler>(std::move(native_handler));
+    }
   }
   void Stop() {
     if (runtime->stopping) {
