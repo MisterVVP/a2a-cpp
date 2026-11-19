@@ -8,6 +8,7 @@
 #include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/system/system_error.hpp>
@@ -52,6 +53,10 @@ core::Error CoroutineError(const std::exception_ptr& exception) {
   } catch (...) {
     return core::Error::Internal(kDispatchException);
   }
+}
+
+bool HasDispatchHooks(const DispatchPipeline& pipeline) noexcept {
+  return pipeline.security != nullptr || !pipeline.interceptors.empty();
 }
 
 struct CoroutineDispatchResult final {
@@ -175,7 +180,9 @@ struct AsyncDispatcher::State final {
         : strand(boost::asio::make_strand(scheduler)),
           admission(counts, pending),
           request(std::move(request)),
-          context(metadata),
+          context(HasDispatchHooks(*pipeline) || this->request.operation == DispatcherOperation::kGetExtendedAgentCard
+                      ? metadata
+                      : RequestContext{}),
           source(std::make_shared<RequestExecution>(std::move(metadata), deadline)),
           completion(std::move(completion)),
           pipeline(std::move(pipeline)),
@@ -205,9 +212,10 @@ struct AsyncDispatcher::State final {
 
     static boost::asio::awaitable<void> Run(std::shared_ptr<State> state, std::shared_ptr<Call> call) {
       call->started = true;
+      auto view = call->source->Context();
       core::Result<DispatchResponse> response = core::Error::Internal(kDispatchException);
       try {
-        const auto valid = state->extensions.Validate(call->context.client_headers);
+        const auto valid = state->extensions.Validate(view.Metadata().client_headers);
         if (!valid.ok()) {
           response = valid.error();
         } else {
@@ -216,14 +224,14 @@ struct AsyncDispatcher::State final {
           call->ObserveShutdown(state->closed.load());
           if (!before.ok()) {
             response = before.error();
-          } else if (call->source->Context().StopToken().stop_requested()) {
-            response = CancellationError(call->source->Context().Outcome());
+          } else if (view.StopToken().stop_requested()) {
+            response = CancellationError(view.Outcome());
           } else if (auto handled = call->session.Handle()) {
             response = std::move(*handled);
           } else {
-            auto view = call->pipeline->security == nullptr && call->pipeline->interceptors.empty()
-                            ? call->source->Context()
-                            : call->source->Context().WithMetadata(call->context);
+            if (HasDispatchHooks(*call->pipeline)) {
+              view = view.WithMetadata(call->context);
+            }
             const auto prepared = call->session.Prepare();
             if (call->stream != nullptr) {
               response = co_await call->RunStream(*state->executor, view);
@@ -437,11 +445,14 @@ core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchImpl(
                                             std::move(stream));
   call->owner = state;
   call->ObserveStop();
-  std::lock_guard lock(state->mutex);
-  if (state->closed.load()) {
-    return core::Error::Network(kAdmissionClosed);
+  const auto submission_work = boost::asio::make_work_guard(state->scheduler);
+  {
+    std::lock_guard lock(state->mutex);
+    if (state->closed.load()) {
+      return core::Error::Network(kAdmissionClosed);
+    }
+    state->calls.emplace(call.get(), call);
   }
-  state->calls.emplace(call.get(), call);
   try {
     boost::asio::post(call->strand, [state, call] {
       boost::asio::co_spawn(
@@ -454,6 +465,7 @@ core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchImpl(
           }));
     });
   } catch (...) {
+    std::lock_guard lock(state->mutex);
     state->calls.erase(call.get());
     throw;
   }

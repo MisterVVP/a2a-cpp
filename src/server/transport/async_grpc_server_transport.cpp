@@ -10,7 +10,6 @@
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <chrono>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -101,7 +100,6 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     }
     std::weak_ptr<State> owner;
     std::weak_ptr<engine::AsyncDispatcher> dispatcher;
-    std::function<void(core::Result<DispatchResponse>, RequestExecutionContext)> deliver;
     std::vector<std::string> extensions;
     std::mutex mutex;
     std::shared_ptr<RequestExecution> source;
@@ -316,12 +314,11 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       calls.emplace(call.get(), call);
     }
     auto* reactor = new Reactor<Response>(call, context, *response);
-    call->deliver = [reactor](auto result, const RequestExecutionContext& execution) {
-      reactor->Complete(std::move(result), execution);
-    };
     const auto admitted = dispatcher->Dispatch(
         std::move(routed.value()), std::move(metadata.value().request_context),
-        [call](auto result, const RequestExecutionContext& execution) { call->deliver(std::move(result), execution); },
+        [reactor](auto result, const RequestExecutionContext& execution) {
+          reactor->Complete(std::move(result), execution);
+        },
         SteadyDeadline(context.deadline()));
     if (!admitted.ok()) {
       reactor->Finish(GrpcErrorStatus(admitted.error(), &context, call->extensions));
