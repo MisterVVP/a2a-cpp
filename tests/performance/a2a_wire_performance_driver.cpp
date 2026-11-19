@@ -48,6 +48,11 @@ constexpr std::chrono::milliseconds kWireStreamWaitTimeout{5000};
 constexpr int kFocusedListConfigCount = 3;
 constexpr std::string_view kSyncClient = "sync";
 constexpr std::string_view kAsyncClient = "async";
+constexpr std::string_view kObserverClient = "observer";
+constexpr std::string_view kClientExecutionModeField = "client_execution_mode";
+constexpr std::string_view kCreateTaskMessagePrefix = "wire-create";
+constexpr std::string_view kWarmupCreateTaskMessagePrefix = "wire-warmup-create";
+constexpr std::string_view kTaskCreationWarmupError = "task creation warmup errors: ";
 constexpr int kWarmupRequestLimit = 1000000;
 constexpr std::string_view kScenarioSendStreamingMessageFiniteStreamSharedClient =
     "SendStreamingMessage_FiniteStream_SharedClient";
@@ -231,6 +236,14 @@ std::string SeedTask(a2a::client::A2AClient* client, std::string_view message_id
     return response.value().task().id();
   }
   return {};
+}
+
+lf::a2a::v1::SendMessageRequest MakeCreateTaskRequest(int index, std::string_view prefix) {
+  return MakeSendRequest(BuildId(prefix, index));
+}
+
+bool HasCreatedTask(const a2a::core::Result<lf::a2a::v1::SendMessageResponse>& response) {
+  return response.ok() && response.value().has_task() && !response.value().task().id().empty();
 }
 
 bool IsListScenario(std::string_view scenario) {
@@ -423,7 +436,8 @@ OperationOutcome ExecuteScenario(a2a::client::A2AClient* client, std::string_vie
                                  int stream_hold_ms = 0) {
   const a2a::client::CallOptions call_options = MakeCallOptions();
   if (scenario == kScenarioSendMessageCreateTask) {
-    return MakeOutcome(client->SendMessage(MakeSendRequest(BuildId("wire-create", index)), call_options).ok());
+    return MakeOutcome(
+        HasCreatedTask(client->SendMessage(MakeCreateTaskRequest(index, kCreateTaskMessagePrefix), call_options)));
   }
   if (scenario == kScenarioGetTaskExistingTask) {
     lf::a2a::v1::GetTaskRequest request;
@@ -513,8 +527,12 @@ std::vector<std::unique_ptr<a2a::client::A2AClient>> MakeMeasuredClients(const W
   return clients;
 }
 
-bool SupportsAsyncClient(std::string_view scenario) {
+bool IsComparableReadScenario(std::string_view scenario) {
   return IsListScenario(scenario) || scenario == kScenarioGetTaskExistingTask;
+}
+
+bool SupportsAsyncClient(std::string_view scenario) {
+  return IsComparableReadScenario(scenario) || scenario == kScenarioSendMessageCreateTask;
 }
 
 // Each lane has one outstanding callback, matching the sync driver's in-flight
@@ -523,11 +541,12 @@ class AsyncWireMeasurement final {
  public:
   AsyncWireMeasurement(const WireOptions& options, const std::string& scenario,
                        const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
-                       const FocusedWireFixture& fixture)
+                       const FocusedWireFixture& fixture, std::string_view message_id_prefix = kCreateTaskMessagePrefix)
       : options_(options),
         scenario_(scenario),
         clients_(clients),
         fixture_(fixture),
+        message_id_prefix_(message_id_prefix),
         lanes_(clients.size()),
         next_(static_cast<int>(clients.size())) {}
 
@@ -536,7 +555,7 @@ class AsyncWireMeasurement final {
     deadline_ = started + std::chrono::duration<double>(options_.duration_seconds);
     for (std::size_t lane = 0; lane < lanes_.size(); ++lane) {
       lanes_[lane].latencies.reserve(static_cast<std::size_t>(options_.requests) / lanes_.size());
-      Start(lane, true);
+      Start(lane, static_cast<int>(lane));
     }
     {
       std::unique_lock lock(mutex_);
@@ -574,46 +593,60 @@ class AsyncWireMeasurement final {
     }
   }
 
-  a2a::core::Result<a2a::core::AsyncHandle> Submit(std::size_t lane, std::chrono::steady_clock::time_point started) {
-    auto completion = [this, lane, started](auto result) {
-      Record(lane, started, result.ok());
-      Start(lane);
+  a2a::core::Result<a2a::core::AsyncHandle> Submit(std::size_t lane, int index,
+                                                   std::chrono::steady_clock::time_point started) {
+    auto complete = [this, lane, started](bool ok) {
+      Record(lane, started, ok);
+      Start(lane, NextOperationIndex());
     };
+    auto completion = [complete](const auto& result) { complete(result.ok()); };
     auto client = clients_[lane]->Async();
+    const auto call_options = MakeCallOptions();
+    if (scenario_ == kScenarioSendMessageCreateTask) {
+      return client.SendMessage(
+          MakeCreateTaskRequest(index, message_id_prefix_),
+          [complete](const a2a::core::Result<lf::a2a::v1::SendMessageResponse>& response) {
+            complete(HasCreatedTask(response));
+          },
+          call_options);
+    }
     if (scenario_ == kScenarioGetTaskExistingTask) {
       lf::a2a::v1::GetTaskRequest request;
       request.set_id(fixture_.task_id);
-      return client.GetTask(request, completion, MakeCallOptions());
+      return client.GetTask(request, completion, call_options);
     }
     a2a::client::ListTasksRequest request;
     if (scenario_ == kScenarioListTasksWithPagination) {
       request.page_size = kListPageSize;
     }
-    return client.ListTasks(request, completion, MakeCallOptions());
+    return client.ListTasks(request, completion, call_options);
   }
 
-  void Start(std::size_t lane, bool first = false) {
-    for (;;) {
-      if (!first && ((options_.duration_seconds > 0.0 && std::chrono::steady_clock::now() >= deadline_) ||
-                     next_.fetch_add(1, std::memory_order_relaxed) >= options_.requests)) {
-        std::lock_guard lock(mutex_);
-        ++retired_;
-        ready_.notify_one();
-        return;
-      }
-      first = false;
+  int NextOperationIndex() {
+    if (options_.duration_seconds > 0.0 && std::chrono::steady_clock::now() >= deadline_) {
+      return options_.requests;
+    }
+    return next_.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  void Start(std::size_t lane, int index) {
+    for (; index < options_.requests; index = NextOperationIndex()) {
       const auto started = std::chrono::steady_clock::now();
-      if (Submit(lane, started).ok()) {
+      if (Submit(lane, index, started).ok()) {
         return;
       }
       Record(lane, started, false);
     }
+    std::lock_guard lock(mutex_);
+    ++retired_;
+    ready_.notify_one();
   }
 
   const WireOptions& options_;
   const std::string& scenario_;
   const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients_;
   const FocusedWireFixture& fixture_;
+  std::string_view message_id_prefix_;
   std::vector<Lane> lanes_;
   std::atomic<int> next_;
   std::chrono::time_point<std::chrono::steady_clock, std::chrono::duration<double>> deadline_;
@@ -621,6 +654,30 @@ class AsyncWireMeasurement final {
   std::condition_variable ready_;
   std::size_t retired_ = 0;
 };
+
+int WarmTaskCreationClients(const WireOptions& options, const std::string& scenario,
+                            const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
+                            const FocusedWireFixture& fixture) {
+  if (options.warmup_seconds <= 0.0) {
+    return 0;
+  }
+  if (options.client_mode == kAsyncClient) {
+    auto warmup_options = options;
+    warmup_options.requests = static_cast<int>(clients.size());
+    warmup_options.duration_seconds = 0.0;
+    return AsyncWireMeasurement(warmup_options, scenario, clients, fixture, kWarmupCreateTaskMessagePrefix)
+        .Run()
+        .errors;
+  }
+  int errors = 0;
+  for (std::size_t lane = 0; lane < clients.size(); ++lane) {
+    const auto request = MakeCreateTaskRequest(static_cast<int>(lane), kWarmupCreateTaskMessagePrefix);
+    if (!HasCreatedTask(clients[lane]->SendMessage(request, MakeCallOptions()))) {
+      ++errors;
+    }
+  }
+  return errors;
+}
 
 OperationOutcome ExecuteMeasuredWireOperation(const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
                                               const std::string& scenario,
@@ -679,12 +736,29 @@ ScenarioResult RunPreparedWireScenario(const WireOptions& options, const std::st
                              });
 }
 
+ScenarioResult WarmReadClients(const WireOptions& options, const std::string& scenario,
+                               const std::vector<std::unique_ptr<a2a::client::A2AClient>>& clients,
+                               const FocusedWireFixture& fixture) {
+  // Even a very short warmup must visit every measured connection.
+  if (options.client_mode == kSyncClient) {
+    for (const auto& client : clients) {
+      (void)ExecuteScenario(client.get(), scenario, 0, fixture);
+    }
+  }
+  auto warmup_options = options;
+  warmup_options.requests = kWarmupRequestLimit;
+  warmup_options.duration_seconds = options.warmup_seconds;
+  return RunPreparedWireScenario(warmup_options, scenario, clients, fixture, {}, false);
+}
+
 ScenarioResult RunWireScenario(const WireOptions& options, const std::string& scenario) {
   const int worker_count = std::min(options.concurrency, options.requests);
   const bool use_shared_http_client = UsesSharedHttpClient(scenario) && options.transport != kGrpcTransport;
   const int client_count = use_shared_http_client ? 1 : worker_count;
   auto clients = MakeMeasuredClients(options, client_count);
-  if (!SupportsAsyncClient(scenario)) {
+  const bool uses_fixed_warmup = scenario == kScenarioSendMessageCreateTask && options.store_backend == kInMemoryStore;
+  const bool uses_read_warmup = IsComparableReadScenario(scenario);
+  if (!uses_fixed_warmup && !uses_read_warmup) {
     WarmSyncClients(options, scenario, clients);
   }
 
@@ -727,18 +801,17 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
     }
   }
 
-  if (SupportsAsyncClient(scenario) && options.warmup_seconds > 0.0) {
-    // Even a very short warmup must visit every measured connection.
-    if (options.client_mode == kSyncClient) {
-      for (const auto& client : clients) {
-        (void)ExecuteScenario(client.get(), scenario, 0, focused_fixture);
-      }
+  if (uses_fixed_warmup) {
+    const int warmup_errors = WarmTaskCreationClients(options, scenario, clients, focused_fixture);
+    if (warmup_errors != 0) {
+      std::cerr << kTaskCreationWarmupError << warmup_errors << '\n';
+      ScenarioResult failed;
+      failed.scenario = scenario;
+      failed.errors = warmup_errors;
+      return failed;
     }
-    auto warmup_options = options;
-    warmup_options.requests = kWarmupRequestLimit;
-    warmup_options.duration_seconds = options.warmup_seconds;
-    auto warmup = RunPreparedWireScenario(warmup_options, scenario, clients, focused_fixture, follow_up_task_ids,
-                                          use_shared_http_client);
+  } else if (uses_read_warmup && options.warmup_seconds > 0.0) {
+    auto warmup = WarmReadClients(options, scenario, clients, focused_fixture);
     if (warmup.errors != 0) {
       return warmup;
     }
@@ -850,8 +923,8 @@ std::vector<std::string> SelectedScenarios(const WireOptions& options) {
     return options.scenarios;
   }
   if (options.client_mode == kAsyncClient) {
-    return {std::string(kScenarioGetTaskExistingTask), std::string(kScenarioListTasksNoPagination),
-            std::string(kScenarioListTasksWithPagination)};
+    return {std::string(kScenarioSendMessageCreateTask), std::string(kScenarioGetTaskExistingTask),
+            std::string(kScenarioListTasksNoPagination), std::string(kScenarioListTasksWithPagination)};
   }
   std::vector<std::string> scenarios = {std::string(kScenarioListTasksNoPagination),
                                         std::string(kScenarioListTasksWithPagination),
@@ -895,7 +968,8 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   PopulateCommonResultFields(&object, result.scenario, options.transport, options.store_backend, options.concurrency,
                              result);
   SetIntegerField(&object, "configured_requests", options.requests);
-  SetStringField(&object, "client_execution_mode", options.client_mode);
+  SetStringField(&object, kClientExecutionModeField,
+                 IsStreamingWireScenario(result.scenario) ? kObserverClient : std::string_view(options.client_mode));
   SetIntegerField(&object, "stream_hold_ms", options.stream_hold_ms);
   const int history_depth = ScenarioHistoryDepth(result.scenario);
   if (history_depth > 0) {
