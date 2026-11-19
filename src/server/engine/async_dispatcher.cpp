@@ -373,6 +373,7 @@ struct AsyncDispatcher::State final {
   std::mutex mutex;
   std::unordered_map<Call*, std::shared_ptr<Call>> calls;
   std::atomic_bool closed = false;
+  bool native_http_ingress = false;
 };
 
 AsyncDispatcher::AsyncDispatcher(std::shared_ptr<CoroutineAgentExecutor> executor,
@@ -390,6 +391,13 @@ AsyncDispatcher::~AsyncDispatcher() {
   }
 }
 void AsyncDispatcher::Shutdown() { state_->Shutdown(); }
+
+void AsyncDispatcher::EnableNativeHttpIngress() { state_->native_http_ingress = true; }
+
+boost::asio::any_io_executor AsyncDispatcher::NativeHttpIngressExecutor() const {
+  return state_->native_http_ingress ? state_->scheduler : boost::asio::any_io_executor{};
+}
+
 void AsyncDispatcher::Cancel(std::shared_ptr<RequestExecution> execution, RequestCancellationReason reason) {
   if (execution != nullptr) {
     boost::asio::post(state_->scheduler,

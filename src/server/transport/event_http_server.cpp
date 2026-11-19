@@ -43,11 +43,16 @@ EventHttpServer::EventHttpServer(AsyncHandler handler, EventHttpServerOptions op
           std::move(handler), http_runtime::NativeHttpHandler{}, std::move(options)))) {}
 
 EventHttpServer::EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
-                                 const ServerBindingsOptions& bindings, EventHttpServerOptions options)
-    : impl_(std::make_unique<Impl>(std::make_unique<http_runtime::EventHttpListener>(
-          AsyncHandler{},
-          http_runtime::EventHttpHandlerFactory::Native(std::move(dispatcher), std::move(card), bindings),
-          std::move(options)))) {}
+                                 const ServerBindingsOptions& bindings, EventHttpServerOptions options) {
+  http_runtime::NativeGetTaskIngress ingress;
+  if (dispatcher) {
+    ingress =
+        http_runtime::NativeGetTaskIngress(dispatcher->NativeHttpIngressExecutor(), bindings.rest.rest_api_base_path);
+  }
+  auto handler = http_runtime::EventHttpHandlerFactory::Native(std::move(dispatcher), std::move(card), bindings);
+  impl_ = std::make_unique<Impl>(std::make_unique<http_runtime::EventHttpListener>(
+      AsyncHandler{}, std::move(handler), std::move(options), std::move(ingress)));
+}
 
 EventHttpServer::~EventHttpServer() = default;
 

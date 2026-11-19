@@ -31,6 +31,9 @@
 #include <vector>
 
 #include "a2a/core/http_constants.h"
+#include "a2a/core/http_utils.h"
+#include "a2a/core/protocol_paths.h"
+#include "a2a/server/rest_transport.h"
 namespace a2a::server {
 namespace {
 namespace asio = boost::asio;
@@ -41,6 +44,10 @@ constexpr std::size_t kReadBytes = 8192;
 constexpr std::size_t kHexBytes = sizeof(std::size_t) * 2U;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 constexpr std::string_view kHeartbeat = ": heartbeat\n\n";
+constexpr std::size_t kIngressShutdownHold = 1;
+constexpr std::string_view kRootPath = "/";
+constexpr std::string_view kTaskIdDelimiters = "/:%#";
+constexpr std::string_view kExtendedCardPathSegment = core::protocol_paths::kExtendedAgentCard.substr(1);
 constexpr std::string_view kStopped = "HTTP connection closed";
 constexpr std::string_view kOutputLimit = "HTTP output exceeds configured bound";
 constexpr std::string_view kThreadFailure = "HTTP worker startup failed";
@@ -89,11 +96,16 @@ bool FitsOutput(const HttpServerResponse& response, std::size_t limit, bool stre
 }
 
 struct Runtime final {
-  explicit Runtime(EventHttpServer::AsyncHandler callback, EventHttpServerOptions settings)
-      : handler(std::move(callback)), options(std::move(settings)), acceptor(network) {}
+  Runtime(EventHttpServer::AsyncHandler callback, EventHttpServerOptions settings,
+          http_runtime::NativeGetTaskIngress native_ingress)
+      : handler(std::move(callback)),
+        options(std::move(settings)),
+        ingress(std::move(native_ingress)),
+        acceptor(network) {}
   EventHttpServer::AsyncHandler handler;
   std::shared_ptr<const http_runtime::NativeHttpHandler> native_handler;
   EventHttpServerOptions options;
+  const http_runtime::NativeGetTaskIngress ingress;
   asio::io_context network;
   asio::io_context application;
   asio::executor_work_guard<asio::io_context::executor_type> application_work{application.get_executor()};
@@ -101,14 +113,11 @@ struct Runtime final {
   Tcp::acceptor acceptor;
   std::atomic_size_t pending{0};
   std::atomic_bool stopping{false};
+  std::atomic_size_t ingress_work{kIngressShutdownHold};
   bool finishing_shutdown = false;
 };
 
-void DrainRuntime(std::shared_ptr<Runtime> runtime) {
-  if (runtime->finishing_shutdown) {
-    return;
-  }
-  runtime->finishing_shutdown = true;
+void FinishRuntime(std::shared_ptr<Runtime> runtime) {
   auto& state = *runtime;
   auto native_handler = std::move(state.native_handler);
   state.network_work.reset();
@@ -118,6 +127,16 @@ void DrainRuntime(std::shared_ptr<Runtime> runtime) {
     native_handler.reset();
     runtime->application_work.reset();
   });
+}
+
+void DrainRuntime(const std::shared_ptr<Runtime>& runtime) {
+  if (runtime->finishing_shutdown) {
+    return;
+  }
+  runtime->finishing_shutdown = true;
+  if (runtime->ingress_work.fetch_sub(kIngressShutdownHold) == kIngressShutdownHold) {
+    FinishRuntime(runtime);
+  }
 }
 
 class Connection;
@@ -430,42 +449,65 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     processing_ = true;
     runtime_->pending.store(pending + 1, std::memory_order_relaxed);
     execution_ = std::make_shared<engine::RequestExecution>();
-    auto self = shared_from_this();
-    auto execution = execution_;
     if (auto native_handler = runtime_->native_handler) {
-      asio::post(runtime_->application, [self, execution, native_handler = std::move(native_handler),
-                                         request = std::move(parsed.value())]() mutable {
-        if (self->runtime_->stopping.load() || execution->Context().StopToken().stop_requested()) {
-          (void)execution->Cancel(engine::RequestCancellationReason::kServerShutdown);
-          self->PostTerminalResponse(execution, {}, {});
-          return;
-        }
-        const bool reusable = HttpAdapter::IsConnectionReusable(request);
-        auto complete = [self, execution, reusable](core::Result<HttpServerResponse> result) {
-          try {
-            auto event = GetResponse(std::move(result));
-            self->PostTerminalResponse(execution, {}, self->EncodeResponse(event.response, reusable, false));
-          } catch (...) {
-            self->PostTerminalResponse(execution, std::current_exception(), {});
-          }
-        };
-        try {
-          (*native_handler)(
-              std::move(request), execution->Context(), std::move(complete),
-              [self, execution, reusable] {
-                return std::make_shared<NativeConnectionStream>(self, execution, reusable);
-              },
-              {.executor = self->runtime_->application.get_executor(), .pending = self->runtime_->pending});
-        } catch (...) {
-          self->PostTerminalResponse(execution, std::current_exception(), {});
-        }
-      });
+      StartNative(std::move(parsed.value()), std::move(native_handler));
       return;
     }
+    auto self = shared_from_this();
+    auto execution = execution_;
     asio::co_spawn(runtime_->application, RunApplication(self, std::move(parsed.value()), execution_),
                    [self, execution](const std::exception_ptr& exception, TerminalResponse response) {
                      self->PostTerminalResponse(execution, exception, std::move(response));
                    });
+  }
+
+  void StartNative(HttpServerRequest&& request, std::shared_ptr<const http_runtime::NativeHttpHandler> native_handler) {
+    const bool borrowed = runtime_->ingress.Accepts(request);
+    auto invoke = [self = shared_from_this(), execution = execution_, handler = std::move(native_handler),
+                   request = std::move(request), borrowed]() mutable {
+      const auto callback = std::move(handler);
+      RunNative(self, *callback, std::move(request), execution, borrowed);
+    };
+    if (!borrowed) {
+      asio::post(runtime_->application, std::move(invoke));
+      return;
+    }
+    runtime_->ingress_work.fetch_add(1);
+    asio::post(runtime_->ingress.executor(), [runtime = runtime_, invoke = std::move(invoke)]() mutable {
+      invoke();
+      if (runtime->ingress_work.fetch_sub(1) == 1) {
+        asio::post(runtime->network, [runtime] { FinishRuntime(runtime); });
+      }
+    });
+  }
+
+  static void RunNative(const std::shared_ptr<Connection>& self, const http_runtime::NativeHttpHandler& handler,
+                        HttpServerRequest&& request, const std::shared_ptr<engine::RequestExecution>& execution,
+                        bool borrowed) {
+    if (self->runtime_->stopping.load() || execution->Context().StopToken().stop_requested()) {
+      if (!borrowed) {
+        (void)execution->Cancel(engine::RequestCancellationReason::kServerShutdown);
+      }
+      self->PostTerminalResponse(execution, {}, {});
+      return;
+    }
+    const bool reusable = HttpAdapter::IsConnectionReusable(request);
+    auto complete = [self, execution, reusable](core::Result<HttpServerResponse> result) {
+      try {
+        auto event = GetResponse(std::move(result));
+        self->PostTerminalResponse(execution, {}, self->EncodeResponse(event.response, reusable, false));
+      } catch (...) {
+        self->PostTerminalResponse(execution, std::current_exception(), {});
+      }
+    };
+    try {
+      handler(
+          std::move(request), execution->Context(), std::move(complete),
+          [self, execution, reusable] { return std::make_shared<NativeConnectionStream>(self, execution, reusable); },
+          {.executor = self->runtime_->application.get_executor(), .pending = self->runtime_->pending});
+    } catch (...) {
+      self->PostTerminalResponse(execution, std::current_exception(), {});
+    }
   }
 
   struct TerminalResponse final {
@@ -714,9 +756,28 @@ void NativeConnectionStream::Abort() {
 
 namespace http_runtime {
 
+NativeGetTaskIngress::NativeGetTaskIngress(asio::any_io_executor executor, std::string rest_api_base_path)
+    : executor_(std::move(executor)), task_prefix_(core::http::NormalizeRoutePath(std::move(rest_api_base_path))) {
+  if (task_prefix_ == kRootPath) {
+    task_prefix_.clear();
+  }
+  task_prefix_.append(RestEndpointPaths::kTaskResourcePrefix);
+}
+
+bool NativeGetTaskIngress::Accepts(const HttpServerRequest& request) const noexcept {
+  if (!executor_ || request.method != core::http::kMethodGet || !request.target.starts_with(task_prefix_)) {
+    return false;
+  }
+  const auto suffix = std::string_view(request.target).substr(task_prefix_.size());
+  const auto task_id = suffix.substr(0, suffix.find('?'));
+  return !task_id.empty() && task_id != kExtendedCardPathSegment &&
+         task_id.find_first_of(kTaskIdDelimiters) == std::string_view::npos;
+}
+
 struct EventHttpListener::Impl final {
-  Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options)
-      : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options))) {
+  Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options,
+       NativeGetTaskIngress ingress)
+      : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options), std::move(ingress))) {
     if (native_handler) {
       runtime->native_handler = std::make_shared<const NativeHttpHandler>(std::move(native_handler));
     }
@@ -764,8 +825,9 @@ struct EventHttpListener::Impl final {
 };
 
 EventHttpListener::EventHttpListener(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler,
-                                     EventHttpServerOptions options)
-    : impl_(std::make_unique<Impl>(std::move(handler), std::move(native_handler), std::move(options))) {}
+                                     EventHttpServerOptions options, NativeGetTaskIngress ingress)
+    : impl_(std::make_unique<Impl>(std::move(handler), std::move(native_handler), std::move(options),
+                                   std::move(ingress))) {}
 
 EventHttpListener::~EventHttpListener() {
   try {

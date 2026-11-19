@@ -395,6 +395,83 @@ TEST(EventHttpServer, ShutdownKeepsNativeHandlerAliveUntilInvocationReturns) {
 }
 
 constexpr std::string_view kSubscribeRequest = "GET /a2a/tasks/native:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr std::string_view kCustomRestBase = "api/a2a/";
+constexpr std::string_view kTaskTarget = "/a2a/tasks/native";
+constexpr std::string_view kCustomTaskTarget = "/api/a2a/tasks/native?historyLength=1";
+constexpr std::string_view kRootTaskTarget = "/tasks/native";
+constexpr std::string_view kSubscriptionTarget = "/a2a/tasks/native:subscribe";
+constexpr std::string_view kPushConfigTarget = "/a2a/tasks/native/pushNotificationConfigs";
+constexpr std::string_view kTenantCardTarget = "/a2a/tasks/extendedAgentCard";
+constexpr std::string_view kEncodedTaskTarget = "/a2a/tasks/native%3Asubscribe";
+constexpr std::string_view kEmptyTaskTarget = "/a2a/tasks/";
+constexpr auto kBorrowedJoinObservation = std::chrono::milliseconds(50);
+
+HttpServerRequest IngressRequest(std::string_view target, std::string_view method = core::http::kMethodGet) {
+  HttpServerRequest request;
+  request.method = method;
+  request.target = target;
+  return request;
+}
+
+TEST(NativeGetTaskIngress, SelectsCanonicalTaskResourcesAtTheConfiguredBase) {
+  asio::io_context context;
+  const http_runtime::NativeGetTaskIngress configured(context.get_executor(), std::string(kCustomRestBase));
+  const http_runtime::NativeGetTaskIngress root(context.get_executor(), {});
+  const http_runtime::NativeGetTaskIngress disabled;
+  EXPECT_TRUE(configured.Accepts(IngressRequest(kCustomTaskTarget)));
+  EXPECT_FALSE(configured.Accepts(IngressRequest(kTaskTarget)));
+  EXPECT_TRUE(root.Accepts(IngressRequest(kRootTaskTarget)));
+  EXPECT_FALSE(disabled.Accepts(IngressRequest(kTaskTarget)));
+}
+
+TEST(NativeGetTaskIngress, ExcludesOtherOperationsAndAmbiguousPaths) {
+  asio::io_context context;
+  const http_runtime::NativeGetTaskIngress ingress(context.get_executor(), ServerBindingsOptions::kDefaultRestPath);
+  EXPECT_TRUE(ingress.Accepts(IngressRequest(kTaskTarget)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kTaskTarget, core::http::kMethodPost)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kRpcPath, core::http::kMethodPost)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kSubscriptionTarget)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kPushConfigTarget)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kTenantCardTarget)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kEncodedTaskTarget)));
+  EXPECT_FALSE(ingress.Accepts(IngressRequest(kEmptyTaskTarget)));
+}
+
+TEST(EventHttpServer, JoinDrainsBorrowedGetTaskAfterItsResponseFinishes) {
+  asio::thread_pool pool(engine::AsyncRuntimeOptions::kDefaultThreads);
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::atomic_bool returned = false;
+  const auto executor = pool.get_executor();
+  http_runtime::NativeHttpHandler handler =
+      [executor, &released, &returned](
+          HttpServerRequest request, engine::RequestExecutionContext, http_runtime::NativeHttpCompletion complete,
+          const http_runtime::NativeHttpStreamFactory&, const http_runtime::NativeHttpWorkQueue&) {
+        EXPECT_TRUE(executor.running_in_this_thread());
+        complete(Respond(request));
+        released.wait();
+        returned = true;
+      };
+  http_runtime::EventHttpListener listener({}, std::move(handler), {.idle_timeout = kTimeout},
+                                           {executor, ServerBindingsOptions::kDefaultRestPath});
+  ASSERT_TRUE(listener.Start().ok());
+  asio::io_context io;
+  Tcp::socket peer(io);
+  peer.connect(Tcp::endpoint(asio::ip::address_v4::loopback(), listener.port()));
+  asio::write(peer, asio::buffer(kRestTask));
+  EXPECT_TRUE(ReadToEnd(peer).starts_with(kStatus));
+  listener.Shutdown();
+  auto joined = std::async(std::launch::async, [&listener, &returned] {
+    listener.Join();
+    return returned.load();
+  });
+  EXPECT_EQ(joined.wait_for(kBorrowedJoinObservation), std::future_status::timeout);
+  release.set_value();
+  ASSERT_EQ(joined.wait_for(kTimeout), std::future_status::ready);
+  EXPECT_TRUE(joined.get());
+  pool.join();
+}
+
 constexpr std::size_t kLiveClients = 32;
 constexpr std::size_t kLargeBody = std::size_t{2} * 1024U * 1024U;
 constexpr auto kIdleDeadline = std::chrono::milliseconds(50);
