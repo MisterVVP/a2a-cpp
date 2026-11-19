@@ -33,12 +33,20 @@ except ImportError:
 
 TRANSPORTS = ("grpc", "jsonrpc", "http_json")
 STORE_BACKENDS = ("inmemory", "postgres")
+TASK_CREATION_SCENARIO = "SendMessage_CreateTask"
+OBSERVER_CLIENT_MODE = "observer"
 SHARED_CLIENT_WIRE_SCENARIOS = (
     "SendStreamingMessage_FiniteStream_SharedClient",
     "SubscribeToTask_FirstEventLatency_SharedClient",
 )
+WIRE_OBSERVER_SCENARIOS = (
+    "SendStreamingMessage_FiniteStream",
+    "SubscribeToTask_FirstEventLatency",
+    "IdleStream_ClientCancellationLatency",
+    *SHARED_CLIENT_WIRE_SCENARIOS,
+)
 SCENARIOS = (
-    "SendMessage_CreateTask",
+    TASK_CREATION_SCENARIO,
     "GetTask_ExistingTask",
     "CancelTask_WorkingTask",
     "ListTasks_NoPagination",
@@ -46,10 +54,7 @@ SCENARIOS = (
     "SendMessage_FollowUpExistingTask",
     "SendMessage_FollowUpAtHistoryDepth/8",
     "GetTask_MissingTaskError",
-    "SendStreamingMessage_FiniteStream",
-    "SubscribeToTask_FirstEventLatency",
-    "IdleStream_ClientCancellationLatency",
-    *SHARED_CLIENT_WIRE_SCENARIOS,
+    *WIRE_OBSERVER_SCENARIOS,
     "SubscribeToTask_MultiSubscriber",
     "SubscribeToTask_TerminalCompletionLatency",
     "SubscribeToTask_DisconnectOneSubscriber",
@@ -83,7 +88,7 @@ POSTGRES_WRITE_PROFILE = "postgres-write"
 POSTGRES_TAIL_PROFILES = (POSTGRES_TAIL_PROFILE, POSTGRES_TAIL_C1_PROFILE)
 POSTGRES_PROFILES = (*POSTGRES_TAIL_PROFILES, POSTGRES_WRITE_PROFILE)
 POSTGRES_WRITE_SCENARIOS = (
-    "SendMessage_CreateTask",
+    TASK_CREATION_SCENARIO,
     "SendMessage_FollowUpExistingTask",
     "PushConfig_Create",
     "PushConfig_CreateMany",
@@ -97,7 +102,7 @@ POSTGRES_TAIL_SCENARIOS = (
     "PushConfig_CreateMany",
     "PushConfig_ListManyConfigs",
     "SendMessage_FollowUpExistingTask",
-    "SendMessage_CreateTask",
+    TASK_CREATION_SCENARIO,
 )
 POSTGRES_TAIL_C1_SCENARIOS = ("PushConfig_ListManyConfigs",)
 POSTGRES_TAIL_CONCURRENCY = (4, 16, 64)
@@ -109,16 +114,13 @@ POSTGRES_TAIL_C1_POOL_SIZES = (64,)
 WIRE_SCENARIOS = (
     "ListTasks_NoPagination",
     "ListTasks_WithPagination",
-    "SendMessage_CreateTask",
+    TASK_CREATION_SCENARIO,
     "GetTask_ExistingTask",
     "CancelTask_WorkingTask",
     "SendMessage_FollowUpExistingTask",
     "SendMessage_FollowUpAtHistoryDepth/8",
     "GetTask_MissingTaskError",
-    "SendStreamingMessage_FiniteStream",
-    "SubscribeToTask_FirstEventLatency",
-    "IdleStream_ClientCancellationLatency",
-    *SHARED_CLIENT_WIRE_SCENARIOS,
+    *WIRE_OBSERVER_SCENARIOS,
     "PushConfig_Create",
     "PushConfig_Get",
     "PushConfig_List",
@@ -128,7 +130,9 @@ WIRE_TRANSPORT_PATHS = {"http_json": "wire_http_json", "jsonrpc": "wire_jsonrpc"
 WIRE_ONLY_SCENARIOS = ("IdleStream_ClientCancellationLatency", *SHARED_CLIENT_WIRE_SCENARIOS)
 SERVER_MODES = ("sync", "async")
 ASYNC_SCENARIOS = WIRE_SCENARIOS
-ASYNC_CLIENT_SCENARIOS = ("GetTask_ExistingTask", "ListTasks_NoPagination", "ListTasks_WithPagination")
+ASYNC_CLIENT_SCENARIOS = (
+    TASK_CREATION_SCENARIO, "GetTask_ExistingTask", "ListTasks_NoPagination", "ListTasks_WithPagination",
+)
 RESOURCE_FIELDS = tuple(f"{side}_{metric}" for side in ("server", "client")
                         for metric in ("cpu_seconds", "peak_threads", "peak_rss_kib"))
 IN_PROCESS_SCENARIOS = tuple(scenario for scenario in SCENARIOS if scenario not in WIRE_ONLY_SCENARIOS)
@@ -801,7 +805,8 @@ def run_wire_scenarios(config: RunnerConfig, wire_driver: Path, transport: str, 
                 client_mode = getattr(config, "client_mode", "sync")
                 if client_mode == "async" and result.get("client_execution_mode") != client_mode:
                     raise ValueError("wire driver did not confirm the requested client mode")
-                result.update(client_execution_mode=client_mode, server_execution_mode=getattr(config, "server_mode", "sync"),
+                result.update(client_execution_mode=OBSERVER_CLIENT_MODE if scenario in WIRE_OBSERVER_SCENARIOS else client_mode,
+                              server_execution_mode=getattr(config, "server_mode", "sync"),
                               executor_mode=getattr(sut, "executor_mode", "synchronous"))
             payload.extend(scenario_payload)
     diagnostics = read_http_diagnostics(sut.log_path) if transport in {"http_json", "jsonrpc"} else {}
@@ -840,14 +845,23 @@ def run_wire_driver(config: RunnerConfig, transport: str, store_backend: str, co
     if not wire_scenarios:
         return []
     wire_driver = ensure_wire_driver(config)
+    results = []
     if (not subscription_diagnostics_requested() and "async" not in getattr(config, "server_modes", ())
             and getattr(config, "client_modes", ("sync",)) == ("sync",)):
-        return run_wire_scenarios(
-            config, wire_driver, transport, store_backend, concurrency,
-            postgres_pool_size, port, wire_scenarios,
-        )
+        if store_backend == "inmemory" and TASK_CREATION_SCENARIO in wire_scenarios:
+            results.extend(run_wire_scenarios(
+                config, wire_driver, transport, store_backend, concurrency,
+                postgres_pool_size, port, (TASK_CREATION_SCENARIO,),
+            ))
+            wire_scenarios = tuple(scenario for scenario in wire_scenarios if scenario != TASK_CREATION_SCENARIO)
+            if not wire_scenarios:
+                return results
+            port = find_available_sut_port()
+        results.extend(run_wire_scenarios(
+            config, wire_driver, transport, store_backend, concurrency, postgres_pool_size, port, wire_scenarios,
+        ))
+        return results
 
-    results = []
     for index, scenario in enumerate(wire_scenarios):
         client_modes = wire_client_modes(config, scenario, store_backend)
         if getattr(config, "server_mode", "sync") == "async":
@@ -1688,7 +1702,7 @@ def valid_comparison_result(row: dict[str, object]) -> bool:
         return (operations > 0 and success == operations and errors == 0 and complete and
                 math.isfinite(throughput) and throughput > 0 and
                 all(math.isfinite(float(row["latency_ms"][key])) and float(row["latency_ms"][key]) >= 0
-                    for key in ("p95", "p99")))
+                    for key in ("p50", "p95", "p99")))
     except (KeyError, TypeError, ValueError):
         return False
 
@@ -1718,7 +1732,7 @@ def sync_async_comparisons(results: list[dict[str, object]], repetitions: int) -
             summary["throughput_ops_per_sec"] = statistics.median(float(row["throughput_ops_per_sec"]) for row in rows)
             summary["throughput_min"] = min(float(row["throughput_ops_per_sec"]) for row in rows)
             summary["throughput_max"] = max(float(row["throughput_ops_per_sec"]) for row in rows)
-            for metric in ("p95", "p99"):
+            for metric in ("p50", "p95", "p99"):
                 summary[f"{metric}_ms"] = statistics.median(float(row["latency_ms"][metric]) for row in rows)
             for dimension, prefix in ((FIRST_EVENT_LATENCY_FIELD, "first_event"),
                                       (STREAM_COMPLETION_LATENCY_FIELD, "stream_completion")):
@@ -1760,20 +1774,22 @@ def append_sync_async_markdown(lines: list[str], results: list[dict[str, object]
                    else "Medians of repeated runs. ")
     lines.extend(["", "## Sync / async server comparison", "",
                   measurement + "Client mode is explicit. Ratio = async/sync server ops/s: >1 gain, <1 regression, ~1 parity. "
-                  "Callback-driven async client coverage: GetTask and ListTasks. Streaming uses the common observer API and runs once per server mode. "
+                  "Callback-driven async client coverage includes task creation, GetTask, and ListTasks. "
+                  "Streaming and subscription rows use the observer label and run once per server mode. "
+                  "To compare server modes, read across one client row. To compare client modes, read down one server column. "
                   "Missing or invalid pairs are n/a; no speed thresholds. All supported in-memory wire workloads run both modes. "
                   "PostgreSQL async is n/a (not measured); its wire tables below are sync-only. "
                   "In-process measurements bypass the gRPC/HTTP server transports. "
                   "Raw repetitions remain in results.json and results.csv."])
     append_collapsible_start(lines, "Show sync/async throughput and latency")
     lines.extend(["",
-                  "| Scenario | Transport | Store | c | Client | Sync server ops/s | Async server ops/s | Ratio | Sync p95/p99 ms | Async p95/p99 ms | Ops/s range sync / async | Errors sync/async |",
+                  "| Scenario | Transport | Store | c | Client | Sync server ops/s | Async server ops/s | Ratio | Sync p50/p95/p99 ms | Async p50/p95/p99 ms | Ops/s range sync / async | Errors sync/async |",
                   "| --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- | --- | --- | --- |"])
     comparisons = [row for row in sync_async_comparisons(results, repetitions) if row["store_backend"] == "inmemory"]
     for row in comparisons:
         modes = row["modes"]
         def latency(mode: str) -> str:
-            return "/".join(comparison_value(modes, mode, metric) for metric in ("p95_ms", "p99_ms"))
+            return "/".join(comparison_value(modes, mode, metric) for metric in ("p50_ms", "p95_ms", "p99_ms"))
         errors = "/".join(str(modes[mode]["errors"]) if mode in modes else "n/a" for mode in SERVER_MODES)
         ranges = ("n/a" if repetitions == 1 else " / ".join(
             f"{comparison_value(modes, mode, 'throughput_min', 0)}–{comparison_value(modes, mode, 'throughput_max', 0)}"
