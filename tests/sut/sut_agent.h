@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -59,6 +60,7 @@ struct SutAgentOptions final {
   std::string signing_private_key = {};
   std::string extended_card_mode = std::string(kExtendedCardModeConfigured);
   bool allow_opaque_input = false;
+  std::chrono::milliseconds blocking_get_task_delay{};
 };
 
 [[nodiscard]] core::Result<SutAgentOptions> ReadSutAgentOptions(bool asynchronous = false);

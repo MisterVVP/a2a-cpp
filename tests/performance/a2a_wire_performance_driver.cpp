@@ -15,6 +15,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -41,6 +42,7 @@ namespace {
 
 using namespace a2a::tests::performance;
 
+constexpr std::string_view kFixedTaskIdFlag = "--fixed-task-id";
 constexpr std::string_view kWireDriverType = "wire_tck_sut";
 constexpr int kEndpointReserveSlack = 32;
 constexpr int kListFixtureTaskCount = 20;
@@ -49,6 +51,7 @@ constexpr int kFocusedListConfigCount = 3;
 constexpr std::string_view kSyncClient = "sync";
 constexpr std::string_view kAsyncClient = "async";
 constexpr std::string_view kObserverClient = "observer";
+constexpr std::string_view kMeanOutstandingField = "mean_outstanding_requests";
 constexpr std::string_view kClientExecutionModeField = "client_execution_mode";
 constexpr std::string_view kCreateTaskMessagePrefix = "wire-create";
 constexpr std::string_view kWarmupCreateTaskMessagePrefix = "wire-warmup-create";
@@ -153,6 +156,7 @@ struct WireOptions final {
   std::string client_mode = std::string(kSyncClient);
   int stream_hold_ms = 0;
   std::vector<std::string> scenarios;
+  std::string fixed_task_id;
 };
 
 std::string HttpEndpoint(const WireOptions& options, std::string_view path) {
@@ -764,8 +768,10 @@ ScenarioResult RunWireScenario(const WireOptions& options, const std::string& sc
 
   const a2a::client::CallOptions fixture_call_options = MakeCallOptions();
   FocusedWireFixture focused_fixture;
-  if (!PrepareFocusedWireFixture(clients.front().get(), scenario, options.requests, "wire-measured-fixture",
-                                 fixture_call_options, &focused_fixture)) {
+  if (!options.fixed_task_id.empty()) {
+    focused_fixture.task_id = options.fixed_task_id;
+  } else if (!PrepareFocusedWireFixture(clients.front().get(), scenario, options.requests, "wire-measured-fixture",
+                                        fixture_call_options, &focused_fixture)) {
     ScenarioResult failed;
     failed.scenario = scenario;
     failed.operations = options.requests;
@@ -866,6 +872,11 @@ bool ParseScenarios(std::string_view value, WireOptions* options) {
 }
 
 bool ValidateOptions(const WireOptions& options) {
+  if (!options.fixed_task_id.empty() &&
+      (options.scenarios.size() != 1 || options.scenarios.front() != kScenarioGetTaskExistingTask)) {
+    std::cerr << kFixedTaskIdFlag << " requires an explicit GetTask_ExistingTask scenario\n";
+    return false;
+  }
   for (const std::string& scenario : options.scenarios) {
     if (!IsWireScenario(scenario, options.transport) ||
         (options.client_mode == kAsyncClient && !SupportsAsyncClient(scenario))) {
@@ -906,6 +917,8 @@ bool ParseArgs(int argc, char** argv, WireOptions* options) {
       options->warmup_seconds = std::atof(raw_value);
     } else if (arg == "--duration-seconds") {
       options->duration_seconds = std::atof(raw_value);
+    } else if (arg == kFixedTaskIdFlag) {
+      options->fixed_task_id = value;
     } else if (arg == "--scenarios") {
       if (!ParseScenarios(value, options)) {
         return false;
@@ -982,6 +995,12 @@ google::protobuf::Struct BuildResultObject(const WireOptions& options, const Sce
   }
   SetStringField(&object, "driver_type", kWireDriverType);
   SetStringField(&object, "transport_path", TransportPath(options.transport));
+  if (IsComparableReadScenario(result.scenario) && result.errors == 0 && result.measured_duration_seconds > 0.0) {
+    const auto total_latency_ms = std::accumulate(result.latencies.begin(), result.latencies.end(), 0.0);
+    const auto measurement_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::duration<double>(result.measured_duration_seconds));
+    SetNumberField(&object, kMeanOutstandingField, total_latency_ms / measurement_ms.count());
+  }
   AddLatencyField(&object, result);
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   google::protobuf::Struct diagnostics;

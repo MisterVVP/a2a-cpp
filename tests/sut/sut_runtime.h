@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <cstddef>
 #include <memory>
 #include <string_view>
 
@@ -43,11 +45,16 @@ class SutRuntimeObserver {
   SutRuntimeObserver() = default;
 };
 
+enum class SutReadFixture { kDisabled, kListener, kDispatcher };
+
 struct SutRuntimeOptions final {
   std::string_view display_name;
   SutRuntimeObserver* observer = nullptr;
   bool asynchronous = false;
   bool allow_opaque_input = false;
+  std::chrono::milliseconds get_task_delay{};
+  std::size_t http_pending_limit = 0;
+  SutReadFixture read_fixture = SutReadFixture::kDisabled;
 };
 
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options);
