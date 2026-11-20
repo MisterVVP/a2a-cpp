@@ -62,8 +62,8 @@ struct EventHttpServerOptions final {
 };
 
 // Optional a2a::asio listener. Linux epoll, macOS kqueue, Windows IOCP through
-// Boost.Asio. Exactly one network thread; application code always runs on the
-// fixed application pool. Configure before Start; Start is single-use.
+// Boost.Asio. Each connection stays on one network thread. Application code
+// runs on the application pool or the native dispatcher. Start is single-use.
 // Shutdown is thread-safe and non-blocking. Join/destruction must run outside
 // callbacks, drain cancellation and wait for legacy blocking work to return.
 class EventHttpServer final : private core::NonCopyableOrMovable {

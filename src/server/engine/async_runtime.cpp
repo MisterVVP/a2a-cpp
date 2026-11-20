@@ -30,7 +30,9 @@ struct AsyncRuntime::Impl final {
 };
 AsyncRuntime::AsyncRuntime(std::shared_ptr<CoroutineAgentExecutor> executor, AsyncDispatcherOptions execution,
                            AsyncRuntimeOptions runtime)
-    : impl_(std::make_unique<Impl>(std::move(executor), std::move(execution), runtime)) {}
+    : impl_(std::make_unique<Impl>(std::move(executor), std::move(execution), runtime)) {
+  impl_->dispatcher->EnableNativeHttpIngress();
+}
 AsyncRuntime::~AsyncRuntime() {
   try {
     Join();

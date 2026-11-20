@@ -16,7 +16,13 @@
 #include "a2a/server/security_policy.h"
 #include "a2a/server/server_interceptor.h"
 
+namespace a2a::server {
+class EventHttpServer;
+}
+
 namespace a2a::server::engine {
+class AsyncRuntime;
+
 struct AsyncDispatcherOptions final {
   static constexpr std::size_t kDefaultMaxInFlight = 1024;
   std::size_t max_in_flight = kDefaultMaxInFlight;
@@ -67,6 +73,11 @@ class AsyncDispatcher final : private core::NonCopyableOrMovable {
   void Shutdown();
 
  private:
+  friend class AsyncRuntime;
+  friend class a2a::server::EventHttpServer;
+  void EnableNativeHttpIngress();
+  [[nodiscard]] boost::asio::any_io_executor NativeHttpIngressExecutor() const;
+
   [[nodiscard]] core::Result<std::shared_ptr<RequestExecution>> DispatchImpl(
       DispatchRequest request, RequestContext metadata, TransportCompletion completion,
       std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream);

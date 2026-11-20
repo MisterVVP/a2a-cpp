@@ -63,10 +63,14 @@ of this codec.
 
 ## Scheduling and ownership
 
-The listener owns a fixed application `io_context` pool, separate from its
-network thread. Every handler, stream producer and cancellation observer runs
-off the network thread. Native dispatcher execution runs on the application's
-own `AsyncRuntime` or supplied executor. With the dispatcher-backed listener
+The listener owns a fixed application `io_context` pool and a separate network
+loop. On hosts reporting at least four hardware threads, the dispatcher-backed
+listener starts distributing new sockets across a second loop once four
+connections are active. Each socket stays on its assigned loop, and
+both loops share the server's connection and pending request limits. Handlers,
+stream producers, and cancellation observers run on application workers. Native
+dispatcher execution runs on the application's `AsyncRuntime` or supplied
+executor. With the dispatcher-backed listener
 constructor, the dispatcher serializes replies and submits their writes
 directly to the network executor. A stream's first event can share the write
 that commits the response headers. `MakeEventHttpHandler` remains available
@@ -164,8 +168,8 @@ native application coroutines do.
 
 Configure the listener before its single successful `Start()`. `port()` returns
 the bound port, including when port zero requested an ephemeral port.
-`Shutdown()` is thread-safe, wakes the network loop, closes admission and sockets,
-and posts cancellation off the network thread. `Join()` and destruction drain
+`Shutdown()` is thread-safe, wakes the network loops, closes admission and sockets,
+and posts cancellation to application workers. `Join()` and destruction drain
 network/HTTP callbacks and release handler captures on application workers.
 Call them outside runtime callbacks. Blocking legacy work must eventually
 return, and custom producers must honor cancellation.
