@@ -23,10 +23,3 @@ includes throughput, completion and first-event p95/p99, protocol/network errors
 process CPU, resident memory and thread counts. A separate 64-idle-client case
 measures resource use without application work. Results are local workload
 evidence; account for client and host CPU limits when interpreting throughput.
-
-For interleaved server builds, immediate HTTP fixtures and controlled I/O
-waits, see the [async server execution investigation](async-server-execution.md).
-For matched REST and JSON-RPC stage costs and pinned executor comparisons, see
-the [GetTask pipeline measurements](request-pipeline.md).
-For independently controlled worker pools and the serialization follow-up, see
-the [async server optimization report](server-optimization-followup.md).
