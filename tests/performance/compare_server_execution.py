@@ -21,6 +21,9 @@ PIPELINE_MODES = {"pipeline-sync", "pipeline-async"}
 FIXTURE_MODES = RAW_FIXTURE_MODES | PIPELINE_MODES
 ASYNC_MODES = {"async", "pipeline-async"}
 HOST = "127.0.0.1"
+TOPOLOGY_MARKER = "A2A_PERFORMANCE_TOPOLOGY "
+TOPOLOGY_KEYS = {"ingress", "dispatcher_threads", "http_application_threads",
+                 "http_network_threads", "http_pending_limit"}
 
 
 def pinned(cpus, *command):
@@ -67,6 +70,22 @@ def cpu_allocation(server_spec, client_spec):
             "available_cpus": sorted(affinity)}
 
 
+def read_topology(startup, expected):
+    candidates = [line.removeprefix(TOPOLOGY_MARKER) for line in startup.splitlines()
+                  if line.startswith(TOPOLOGY_MARKER)]
+    if len(candidates) != 1:
+        raise ValueError("Expected one effective topology marker from the SUT")
+    assignments = candidates[0].split()
+    fields = dict(field.split("=", 1) for field in assignments)
+    if len(assignments) != len(TOPOLOGY_KEYS) or fields.keys() != TOPOLOGY_KEYS:
+        raise ValueError("Unexpected topology fields from the SUT")
+    topology = {key: value if key == "ingress" else int(value) for key, value in fields.items()}
+    if (topology["http_network_threads"] not in (1, 2)
+            or any(topology[key] != value for key, value in expected.items())):
+        raise ValueError(f"SUT reported topology {topology}, expected {expected}")
+    return topology
+
+
 def sample(args, variant, transport, scenario, client, delay, concurrency, repetition):
     name, mode, binary = variant
     port = find_available_sut_port(HOST)
@@ -80,10 +99,11 @@ def sample(args, variant, transport, scenario, client, delay, concurrency, repet
     fixed_real_task = args.seed_pipeline_task and mode not in FIXTURE_MODES and scenario == GET_TASK
     if args.seed_pipeline_task:
         environment["A2A_PERF_SEED_PIPELINE_TASK"] = str(int(fixed_real_task))
-    threads, ingress = args.executors.get(name, (None, None))
-    if threads is not None:
-        environment.update(A2A_PERF_DISPATCHER_THREADS=threads, A2A_PERF_INGRESS=ingress)
-        coordinates.update(dispatcher_threads=int(threads), ingress=ingress)
+    threads, ingress = args.executors.get(name, (None, "shared"))
+    network, application = args.http_worker_counts.get(name, (None, None))
+    environment.update(A2A_PERF_DISPATCHER_THREADS=str(threads or 0), A2A_PERF_INGRESS=ingress,
+                       A2A_PERF_HTTP_NETWORK_THREADS=str(network or 0),
+                       A2A_PERF_HTTP_APPLICATION_THREADS=str(application or 0))
     with log_path.open("w", encoding="utf-8") as log:
         server = subprocess.Popen(pinned(args.server_cpus, str(Path(binary).resolve()), f"{HOST}:{port}"),
                                   env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -92,8 +112,13 @@ def sample(args, variant, transport, scenario, client, delay, concurrency, repet
         startup = log_path.read_text(encoding="utf-8")
         if mode != "sync" and f"A2A_PERFORMANCE_MODE server={mode} " not in startup:
             raise ValueError(f"{name} did not confirm the requested server mode")
-        if threads is not None and f" ingress={ingress} dispatcher_threads={threads}\n" not in startup:
-            raise ValueError(f"{name} did not confirm the requested executor configuration")
+        if mode in ASYNC_MODES and (args.require_topology or threads is not None or name in args.http_worker_counts):
+            expected_topology = {"dispatcher_threads": threads or 2, "ingress": ingress,
+                                 "http_application_threads": application or 4,
+                                 "http_pending_limit": args.http_pending_limit or 128}
+            if network is not None:
+                expected_topology["http_network_threads"] = network
+            coordinates.update(read_topology(startup, expected_topology))
         resources = {}
         command = pinned(args.client_cpus, str(args.driver.resolve()), "--transport", transport,
                          "--store-backend", "inmemory", "--host", HOST, "--port", str(port),
@@ -136,7 +161,9 @@ def schedule(args):
                 mode = variant[1]
                 if mode in RAW_FIXTURE_MODES and transport != "http_json":
                     continue
-                if mode in FIXTURE_MODES and (transport == "grpc" or scenario != GET_TASK or delay):
+                if mode in FIXTURE_MODES and (scenario != GET_TASK or delay):
+                    continue
+                if transport not in args.transport_filters.get(variant[0], args.transports):
                     continue
                 yield variant, transport, scenario, client, delay, concurrency, repetition
 
@@ -150,6 +177,10 @@ def main():
     parser.add_argument("--client-cpus")
     parser.add_argument("--require-dedicated-cores", action="store_true")
     parser.add_argument("--executor", action="append", nargs=3, metavar=("LABEL", "THREADS", "INGRESS"), default=[])
+    parser.add_argument("--http-workers", action="append", nargs=3, metavar=("LABEL", "NETWORK", "APPLICATION"),
+                        default=[], help="Set HTTP worker counts with 'auto' for either default")
+    parser.add_argument("--only-transports", action="append", nargs="+", metavar="LABEL_OR_TRANSPORT", default=[])
+    parser.add_argument("--require-topology", action="store_true", help="Require effective async SUT settings")
     parser.add_argument("--seed-pipeline-task", action="store_true")
     parser.add_argument("--concurrency", nargs="+", type=int, default=[1, 16, 64, 256])
     parser.add_argument("--transports", nargs="+", choices=["http_json", "jsonrpc", "grpc"],
@@ -182,7 +213,20 @@ def main():
         if (modes.get(name) not in ASYNC_MODES or name in args.executors or not threads.isascii()
                 or not threads.isdecimal() or not 1 <= int(threads) <= 64 or ingress not in {"shared", "separate"}):
             parser.error("Each executor needs a distinct async server label, 1–64 threads, and shared or separate ingress")
-        args.executors[name] = (str(int(threads)), ingress)
+        args.executors[name] = (int(threads), ingress)
+    args.http_worker_counts = {}
+    for name, network, application in args.http_workers:
+        if (modes.get(name) not in ASYNC_MODES or name in args.http_worker_counts
+                or network not in {"auto", "1", "2"}
+                or application not in {"auto", *(str(number) for number in range(1, 65))}):
+            parser.error("Each HTTP worker setting needs a distinct async server label, network count auto/1/2, "
+                         "and application count auto/1–64")
+        args.http_worker_counts[name] = tuple(None if count == "auto" else int(count) for count in (network, application))
+    args.transport_filters = {}
+    for name, *transports in args.only_transports:
+        if name not in modes or name in args.transport_filters or not transports or not set(transports) <= set(args.transports):
+            parser.error("Each transport filter needs a distinct server label and transports in the selected matrix")
+        args.transport_filters[name] = transports
     if args.require_dedicated_cores:
         if not args.server_cpus or not args.client_cpus:
             parser.error("Dedicated cores require both server and client CPU lists")

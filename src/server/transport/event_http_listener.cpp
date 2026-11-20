@@ -42,6 +42,8 @@ constexpr std::size_t kHexBytes = sizeof(std::size_t) * 2U;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 constexpr std::string_view kHeartbeat = ": heartbeat\n\n";
 constexpr unsigned kDualNetworkMinimumCpus = 4;
+constexpr std::size_t kSingleNetworkWorker = 1;
+constexpr std::size_t kDualNetworkWorkers = 2;
 constexpr std::size_t kSecondNetworkConnectionThreshold = 4;
 constexpr int kNetworkConcurrency = 1;
 constexpr std::string_view kStopped = "HTTP connection closed";
@@ -769,10 +771,11 @@ namespace http_runtime {
 
 struct EventHttpListener::Impl final {
   Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options,
-       asio::any_io_executor native_executor)
+       asio::any_io_executor native_executor, std::size_t network_workers)
       : runtime(std::make_shared<Runtime>(
             std::move(handler), std::move(options), std::move(native_executor),
-            native_handler && std::thread::hardware_concurrency() >= kDualNetworkMinimumCpus)) {
+            network_workers == 0 ? native_handler && std::thread::hardware_concurrency() >= kDualNetworkMinimumCpus
+                                 : network_workers == kDualNetworkWorkers)) {
     if (native_handler) {
       runtime->native_handler = std::make_shared<const NativeHttpHandler>(std::move(native_handler));
     }
@@ -846,9 +849,14 @@ struct EventHttpListener::Impl final {
 };
 
 EventHttpListener::EventHttpListener(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler,
-                                     EventHttpServerOptions options, asio::any_io_executor native_executor)
+                                     EventHttpServerOptions options, asio::any_io_executor native_executor,
+                                     std::size_t network_workers)
     : impl_(std::make_unique<Impl>(std::move(handler), std::move(native_handler), std::move(options),
-                                   std::move(native_executor))) {}
+                                   std::move(native_executor), network_workers)) {}
+
+std::size_t EventHttpListener::network_workers() const noexcept {
+  return impl_->runtime->secondary ? kDualNetworkWorkers : kSingleNetworkWorker;
+}
 
 EventHttpListener::~EventHttpListener() {
   try {

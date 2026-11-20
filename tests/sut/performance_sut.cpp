@@ -19,12 +19,16 @@ constexpr auto kServerModeEnvironment = "A2A_PERF_SERVER_MODE";
 constexpr auto kDelayEnvironment = "A2A_PERF_GET_TASK_DELAY_MS";
 constexpr auto kHttpPendingEnvironment = "A2A_PERF_HTTP_PENDING_LIMIT";
 constexpr auto kDispatcherThreadsEnvironment = "A2A_PERF_DISPATCHER_THREADS";
+constexpr auto kHttpApplicationThreadsEnvironment = "A2A_PERF_HTTP_APPLICATION_THREADS";
+constexpr auto kHttpNetworkThreadsEnvironment = "A2A_PERF_HTTP_NETWORK_THREADS";
 constexpr auto kIngressEnvironment = "A2A_PERF_INGRESS";
 constexpr auto kSeedPipelineEnvironment = "A2A_PERF_SEED_PIPELINE_TASK";
 constexpr int kSeedPipelineEnabled = 1;
 constexpr int kMaxDelayMs = 1000;
 constexpr int kMaxHttpPending = 1024;
 constexpr int kMaxDispatcherThreads = 64;
+constexpr int kMaxHttpApplicationThreads = 64;
+constexpr int kMaxHttpNetworkThreads = 2;
 constexpr auto kStoreBackendEnvironment = "A2A_TCK_STORE_BACKEND";
 constexpr std::string_view kSyncMode = "sync";
 constexpr std::string_view kListenerMode = "listener";
@@ -99,8 +103,7 @@ int main(int argc, char** argv) noexcept {
     }
     const auto dispatcher_threads =
         static_cast<std::size_t>(ReadLimit(kDispatcherThreadsEnvironment, kMaxDispatcherThreads));
-    std::cerr << "A2A_PERFORMANCE_MODE server=" << mode << " executor=" << executor << " ingress=" << ingress
-              << " dispatcher_threads=" << dispatcher_threads << '\n';
+    std::cerr << "A2A_PERFORMANCE_MODE server=" << mode << " executor=" << executor << '\n';
     a2a::tests::sut::PerformanceSutDiagnostics diagnostics;
     return a2a::tests::sut::RunSutRuntime(
         argc, argv,
@@ -112,9 +115,14 @@ int main(int argc, char** argv) noexcept {
          .http_pending_limit = static_cast<std::size_t>(ReadLimit(kHttpPendingEnvironment, kMaxHttpPending)),
          .read_fixture = fixture,
          .dispatcher_threads = dispatcher_threads,
+         .http_application_threads =
+             static_cast<std::size_t>(ReadLimit(kHttpApplicationThreadsEnvironment, kMaxHttpApplicationThreads)),
+         .http_network_threads =
+             static_cast<std::size_t>(ReadLimit(kHttpNetworkThreadsEnvironment, kMaxHttpNetworkThreads)),
          .ingress =
              ingress == kSharedIngress ? a2a::tests::sut::SutIngress::kShared : a2a::tests::sut::SutIngress::kSeparate,
-         .seed_pipeline_task = ReadLimit(kSeedPipelineEnvironment, kSeedPipelineEnabled) == kSeedPipelineEnabled});
+         .seed_pipeline_task = ReadLimit(kSeedPipelineEnvironment, kSeedPipelineEnabled) == kSeedPipelineEnabled,
+         .report_topology = true});
   } catch (const std::exception& ex) {
     std::cerr << "Unhandled performance SUT exception: " << ex.what() << '\n';
     return 1;

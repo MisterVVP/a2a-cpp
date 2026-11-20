@@ -19,6 +19,9 @@ class AgentCard;
 }  // namespace lf::a2a::v1
 
 namespace a2a::server {
+namespace http_runtime {
+class EventHttpServerAccess;
+}
 namespace engine {
 class AsyncDispatcher;
 }  // namespace engine
@@ -82,6 +85,9 @@ class EventHttpServer final : private core::NonCopyableOrMovable {
   void Join();
 
  private:
+  friend class http_runtime::EventHttpServerAccess;
+  EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
+                  const ServerBindingsOptions& bindings, EventHttpServerOptions options, std::size_t network_workers);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

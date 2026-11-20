@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../../src/server/transport/event_http_listener.h"
+#include "../../src/server/transport/event_http_server_access.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
@@ -45,6 +46,8 @@ constexpr auto kTimeout = std::chrono::seconds(5);
 constexpr std::string_view kEchoCloseRequest = "POST / HTTP/1.1\r\nContent-Length: 4\r\nConnection: close\r\n\r\necho";
 constexpr std::string_view kEchoPayload = "echo";
 constexpr std::size_t kIdleClients = 64;
+constexpr std::size_t kTwoNetworkWorkers = 2;
+constexpr std::size_t kNetworkWorkerTestConnections = 8;
 
 core::Result<HttpServerResponse> Respond(const HttpServerRequest& /*request*/) {
   HttpServerResponse response;
@@ -307,6 +310,29 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   server.Join();
   runtime.Shutdown();
   runtime.Join();
+}
+
+TEST(EventHttpServer, NativeNetworkWorkersServeConcurrentConnections) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  auto server = http_runtime::EventHttpServerAccess::MakeNative(runtime.dispatcher(), {}, {}, {}, kTwoNetworkWorkers);
+  EXPECT_EQ(http_runtime::EventHttpServerAccess::NetworkWorkers(server), kTwoNetworkWorkers);
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  std::vector<Tcp::socket> peers;
+  peers.reserve(kNetworkWorkerTestConnections);
+  for (std::size_t i = 0; i < kNetworkWorkerTestConnections; ++i) {
+    peers.push_back(Connect(io, server));
+  }
+  for (auto& peer : peers) {
+    asio::write(peer, asio::buffer(kRestTask));
+  }
+  for (auto& peer : peers) {
+    const auto response = ReadToEnd(peer);
+    EXPECT_TRUE(response.starts_with(kStatus)) << response;
+    EXPECT_NE(response.find(kNativeId), std::string::npos) << response;
+  }
+  server.Shutdown();
+  server.Join();
 }
 
 TEST(EventHttpServer, NativeDiscoveryCompletesWithoutDispatchAdmission) {

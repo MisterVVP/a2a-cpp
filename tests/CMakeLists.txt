@@ -1242,6 +1242,7 @@ gtest_discover_tests(security_transport_integration_test PROPERTIES LABELS "secu
 
 if(A2A_ENABLE_ASIO)
   target_link_libraries(sut_runtime PUBLIC a2a::asio)
+  target_include_directories(sut_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(sut_runtime PRIVATE A2A_SUT_ASYNC=1)
   add_executable(async_sut_test unit/async_sut_test.cpp)
   target_link_libraries(async_sut_test PRIVATE sut_runtime GTest::gtest_main)
