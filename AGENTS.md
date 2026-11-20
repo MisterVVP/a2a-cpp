@@ -184,7 +184,7 @@ The Go-only benchmark-runner exception above is exempt from this gate.
   1. Start SUT: `./scripts/run_tck_sut.sh`
   2. Run TCK mandatory suite via `.github/workflows/tck.yml` equivalent entrypoint (for example the detected script in checked out TCK repo, such as `scripts/run_tck.sh` / `scripts/run_mandatory.sh`).
   3. Stop SUT: `./scripts/stop_tck_sut.sh`
-- Do not commit or push code unless TCK mandatory compliance is **100%** (all mandatory requirements passing).
+- Require **no regression in TCK compliance** compared with the target branch before committing or pushing. Compare mandatory-suite results using the same TCK revision, suite, SUT configuration, and transports. The mandatory score must stay at least as high, and each previously passing mandatory requirement must still pass.
 - If TCK tooling or fixtures are unavailable locally, treat that as a blocking issue and resolve environment parity before committing.
 
 ## AI agent pre-commit hygiene

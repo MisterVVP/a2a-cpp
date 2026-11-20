@@ -48,6 +48,9 @@ struct EventHttpServerOptions final {
   static constexpr std::size_t kDefaultBufferBytes = 1024U * 1024U;
   static constexpr auto kDefaultIdleTimeout = std::chrono::seconds(30);
   static constexpr auto kDefaultHeartbeat = std::chrono::seconds(15);
+  static constexpr std::size_t kMaxNetworkWorkers = 2;
+  static constexpr unsigned kDefaultNetworkAutoMinCpus = 4;
+  static constexpr std::size_t kDefaultSecondNetworkConnectionThreshold = 4;
   std::string address = "127.0.0.1";
   std::uint16_t port = 0;
   std::size_t max_connections = kDefaultConnections;
@@ -59,6 +62,12 @@ struct EventHttpServerOptions final {
   HttpAdapter::Options codec = {};
   std::chrono::milliseconds idle_timeout = kDefaultIdleTimeout;
   std::chrono::milliseconds heartbeat_interval = kDefaultHeartbeat;
+  // Select one or two socket workers. Zero selects automatically, with one worker for generic handlers.
+  std::size_t network_workers = 0;
+  // Minimum hardware concurrency for a second worker when a native binding uses automatic selection.
+  unsigned network_auto_min_cpus = kDefaultNetworkAutoMinCpus;
+  // Active connections before new connections alternate between socket workers. Zero enables immediate alternation.
+  std::size_t second_network_connection_threshold = kDefaultSecondNetworkConnectionThreshold;
 };
 
 // Optional a2a::asio listener. Linux epoll, macOS kqueue, Windows IOCP through
@@ -78,6 +87,8 @@ class EventHttpServer final : private core::NonCopyableOrMovable {
   ~EventHttpServer();
   [[nodiscard]] core::Result<void> Start();
   [[nodiscard]] std::uint16_t port() const noexcept;
+  // The resolved socket worker count for this server.
+  [[nodiscard]] std::size_t network_workers() const noexcept;
   void Shutdown();
   void Join();
 
