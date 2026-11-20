@@ -9,7 +9,6 @@
 
 #include "event_http_listener.h"
 #include "event_http_native_handler.h"
-#include "event_http_server_access.h"
 
 namespace a2a::server {
 namespace {
@@ -45,20 +44,11 @@ EventHttpServer::EventHttpServer(AsyncHandler handler, EventHttpServerOptions op
           std::move(handler), http_runtime::NativeHttpHandler{}, std::move(options)))) {}
 
 EventHttpServer::EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
-                                 const ServerBindingsOptions& bindings, EventHttpServerOptions options)
-    : EventHttpServer(std::move(dispatcher), std::move(card), bindings, std::move(options), 0) {}
-
-EventHttpServer::EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
-                                 const ServerBindingsOptions& bindings, EventHttpServerOptions options,
-                                 std::size_t network_workers) {
+                                 const ServerBindingsOptions& bindings, EventHttpServerOptions options) {
   auto native_executor = dispatcher ? dispatcher->NativeHttpIngressExecutor() : boost::asio::any_io_executor{};
   auto handler = http_runtime::EventHttpHandlerFactory::Native(std::move(dispatcher), std::move(card), bindings);
   impl_ = std::make_unique<Impl>(std::make_unique<http_runtime::EventHttpListener>(
-      AsyncHandler{}, std::move(handler), std::move(options), std::move(native_executor), network_workers));
-}
-
-std::size_t http_runtime::EventHttpServerAccess::NetworkWorkers(const EventHttpServer& server) noexcept {
-  return server.impl_->listener->network_workers();
+      AsyncHandler{}, std::move(handler), std::move(options), std::move(native_executor)));
 }
 
 EventHttpServer::~EventHttpServer() = default;
@@ -66,6 +56,8 @@ EventHttpServer::~EventHttpServer() = default;
 core::Result<void> EventHttpServer::Start() { return impl_->listener->Start(); }
 
 std::uint16_t EventHttpServer::port() const noexcept { return impl_->listener->port(); }
+
+std::size_t EventHttpServer::network_workers() const noexcept { return impl_->listener->network_workers(); }
 
 void EventHttpServer::Shutdown() { impl_->listener->Shutdown(); }
 

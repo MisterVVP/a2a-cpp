@@ -41,16 +41,13 @@ constexpr std::size_t kReadBytes = 8192;
 constexpr std::size_t kHexBytes = sizeof(std::size_t) * 2U;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
 constexpr std::string_view kHeartbeat = ": heartbeat\n\n";
-constexpr unsigned kDualNetworkMinimumCpus = 4;
-constexpr std::size_t kSingleNetworkWorker = 1;
-constexpr std::size_t kDualNetworkWorkers = 2;
-constexpr std::size_t kSecondNetworkConnectionThreshold = 4;
 constexpr int kNetworkConcurrency = 1;
 constexpr std::string_view kStopped = "HTTP connection closed";
 constexpr std::string_view kOutputLimit = "HTTP output exceeds configured bound";
 constexpr std::string_view kThreadFailure = "HTTP worker startup failed";
 constexpr std::string_view kAlreadyStarted = "HTTP server Start is single-use";
 constexpr std::string_view kInvalidOptions = "HTTP server requires a handler, positive limits and idle timeout";
+constexpr std::string_view kInvalidNetworkWorkers = "HTTP network worker count must be automatic, one, or two";
 constexpr std::string_view kBlockingStream = "Legacy stream writers require the synchronous HTTP runtime";
 
 std::string Chunk(std::string_view bytes) {
@@ -105,13 +102,22 @@ struct NetworkLoop final {
 
 struct Runtime final {
   Runtime(EventHttpServer::AsyncHandler callback, EventHttpServerOptions settings,
-          asio::any_io_executor native_executor, bool use_second_loop)
+          asio::any_io_executor native_executor, bool native_binding)
       : handler(std::move(callback)),
         options(std::move(settings)),
         native_executor(std::move(native_executor)),
-        secondary(use_second_loop ? std::make_unique<NetworkLoop>() : nullptr),
+        secondary(UseSecondLoop(options, native_binding) ? std::make_unique<NetworkLoop>() : nullptr),
         acceptor(network.context),
-        drains(secondary ? 2U : 1U) {}
+        drains(NetworkWorkers()) {}
+
+  static bool UseSecondLoop(const EventHttpServerOptions& options, bool native_binding) {
+    if (options.network_workers != 0) {
+      return options.network_workers == EventHttpServerOptions::kMaxNetworkWorkers;
+    }
+    return native_binding && std::thread::hardware_concurrency() >= options.network_auto_min_cpus;
+  }
+
+  [[nodiscard]] std::size_t NetworkWorkers() const noexcept { return 1U + (secondary ? 1U : 0U); }
 
   bool ReserveRequest() noexcept {
     auto count = pending.load(std::memory_order_relaxed);
@@ -771,11 +777,9 @@ namespace http_runtime {
 
 struct EventHttpListener::Impl final {
   Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options,
-       asio::any_io_executor native_executor, std::size_t network_workers)
-      : runtime(std::make_shared<Runtime>(
-            std::move(handler), std::move(options), std::move(native_executor),
-            network_workers == 0 ? native_handler && std::thread::hardware_concurrency() >= kDualNetworkMinimumCpus
-                                 : network_workers == kDualNetworkWorkers)) {
+       asio::any_io_executor native_executor)
+      : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options), std::move(native_executor),
+                                          static_cast<bool>(native_handler))) {
     if (native_handler) {
       runtime->native_handler = std::make_shared<const NativeHttpHandler>(std::move(native_handler));
     }
@@ -820,9 +824,10 @@ struct EventHttpListener::Impl final {
   }
   void Accept() {
     const auto active = runtime->active_connections.load(std::memory_order_relaxed);
-    auto& loop = runtime->secondary && active >= kSecondNetworkConnectionThreshold && accept_to_secondary
-                     ? *runtime->secondary
-                     : runtime->network;
+    auto& loop =
+        runtime->secondary && active >= runtime->options.second_network_connection_threshold && accept_to_secondary
+            ? *runtime->secondary
+            : runtime->network;
     accept_to_secondary = !accept_to_secondary;
     runtime->acceptor.async_accept(loop.context, [this, &loop](IoError error, Tcp::socket socket) {
       if (error) {
@@ -849,14 +854,11 @@ struct EventHttpListener::Impl final {
 };
 
 EventHttpListener::EventHttpListener(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler,
-                                     EventHttpServerOptions options, asio::any_io_executor native_executor,
-                                     std::size_t network_workers)
+                                     EventHttpServerOptions options, asio::any_io_executor native_executor)
     : impl_(std::make_unique<Impl>(std::move(handler), std::move(native_handler), std::move(options),
-                                   std::move(native_executor), network_workers)) {}
+                                   std::move(native_executor))) {}
 
-std::size_t EventHttpListener::network_workers() const noexcept {
-  return impl_->runtime->secondary ? kDualNetworkWorkers : kSingleNetworkWorker;
-}
+std::size_t EventHttpListener::network_workers() const noexcept { return impl_->runtime->NetworkWorkers(); }
 
 EventHttpListener::~EventHttpListener() {
   try {
@@ -874,6 +876,9 @@ core::Result<void> EventHttpListener::Start() {
   const auto& options = rt.options;
   if (impl_->started) {
     return core::Error::Validation(std::string(kAlreadyStarted));
+  }
+  if (options.network_workers > EventHttpServerOptions::kMaxNetworkWorkers) {
+    return core::Error::Validation(std::string(kInvalidNetworkWorkers));
   }
   if ((!rt.handler && !rt.native_handler) || options.max_connections == 0 || options.max_pending_requests == 0 ||
       options.application_threads == 0 || options.max_input_bytes == 0 || options.max_output_bytes <= kHexBytes + 4U ||

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <limits>
 #include <memory>
 #include <stop_token>
 #include <string>
@@ -17,7 +18,6 @@
 #include <vector>
 
 #include "../../src/server/transport/event_http_listener.h"
-#include "../../src/server/transport/event_http_server_access.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
@@ -46,7 +46,8 @@ constexpr auto kTimeout = std::chrono::seconds(5);
 constexpr std::string_view kEchoCloseRequest = "POST / HTTP/1.1\r\nContent-Length: 4\r\nConnection: close\r\n\r\necho";
 constexpr std::string_view kEchoPayload = "echo";
 constexpr std::size_t kIdleClients = 64;
-constexpr std::size_t kTwoNetworkWorkers = 2;
+constexpr std::size_t kOneNetworkWorker = 1;
+constexpr auto kTwoNetworkWorkers = EventHttpServerOptions::kMaxNetworkWorkers;
 constexpr std::size_t kNetworkWorkerTestConnections = 8;
 
 core::Result<HttpServerResponse> Respond(const HttpServerRequest& /*request*/) {
@@ -314,8 +315,9 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
 
 TEST(EventHttpServer, NativeNetworkWorkersServeConcurrentConnections) {
   engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
-  auto server = http_runtime::EventHttpServerAccess::MakeNative(runtime.dispatcher(), {}, {}, {}, kTwoNetworkWorkers);
-  EXPECT_EQ(http_runtime::EventHttpServerAccess::NetworkWorkers(server), kTwoNetworkWorkers);
+  EventHttpServer server(runtime.dispatcher(), {}, {},
+                         {.network_workers = kTwoNetworkWorkers, .second_network_connection_threshold = 0});
+  EXPECT_EQ(server.network_workers(), kTwoNetworkWorkers);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   std::vector<Tcp::socket> peers;
@@ -333,6 +335,25 @@ TEST(EventHttpServer, NativeNetworkWorkersServeConcurrentConnections) {
   }
   server.Shutdown();
   server.Join();
+}
+
+TEST(EventHttpServer, NetworkWorkersRespectAutomaticAndExplicitSelection) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  EventHttpServer automatic_dual(runtime.dispatcher(), {}, {}, {.network_auto_min_cpus = 0});
+  EXPECT_EQ(automatic_dual.network_workers(), kTwoNetworkWorkers);
+  EventHttpServer automatic_single(runtime.dispatcher(), {}, {},
+                                   {.network_auto_min_cpus = std::numeric_limits<unsigned>::max()});
+  EXPECT_EQ(automatic_single.network_workers(), kOneNetworkWorker);
+  EventHttpServer explicit_single(runtime.dispatcher(), {}, {},
+                                  {.network_workers = kOneNetworkWorker, .network_auto_min_cpus = 0});
+  EXPECT_EQ(explicit_single.network_workers(), kOneNetworkWorker);
+  EventHttpServer generic(Respond, {.network_auto_min_cpus = 0});
+  EXPECT_EQ(generic.network_workers(), kOneNetworkWorker);
+}
+
+TEST(EventHttpServer, RejectsUnsupportedNetworkWorkerCount) {
+  EventHttpServer server(Respond, {.network_workers = kTwoNetworkWorkers + kOneNetworkWorker});
+  EXPECT_FALSE(server.Start().ok());
 }
 
 TEST(EventHttpServer, NativeDiscoveryCompletesWithoutDispatchAdmission) {

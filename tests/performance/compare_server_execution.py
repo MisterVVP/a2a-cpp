@@ -80,7 +80,7 @@ def read_topology(startup, expected):
     if len(assignments) != len(TOPOLOGY_KEYS) or fields.keys() != TOPOLOGY_KEYS:
         raise ValueError("Unexpected topology fields from the SUT")
     topology = {key: value if key == "ingress" else int(value) for key, value in fields.items()}
-    if (topology["http_network_threads"] not in (1, 2)
+    if (any(topology[key] <= 0 for key in TOPOLOGY_KEYS - {"ingress"})
             or any(topology[key] != value for key, value in expected.items())):
         raise ValueError(f"SUT reported topology {topology}, expected {expected}")
     return topology
@@ -113,11 +113,10 @@ def sample(args, variant, transport, scenario, client, delay, concurrency, repet
         if mode != "sync" and f"A2A_PERFORMANCE_MODE server={mode} " not in startup:
             raise ValueError(f"{name} did not confirm the requested server mode")
         if mode in ASYNC_MODES and (args.require_topology or threads is not None or name in args.http_worker_counts):
-            expected_topology = {"dispatcher_threads": threads or 2, "ingress": ingress,
-                                 "http_application_threads": application or 4,
-                                 "http_pending_limit": args.http_pending_limit or 128}
-            if network is not None:
-                expected_topology["http_network_threads"] = network
+            expected_topology = {"ingress": ingress}
+            overrides = {"dispatcher_threads": threads, "http_application_threads": application,
+                         "http_pending_limit": args.http_pending_limit, "http_network_threads": network}
+            expected_topology.update({key: value for key, value in overrides.items() if value})
             coordinates.update(read_topology(startup, expected_topology))
         resources = {}
         command = pinned(args.client_cpus, str(args.driver.resolve()), "--transport", transport,

@@ -29,7 +29,6 @@
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
 #include "a2a/server/http_server_response_builder.h"
-#include "server/transport/event_http_server_access.h"
 #include "sut/pipeline_read_fixture.h"
 #include "sut/sut_coroutine_executor.h"
 #endif
@@ -162,6 +161,7 @@ server::EventHttpServerOptions EventOptions(const SutConfig& listener, const Sut
   if (options.http_application_threads != 0) {
     settings.application_threads = options.http_application_threads;
   }
+  settings.network_workers = options.http_network_threads;
   return settings;
 }
 constexpr auto kSignalInterval = std::chrono::milliseconds(10);
@@ -175,16 +175,14 @@ class EventSutServer final {
  public:
   EventSutServer(std::shared_ptr<server::engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
                  const SutConfig& listener, const SutRuntimeOptions& options)
-      : server_(server::http_runtime::EventHttpServerAccess::MakeNative(
-            std::move(dispatcher), std::move(card), BindingOptions(), EventOptions(listener, options),
-            options.http_network_threads)) {
+      : server_(std::move(dispatcher), std::move(card), BindingOptions(), EventOptions(listener, options)) {
     if (options.report_topology) {
       const auto settings = EventOptions(listener, options);
       std::cerr << "A2A_PERFORMANCE_TOPOLOGY ingress="
                 << (options.ingress == SutIngress::kShared ? "shared" : "separate")
                 << " dispatcher_threads=" << DispatcherThreads(options)
                 << " http_application_threads=" << settings.application_threads
-                << " http_network_threads=" << server::http_runtime::EventHttpServerAccess::NetworkWorkers(server_)
+                << " http_network_threads=" << server_.network_workers()
                 << " http_pending_limit=" << settings.max_pending_requests << '\n';
     }
   }
