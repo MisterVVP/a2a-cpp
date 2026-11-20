@@ -22,11 +22,14 @@
 #include "sut/tck_sut_http_server.h"
 #include "sut/tck_sut_store.h"
 #ifdef A2A_SUT_ASYNC
+#include <boost/asio/thread_pool.hpp>
+
 #include "a2a/core/http_constants.h"
 #include "a2a/core/protojson.h"
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
 #include "a2a/server/http_server_response_builder.h"
+#include "sut/pipeline_read_fixture.h"
 #include "sut/sut_coroutine_executor.h"
 #endif
 
@@ -141,10 +144,15 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
 }
 
 #ifdef A2A_SUT_ASYNC
-server::EventHttpServerOptions EventOptions(const SutConfig& listener, std::size_t pending_limit) {
-  return {.address = listener.host,
-          .port = static_cast<std::uint16_t>(listener.port),
-          .max_pending_requests = pending_limit == 0 ? server::EventHttpServerOptions::kDefaultPending : pending_limit};
+server::EventHttpServerOptions EventOptions(const SutConfig& listener, const SutRuntimeOptions& options) {
+  using EventOptions = server::EventHttpServerOptions;
+  const auto pending_limit = options.http_pending_limit;
+  constexpr std::size_t kSeparateIngressWorkers = 1;
+  return {
+      .address = listener.host,
+      .port = static_cast<std::uint16_t>(listener.port),
+      .max_pending_requests = pending_limit == 0 ? EventOptions::kDefaultPending : pending_limit,
+      .application_threads = options.dispatcher_threads == 0 ? EventOptions::kDefaultWorkers : kSeparateIngressWorkers};
 }
 constexpr auto kSignalInterval = std::chrono::milliseconds(10);
 void WaitForSignal(const volatile std::sig_atomic_t& keep_running) {
@@ -156,8 +164,8 @@ void WaitForSignal(const volatile std::sig_atomic_t& keep_running) {
 class EventSutServer final {
  public:
   EventSutServer(std::shared_ptr<server::engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
-                 const SutConfig& listener, std::size_t pending_limit)
-      : server_(std::move(dispatcher), std::move(card), BindingOptions(), EventOptions(listener, pending_limit)) {}
+                 const SutConfig& listener, const SutRuntimeOptions& options)
+      : server_(std::move(dispatcher), std::move(card), BindingOptions(), EventOptions(listener, options)) {}
   bool Start() { return server_.Start().ok(); }
   static void AcceptConnections(const volatile std::sig_atomic_t& keep_running) { WaitForSignal(keep_running); }
   void ShutdownActiveSockets() { server_.Shutdown(); }
@@ -190,7 +198,7 @@ int ServeReadFixture(server::EventHttpServer& server) {
 }
 
 int RunReadFixture(const SutConfig& listener, const SutRuntimeOptions& options) {
-  const auto event_options = EventOptions(listener, options.http_pending_limit);
+  const auto event_options = EventOptions(listener, options);
   if (options.read_fixture == SutReadFixture::kDispatcher) {
     server::engine::AsyncRuntime engine(std::make_shared<ImmediateRead>());
     server::EventHttpServer server(engine.dispatcher(), {}, BindingOptions(), event_options);
@@ -215,23 +223,71 @@ int RunReadFixture(const SutConfig& listener, const SutRuntimeOptions& options) 
   return ServeReadFixture(server);
 }
 
+template <typename Run>
+int WithDispatcher(std::shared_ptr<server::engine::CoroutineAgentExecutor> executor,
+                   server::engine::AsyncDispatcherOptions execution, const SutRuntimeOptions& options, Run run) {
+  using server::engine::AsyncDispatcher;
+  using server::engine::AsyncRuntime;
+  using server::engine::AsyncRuntimeOptions;
+  const auto threads =
+      options.dispatcher_threads == 0 ? AsyncRuntimeOptions::kDefaultThreads : options.dispatcher_threads;
+  if (options.ingress == SutIngress::kShared) {
+    AsyncRuntime engine(std::move(executor), std::move(execution), {.threads = threads});
+    return run(engine.dispatcher());
+  }
+  boost::asio::thread_pool pool(threads);
+  auto dispatcher = std::make_shared<AsyncDispatcher>(std::move(executor), pool.get_executor(), std::move(execution));
+  const int status = run(dispatcher);
+  dispatcher->Shutdown();
+  pool.join();
+  return status;
+}
+
+int RunPipelineFixture(const SutConfig& listener, const SutRuntimeOptions& options) {
+  auto executor = std::make_shared<PipelineReadFixture>();
+  auto interceptor = std::make_shared<PipelinePolicy>();
+  if (options.asynchronous) {
+    server::engine::AsyncDispatcherOptions execution;
+    execution.interceptors = {interceptor};
+    return WithDispatcher(executor, std::move(execution), options, [&](auto dispatcher) {
+      server::EventHttpServer server(std::move(dispatcher), {}, BindingOptions(), EventOptions(listener, options));
+      return ServeReadFixture(server);
+    });
+  }
+  server::Dispatcher dispatcher(executor.get(), {interceptor});
+  server::ServerBindings bindings(dispatcher, {}, BindingOptions());
+  TckHttpServer http(listener.host, listener.port, bindings.http_mux(), nullptr);
+  SetSignals();
+  if (!http.Start()) {
+    return 1;
+  }
+  http.AcceptConnections(kKeepRunning);
+  http.ShutdownActiveSockets();
+  http.JoinConnections();
+  return 0;
+}
+
 int RunAsync(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOptions& options) {
   server::engine::AsyncDispatcherOptions execution;
   execution.agent_card_provider = agent.card_provider();
   execution.interceptors = {agent.interceptor()};
   execution.security_policy = agent.security_policy();
   execution.task_store = agent.task_store();
-  server::engine::AsyncRuntime engine(std::make_shared<SutCoroutineExecutor>(agent, options.get_task_delay),
-                                      std::move(execution));
-  server::ServerBindings bindings(engine.dispatcher(), agent.agent_card(), BindingOptions());
-  EventSutServer http(engine.dispatcher(), agent.agent_card(), config.listener, options.http_pending_limit);
-  return Serve(agent, config, options, bindings, http);
+  return WithDispatcher(std::make_shared<SutCoroutineExecutor>(agent, options.get_task_delay), std::move(execution),
+                        options, [&](const auto& dispatcher) {
+                          server::ServerBindings bindings(dispatcher, agent.agent_card(), BindingOptions());
+                          EventSutServer http(dispatcher, agent.agent_card(), config.listener, options);
+                          return Serve(agent, config, options, bindings, http);
+                        });
 }
 #endif
 }  // namespace
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options) {
   auto config = ReadSutServerConfig(argc, argv);
 #ifdef A2A_SUT_ASYNC
+  if (config.ok() && options.read_fixture == SutReadFixture::kPipeline) {
+    return RunPipelineFixture(config.value().listener, options);
+  }
   if (config.ok() && options.read_fixture != SutReadFixture::kDisabled) {
     return RunReadFixture(config.value().listener, options);
   }
@@ -251,6 +307,10 @@ int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options) {
   }
   SutAgent agent(std::move(stores.value()), config.value().endpoints, std::move(agent_options.value()));
 #ifdef A2A_SUT_ASYNC
+  if (options.seed_pipeline_task && !SeedPipelineTask(*agent.task_store()).ok()) {
+    std::cerr << kPipelineStoreSetupFailed << '\n';
+    return 1;
+  }
   if (options.asynchronous) {
     return RunAsync(agent, config.value(), options);
   }

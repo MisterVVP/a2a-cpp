@@ -45,7 +45,8 @@ class SutRuntimeObserver {
   SutRuntimeObserver() = default;
 };
 
-enum class SutReadFixture { kDisabled, kListener, kDispatcher };
+enum class SutReadFixture { kDisabled, kListener, kDispatcher, kPipeline };
+enum class SutIngress { kShared, kSeparate };
 
 struct SutRuntimeOptions final {
   std::string_view display_name;
@@ -55,6 +56,9 @@ struct SutRuntimeOptions final {
   std::chrono::milliseconds get_task_delay{};
   std::size_t http_pending_limit = 0;
   SutReadFixture read_fixture = SutReadFixture::kDisabled;
+  std::size_t dispatcher_threads = 0;
+  SutIngress ingress = SutIngress::kShared;
+  bool seed_pipeline_task = false;
 };
 
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options);
