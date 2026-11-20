@@ -28,3 +28,5 @@ For interleaved server builds, immediate HTTP fixtures and controlled I/O
 waits, see the [async server execution investigation](async-server-execution.md).
 For matched REST and JSON-RPC stage costs and pinned executor comparisons, see
 the [GetTask pipeline measurements](request-pipeline.md).
+For independently controlled worker pools and the serialization follow-up, see
+the [async server optimization report](server-optimization-followup.md).
