@@ -223,6 +223,11 @@ constexpr std::string_view kRpcStreamBody =
 constexpr std::string_view kRestStreamBody =
     R"({"message":{"messageId":"m","role":"user","parts":[{"text":"hello"}]}})";
 constexpr std::string_view kNativeId = "native";
+constexpr std::string_view kDiscoveryName = "native-discovery";
+constexpr std::string_view kDiscoveryRequest = "GET /.well-known/agent-card.json HTTP/1.1\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kListTasksRequest =
+    "GET /a2a/tasks HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kRestStreamPath = "/a2a/message:stream";
 constexpr std::string_view kEmptySubscription = "GET /a2a/tasks/empty:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
@@ -242,6 +247,14 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     co_return task;
+  }
+  asio::awaitable<core::Result<ListTasksResponse>> ListTasks(ListTasksRequest /*request*/,
+                                                             engine::RequestExecutionContext /*context*/) override {
+    lf::a2a::v1::Task task;
+    task.set_id(std::string(kNativeId));
+    ListTasksResponse response;
+    response.tasks.push_back(std::move(task));
+    co_return response;
   }
   asio::awaitable<core::Result<void>> SendStreamingMessage(
       lf::a2a::v1::SendMessageRequest /*request*/, engine::RequestExecutionContext /*context*/,
@@ -280,8 +293,9 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
-  const std::vector<std::string> requests{std::string(kRestTask), Post(kRpcPath, kRpcBody),
-                                          Post(kRpcPath, kRpcStreamBody), Post(kRestStreamPath, kRestStreamBody)};
+  const std::vector<std::string> requests{std::string(kRestTask), std::string(kListTasksRequest),
+                                          Post(kRpcPath, kRpcBody), Post(kRpcPath, kRpcStreamBody),
+                                          Post(kRestStreamPath, kRestStreamBody)};
   for (const auto& request : requests) {
     auto socket = Connect(io, server);
     asio::write(socket, asio::buffer(request));
@@ -292,6 +306,25 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   server.Shutdown();
   server.Join();
   runtime.Shutdown();
+  runtime.Join();
+}
+
+TEST(EventHttpServer, NativeDiscoveryCompletesWithoutDispatchAdmission) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  lf::a2a::v1::AgentCard card;
+  card.set_name(std::string(kDiscoveryName));
+  EventHttpServer server(runtime.dispatcher(), std::move(card), {});
+  ASSERT_TRUE(server.Start().ok());
+  runtime.Shutdown();
+
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kDiscoveryRequest));
+  const auto response = ReadToEnd(peer);
+  EXPECT_TRUE(response.starts_with(kStatus)) << response;
+  EXPECT_NE(response.find(kDiscoveryName), std::string::npos) << response;
+  server.Shutdown();
+  server.Join();
   runtime.Join();
 }
 
@@ -395,47 +428,7 @@ TEST(EventHttpServer, ShutdownKeepsNativeHandlerAliveUntilInvocationReturns) {
 }
 
 constexpr std::string_view kSubscribeRequest = "GET /a2a/tasks/native:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
-constexpr std::string_view kCustomRestBase = "api/a2a/";
-constexpr std::string_view kTaskTarget = "/a2a/tasks/native";
-constexpr std::string_view kCustomTaskTarget = "/api/a2a/tasks/native?historyLength=1";
-constexpr std::string_view kRootTaskTarget = "/tasks/native";
-constexpr std::string_view kSubscriptionTarget = "/a2a/tasks/native:subscribe";
-constexpr std::string_view kPushConfigTarget = "/a2a/tasks/native/pushNotificationConfigs";
-constexpr std::string_view kTenantCardTarget = "/a2a/tasks/extendedAgentCard";
-constexpr std::string_view kEncodedTaskTarget = "/a2a/tasks/native%3Asubscribe";
-constexpr std::string_view kEmptyTaskTarget = "/a2a/tasks/";
 constexpr auto kBorrowedJoinObservation = std::chrono::milliseconds(50);
-
-HttpServerRequest IngressRequest(std::string_view target, std::string_view method = core::http::kMethodGet) {
-  HttpServerRequest request;
-  request.method = method;
-  request.target = target;
-  return request;
-}
-
-TEST(NativeGetTaskIngress, SelectsCanonicalTaskResourcesAtTheConfiguredBase) {
-  asio::io_context context;
-  const http_runtime::NativeGetTaskIngress configured(context.get_executor(), std::string(kCustomRestBase));
-  const http_runtime::NativeGetTaskIngress root(context.get_executor(), {});
-  const http_runtime::NativeGetTaskIngress disabled;
-  EXPECT_TRUE(configured.Accepts(IngressRequest(kCustomTaskTarget)));
-  EXPECT_FALSE(configured.Accepts(IngressRequest(kTaskTarget)));
-  EXPECT_TRUE(root.Accepts(IngressRequest(kRootTaskTarget)));
-  EXPECT_FALSE(disabled.Accepts(IngressRequest(kTaskTarget)));
-}
-
-TEST(NativeGetTaskIngress, ExcludesOtherOperationsAndAmbiguousPaths) {
-  asio::io_context context;
-  const http_runtime::NativeGetTaskIngress ingress(context.get_executor(), ServerBindingsOptions::kDefaultRestPath);
-  EXPECT_TRUE(ingress.Accepts(IngressRequest(kTaskTarget)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kTaskTarget, core::http::kMethodPost)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kRpcPath, core::http::kMethodPost)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kSubscriptionTarget)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kPushConfigTarget)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kTenantCardTarget)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kEncodedTaskTarget)));
-  EXPECT_FALSE(ingress.Accepts(IngressRequest(kEmptyTaskTarget)));
-}
 
 http_runtime::NativeHttpHandler BorrowedIngressHandler(asio::thread_pool::executor_type executor,
                                                        std::future<void>& released, std::atomic_bool& returned) {
@@ -449,20 +442,20 @@ http_runtime::NativeHttpHandler BorrowedIngressHandler(asio::thread_pool::execut
   };
 }
 
-TEST(EventHttpServer, JoinDrainsBorrowedGetTaskAfterItsResponseFinishes) {
+TEST(EventHttpServer, JoinDrainsBorrowedJsonRpcRequestAfterItsResponseFinishes) {
   asio::thread_pool pool(engine::AsyncRuntimeOptions::kDefaultThreads);
   std::promise<void> release;
   auto released = release.get_future();
   std::atomic_bool returned = false;
   const auto executor = pool.get_executor();
   http_runtime::EventHttpListener listener({}, BorrowedIngressHandler(executor, released, returned),
-                                           {.idle_timeout = kTimeout},
-                                           {executor, ServerBindingsOptions::kDefaultRestPath});
+                                           {.idle_timeout = kTimeout}, executor);
   ASSERT_TRUE(listener.Start().ok());
   asio::io_context io;
   Tcp::socket peer(io);
   peer.connect(Tcp::endpoint(asio::ip::address_v4::loopback(), listener.port()));
-  asio::write(peer, asio::buffer(kRestTask));
+  const auto request = Post(kRpcPath, kRpcBody);
+  asio::write(peer, asio::buffer(request));
   EXPECT_TRUE(ReadToEnd(peer).starts_with(kStatus));
   listener.Shutdown();
   auto joined = std::async(std::launch::async, [&listener, &returned] {

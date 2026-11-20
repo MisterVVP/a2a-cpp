@@ -3,6 +3,7 @@
 
 #include "a2a/server/event_http_server.h"
 
+#include <boost/asio/any_io_executor.hpp>
 #include <memory>
 #include <utility>
 
@@ -44,14 +45,10 @@ EventHttpServer::EventHttpServer(AsyncHandler handler, EventHttpServerOptions op
 
 EventHttpServer::EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
                                  const ServerBindingsOptions& bindings, EventHttpServerOptions options) {
-  http_runtime::NativeGetTaskIngress ingress;
-  if (dispatcher) {
-    ingress =
-        http_runtime::NativeGetTaskIngress(dispatcher->NativeHttpIngressExecutor(), bindings.rest.rest_api_base_path);
-  }
+  auto native_executor = dispatcher ? dispatcher->NativeHttpIngressExecutor() : boost::asio::any_io_executor{};
   auto handler = http_runtime::EventHttpHandlerFactory::Native(std::move(dispatcher), std::move(card), bindings);
   impl_ = std::make_unique<Impl>(std::make_unique<http_runtime::EventHttpListener>(
-      AsyncHandler{}, std::move(handler), std::move(options), std::move(ingress)));
+      AsyncHandler{}, std::move(handler), std::move(options), std::move(native_executor)));
 }
 
 EventHttpServer::~EventHttpServer() = default;
