@@ -62,8 +62,13 @@ after a result has been selected does not replace it.
 
 Callbacks can run before the initiating method returns. Calls may complete in any
 order, and callbacks for different operations may run concurrently. Application
-completion callbacks and `AfterCall` run on shared completion workers, away from libcurl reactors and native gRPC callback threads. Callback
-exceptions are contained. Keep captures alive until callback completion; dropping
+completion callbacks and `AfterCall` run on shared completion workers, away from
+libcurl reactors and native gRPC callback threads. Internal HTTP adapter stages
+can continue on an existing completion worker instead of queueing final delivery
+again. Initiation still defers callbacks, including calls started from another
+callback. The HTTP client and SDK retain separate scopes for their independent
+shutdown and deadline ownership. Callback exceptions are contained.
+Keep captures alive until callback completion; dropping
 an `AsyncHandle` leaves the operation running. The SDK owns the request's network
 storage, the callback, and the copied options needed by interceptors. Callback
 code can start more calls or destroy its client. Avoid blocking the shared
@@ -91,8 +96,9 @@ owner of the async component; releasing its last owner drains outstanding calls.
 unary calls. Shutdown from outside SDK callbacks drains their callbacks.
 Reentrant shutdown from an SDK callback cancels calls and lets already queued
 callbacks finish with owned state. Keep observer-owned state alive until any
-concurrent `StreamObserver` callbacks return as well. The gRPC transport also
-drains native unary cleanup; contexts, messages and stubs stay alive through native completion.
+concurrent `StreamObserver` callbacks return as well. External gRPC shutdown also
+drains native unary and streaming cleanup; contexts, messages and stubs stay alive
+through native completion.
 Simultaneous async initiations and `Destroy()` are supported. As with other C++
 objects, callers must keep the client object alive while invoking its methods.
 

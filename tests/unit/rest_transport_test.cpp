@@ -411,7 +411,7 @@ TEST(RestTransportTest, ErrorStatusPreservesProtocolAndValidationClassification)
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().http_status, a2a::core::http::kStatusInternalServerError);
   EXPECT_EQ(response.value().headers.at(std::string(kContentTypeHeaderName)),
-            a2a::core::http::kContentTypeApplicationJson);
+            a2a::core::http::kContentTypeApplicationA2aJson);
   EXPECT_NE(response.value().body.find(kInternalErrorReason), std::string::npos);
   EXPECT_NE(response.value().body.find(kInternalStatusField), std::string::npos);
   executor.send_failure = a2a::core::Error::Validation(std::string(kRawValidationError));

@@ -7,8 +7,11 @@
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/this_coro.hpp>
 #include <boost/asio/thread_pool.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <chrono>
 #include <memory>
 #include <utility>
 
@@ -22,10 +25,11 @@ namespace a2a::tests::sut {
 // bounded adaptation; live subscriptions await the shared publication core.
 class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor {
  public:
-  explicit SutCoroutineExecutor(SutAgent& agent)
+  explicit SutCoroutineExecutor(SutAgent& agent, std::chrono::milliseconds get_task_delay = {})
       : agent_(agent),
         executor_(agent.executor()),
         in_memory_(dynamic_cast<server::InMemoryTaskStore*>(agent.task_store()) != nullptr),
+        get_task_delay_(get_task_delay),
         unary_(executor_) {}
   boost::asio::awaitable<core::Result<void>> SendStreamingMessage(
       lf::a2a::v1::SendMessageRequest request, server::engine::RequestExecutionContext context,
@@ -65,8 +69,10 @@ class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor
   }
   boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(
       lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context) override {
-    return Invoke(std::move(request), std::move(context), &server::AgentExecutor::GetTask,
-                  &server::engine::BlockingExecutorAdapter::GetTask);
+    if (get_task_delay_ == std::chrono::milliseconds::zero()) {
+      return InvokeGetTask(std::move(request), std::move(context));
+    }
+    return DelayedGetTask(std::move(request), std::move(context));
   }
   boost::asio::awaitable<core::Result<server::ListTasksResponse>> ListTasks(
       server::ListTasksRequest request, server::engine::RequestExecutionContext context) override {
@@ -103,6 +109,19 @@ class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor
   }
 
  private:
+  boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> InvokeGetTask(
+      lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context) {
+    return Invoke(std::move(request), std::move(context), &server::AgentExecutor::GetTask,
+                  &server::engine::BlockingExecutorAdapter::GetTask);
+  }
+
+  boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> DelayedGetTask(
+      lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context) {
+    boost::asio::steady_timer timer(co_await boost::asio::this_coro::executor, get_task_delay_);
+    co_await timer.async_wait(boost::asio::use_awaitable);
+    co_return co_await InvokeGetTask(std::move(request), std::move(context));
+  }
+
   template <typename Request, typename Response>
   boost::asio::awaitable<core::Result<Response>> Invoke(
       Request request, server::engine::RequestExecutionContext context,
@@ -157,6 +176,7 @@ class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor
   SutAgent& agent_;
   const std::shared_ptr<server::AgentExecutor> executor_;
   const bool in_memory_;
+  const std::chrono::milliseconds get_task_delay_;
   server::engine::BlockingExecutorAdapter unary_;
   boost::asio::thread_pool backend_{kBackendWorkers};
 };

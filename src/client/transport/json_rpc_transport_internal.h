@@ -13,13 +13,15 @@
 #include "a2a/core/error.h"
 #include "a2a/core/protojson.h"
 #include "a2a/http/http_client.h"
+#include "http_transport_internal.h"
 
 namespace a2a::client::json_rpc_internal {
 
 inline constexpr char kTransportName[] = "jsonrpc";
 
-[[nodiscard]] a2a::http::Request ToSharedHttpRequest(const HttpRequest& request);
-[[nodiscard]] HttpClientResponse ToClientHttpResponse(a2a::http::Response response);
+using http_transport_internal::OwnedHttpAsyncRequester;
+using http_transport_internal::ToClientHttpResponse;
+using http_transport_internal::ToSharedHttpRequest;
 [[nodiscard]] std::string JoinUrl(std::string_view interface_base_url);
 [[nodiscard]] core::Result<void> ValidateResponseVersion(const HttpClientResponse& response);
 [[nodiscard]] core::Error BuildJsonRpcEnvelopeError(std::string_view message, const HttpClientResponse& response);
@@ -44,8 +46,8 @@ template <typename T>
                                                           std::chrono::milliseconds default_timeout,
                                                           std::string request_body, const CallOptions& options);
 [[nodiscard]] std::shared_ptr<AsyncClientTransport> MakeAsyncTransport(
-    ResolvedInterface resolved_interface, HttpAsyncRequester requester, std::chrono::milliseconds default_timeout,
-    std::shared_ptr<RequestIdGenerator> id_generator);
+    ResolvedInterface resolved_interface, http_transport_internal::OwnedHttpAsyncRequester requester,
+    std::chrono::milliseconds default_timeout, std::shared_ptr<RequestIdGenerator> id_generator);
 [[nodiscard]] core::Result<void> ValidateJsonRpcHttpStatus(const HttpClientResponse& response);
 [[nodiscard]] core::Result<lf::a2a::v1::ListTasksResponse> ParseListTasksResult(const HttpClientResponse& response,
                                                                                 std::string_view expected_id);

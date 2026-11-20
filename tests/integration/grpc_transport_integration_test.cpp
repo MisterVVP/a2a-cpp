@@ -729,6 +729,32 @@ TEST(GrpcTransportIntegrationTest, ClientStreamCancellationCancelsServerSubscrip
   harness->server->Shutdown();
 }
 
+TEST(GrpcTransportIntegrationTest, DestroyCancelsNativeSubscriptionWithoutCancellingHandleFirst) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  auto client = BuildClient(harness->port);
+  auto recorder = std::make_shared<ControlledSubscriptionRecorder>();
+  harness->executor.RecordSubscribeCancellationFor(std::string(kClientCancelledSubscribeTaskId), recorder);
+  lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send.mutable_message()->set_task_id(std::string(kClientCancelledSubscribeTaskId));
+  ASSERT_TRUE(client->SendMessage(send).ok());
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kClientCancelledSubscribeTaskId));
+  RecordingObserver observer;
+  auto stream = client->SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok());
+  ASSERT_TRUE(observer.WaitForEventCount(1));
+  ASSERT_TRUE(recorder->WaitForPendingRead());
+  EXPECT_TRUE(client->Destroy().ok());
+  EXPECT_FALSE(stream.value()->IsActive());
+  EXPECT_TRUE(recorder->WaitForCancel());
+  EXPECT_EQ(recorder->CancelCount(), 1);
+  EXPECT_TRUE(observer.GetSnapshot().errors.empty());
+  EXPECT_EQ(observer.GetSnapshot().completed_count, 0);
+  harness->server->Shutdown();
+}
+
 TEST(GrpcTransportIntegrationTest, TimedClientStreamCancellationCancelsBothServerSessions) {
   for (const bool send_streaming_message : {false, true}) {
     SCOPED_TRACE(send_streaming_message);

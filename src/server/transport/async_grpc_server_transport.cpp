@@ -10,7 +10,6 @@
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <chrono>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -101,7 +100,6 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     }
     std::weak_ptr<State> owner;
     std::weak_ptr<engine::AsyncDispatcher> dispatcher;
-    std::function<void(core::Result<DispatchResponse>, RequestExecutionContext)> deliver;
     std::vector<std::string> extensions;
     std::mutex mutex;
     std::shared_ptr<RequestExecution> source;
@@ -155,16 +153,19 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       static boost::asio::awaitable<core::Result<void>> WriteOwned(std::shared_ptr<Session> session,
                                                                    lf::a2a::v1::StreamResponse event) {
         const auto scheduler = co_await boost::asio::this_coro::executor;
-        auto ack =
-            std::allocate_shared<Acknowledgement>(boost::asio::recycling_allocator<Acknowledgement>{}, scheduler, 1);
+        std::shared_ptr<Acknowledgement> ack;
         {
           std::lock_guard lock(session->mutex);
           if (session->reactor == nullptr || session->terminal.has_value() || session->writing) {
             co_return core::Error::Network(kStreamClosed);
           }
+          if (session->acknowledgement == nullptr) {
+            session->acknowledgement = std::allocate_shared<Acknowledgement>(
+                boost::asio::recycling_allocator<Acknowledgement>{}, scheduler, 1);
+          }
+          ack = session->acknowledgement;
           session->writing = true;
           session->current = std::move(event);
-          session->acknowledgement = ack;
           session->reactor->StartWrite(&session->current);
         }
         const bool ok = co_await ack->async_receive(boost::asio::use_awaitable);
@@ -203,6 +204,7 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
         session->terminal = ::grpc::Status(::grpc::StatusCode::CANCELLED, status.error_message());
         context_.TryCancel();
       } else {
+        session->acknowledgement.reset();
         Finish(status);
       }
     }
@@ -210,12 +212,10 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       const auto session = session_;
       std::lock_guard lock(session->mutex);
       session->writing = false;
-      auto ack = std::exchange(session->acknowledgement, nullptr);
-      if (ack != nullptr) {
-        (void)ack->try_send(boost::system::error_code{}, ok);
-      }
+      (void)session->acknowledgement->try_send(boost::system::error_code{}, ok);
       const auto terminal = session->terminal;
       if (terminal.has_value()) {
+        session->acknowledgement.reset();
         Finish(terminal.value());
       }
     }
@@ -316,12 +316,11 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       calls.emplace(call.get(), call);
     }
     auto* reactor = new Reactor<Response>(call, context, *response);
-    call->deliver = [reactor](auto result, const RequestExecutionContext& execution) {
-      reactor->Complete(std::move(result), execution);
-    };
     const auto admitted = dispatcher->Dispatch(
         std::move(routed.value()), std::move(metadata.value().request_context),
-        [call](auto result, const RequestExecutionContext& execution) { call->deliver(std::move(result), execution); },
+        [reactor](auto result, const RequestExecutionContext& execution) {
+          reactor->Complete(std::move(result), execution);
+        },
         SteadyDeadline(context.deadline()));
     if (!admitted.ok()) {
       reactor->Finish(GrpcErrorStatus(admitted.error(), &context, call->extensions));

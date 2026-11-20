@@ -22,8 +22,14 @@
 #include "sut/tck_sut_http_server.h"
 #include "sut/tck_sut_store.h"
 #ifdef A2A_SUT_ASYNC
+#include <boost/asio/thread_pool.hpp>
+
+#include "a2a/core/http_constants.h"
+#include "a2a/core/protojson.h"
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
+#include "a2a/server/http_server_response_builder.h"
+#include "sut/pipeline_read_fixture.h"
 #include "sut/sut_coroutine_executor.h"
 #endif
 
@@ -103,7 +109,7 @@ server::ServerBindingsOptions BindingOptions() {
   return options;
 }
 template <typename HttpListener>
-int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOptions& options,
+int Serve(SutAgent* agent, const SutServerConfig& config, const SutRuntimeOptions& options,
           server::ServerBindings& bindings, HttpListener& http) {
   SetSignals();
   auto credentials = GrpcCredentials();
@@ -125,7 +131,9 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
   }
   http.AcceptConnections(kKeepRunning);
   bindings.Shutdown();
-  agent.ShutdownSubscriptions();
+  if (agent != nullptr) {
+    agent->ShutdownSubscriptions();
+  }
   http.ShutdownActiveSockets();
   http.JoinConnections();
   std::cerr << options.display_name << kHttpJoined;
@@ -138,39 +146,164 @@ int Serve(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOption
 }
 
 #ifdef A2A_SUT_ASYNC
+std::size_t DispatcherThreads(const SutRuntimeOptions& options) {
+  return options.dispatcher_threads == 0 ? server::engine::AsyncRuntimeOptions::kDefaultThreads
+                                         : options.dispatcher_threads;
+}
+
+server::EventHttpServerOptions EventOptions(const SutConfig& listener, const SutRuntimeOptions& options) {
+  server::EventHttpServerOptions settings;
+  settings.address = listener.host;
+  settings.port = static_cast<std::uint16_t>(listener.port);
+  if (options.http_pending_limit != 0) {
+    settings.max_pending_requests = options.http_pending_limit;
+  }
+  if (options.http_application_threads != 0) {
+    settings.application_threads = options.http_application_threads;
+  }
+  settings.network_workers = options.http_network_threads;
+  return settings;
+}
+constexpr auto kSignalInterval = std::chrono::milliseconds(10);
+void WaitForSignal(const volatile std::sig_atomic_t& keep_running) {
+  while (keep_running != 0) {
+    std::this_thread::sleep_for(kSignalInterval);
+  }
+}
+
 class EventSutServer final {
  public:
-  EventSutServer(server::EventHttpServer::AsyncHandler handler, const SutConfig& listener)
-      : server_(std::move(handler), {.address = listener.host, .port = static_cast<std::uint16_t>(listener.port)}) {}
-  bool Start() { return server_.Start().ok(); }
-  static void AcceptConnections(const volatile std::sig_atomic_t& keep_running) {
-    constexpr auto kSignalInterval = std::chrono::milliseconds(10);
-    while (keep_running != 0) {
-      std::this_thread::sleep_for(kSignalInterval);
+  EventSutServer(std::shared_ptr<server::engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
+                 const SutConfig& listener, const SutRuntimeOptions& options)
+      : server_(std::move(dispatcher), std::move(card), BindingOptions(), EventOptions(listener, options)) {
+    if (options.report_topology) {
+      const auto settings = EventOptions(listener, options);
+      std::cerr << "A2A_PERFORMANCE_TOPOLOGY ingress="
+                << (options.ingress == SutIngress::kShared ? "shared" : "separate")
+                << " dispatcher_threads=" << DispatcherThreads(options)
+                << " http_application_threads=" << settings.application_threads
+                << " http_network_threads=" << server_.network_workers()
+                << " http_pending_limit=" << settings.max_pending_requests << '\n';
     }
   }
+  bool Start() { return server_.Start().ok(); }
+  static void AcceptConnections(const volatile std::sig_atomic_t& keep_running) { WaitForSignal(keep_running); }
   void ShutdownActiveSockets() { server_.Shutdown(); }
   void JoinConnections() { server_.Join(); }
 
  private:
   server::EventHttpServer server_;
 };
+class ImmediateRead final : public server::engine::CoroutineAgentExecutor {
+ public:
+  boost::asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(
+      lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext /*context*/) override {
+    lf::a2a::v1::Task task;
+    task.set_id(std::move(*request.mutable_id()));
+    co_return task;
+  }
+};
+
+constexpr auto kReadFixtureTask = "benchmark-task";
+
+int ServeReadFixture(server::EventHttpServer& server) {
+  SetSignals();
+  if (!server.Start().ok()) {
+    return 1;
+  }
+  WaitForSignal(kKeepRunning);
+  server.Shutdown();
+  server.Join();
+  return 0;
+}
+
+int RunReadFixture(const SutConfig& listener, const SutRuntimeOptions& options) {
+  const auto event_options = EventOptions(listener, options);
+  if (options.read_fixture == SutReadFixture::kDispatcher) {
+    server::engine::AsyncRuntime engine(std::make_shared<ImmediateRead>());
+    server::EventHttpServer server(engine.dispatcher(), {}, BindingOptions(), event_options);
+    return ServeReadFixture(server);
+  }
+  lf::a2a::v1::Task task;
+  task.set_id(kReadFixtureTask);
+  auto body = core::MessageToJson(task);
+  if (!body.ok()) {
+    return 1;
+  }
+  auto response =
+      server::HttpServerResponseBuilder()
+          .WithStatus(core::http::kStatusOk)
+          .WithHeader(core::http::kContentTypeHeaderName, std::string(core::http::kContentTypeApplicationA2aJson))
+          .WithA2aVersion()
+          .WithActivatedExtensions({std::string(kRequiredExtensionUri)})
+          .WithBody(std::move(body.value()))
+          .Build();
+  server::EventHttpServer server(
+      [response = std::move(response)](const server::HttpServerRequest&) { return response; }, event_options);
+  return ServeReadFixture(server);
+}
+
+template <typename Run>
+int WithDispatcher(std::shared_ptr<server::engine::CoroutineAgentExecutor> executor,
+                   server::engine::AsyncDispatcherOptions execution, const SutRuntimeOptions& options, Run run) {
+  using server::engine::AsyncDispatcher;
+  using server::engine::AsyncRuntime;
+  const auto threads = DispatcherThreads(options);
+  if (options.ingress == SutIngress::kShared) {
+    AsyncRuntime engine(std::move(executor), std::move(execution), {.threads = threads});
+    return run(engine.dispatcher());
+  }
+  boost::asio::thread_pool pool(threads);
+  auto dispatcher = std::make_shared<AsyncDispatcher>(std::move(executor), pool.get_executor(), std::move(execution));
+  const int status = run(dispatcher);
+  dispatcher->Shutdown();
+  pool.join();
+  return status;
+}
+
+int RunPipelineFixture(const SutServerConfig& config, const SutRuntimeOptions& options) {
+  auto executor = std::make_shared<PipelineReadFixture>();
+  auto interceptor = std::make_shared<PipelinePolicy>();
+  if (options.asynchronous) {
+    server::engine::AsyncDispatcherOptions execution;
+    execution.interceptors = {interceptor};
+    return WithDispatcher(executor, std::move(execution), options, [&](const auto& dispatcher) {
+      server::ServerBindings bindings(dispatcher, {}, BindingOptions());
+      EventSutServer http(dispatcher, {}, config.listener, options);
+      return Serve(nullptr, config, options, bindings, http);
+    });
+  }
+  server::Dispatcher dispatcher(executor.get(), {interceptor});
+  server::ServerBindings bindings(dispatcher, {}, BindingOptions());
+  TckHttpServer http(config.listener.host, config.listener.port, bindings.http_mux(), nullptr);
+  return Serve(nullptr, config, options, bindings, http);
+}
+
 int RunAsync(SutAgent& agent, const SutServerConfig& config, const SutRuntimeOptions& options) {
   server::engine::AsyncDispatcherOptions execution;
   execution.agent_card_provider = agent.card_provider();
   execution.interceptors = {agent.interceptor()};
   execution.security_policy = agent.security_policy();
   execution.task_store = agent.task_store();
-  server::engine::AsyncRuntime engine(std::make_shared<SutCoroutineExecutor>(agent), std::move(execution));
-  server::ServerBindings bindings(engine.dispatcher(), agent.agent_card(), BindingOptions());
-  EventSutServer http(server::MakeEventHttpHandler(engine.dispatcher(), agent.agent_card(), BindingOptions()),
-                      config.listener);
-  return Serve(agent, config, options, bindings, http);
+  return WithDispatcher(std::make_shared<SutCoroutineExecutor>(agent, options.get_task_delay), std::move(execution),
+                        options, [&](const auto& dispatcher) {
+                          server::ServerBindings bindings(dispatcher, agent.agent_card(), BindingOptions());
+                          EventSutServer http(dispatcher, agent.agent_card(), config.listener, options);
+                          return Serve(&agent, config, options, bindings, http);
+                        });
 }
 #endif
 }  // namespace
 int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options) {
   auto config = ReadSutServerConfig(argc, argv);
+#ifdef A2A_SUT_ASYNC
+  if (config.ok() && options.read_fixture == SutReadFixture::kPipeline) {
+    return RunPipelineFixture(config.value(), options);
+  }
+  if (config.ok() && options.read_fixture != SutReadFixture::kDisabled) {
+    return RunReadFixture(config.value().listener, options);
+  }
+#endif
   auto agent_options = ReadSutAgentOptions(options.asynchronous);
   auto stores = CreateStoreBundleFromEnvironment();
   if (!config.ok() || !agent_options.ok() || !stores.ok()) {
@@ -180,14 +313,22 @@ int RunSutRuntime(int argc, char** argv, const SutRuntimeOptions& options) {
     }
     return 1;
   }
+  agent_options.value().allow_opaque_input = options.allow_opaque_input;
+  if (!options.asynchronous) {
+    agent_options.value().blocking_get_task_delay = options.get_task_delay;
+  }
   SutAgent agent(std::move(stores.value()), config.value().endpoints, std::move(agent_options.value()));
 #ifdef A2A_SUT_ASYNC
+  if (options.seed_pipeline_task && !SeedPipelineTask(*agent.task_store()).ok()) {
+    std::cerr << kPipelineStoreSetupFailed << '\n';
+    return 1;
+  }
   if (options.asynchronous) {
     return RunAsync(agent, config.value(), options);
   }
 #endif
   server::ServerBindings bindings(agent.dispatcher(), agent.agent_card(), BindingOptions());
   TckHttpServer http(config.value().listener.host, config.value().listener.port, bindings.http_mux(), options.observer);
-  return Serve(agent, config.value(), options, bindings, http);
+  return Serve(&agent, config.value(), options, bindings, http);
 }
 }  // namespace a2a::tests::sut

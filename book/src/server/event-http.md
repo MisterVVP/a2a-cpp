@@ -15,7 +15,7 @@ a2a::server::engine::AsyncRuntime application(executor);
 a2a::server::EventHttpServerOptions limits;
 limits.port = 8080;
 a2a::server::EventHttpServer listener(
-    a2a::server::MakeEventHttpHandler(application.dispatcher(), card), limits);
+    application.dispatcher(), card, a2a::server::ServerBindingsOptions{}, limits);
 auto started = listener.Start();
 if (!started.ok()) {
     throw std::runtime_error(std::string(started.error().message()));
@@ -63,10 +63,18 @@ of this codec.
 
 ## Scheduling and ownership
 
-The listener owns a fixed application `io_context` pool, separate from its
-network thread. Every handler, stream producer and cancellation observer runs
-off the network thread. Native dispatcher execution runs on the application's
-own `AsyncRuntime` or supplied executor. Its existing admission and cancellation
+The listener owns a fixed application `io_context` pool and a separate network
+loop. On hosts reporting at least four hardware threads, the dispatcher-backed
+listener starts distributing new sockets across a second loop once four
+connections are active. Each socket stays on its assigned loop, and
+both loops share the server's connection and pending request limits. Handlers,
+stream producers, and cancellation observers run on application workers. Native
+dispatcher execution runs on the application's `AsyncRuntime` or supplied
+executor. With the dispatcher-backed listener
+constructor, the dispatcher serializes replies and submits their writes
+directly to the network executor. A stream's first event can share the write
+that commits the response headers. `MakeEventHttpHandler` remains available
+for callers composing their own handler. Its existing admission and cancellation
 contracts remain authoritative; the HTTP runtime does not implement another
 application dispatcher.
 
@@ -135,6 +143,11 @@ heartbeats never accumulate behind a stalled write. Finite completion writes a
 final chunk and permits connection reuse. A request's `Connection: close` still
 closes after its chunked response completes.
 
+Ready socket writes can complete immediately on the network executor, with
+application acknowledgements delivered off that thread. Chunk framing reuses
+owned event buffers where capacity permits. These paths retain the same output
+bounds and socket-acceptance acknowledgement contract.
+
 Disconnect and shutdown wake mailbox waits and socket writes, and call the
 existing dispatcher's cancellation entrypoint. `RequestExecution` arbitrates
 completion/cancellation races and runs application cleanup exactly once. Server
@@ -155,8 +168,8 @@ native application coroutines do.
 
 Configure the listener before its single successful `Start()`. `port()` returns
 the bound port, including when port zero requested an ephemeral port.
-`Shutdown()` is thread-safe, wakes the network loop, closes admission and sockets,
-and posts cancellation off the network thread. `Join()` and destruction drain
+`Shutdown()` is thread-safe, wakes the network loops, closes admission and sockets,
+and posts cancellation to application workers. `Join()` and destruction drain
 network/HTTP callbacks and release handler captures on application workers.
 Call them outside runtime callbacks. Blocking legacy work must eventually
 return, and custom producers must honor cancellation.
@@ -188,3 +201,8 @@ README. The runner records throughput, completion and first-event p95/p99,
 errors, CPU, resident memory and process threads. Short finite streams incur
 additional executor scheduling and awaited write acknowledgements; use the
 comparison to assess the tradeoff for your workload.
+
+The network executor completes each request after the socket accepts the unary
+response or final stream chunk. It then releases the pending request slot and
+can process the next request on that connection. Stream producers still await
+socket acceptance of each event.

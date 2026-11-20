@@ -9,12 +9,15 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <limits>
+#include <memory>
 #include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "../../src/server/transport/event_http_listener.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
@@ -31,6 +34,7 @@ constexpr std::string_view kStatus = "HTTP/1.1 200 OK";
 constexpr std::string_view kOverload = "503 Service Unavailable";
 constexpr std::string_view kBody = "ok";
 constexpr std::string_view kEvent = "data: hello\n\n";
+constexpr std::string_view kChunkedEvent = "d\r\ndata: hello\n\n\r\n";
 constexpr std::string_view kInitialEvent = "data: initial";
 constexpr std::string_view kEventEnd = "\n\n";
 constexpr std::size_t kInitialPadding = 64;
@@ -42,6 +46,9 @@ constexpr auto kTimeout = std::chrono::seconds(5);
 constexpr std::string_view kEchoCloseRequest = "POST / HTTP/1.1\r\nContent-Length: 4\r\nConnection: close\r\n\r\necho";
 constexpr std::string_view kEchoPayload = "echo";
 constexpr std::size_t kIdleClients = 64;
+constexpr std::size_t kOneNetworkWorker = 1;
+constexpr auto kTwoNetworkWorkers = EventHttpServerOptions::kMaxNetworkWorkers;
+constexpr std::size_t kNetworkWorkerTestConnections = 8;
 
 core::Result<HttpServerResponse> Respond(const HttpServerRequest& /*request*/) {
   HttpServerResponse response;
@@ -76,6 +83,22 @@ TEST(EventHttpServer, FragmentationPipeliningAndHalfClose) {
   const auto first = response.find(kStatus);
   ASSERT_NE(first, std::string::npos);
   EXPECT_NE(response.find(kStatus, first + kStatus.size()), std::string::npos);
+  server.Shutdown();
+  server.Join();
+}
+
+TEST(EventHttpServer, TerminalWriteReleasesPendingSlotBeforePipelinedRequest) {
+  EventHttpServer server(Respond, {.max_pending_requests = 1});
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  const std::string requests = std::string(kRequest).append(kCloseRequest);
+  asio::write(peer, asio::buffer(requests));
+  const auto response = ReadToEnd(peer);
+  const auto first = response.find(kStatus);
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_NE(response.find(kStatus, first + kStatus.size()), std::string::npos);
+  EXPECT_EQ(response.find(kOverload), std::string::npos);
   server.Shutdown();
   server.Join();
 }
@@ -135,7 +158,7 @@ TEST(EventHttpServer, FiniteStreamUsesChunksAndConnectionReuse) {
   asio::write(socket, asio::buffer(kRequest));
   asio::write(socket, asio::buffer(kCloseRequest));
   const auto response = ReadToEnd(socket);
-  EXPECT_NE(response.find(kEvent), std::string::npos);
+  EXPECT_NE(response.find(kChunkedEvent), std::string::npos);
   const auto end = response.find(kFinalChunk);
   ASSERT_NE(end, std::string::npos);
   EXPECT_NE(response.find(kStatus, end), std::string::npos);
@@ -204,8 +227,18 @@ constexpr std::string_view kRpcStreamBody =
 constexpr std::string_view kRestStreamBody =
     R"({"message":{"messageId":"m","role":"user","parts":[{"text":"hello"}]}})";
 constexpr std::string_view kNativeId = "native";
+constexpr std::string_view kDiscoveryName = "native-discovery";
+constexpr std::string_view kDiscoveryRequest = "GET /.well-known/agent-card.json HTTP/1.1\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kListTasksRequest =
+    "GET /a2a/tasks HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kRestStreamPath = "/a2a/message:stream";
+constexpr std::string_view kEmptySubscription = "GET /a2a/tasks/empty:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr std::string_view kFailingSubscription = "GET /a2a/tasks/fail:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr std::string_view kFailingTaskId = "fail";
+constexpr std::string_view kNativeStreamFailure = "native stream producer failed";
+constexpr std::string_view kSseError = "event: error\n";
 
 constexpr std::string_view kPostPrefix = "POST ";
 constexpr std::string_view kPostHeaders =
@@ -219,12 +252,33 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
     task.set_id(request.id());
     co_return task;
   }
+  asio::awaitable<core::Result<ListTasksResponse>> ListTasks(ListTasksRequest /*request*/,
+                                                             engine::RequestExecutionContext /*context*/) override {
+    lf::a2a::v1::Task task;
+    task.set_id(std::string(kNativeId));
+    ListTasksResponse response;
+    response.tasks.push_back(std::move(task));
+    co_return response;
+  }
   asio::awaitable<core::Result<void>> SendStreamingMessage(
       lf::a2a::v1::SendMessageRequest /*request*/, engine::RequestExecutionContext /*context*/,
       std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
     lf::a2a::v1::StreamResponse event;
     event.mutable_task()->set_id(std::string(kNativeId));
     co_return co_await stream->Write(std::move(event));
+  }
+
+  asio::awaitable<core::Result<void>> SubscribeTask(lf::a2a::v1::GetTaskRequest request,
+                                                    engine::RequestExecutionContext context,
+                                                    std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
+    if (request.id() != kFailingTaskId) {
+      co_return core::Result<void>{};
+    }
+    const auto written = co_await SendStreamingMessage({}, std::move(context), std::move(stream));
+    if (!written.ok()) {
+      co_return written.error();
+    }
+    co_return core::Error::Internal(std::string(kNativeStreamFailure));
   }
 };
 
@@ -240,11 +294,12 @@ std::string Post(std::string_view path, std::string_view body) {
 
 TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncoding) {
   engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
-  const std::vector<std::string> requests{std::string(kRestTask), Post(kRpcPath, kRpcBody),
-                                          Post(kRpcPath, kRpcStreamBody), Post(kRestStreamPath, kRestStreamBody)};
+  const std::vector<std::string> requests{std::string(kRestTask), std::string(kListTasksRequest),
+                                          Post(kRpcPath, kRpcBody), Post(kRpcPath, kRpcStreamBody),
+                                          Post(kRestStreamPath, kRestStreamBody)};
   for (const auto& request : requests) {
     auto socket = Connect(io, server);
     asio::write(socket, asio::buffer(request));
@@ -257,7 +312,210 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   runtime.Shutdown();
   runtime.Join();
 }
+
+TEST(EventHttpServer, NativeNetworkWorkersServeConcurrentConnections) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  EventHttpServer server(runtime.dispatcher(), {}, {},
+                         {.network_workers = kTwoNetworkWorkers, .second_network_connection_threshold = 0});
+  EXPECT_EQ(server.network_workers(), kTwoNetworkWorkers);
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  std::vector<Tcp::socket> peers;
+  peers.reserve(kNetworkWorkerTestConnections);
+  for (std::size_t i = 0; i < kNetworkWorkerTestConnections; ++i) {
+    peers.push_back(Connect(io, server));
+  }
+  for (auto& peer : peers) {
+    asio::write(peer, asio::buffer(kRestTask));
+  }
+  for (auto& peer : peers) {
+    const auto response = ReadToEnd(peer);
+    EXPECT_TRUE(response.starts_with(kStatus)) << response;
+    EXPECT_NE(response.find(kNativeId), std::string::npos) << response;
+  }
+  server.Shutdown();
+  server.Join();
+}
+
+TEST(EventHttpServer, NetworkWorkersRespectAutomaticAndExplicitSelection) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  EventHttpServer automatic_dual(runtime.dispatcher(), {}, {}, {.network_auto_min_cpus = 0});
+  EXPECT_EQ(automatic_dual.network_workers(), kTwoNetworkWorkers);
+  EventHttpServer automatic_single(runtime.dispatcher(), {}, {},
+                                   {.network_auto_min_cpus = std::numeric_limits<unsigned>::max()});
+  EXPECT_EQ(automatic_single.network_workers(), kOneNetworkWorker);
+  EventHttpServer explicit_single(runtime.dispatcher(), {}, {},
+                                  {.network_workers = kOneNetworkWorker, .network_auto_min_cpus = 0});
+  EXPECT_EQ(explicit_single.network_workers(), kOneNetworkWorker);
+  EventHttpServer generic(Respond, {.network_auto_min_cpus = 0});
+  EXPECT_EQ(generic.network_workers(), kOneNetworkWorker);
+}
+
+TEST(EventHttpServer, RejectsUnsupportedNetworkWorkerCount) {
+  EventHttpServer server(Respond, {.network_workers = kTwoNetworkWorkers + kOneNetworkWorker});
+  EXPECT_FALSE(server.Start().ok());
+}
+
+TEST(EventHttpServer, NativeDiscoveryCompletesWithoutDispatchAdmission) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  lf::a2a::v1::AgentCard card;
+  card.set_name(std::string(kDiscoveryName));
+  EventHttpServer server(runtime.dispatcher(), std::move(card), {});
+  ASSERT_TRUE(server.Start().ok());
+  runtime.Shutdown();
+
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  asio::write(peer, asio::buffer(kDiscoveryRequest));
+  const auto response = ReadToEnd(peer);
+  EXPECT_TRUE(response.starts_with(kStatus)) << response;
+  EXPECT_NE(response.find(kDiscoveryName), std::string::npos) << response;
+  server.Shutdown();
+  server.Join();
+  runtime.Join();
+}
+
+std::string PipelineNativeSubscription(std::string_view subscription) {
+  engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
+  EventHttpServer server(runtime.dispatcher(), {}, {}, {.max_pending_requests = 1, .idle_timeout = kTimeout});
+  if (const auto started = server.Start(); !started.ok()) {
+    ADD_FAILURE() << started.error().message();
+    return {};
+  }
+  asio::io_context io;
+  auto peer = Connect(io, server);
+  const auto requests = std::string(subscription).append(kRestTask);
+  asio::write(peer, asio::buffer(requests));
+  return ReadToEnd(peer);
+}
+
+void ExpectFinalChunkBeforeNextResponse(const std::string& response) {
+  ASSERT_TRUE(response.starts_with(kStatus)) << response;
+  const auto end = response.find(kFinalChunk);
+  ASSERT_NE(end, std::string::npos) << response;
+  const auto next = std::string_view(response).substr(end + kFinalChunk.size());
+  EXPECT_TRUE(next.starts_with(kStatus)) << response;
+  EXPECT_EQ(next.find(kFinalChunk), std::string::npos) << response;
+}
+
+TEST(EventHttpServer, NativeEmptyStreamTerminatesOnceBeforePipelinedResponse) {
+  const auto response = PipelineNativeSubscription(kEmptySubscription);
+  ExpectFinalChunkBeforeNextResponse(response);
+  EXPECT_EQ(response.find(kFinalChunk),
+            response.find(core::http::kHeaderDelimiter) + core::http::kHeaderDelimiter.size());
+}
+
+TEST(EventHttpServer, NativeStreamErrorTerminatesOnceBeforePipelinedResponse) {
+  const auto response = PipelineNativeSubscription(kFailingSubscription);
+  ExpectFinalChunkBeforeNextResponse(response);
+  const auto error = response.find(kSseError);
+  ASSERT_NE(error, std::string::npos) << response;
+  EXPECT_LT(error, response.find(kFinalChunk)) << response;
+}
+
+struct DrainProbe final {
+  ~DrainProbe() { dropped.set_value(); }
+  std::promise<void> dropped;
+};
+
+struct DrainProbeHandler final {
+  std::shared_ptr<DrainProbe> probe;
+
+  asio::awaitable<core::Result<EventHttpResponse>> operator()(HttpServerRequest request,
+                                                              engine::RequestExecutionContext /*context*/) const {
+    co_return EventHttpResponse{.response = Respond(request).value(), .stream = {}};
+  }
+};
+
+using ApplicationExecutor = asio::io_context::executor_type;
+
+void ExpectHandlerRetainedAfterDrain(std::future<ApplicationExecutor>& executor, std::future<void>& probe_dropped,
+                                     const std::weak_ptr<const HttpServerResponse>& handler_lifetime) {
+  ASSERT_EQ(executor.wait_for(kTimeout), std::future_status::ready);
+  ASSERT_EQ(probe_dropped.wait_for(kTimeout), std::future_status::ready);
+  const auto marker = std::make_shared<std::promise<void>>();
+  auto drained = marker->get_future();
+  asio::post(executor.get(), [marker] { marker->set_value(); });
+  ASSERT_EQ(drained.wait_for(kTimeout), std::future_status::ready);
+  EXPECT_FALSE(handler_lifetime.expired());
+}
+
+TEST(EventHttpServer, ShutdownKeepsNativeHandlerAliveUntilInvocationReturns) {
+  constexpr std::size_t kShutdownWorkers = 2;
+  auto probe = std::make_shared<DrainProbe>();
+  auto probe_dropped = probe->dropped.get_future();
+  auto response = std::make_shared<const HttpServerResponse>(Respond({}).value());
+  const std::weak_ptr<const HttpServerResponse> handler_lifetime = response;
+  std::promise<ApplicationExecutor> application;
+  auto executor = application.get_future();
+  std::promise<void> release;
+  auto released = release.get_future();
+  http_runtime::NativeHttpHandler handler =
+      [response = std::move(response), &application, &released](
+          HttpServerRequest, engine::RequestExecutionContext, http_runtime::NativeHttpCompletion complete,
+          const http_runtime::NativeHttpStreamFactory&, const http_runtime::NativeHttpWorkQueue& work) {
+        auto& wait = released;
+        application.set_value(work.executor);
+        complete(*response);
+        wait.wait();
+      };
+  http_runtime::EventHttpListener listener(DrainProbeHandler{.probe = std::move(probe)}, std::move(handler),
+                                           {.application_threads = kShutdownWorkers, .idle_timeout = kTimeout});
+  ASSERT_TRUE(listener.Start().ok());
+  asio::io_context io;
+  Tcp::socket peer(io);
+  peer.connect(Tcp::endpoint(asio::ip::address_v4::loopback(), listener.port()));
+  asio::write(peer, asio::buffer(kCloseRequest));
+  EXPECT_TRUE(ReadToEnd(peer).starts_with(kStatus));
+  listener.Shutdown();
+  ExpectHandlerRetainedAfterDrain(executor, probe_dropped, handler_lifetime);
+  release.set_value();
+  listener.Join();
+  EXPECT_TRUE(handler_lifetime.expired());
+}
+
 constexpr std::string_view kSubscribeRequest = "GET /a2a/tasks/native:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr auto kBorrowedJoinObservation = std::chrono::milliseconds(50);
+
+http_runtime::NativeHttpHandler BorrowedIngressHandler(asio::thread_pool::executor_type executor,
+                                                       std::future<void>& released, std::atomic_bool& returned) {
+  return [executor, &released, &returned](
+             HttpServerRequest request, engine::RequestExecutionContext, http_runtime::NativeHttpCompletion complete,
+             const http_runtime::NativeHttpStreamFactory&, const http_runtime::NativeHttpWorkQueue&) {
+    EXPECT_TRUE(executor.running_in_this_thread());
+    complete(Respond(request));
+    released.wait();
+    returned = true;
+  };
+}
+
+TEST(EventHttpServer, JoinDrainsBorrowedJsonRpcRequestAfterItsResponseFinishes) {
+  asio::thread_pool pool(engine::AsyncRuntimeOptions::kDefaultThreads);
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::atomic_bool returned = false;
+  const auto executor = pool.get_executor();
+  http_runtime::EventHttpListener listener({}, BorrowedIngressHandler(executor, released, returned),
+                                           {.idle_timeout = kTimeout}, executor);
+  ASSERT_TRUE(listener.Start().ok());
+  asio::io_context io;
+  Tcp::socket peer(io);
+  peer.connect(Tcp::endpoint(asio::ip::address_v4::loopback(), listener.port()));
+  const auto request = Post(kRpcPath, kRpcBody);
+  asio::write(peer, asio::buffer(request));
+  EXPECT_TRUE(ReadToEnd(peer).starts_with(kStatus));
+  listener.Shutdown();
+  auto joined = std::async(std::launch::async, [&listener, &returned] {
+    listener.Join();
+    return returned.load();
+  });
+  EXPECT_EQ(joined.wait_for(kBorrowedJoinObservation), std::future_status::timeout);
+  release.set_value();
+  ASSERT_EQ(joined.wait_for(kTimeout), std::future_status::ready);
+  EXPECT_TRUE(joined.get());
+  pool.join();
+}
+
 constexpr std::size_t kLiveClients = 32;
 constexpr std::size_t kLargeBody = std::size_t{2} * 1024U * 1024U;
 constexpr auto kIdleDeadline = std::chrono::milliseconds(50);
@@ -299,12 +557,40 @@ class LiveBackend final : public engine::CoroutineAgentExecutor {
   std::promise<void> first_completed;
 };
 
+TEST(EventHttpServer, NativePendingLimitAppliesAcrossConnections) {
+  constexpr std::size_t kPendingLimit = 1;
+  constexpr std::size_t kIdlePeers = 4;
+  const auto backend = std::make_shared<LiveBackend>();
+  engine::AsyncRuntime runtime(backend);
+  EventHttpServer server(runtime.dispatcher(), {}, {},
+                         {.max_pending_requests = kPendingLimit, .idle_timeout = kTimeout});
+  ASSERT_TRUE(server.Start().ok());
+  asio::io_context io;
+  std::vector<Tcp::socket> idle;
+  idle.reserve(kIdlePeers);
+  for (std::size_t index = 0; index < kIdlePeers; ++index) {
+    idle.push_back(Connect(io, server));
+  }
+  auto stream = Connect(io, server);
+  asio::write(stream, asio::buffer(kSubscribeRequest));
+  std::string event;
+  asio::read_until(stream, asio::dynamic_buffer(event), kEventEnd);
+  EXPECT_NE(event.find(kNativeId), std::string::npos);
+  auto unary = Connect(io, server);
+  asio::write(unary, asio::buffer(kRestTask));
+  EXPECT_NE(ReadToEnd(unary).find(kOverload), std::string::npos);
+  server.Shutdown();
+  server.Join();
+  runtime.Join();
+  EXPECT_EQ(backend->completed.load(), kPendingLimit);
+}
+
 TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
   const auto backend = std::make_shared<LiveBackend>();
   engine::AsyncRuntime runtime(backend, {}, {.threads = 1});
   EventHttpServerOptions options;
   options.application_threads = 1;
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   std::vector<Tcp::socket> sockets;
@@ -327,7 +613,7 @@ TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
 TEST(EventHttpServer, DisconnectCancelsLiveProducer) {
   const auto backend = std::make_shared<LiveBackend>();
   engine::AsyncRuntime runtime(backend);
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   auto socket = Connect(io, server);
@@ -346,7 +632,7 @@ TEST(EventHttpServer, PeerResetCancelsLiveProducerBeforeShutdown) {
   const auto backend = std::make_shared<LiveBackend>();
   auto completed = backend->first_completed.get_future();
   engine::AsyncRuntime runtime(backend);
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+  EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   auto peer = Connect(io, server);
@@ -519,7 +805,7 @@ TEST(EventHttpServer, RejectedStreamHeadersCancelNativeProducerBeforeShutdown) {
   engine::AsyncRuntime runtime(backend);
   EventHttpServerOptions options;
   options.max_output_bytes = kRejectedHeaderLimit;
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   auto peer = Connect(io, server);
@@ -719,7 +1005,7 @@ void ExpectNativeWriteCancellation(ConcurrentClose close) {
   EventHttpServerOptions options;
   options.application_threads = 1;
   options.heartbeat_interval = std::chrono::milliseconds::zero();
-  EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}), options);
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
   Tcp::socket peer(io);
@@ -878,19 +1164,33 @@ TEST(EventHttpServer, CompletedStreamSinkCannotCorruptReusedConnection) {
 
 class DelayedBackend final : public engine::CoroutineAgentExecutor {
  public:
+  asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(
+      lf::a2a::v1::GetTaskRequest request, [[maybe_unused]] engine::RequestExecutionContext context) override {
+    const auto ready = co_await WaitForRelease();
+    if (!ready.ok()) {
+      co_return ready.error();
+    }
+    lf::a2a::v1::Task task;
+    task.set_id(request.id());
+    co_return task;
+  }
+
   asio::awaitable<core::Result<void>> SubscribeTask(
-      lf::a2a::v1::GetTaskRequest /*request*/, engine::RequestExecutionContext /*context*/,
-      std::shared_ptr<engine::AsyncServerStreamSession> /*stream*/) override {
-    started.set_value();
-    const auto result = co_await reply_.Wait();
-    ++completed;
-    co_return result;
+      [[maybe_unused]] lf::a2a::v1::GetTaskRequest request, [[maybe_unused]] engine::RequestExecutionContext context,
+      [[maybe_unused]] std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
+    co_return co_await WaitForRelease();
   }
   void Release() { reply_.Resolve(core::Result<void>{}); }
   std::promise<void> started;
   std::atomic_size_t completed{0};
 
  private:
+  asio::awaitable<core::Result<void>> WaitForRelease() {
+    started.set_value();
+    const auto result = co_await reply_.Wait();
+    ++completed;
+    co_return result;
+  }
   test::CoroutineReply<void> reply_{true};
 };
 
@@ -900,7 +1200,7 @@ TEST(EventHttpServer, NativeCleanupBeforeFirstEventMayOutliveListener) {
   engine::AsyncRuntime runtime(backend);
   asio::io_context io;
   {
-    EventHttpServer server(MakeEventHttpHandler(runtime.dispatcher(), {}));
+    EventHttpServer server(runtime.dispatcher(), {}, {});
     ASSERT_TRUE(server.Start().ok());
     auto peer = Connect(io, server);
     asio::write(peer, asio::buffer(kSubscribeRequest));
@@ -911,6 +1211,26 @@ TEST(EventHttpServer, NativeCleanupBeforeFirstEventMayOutliveListener) {
   }
   backend->Release();
   runtime.Shutdown();
+  runtime.Join();
+  EXPECT_EQ(backend->completed.load(), 1U);
+}
+
+TEST(EventHttpServer, NativeUnaryCleanupMayOutliveListener) {
+  const auto backend = std::make_shared<DelayedBackend>();
+  auto started = backend->started.get_future();
+  engine::AsyncRuntime runtime(backend);
+  asio::io_context io;
+  {
+    EventHttpServer server(runtime.dispatcher(), {}, {});
+    ASSERT_TRUE(server.Start().ok());
+    auto peer = Connect(io, server);
+    asio::write(peer, asio::buffer(kRestTask));
+    EXPECT_EQ(started.wait_for(kTimeout), std::future_status::ready);
+    server.Shutdown();
+    server.Join();
+    EXPECT_EQ(backend->completed.load(), 0U);
+  }
+  backend->Release();
   runtime.Join();
   EXPECT_EQ(backend->completed.load(), 1U);
 }

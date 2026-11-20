@@ -36,8 +36,14 @@ the historical v0.5.2 snapshot above or establish full conformance for v0.6.0.
 
 The generic conformance agent advertises `*/*` input support and preserves
 opaque message parts without decoding them. Its supported-media negative probe
-is therefore skipped by TCK. HTTP+JSON error envelopes use `application/json`,
-as required by the mandatory `HTTP_JSON-ERR-001` check.
+was skipped by that TCK revision. Current upstream instead sends a fixed
+`application/x-unsupported-tck-type` part and expects rejection, including when
+the agent advertises wildcard support. This does not establish that the part is
+unsupported by the generic agent. A negative-media test needs an agent that
+actually excludes the tested type.
+
+HTTP+JSON protocol error envelopes use `application/a2a+json`, the recommended
+media type for specification 1.0.1, consistently with ordinary protocol responses.
 
 ## Reproduce the upstream suite
 
@@ -49,8 +55,10 @@ Python 3.15 or newer; CI installs that runtime independently of the SDK tools.
 At upstream revision `104a7b4ae0d83f65c075e3793e322953a830eaba`, the mandatory
 AIP-193 structure test requires `application/json` for errors while the separate
 `HTTP_JSON-SVC-001` SHOULD test expects `application/a2a+json` for the same
-response. The SDK follows the mandatory expectation and reports the optional
-failure. The full upstream runner's nonzero exit status is preserved. To run
+response. That contradiction is fixed in current upstream: mandatory error
+validation accepts both JSON media types, and the recommendation check selects
+`application/json` for 1.0.0 or `application/a2a+json` for 1.0.1. The SDK uses the
+1.0.1 recommendation. The full upstream runner's nonzero exit status is preserved. To run
 only the mandatory category, select `must` with pytest's `-m must` option.
 No upstream assertions or requirement definitions are modified.
 Registered requirements without upstream tests remain `NOT TESTED`.
