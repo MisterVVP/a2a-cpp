@@ -98,9 +98,12 @@ class CheckedStream final : public AsyncServerStreamSession {
     if (auto failed = Failure(); failed.has_value()) {
       co_return failed.value();
     }
-    (void)source_->ExpireDeadline();
-    if (source_->Context().Outcome() != RequestOutcome::kPending) {
-      co_return Reject(CancellationError(source_->Context().Outcome()));
+    const auto view = source_->Context();
+    if (view.Deadline().has_value()) {
+      (void)source_->ExpireDeadline();
+    }
+    if (const auto outcome = view.Outcome(); outcome != RequestOutcome::kPending) {
+      co_return Reject(CancellationError(outcome));
     }
     if (security_ != nullptr) {
       auto authorized = security_->AuthorizeStreamEvent(event, context_, task_id_);
@@ -172,7 +175,16 @@ class AdmissionReservation final : private core::NonCopyableOrMovable {
 }  // namespace
 
 struct AsyncDispatcher::State final {
-  struct Call final : std::enable_shared_from_this<Call> {
+  struct Call final {
+    struct NotifyStop final {
+      std::weak_ptr<Call> call;
+      void operator()() const {
+        if (const auto locked = call.lock()) {
+          boost::asio::post(locked->strand, [locked] { locked->Stopped(); });
+        }
+      }
+    };
+
     Call(const boost::asio::any_io_executor& scheduler, const std::shared_ptr<AdmissionCounts>& counts,
          PendingAdmission& pending, DispatchRequest request, RequestContext metadata, TransportCompletion completion,
          std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<const DispatchPipeline> pipeline,
@@ -189,15 +201,6 @@ struct AsyncDispatcher::State final {
           session(*this->pipeline, this->request, context),
           stream(std::move(stream)) {}
 
-    void ObserveStop() {
-      const auto weak = weak_from_this();
-      observer = std::make_unique<std::stop_callback<std::function<void()>>>(source->Context().StopToken(), [weak] {
-        if (const auto call = weak.lock()) {
-          boost::asio::post(call->strand, [call] { call->Stopped(); });
-        }
-      });
-    }
-
     void Stopped() {
       if (finished) {
         return;
@@ -213,19 +216,21 @@ struct AsyncDispatcher::State final {
     static boost::asio::awaitable<void> Run(std::shared_ptr<State> state, std::shared_ptr<Call> call) {
       call->started = true;
       auto view = call->source->Context();
-      core::Result<DispatchResponse> response = core::Error::Internal(kDispatchException);
+      core::Result<DispatchResponse> response = core::Error::Internal({});
       try {
         const auto valid = state->extensions.Validate(view.Metadata().client_headers);
         if (!valid.ok()) {
           response = valid.error();
         } else {
           const auto before = call->session.Before();
-          (void)call->source->ExpireDeadline();
+          if (view.Deadline().has_value()) {
+            (void)call->source->ExpireDeadline();
+          }
           call->ObserveShutdown(state->closed.load());
           if (!before.ok()) {
             response = before.error();
-          } else if (view.StopToken().stop_requested()) {
-            response = CancellationError(view.Outcome());
+          } else if (const auto outcome = view.Outcome(); outcome != RequestOutcome::kPending) {
+            response = CancellationError(outcome);
           } else if (auto handled = call->session.Handle()) {
             response = std::move(*handled);
           } else {
@@ -283,7 +288,7 @@ struct AsyncDispatcher::State final {
       }
       finished = true;
       try {
-        if (!source->Context().StopToken().stop_requested()) {
+        if (source->Context().Outcome() == RequestOutcome::kPending) {
           session.Project(response);
         }
       } catch (...) {
@@ -317,7 +322,7 @@ struct AsyncDispatcher::State final {
     const std::shared_ptr<AsyncServerStreamSession> stream;
     std::weak_ptr<State> owner;
     boost::asio::cancellation_signal cancellation;
-    std::unique_ptr<std::stop_callback<std::function<void()>>> observer;
+    std::optional<std::stop_callback<NotifyStop>> observer;
     bool started = false;
     bool finished = false;
   };
@@ -444,7 +449,7 @@ core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchImpl(
                                             std::move(metadata), std::move(completion), deadline, state->pipeline,
                                             std::move(stream));
   call->owner = state;
-  call->ObserveStop();
+  call->observer.emplace(call->source->Context().StopToken(), State::Call::NotifyStop{.call = call});
   const auto submission_work = boost::asio::make_work_guard(state->scheduler);
   {
     std::lock_guard lock(state->mutex);
