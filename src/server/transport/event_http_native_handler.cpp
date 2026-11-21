@@ -345,6 +345,29 @@ asio::awaitable<core::Result<EventHttpResponse>> Handle(std::shared_ptr<Bindings
   }
   co_return co_await Unary(bindings->dispatcher, std::move(plan), std::move(context));
 }
+// Cheap to check without traversing a response that may have arbitrarily large
+// artifacts, history, or structured metadata.
+constexpr std::size_t kInlineTextBytes = 512;
+
+bool IsSmallTask(const lf::a2a::v1::Task& task) {
+  return task.id().size() <= kInlineTextBytes && task.context_id().size() <= kInlineTextBytes &&
+         task.artifacts().empty() && task.history().empty() && !task.has_metadata() && !task.status().has_message();
+}
+
+bool CanEncodeInline(const DispatchResult& result) {
+  if (!result.ok()) {
+    return result.error().message().size() <= kInlineTextBytes;
+  }
+  const auto& payload = result.value().payload();
+  if (const auto* task = std::get_if<lf::a2a::v1::Task>(&payload)) {
+    return IsSmallTask(*task);
+  }
+  if (const auto* sent = std::get_if<lf::a2a::v1::SendMessageResponse>(&payload)) {
+    return sent->has_task() && IsSmallTask(sent->task());
+  }
+  return std::holds_alternative<std::monostate>(payload);
+}
+
 class NativeReply final : public std::enable_shared_from_this<NativeReply> {
  public:
   NativeReply(PreparedDispatch<HttpServerResponse>& plan, NativeHttpCompletion done)
@@ -362,7 +385,7 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
     if (!done) {
       return;
     }
-    if (work.pending.load(std::memory_order_relaxed) <= 1) {
+    if (CanEncodeInline(result)) {
       done(Encode(std::move(result)));
       return;
     }

@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <boost/asio.hpp>
 #include <chrono>
@@ -11,6 +12,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -19,6 +21,7 @@
 
 #include "../../src/server/transport/event_http_listener.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/server/engine/async_dispatcher.h"
 #include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/event_http_dispatcher.h"
 #include "support/coroutine_reply.h"
@@ -236,6 +239,15 @@ constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kRestStreamPath = "/a2a/message:stream";
 constexpr std::string_view kEmptySubscription = "GET /a2a/tasks/empty:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
 constexpr std::string_view kFailingSubscription = "GET /a2a/tasks/fail:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr std::string_view kBurstSubscription = "GET /a2a/tasks/burst:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr std::string_view kBurstTaskId = "burst";
+constexpr std::array<std::string_view, 3> kBurstEventIds{"first-event", "second-event", "third-event"};
+constexpr std::string_view kRichTaskId = "rich";
+constexpr std::string_view kRichTaskRequest =
+    "GET /a2a/tasks/rich HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kRichTaskArtifact = "rich-artifact";
+constexpr std::string_view kIncompleteNativeRequest = "Native request was incomplete";
+constexpr std::string_view kMissingNativeReply = "Native reply did not complete";
 constexpr std::string_view kFailingTaskId = "fail";
 constexpr std::string_view kNativeStreamFailure = "native stream producer failed";
 constexpr std::string_view kSseError = "event: error\n";
@@ -250,6 +262,9 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
                                                            engine::RequestExecutionContext /*context*/) override {
     lf::a2a::v1::Task task;
     task.set_id(request.id());
+    if (request.id() == kRichTaskId) {
+      task.add_artifacts()->set_artifact_id(std::string(kRichTaskArtifact));
+    }
     co_return task;
   }
   asio::awaitable<core::Result<ListTasksResponse>> ListTasks(ListTasksRequest /*request*/,
@@ -271,6 +286,17 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
   asio::awaitable<core::Result<void>> SubscribeTask(lf::a2a::v1::GetTaskRequest request,
                                                     engine::RequestExecutionContext context,
                                                     std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
+    if (request.id() == kBurstTaskId) {
+      for (const auto id : kBurstEventIds) {
+        lf::a2a::v1::StreamResponse event;
+        event.mutable_task()->set_id(std::string(id));
+        auto written = co_await stream->Write(std::move(event));
+        if (!written.ok()) {
+          co_return written.error();
+        }
+      }
+      co_return core::Result<void>{};
+    }
     if (request.id() != kFailingTaskId) {
       co_return core::Result<void>{};
     }
@@ -311,6 +337,49 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   server.Join();
   runtime.Shutdown();
   runtime.Join();
+}
+
+void ExpectNativeSerialization(std::string_view wire, bool offloaded, std::string_view expected) {
+  asio::io_context dispatch;
+  asio::io_context encoding;
+  auto dispatcher =
+      std::make_shared<engine::AsyncDispatcher>(std::make_shared<NativeBackend>(), dispatch.get_executor());
+  const auto handler = http_runtime::EventHttpHandlerFactory::Native(dispatcher, {}, {});
+  engine::RequestExecution connection;
+  std::optional<core::Result<HttpServerResponse>> reply;
+  std::size_t consumed = 0;
+  auto parsed = HttpAdapter{}.ParseRequest(wire, consumed);
+  if (!parsed.ok()) {
+    ADD_FAILURE() << parsed.error().message();
+    return;
+  }
+  auto& request = parsed.value();
+  if (!request.has_value()) {
+    ADD_FAILURE() << kIncompleteNativeRequest;
+    return;
+  }
+  handler(std::move(*request), connection.Context(),
+          [&reply](core::Result<HttpServerResponse> result) { reply.emplace(std::move(result)); }, {},
+          {.executor = encoding.get_executor()});
+  (void)dispatch.run();
+  EXPECT_EQ(reply.has_value(), !offloaded);
+  (void)encoding.run();
+  if (!reply.has_value()) {
+    ADD_FAILURE() << kMissingNativeReply;
+    return;
+  }
+  const auto& result = *reply;
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().status_code, core::http::kStatusOk);
+  EXPECT_NE(result.value().body.find(expected), std::string::npos);
+}
+
+TEST(EventHttpServer, NativeSmallTaskReplyEncodesOnDispatcher) {
+  ExpectNativeSerialization(kRestTask, false, kNativeId);
+}
+
+TEST(EventHttpServer, NativeTaskWithArtifactsEncodesOnApplicationExecutor) {
+  ExpectNativeSerialization(kRichTaskRequest, true, kRichTaskArtifact);
 }
 
 TEST(EventHttpServer, NativeNetworkWorkersServeConcurrentConnections) {
@@ -411,6 +480,18 @@ TEST(EventHttpServer, NativeStreamErrorTerminatesOnceBeforePipelinedResponse) {
   const auto error = response.find(kSseError);
   ASSERT_NE(error, std::string::npos) << response;
   EXPECT_LT(error, response.find(kFinalChunk)) << response;
+}
+
+TEST(EventHttpServer, NativeReadyEventsKeepWireOrderBeforePipelinedResponse) {
+  const auto response = PipelineNativeSubscription(kBurstSubscription);
+  ExpectFinalChunkBeforeNextResponse(response);
+  std::size_t start = 0;
+  for (const auto id : kBurstEventIds) {
+    const auto event = response.find(id, start);
+    ASSERT_NE(event, std::string::npos) << response;
+    start = event + id.size();
+  }
+  EXPECT_LT(start, response.find(kFinalChunk)) << response;
 }
 
 struct DrainProbe final {
