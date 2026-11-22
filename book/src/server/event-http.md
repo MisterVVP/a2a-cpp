@@ -154,9 +154,12 @@ completion/cancellation races and runs application cleanup exactly once. Server
 shutdown cancellation is distinguished from peer cancellation and idle expiry.
 Native dispatcher cancellation also wakes a backpressured socket write without
 requiring listener shutdown. Cancelling an in-flight write closes that connection
-because a partially written chunk cannot be completed safely. Completion and
-failure resume the awaiting coroutine on its own executor. No HTTP stream polling
-thread is created.
+because a partially written chunk cannot be completed safely. Write IDs distinguish
+pending socket writes from completed writes whose acknowledgements are still
+queued on the producer's executor. The listener retains the active output buffer
+through socket completion, including during shutdown. Completion and failure
+resume the awaiting coroutine on its own executor. No HTTP stream polling thread
+is created.
 
 Custom asynchronous handlers can return `EventHttpResponse::stream`, receiving
 an owned `HttpEventStream` and `RequestExecutionContext`. Await each `Write` and

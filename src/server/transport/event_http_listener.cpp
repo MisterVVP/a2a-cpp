@@ -306,7 +306,6 @@ class Connection final : public std::enable_shared_from_this<Connection> {
         if (gate && gate != self->active_stream_) {
           return;
         }
-        // A completed write may still have an acknowledgment queued on the producer's executor.
         if (self->active_output_.id == id ||
             std::ranges::any_of(self->output_, [id](const Output& queued) { return queued.id == id; })) {
           self->Close();
@@ -366,7 +365,6 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   }
 
   void FailQueued() {
-    // Asio still borrows the active buffer until the socket completion runs.
     auto active = std::move(active_output_.completion);
     if (active) {
       active(core::Error::Network(std::string(kStopped)));
