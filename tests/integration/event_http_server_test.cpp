@@ -246,6 +246,17 @@ constexpr std::string_view kRichTaskId = "rich";
 constexpr std::string_view kRichTaskRequest =
     "GET /a2a/tasks/rich HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kRichTaskArtifact = "rich-artifact";
+constexpr std::string_view kShortStatusTask = "short-status";
+constexpr std::string_view kLongStatusTask = "long-status";
+constexpr std::string_view kShortStatusRequest =
+    "GET /a2a/tasks/short-status HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kLongStatusRequest =
+    "GET /a2a/tasks/long-status HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kStatusText = "working on the task";
+constexpr std::size_t kLongStatusBytes = 1024;
+constexpr std::string_view kIdleSubscription = "GET /a2a/tasks/idle:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
+constexpr std::string_view kIdleTaskId = "idle";
+constexpr std::size_t kConcurrentNativeRequests = 2;
 constexpr std::string_view kIncompleteNativeRequest = "Native request was incomplete";
 constexpr std::string_view kMissingNativeReply = "Native reply did not complete";
 constexpr std::string_view kFailingTaskId = "fail";
@@ -264,6 +275,14 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
     task.set_id(request.id());
     if (request.id() == kRichTaskId) {
       task.add_artifacts()->set_artifact_id(std::string(kRichTaskArtifact));
+    } else if (request.id() == kShortStatusTask || request.id() == kLongStatusTask) {
+      auto* status = task.mutable_status();
+      status->set_state(lf::a2a::v1::TASK_STATE_WORKING);
+      auto* message = status->mutable_message();
+      message->set_message_id(std::string(kNativeId));
+      message->set_role(lf::a2a::v1::ROLE_AGENT);
+      message->add_parts()->set_text(request.id() == kShortStatusTask ? std::string(kStatusText)
+                                                                      : std::string(kLongStatusBytes, 'x'));
     }
     co_return task;
   }
@@ -297,15 +316,21 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
       }
       co_return core::Result<void>{};
     }
-    if (request.id() != kFailingTaskId) {
+    if (request.id() != kFailingTaskId && request.id() != kIdleTaskId) {
       co_return core::Result<void>{};
     }
     const auto written = co_await SendStreamingMessage({}, std::move(context), std::move(stream));
     if (!written.ok()) {
       co_return written.error();
     }
+    if (request.id() == kIdleTaskId) {
+      co_return co_await idle_.Wait();
+    }
     co_return core::Error::Internal(std::string(kNativeStreamFailure));
   }
+
+ private:
+  test::CoroutineReply<void> idle_;
 };
 
 std::string Post(std::string_view path, std::string_view body) {
@@ -339,14 +364,10 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   runtime.Join();
 }
 
-void ExpectNativeSerialization(std::string_view wire, bool offloaded, std::string_view expected) {
-  asio::io_context dispatch;
-  asio::io_context encoding;
-  auto dispatcher =
-      std::make_shared<engine::AsyncDispatcher>(std::make_shared<NativeBackend>(), dispatch.get_executor());
-  const auto handler = http_runtime::EventHttpHandlerFactory::Native(dispatcher, {}, {});
-  engine::RequestExecution connection;
-  std::optional<core::Result<HttpServerResponse>> reply;
+void SubmitNativeRequest(const http_runtime::NativeHttpHandler& handler, std::string_view wire,
+                         engine::RequestExecutionContext context, http_runtime::NativeHttpCompletion completion,
+                         const http_runtime::NativeHttpWorkQueue& work,
+                         http_runtime::NativeHttpStreamFactory stream_factory = {}) {
   std::size_t consumed = 0;
   auto parsed = HttpAdapter{}.ParseRequest(wire, consumed);
   if (!parsed.ok()) {
@@ -358,9 +379,20 @@ void ExpectNativeSerialization(std::string_view wire, bool offloaded, std::strin
     ADD_FAILURE() << kIncompleteNativeRequest;
     return;
   }
-  handler(std::move(*request), connection.Context(),
-          [&reply](core::Result<HttpServerResponse> result) { reply.emplace(std::move(result)); }, {},
-          {.executor = encoding.get_executor()});
+  handler(std::move(*request), std::move(context), std::move(completion), std::move(stream_factory), work);
+}
+
+void ExpectNativeSerialization(std::string_view wire, bool offloaded, std::string_view expected) {
+  asio::io_context dispatch;
+  asio::io_context encoding;
+  auto dispatcher =
+      std::make_shared<engine::AsyncDispatcher>(std::make_shared<NativeBackend>(), dispatch.get_executor());
+  const auto handler = http_runtime::EventHttpHandlerFactory::Native(dispatcher, {}, {});
+  engine::RequestExecution connection;
+  std::optional<core::Result<HttpServerResponse>> reply;
+  SubmitNativeRequest(handler, wire, connection.Context(),
+                      [&reply](core::Result<HttpServerResponse> result) { reply.emplace(std::move(result)); },
+                      {.executor = encoding.get_executor()});
   (void)dispatch.run();
   EXPECT_EQ(reply.has_value(), !offloaded);
   (void)encoding.run();
@@ -380,6 +412,86 @@ TEST(EventHttpServer, NativeSmallTaskReplyEncodesOnDispatcher) {
 
 TEST(EventHttpServer, NativeTaskWithArtifactsEncodesOnApplicationExecutor) {
   ExpectNativeSerialization(kRichTaskRequest, true, kRichTaskArtifact);
+}
+
+TEST(EventHttpServer, NativeSmallListReplyEncodesOnDispatcher) {
+  ExpectNativeSerialization(kListTasksRequest, false, kNativeId);
+}
+
+TEST(EventHttpServer, NativeShortStatusMessageEncodesOnDispatcher) {
+  ExpectNativeSerialization(kShortStatusRequest, false, kStatusText);
+}
+
+TEST(EventHttpServer, NativeLongStatusMessageEncodesOnApplicationExecutor) {
+  ExpectNativeSerialization(kLongStatusRequest, true, kLongStatusTask);
+}
+
+TEST(EventHttpServer, NativeConcurrentUnaryRepliesOffloadUntilContentionClears) {
+  asio::io_context dispatch;
+  asio::io_context encoding;
+  auto dispatcher =
+      std::make_shared<engine::AsyncDispatcher>(std::make_shared<NativeBackend>(), dispatch.get_executor());
+  const auto handler = http_runtime::EventHttpHandlerFactory::Native(dispatcher, {}, {});
+  const http_runtime::NativeHttpWorkQueue work{.executor = encoding.get_executor()};
+  std::array<engine::RequestExecution, kConcurrentNativeRequests> connections;
+  std::size_t completed = 0;
+  const auto complete = [&completed](const core::Result<HttpServerResponse>& result) {
+    EXPECT_TRUE(result.ok());
+    ++completed;
+  };
+  for (auto& connection : connections) {
+    SubmitNativeRequest(handler, kRestTask, connection.Context(), complete, work);
+  }
+  (void)dispatch.run();
+  EXPECT_EQ(completed, 0U);
+  (void)encoding.run();
+  EXPECT_EQ(completed, kConcurrentNativeRequests);
+  dispatch.restart();
+  engine::RequestExecution next;
+  SubmitNativeRequest(handler, kRestTask, next.Context(), complete, work);
+  (void)dispatch.run();
+  EXPECT_EQ(completed, kConcurrentNativeRequests + 1);
+}
+
+class NativeStreamProbe final : public http_runtime::NativeHttpStream {
+ public:
+  asio::awaitable<core::Result<void>> Start(HttpServerResponse /*response*/, std::string /*first_event*/) override {
+    started = true;
+    co_return core::Result<void>{};
+  }
+  asio::awaitable<core::Result<void>> Write(std::string /*bytes*/) override { co_return core::Result<void>{}; }
+  void Finish(std::string /*error_event*/) override {}
+  void FinishEmpty(HttpServerResponse /*response*/) override {}
+  void Abort() override {}
+
+  bool started = false;
+};
+
+TEST(EventHttpServer, IdleNativeStreamLeavesUnarySerializationInline) {
+  asio::io_context dispatch;
+  asio::io_context encoding;
+  auto dispatcher =
+      std::make_shared<engine::AsyncDispatcher>(std::make_shared<NativeBackend>(), dispatch.get_executor());
+  const auto handler = http_runtime::EventHttpHandlerFactory::Native(dispatcher, {}, {});
+  engine::RequestExecution subscription;
+  engine::RequestExecution unary;
+  const auto stream = std::make_shared<NativeStreamProbe>();
+  const http_runtime::NativeHttpWorkQueue work{.executor = encoding.get_executor()};
+  SubmitNativeRequest(
+      handler, kIdleSubscription, subscription.Context(), [](core::Result<HttpServerResponse>) {}, work,
+      [stream] { return std::shared_ptr<http_runtime::NativeHttpStream>(stream); });
+  (void)dispatch.poll();
+  EXPECT_TRUE(stream->started);
+
+  bool completed = false;
+  SubmitNativeRequest(
+      handler, kListTasksRequest, unary.Context(),
+      [&completed](const core::Result<HttpServerResponse>& result) { completed = result.ok(); }, work);
+  (void)dispatch.poll();
+  EXPECT_TRUE(completed);
+  (void)encoding.poll();
+  dispatcher->Shutdown();
+  (void)dispatch.run();
 }
 
 TEST(EventHttpServer, NativeNetworkWorkersServeConcurrentConnections) {
