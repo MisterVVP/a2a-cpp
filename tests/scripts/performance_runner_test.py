@@ -1070,6 +1070,17 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(runner.POSTGRES_WRITE_SCENARIOS, config.scenarios)
         self.assertEqual(80, runner.postgres_tail_expected_rows(config))
 
+    def test_postgres_profiles_allow_explicit_ci_concurrency(self):
+        runner = load_runner_module()
+        environment = {"A2A_PERF_CONCURRENCY": "16,64,256"}
+        with mock.patch.dict(os.environ, environment, clear=True):
+            tail = runner.parse_args(["--profile", "postgres-tail"])
+            write = runner.parse_args(["--profile", "postgres-write", "--concurrency", "1,16,64,256"])
+        self.assertEqual((16, 64, 256), tail.concurrency_levels)
+        self.assertEqual((1, 16, 64, 256), write.concurrency_levels)
+        self.assertEqual(225, runner.postgres_tail_expected_rows(tail))
+        self.assertEqual(80, runner.postgres_tail_expected_rows(write))
+
     def test_push_config_fanout_can_be_overridden_for_list_scaling(self):
         runner = load_runner_module()
         with mock.patch.dict(os.environ, {"A2A_PERF_PUSH_CONFIG_FANOUT": "100"}, clear=True):

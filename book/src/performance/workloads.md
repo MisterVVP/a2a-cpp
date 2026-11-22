@@ -274,10 +274,12 @@ delta and wait samples can be correlated with one performance row.
 
 CI runs the broad performance matrix and focused PostgreSQL tail profile as
 independent jobs so they execute in parallel. The normal job uses 1,000 requests
-per row across three transports, two stores, and concurrency levels 1, 4, 16,
-and 64; its PostgreSQL rows use a 64-connection pool. The tail job retains 2,000
-requests, five repetitions, pool sizes `4,16,64`, and concurrency levels
-`4,16,64`.
+per row across three transports and two stores at concurrency levels 1, 16, 64,
+and 256. Its PostgreSQL rows use a 64-connection pool. The async HTTP
+benchmark admits up to 512 pending requests to accommodate the 256-client row.
+The tail profile uses 2,000 requests, five repetitions, and pool sizes
+`4,16,64` at concurrency levels `16,64,256`. The job also runs the focused
+concurrency-1 tail profile and the write profile at `1,16,64,256`.
 
 The in-process SDK/service/store rows do not exercise a transport, so the runner
 executes them once per store/concurrency pair instead of repeating identical
