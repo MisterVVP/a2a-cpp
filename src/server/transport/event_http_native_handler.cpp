@@ -2,12 +2,15 @@
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
 #include "event_http_native_handler.h"
 
+#include <algorithm>
+#include <atomic>
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -345,15 +348,61 @@ asio::awaitable<core::Result<EventHttpResponse>> Handle(std::shared_ptr<Bindings
   }
   co_return co_await Unary(bindings->dispatcher, std::move(plan), std::move(context));
 }
-class NativeReply final : public std::enable_shared_from_this<NativeReply> {
+constexpr std::size_t kInlineTextBytes = 512;
+constexpr std::size_t kInlineListTasks = 4;
+
+bool IsSmallTextPart(const lf::a2a::v1::Part& part) {
+  return part.has_text() && part.text().size() <= kInlineTextBytes && !part.has_metadata() &&
+         part.filename().size() <= kInlineTextBytes && part.media_type().size() <= kInlineTextBytes;
+}
+
+bool IsSmallMessage(const lf::a2a::v1::Message& message) {
+  return message.message_id().size() <= kInlineTextBytes && message.context_id().size() <= kInlineTextBytes &&
+         message.task_id().size() <= kInlineTextBytes && !message.has_metadata() && message.extensions().empty() &&
+         message.reference_task_ids().empty() &&
+         (message.parts().empty() || (message.parts_size() == 1 && IsSmallTextPart(message.parts(0))));
+}
+
+bool IsSmallTask(const lf::a2a::v1::Task& task) {
+  return task.id().size() <= kInlineTextBytes && task.context_id().size() <= kInlineTextBytes &&
+         task.artifacts().empty() && task.history().empty() && !task.has_metadata() &&
+         (!task.status().has_message() || IsSmallMessage(task.status().message()));
+}
+
+bool CanEncodeInline(const DispatchResult& result) {
+  if (!result.ok()) {
+    return result.error().message().size() <= kInlineTextBytes;
+  }
+  const auto& payload = result.value().payload();
+  if (const auto* task = std::get_if<lf::a2a::v1::Task>(&payload)) {
+    return IsSmallTask(*task);
+  }
+  if (const auto* sent = std::get_if<lf::a2a::v1::SendMessageResponse>(&payload)) {
+    return sent->has_task() && IsSmallTask(sent->task());
+  }
+  if (const auto* listed = std::get_if<ListTasksResponse>(&payload)) {
+    return listed->tasks.size() <= kInlineListTasks && listed->next_page_token.size() <= kInlineTextBytes &&
+           std::ranges::all_of(listed->tasks, IsSmallTask);
+  }
+  return std::holds_alternative<std::monostate>(payload);
+}
+
+class NativeReply final : public std::enable_shared_from_this<NativeReply>, private core::NonCopyableOrMovable {
  public:
-  NativeReply(PreparedDispatch<HttpServerResponse>& plan, NativeHttpCompletion done)
-      : serialize_(std::move(plan.complete)), done_(std::move(done)) {}
+  NativeReply(PreparedDispatch<HttpServerResponse>& plan, NativeHttpCompletion done,
+              std::shared_ptr<std::atomic_size_t> active_unary = {})
+      : serialize_(std::move(plan.complete)), done_(std::move(done)), active_unary_(std::move(active_unary)) {
+    if (active_unary_) {
+      active_unary_->fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  ~NativeReply() { ReleaseUnary(); }
 
   void Deliver(DispatchResult result) {
     const auto done = Claim();
     if (done) {
-      done(Encode(std::move(result)));
+      Complete(done, Encode(std::move(result)));
     }
   }
 
@@ -362,23 +411,23 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
     if (!done) {
       return;
     }
-    if (work.pending.load(std::memory_order_relaxed) <= 1) {
-      done(Encode(std::move(result)));
+    if (active_unary_->load(std::memory_order_relaxed) == 1 && CanEncodeInline(result)) {
+      Complete(done, Encode(std::move(result)));
       return;
     }
     try {
       asio::post(work.executor, [self = shared_from_this(), done, result = std::move(result)]() mutable {
-        done(self->Encode(std::move(result)));
+        self->Complete(done, self->Encode(std::move(result)));
       });
     } catch (...) {
-      done(core::Error::Internal(kDispatchResponseEncodingFailed));
+      Complete(done, core::Error::Internal(kDispatchResponseEncodingFailed));
     }
   }
 
   void Cancel() {
     auto done = Claim();
     if (done) {
-      done(core::Error::Network(std::string(kCancelled)));
+      Complete(done, core::Error::Network(std::string(kCancelled)));
     }
   }
 
@@ -407,15 +456,28 @@ class NativeReply final : public std::enable_shared_from_this<NativeReply> {
     }
   }
 
+  void Complete(const NativeHttpCompletion& done, core::Result<HttpServerResponse> result) {
+    ReleaseUnary();
+    done(std::move(result));
+  }
+
+  void ReleaseUnary() noexcept {
+    if (const auto active = std::move(active_unary_)) {
+      active->fetch_sub(1, std::memory_order_relaxed);
+    }
+  }
+
   decltype(PreparedDispatch<HttpServerResponse>::complete) serialize_;
   std::mutex mutex_;
   NativeHttpCompletion done_;
+  std::shared_ptr<std::atomic_size_t> active_unary_;
   std::unique_ptr<StopCallback> cancellation_;
 };
 
 void DirectUnary(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher, PreparedDispatch<HttpServerResponse> plan,
-                 engine::RequestExecutionContext context, NativeHttpCompletion done, const NativeHttpWorkQueue& work) {
-  const auto reply = std::make_shared<NativeReply>(plan, std::move(done));
+                 engine::RequestExecutionContext context, NativeHttpCompletion done, const NativeHttpWorkQueue& work,
+                 const std::shared_ptr<std::atomic_size_t>& active_unary) {
+  const auto reply = std::make_shared<NativeReply>(plan, std::move(done), active_unary);
   auto execution = dispatcher->Dispatch(std::move(plan.request), std::move(plan.context),
                                         [reply, work](DispatchResult result, const engine::RequestExecutionContext&) {
                                           reply->Schedule(std::move(result), work);
@@ -509,9 +571,10 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
     return {};
   }
   const auto bindings = std::make_shared<Bindings>(std::move(dispatcher), std::move(card), options);
-  return [bindings](const HttpServerRequest& request, engine::RequestExecutionContext context,
-                    NativeHttpCompletion done, const NativeHttpStreamFactory& stream_factory,
-                    const NativeHttpWorkQueue& work) {
+  auto active_unary = std::make_shared<std::atomic_size_t>(0);
+  return [bindings, active_unary = std::move(active_unary)](
+             const HttpServerRequest& request, engine::RequestExecutionContext context, NativeHttpCompletion done,
+             const NativeHttpStreamFactory& stream_factory, const NativeHttpWorkQueue& work) {
     auto prepared = bindings->mux.PrepareRequest(request);
     if (!prepared.ok()) {
       done(prepared.error());
@@ -537,7 +600,7 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
       }
       return;
     }
-    DirectUnary(bindings->dispatcher, std::move(plan), std::move(context), std::move(done), work);
+    DirectUnary(bindings->dispatcher, std::move(plan), std::move(context), std::move(done), work, active_unary);
   };
 }
 }  // namespace a2a::server::http_runtime

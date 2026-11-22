@@ -964,7 +964,7 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     parser.add_argument("--transports", default=env_or_default("A2A_PERF_TRANSPORTS", ",".join(TRANSPORTS)))
     parser.add_argument("--store-backends", default=env_or_default("A2A_PERF_STORE_BACKENDS", ",".join(STORE_BACKENDS)))
     parser.add_argument("--requests", type=int, default=int(env_or_default("A2A_PERF_REQUESTS", str(DEFAULT_REQUESTS))))
-    parser.add_argument("--concurrency", default=env_or_default("A2A_PERF_CONCURRENCY", ",".join(str(level) for level in DEFAULT_CONCURRENCY)))
+    parser.add_argument("--concurrency", default=os.environ.get("A2A_PERF_CONCURRENCY"))
     parser.add_argument("--push-config-fanout", type=int,
                         default=int(env_or_default("A2A_PERF_PUSH_CONFIG_FANOUT", str(DEFAULT_PUSH_CONFIG_FANOUT))))
     parser.add_argument("--scenarios", default=os.environ.get("A2A_PERF_SCENARIOS"))
@@ -1010,17 +1010,19 @@ def parse_args(argv: list[str]) -> RunnerConfig:
     else:
         postgres_pool_sizes = (DEFAULT_POSTGRES_POOL_SIZE,)
     if profile == POSTGRES_TAIL_PROFILE:
-        concurrency_levels = POSTGRES_TAIL_CONCURRENCY
+        default_concurrency = POSTGRES_TAIL_CONCURRENCY
         scenarios = POSTGRES_TAIL_SCENARIOS
     elif profile == POSTGRES_TAIL_C1_PROFILE:
-        concurrency_levels = POSTGRES_TAIL_C1_CONCURRENCY
+        default_concurrency = POSTGRES_TAIL_C1_CONCURRENCY
         scenarios = POSTGRES_TAIL_C1_SCENARIOS
     elif profile == POSTGRES_WRITE_PROFILE:
-        concurrency_levels = POSTGRES_WRITE_CONCURRENCY
+        default_concurrency = POSTGRES_WRITE_CONCURRENCY
         scenarios = POSTGRES_WRITE_SCENARIOS
     else:
-        concurrency_levels = parse_positive_int_csv(args.concurrency, "concurrency levels")
+        default_concurrency = DEFAULT_CONCURRENCY
         scenarios = None if args.scenarios is None else split_csv(args.scenarios, SCENARIOS)
+    concurrency_levels = (default_concurrency if args.concurrency is None
+                          else parse_positive_int_csv(args.concurrency, "concurrency levels"))
     return RunnerConfig(
         profile=profile,
         transports=("grpc",) if is_postgres_profile else split_csv(args.transports, TRANSPORTS),

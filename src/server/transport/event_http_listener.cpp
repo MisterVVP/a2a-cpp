@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
@@ -16,7 +17,6 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/recycling_allocator.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/asio/write.hpp>
@@ -36,7 +36,7 @@ namespace {
 namespace asio = boost::asio;
 using Tcp = asio::ip::tcp;
 using IoError = boost::system::error_code;
-using WriteCompletion = std::function<void(core::Result<void>)>;
+using WriteCompletion = asio::any_completion_handler<void(core::Result<void>)>;
 constexpr std::size_t kReadBytes = 8192;
 constexpr std::size_t kHexBytes = sizeof(std::size_t) * 2U;
 constexpr std::string_view kFinalChunk = "0\r\n\r\n";
@@ -236,63 +236,40 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     runtime_->active_connections.fetch_sub(1, std::memory_order_relaxed);
   }
 
-  static asio::awaitable<core::Result<void>> WriteEvent(std::shared_ptr<Connection> self, std::string bytes,
-                                                        std::shared_ptr<StreamGate> gate) {
-    if (bytes.empty()) {
-      co_return co_await self->Send({}, std::move(gate));
+  asio::awaitable<core::Result<void>> WriteEvent(std::string bytes, std::shared_ptr<StreamGate> gate) {
+    if (bytes.size() > max_output_bytes_ - kHexBytes - 4U) {
+      return OutputLimitError();
     }
-    if (bytes.size() > self->max_output_bytes_ - kHexBytes - 4U) {
-      co_return core::Error::Validation(std::string(kOutputLimit));
+    if (!bytes.empty()) {
+      bytes = ChunkOwned(std::move(bytes));
     }
-    co_return co_await self->Send(ChunkOwned(std::move(bytes)), std::move(gate));
+    return Send(std::move(bytes), std::move(gate));
   }
 
  private:
+  static asio::awaitable<core::Result<void>> OutputLimitError() {
+    co_return core::Error::Validation(std::string(kOutputLimit));
+  }
+
   friend class NativeConnectionStream;
 
   struct Output final {
-    std::shared_ptr<std::string> bytes;
+    std::string bytes;
     WriteCompletion completion;
+    std::size_t id = 0;
   };
 
   asio::awaitable<core::Result<void>> Send(std::string bytes, std::shared_ptr<StreamGate> gate = {},
                                            bool starts_stream = false) {
     auto token = asio::use_awaitable;
-    co_return co_await asio::async_initiate<decltype(token), void(core::Result<void>)>(
+    return asio::async_initiate<decltype(token), void(core::Result<void>)>(
         [self = shared_from_this(), bytes = std::move(bytes), gate = std::move(gate),
          starts_stream](auto complete) mutable {
-          struct PendingWrite final {
-            decltype(complete) handler;
-            std::atomic_bool pending{true};
-          };
           auto executor = asio::get_associated_executor(complete);
           auto slot = asio::get_associated_cancellation_slot(complete);
-          auto completion =
-              std::allocate_shared<PendingWrite>(asio::recycling_allocator<PendingWrite>{}, std::move(complete));
-          if (slot.is_connected()) {
-            slot.assign([weak = std::weak_ptr(self), operation = std::weak_ptr(completion),
-                         gate](asio::cancellation_type type) {
-              const auto connection = weak.lock();
-              if (!connection || type == asio::cancellation_type::none) {
-                return;
-              }
-              std::lock_guard lock(connection->write_mutex_);
-              if (!connection->closed_) {
-                asio::post(connection->loop_.context, [connection, operation, gate] {
-                  const auto pending = operation.lock();
-                  if (pending && pending->pending && (!gate || gate == connection->active_stream_)) {
-                    // A partially written chunk cannot be reused safely.
-                    connection->Close();
-                  }
-                });
-              }
-            });
-          }
-          auto finish = [executor, completion](core::Result<void> result) mutable {
-            completion->pending = false;
-            asio::post(executor, [completion, result = std::move(result)]() mutable {
-              asio::get_associated_cancellation_slot(completion->handler).clear();
-              completion->handler(std::move(result));
+          auto finish = [executor, complete = std::move(complete)](core::Result<void> result) mutable {
+            asio::post(executor, [complete = std::move(complete), result = std::move(result)]() mutable {
+              complete(std::move(result));
             });
           };
           // Serialize posting with Close so retained sinks cannot revive a stopped loop.
@@ -301,67 +278,97 @@ class Connection final : public std::enable_shared_from_this<Connection> {
             finish(core::Error::Network(std::string(kStopped)));
             return;
           }
+          const auto id = ++self->next_write_id_;
+          if (slot.is_connected()) {
+            slot.assign([weak = std::weak_ptr(self), id, gate](asio::cancellation_type type) {
+              if (type != asio::cancellation_type::none) {
+                if (const auto connection = weak.lock()) {
+                  connection->CancelWrite(id, gate);
+                }
+              }
+            });
+          }
           asio::post(self->loop_.context, [self, bytes = std::move(bytes), gate = std::move(gate),
-                                           finish = std::move(finish), starts_stream]() mutable {
+                                           finish = std::move(finish), id, starts_stream]() mutable {
             if (starts_stream && !self->closed_) {
               self->ActivateStream(gate);
             }
-            self->Queue(std::move(bytes), std::move(finish), gate);
+            self->Queue(std::move(bytes), std::move(finish), gate, id);
           });
         },
         token);
   }
 
-  void Queue(std::string bytes, WriteCompletion completion, const std::shared_ptr<StreamGate>& gate = {}) {
-    if (closed_) {
+  void CancelWrite(std::size_t id, const std::shared_ptr<StreamGate>& gate) {
+    std::lock_guard lock(write_mutex_);
+    if (!closed_) {
+      asio::post(loop_.context, [self = shared_from_this(), id, gate] {
+        if (gate && gate != self->active_stream_) {
+          return;
+        }
+        if (self->active_output_.id == id ||
+            std::ranges::any_of(self->output_, [id](const Output& queued) { return queued.id == id; })) {
+          self->Close();
+        }
+      });
+    }
+  }
+
+  void Queue(std::string bytes, WriteCompletion completion, const std::shared_ptr<StreamGate>& gate = {},
+             std::size_t id = 0) {
+    if (closed_ || (gate && gate != active_stream_)) {
       completion(core::Error::Network(std::string(kStopped)));
       return;
     }
-    if (gate && gate != active_stream_) {
-      completion(core::Error::Network(std::string(kStopped)));
-      return;
-    }
-    if (bytes.size() > runtime_->options.max_output_bytes - queued_bytes_) {
+    if (bytes.size() > max_output_bytes_ - queued_bytes_) {
       Close();
       completion(core::Error::Validation(std::string(kOutputLimit)));
       return;
     }
     queued_bytes_ += bytes.size();
-    output_.push_back({std::allocate_shared<std::string>(asio::recycling_allocator<std::string>{}, std::move(bytes)),
-                       std::move(completion)});
-    if (!writing_) {
+    Output item{.bytes = std::move(bytes), .completion = std::move(completion), .id = id};
+    if (writing_) {
+      output_.push_back(std::move(item));
+    } else {
       writing_ = true;
-      Flush();
+      Flush(std::move(item));
     }
   }
 
-  void Flush() {
-    auto bytes = output_.front().bytes;
-    auto finished = [self = shared_from_this(), bytes](IoError error, std::size_t) {
+  void Flush(Output item) {
+    active_output_ = std::move(item);
+    auto finished = [self = shared_from_this()](IoError error, std::size_t) {
       if (self->closed_) {
+        self->active_output_ = {};
         return;
       }
-      auto item = std::move(self->output_.front());
-      self->output_.pop_front();
-      self->queued_bytes_ -= bytes->size();
+      self->queued_bytes_ -= self->active_output_.bytes.size();
+      auto completion = std::move(self->active_output_.completion);
+      self->active_output_ = {};
       if (error) {
         self->Close();
-        item.completion(core::Error::Network(error.message()));
+        completion(core::Error::Network(error.message()));
         return;
       }
       self->Touch();
-      item.completion({});
+      completion(core::Result<void>{});
       if (!self->closed_ && !self->output_.empty()) {
-        self->Flush();
+        auto next = std::move(self->output_.front());
+        self->output_.pop_front();
+        self->Flush(std::move(next));
       } else {
         self->writing_ = false;
       }
     };
-    asio::async_write(socket_, asio::buffer(*bytes),
+    asio::async_write(socket_, asio::buffer(active_output_.bytes),
                       asio::bind_immediate_executor(loop_.context.get_executor(), std::move(finished)));
   }
 
   void FailQueued() {
+    auto active = std::move(active_output_.completion);
+    if (active) {
+      active(core::Error::Network(std::string(kStopped)));
+    }
     auto output = std::move(output_);
     queued_bytes_ = 0;
     for (auto& item : output) {
@@ -394,7 +401,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     heartbeat_.expires_after(runtime_->options.heartbeat_interval);
     heartbeat_.async_wait([self = shared_from_this()](IoError error) {
       if (!error && self->streaming_ && !self->closed_) {
-        if (self->output_.empty()) {
+        if (!self->writing_) {
           self->Queue(Chunk(kHeartbeat), [](const core::Result<void>& /*result*/) {});
         }
         self->Heartbeat();
@@ -523,7 +530,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       handler(
           std::move(request), execution->Context(), std::move(complete),
           [self, execution, reusable] { return std::make_shared<NativeConnectionStream>(self, execution, reusable); },
-          {.executor = self->runtime_->application.get_executor(), .pending = self->runtime_->pending});
+          {.executor = self->runtime_->application.get_executor()});
     } catch (...) {
       self->PostTerminalResponse(execution, std::current_exception(), {});
     }
@@ -700,10 +707,12 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   std::string input_;
   std::string remote_;
   std::deque<Output> output_;
+  Output active_output_;
   std::shared_ptr<engine::RequestExecution> execution_;
   std::shared_ptr<StreamGate> active_stream_;
   const std::size_t max_output_bytes_;
   std::mutex write_mutex_;
+  std::size_t next_write_id_ = 0;
   std::size_t queued_bytes_ = 0;
   bool writing_ = false;
   bool closed_ = false;
@@ -712,7 +721,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   bool eof_ = false;
 };
 asio::awaitable<core::Result<void>> ConnectionStream::Write(std::string bytes) {
-  return Connection::WriteEvent(connection_, std::move(bytes), gate_);
+  return connection_->WriteEvent(std::move(bytes), gate_);
 }
 
 asio::awaitable<core::Result<void>> NativeConnectionStream::Start(HttpServerResponse response,
@@ -740,7 +749,7 @@ asio::awaitable<core::Result<void>> NativeConnectionStream::Start(HttpServerResp
 }
 
 asio::awaitable<core::Result<void>> NativeConnectionStream::Write(std::string bytes) {
-  return Connection::WriteEvent(connection_, std::move(bytes), gate_);
+  return connection_->WriteEvent(std::move(bytes), gate_);
 }
 
 void NativeConnectionStream::Finish(std::string error_event) {

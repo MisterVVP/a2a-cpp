@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <boost/asio/io_context.hpp>
 
 #include "a2a/server/event_http_dispatcher.h"
@@ -21,7 +20,6 @@ using NativeHttpCompletion = std::function<void(core::Result<HttpServerResponse>
 using NativeHttpStreamFactory = std::function<std::shared_ptr<NativeHttpStream>()>;
 struct NativeHttpWorkQueue final {
   boost::asio::io_context::executor_type executor;
-  const std::atomic_size_t& pending;
 };
 using NativeHttpHandler = std::function<void(HttpServerRequest, engine::RequestExecutionContext, NativeHttpCompletion,
                                              NativeHttpStreamFactory, NativeHttpWorkQueue)>;
