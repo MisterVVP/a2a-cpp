@@ -70,13 +70,15 @@ connections are active. Each socket stays on its assigned loop, and
 both loops share the server's connection and pending request limits. Handlers,
 stream producers, and cancellation observers run on application workers. Native
 dispatcher execution runs on the application's `AsyncRuntime` or supplied
-executor. With the dispatcher-backed listener
-constructor, the dispatcher serializes replies and submits their writes
-directly to the network executor. A stream's first event can share the write
-that commits the response headers. `MakeEventHttpHandler` remains available
-for callers composing their own handler. Its existing admission and cancellation
-contracts remain authoritative; the HTTP runtime does not implement another
-application dispatcher.
+executor. The dispatcher-backed listener serializes a compact unary reply on
+the dispatcher when it is the only active unary request. A work budget accounts
+for payload bytes and nested elements, including artifacts and task history.
+Larger replies and replies under unary contention serialize on application
+workers. Idle subscriptions leave the inline path available. A stream's first
+event can share the write that commits the response headers.
+`MakeEventHttpHandler` remains available for callers composing their own
+handler. The HTTP runtime relies on that handler's admission and cancellation
+contracts.
 
 An async response may place already available SSE bytes in `response.body`.
 The listener sends this prefix before invoking the stream producer and combines
