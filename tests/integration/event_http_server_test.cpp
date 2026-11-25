@@ -248,6 +248,8 @@ constexpr std::string_view kFailingSubscription = "GET /a2a/tasks/fail:subscribe
 constexpr std::string_view kBurstSubscription = "GET /a2a/tasks/burst:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
 constexpr std::string_view kBurstTaskId = "burst";
 constexpr std::array<std::string_view, 3> kBurstEventIds{"first-event", "second-event", "third-event"};
+constexpr std::size_t kBurstContextBytes = 96;
+constexpr std::size_t kBoundedBurstOutputBytes = 240;
 constexpr std::string_view kRichTaskId = "rich";
 constexpr std::string_view kRichTaskRequest =
     "GET /a2a/tasks/rich HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
@@ -334,15 +336,15 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
                                                     engine::RequestExecutionContext context,
                                                     std::shared_ptr<engine::AsyncServerStreamSession> stream) override {
     if (request.id() == kBurstTaskId) {
+      std::vector<lf::a2a::v1::StreamResponse> events;
+      events.reserve(kBurstEventIds.size());
       for (const auto id : kBurstEventIds) {
-        lf::a2a::v1::StreamResponse event;
-        event.mutable_task()->set_id(std::string(id));
-        auto written = co_await stream->Write(std::move(event));
-        if (!written.ok()) {
-          co_return written.error();
-        }
+        auto* update = events.emplace_back().mutable_status_update();
+        update->set_task_id(std::string(id));
+        update->set_context_id(std::string(kBurstContextBytes, 'c'));
+        update->mutable_status()->set_state(lf::a2a::v1::TASK_STATE_WORKING);
       }
-      co_return core::Result<void>{};
+      co_return co_await stream->WriteBatch(std::move(events));
     }
     if (request.id() != kFailingTaskId && request.id() != kIdleTaskId) {
       co_return core::Result<void>{};
@@ -592,9 +594,12 @@ TEST(EventHttpServer, NativeDiscoveryCompletesWithoutDispatchAdmission) {
   runtime.Join();
 }
 
-std::string PipelineNativeSubscription(std::string_view subscription) {
+std::string PipelineNativeSubscription(std::string_view subscription,
+                                       std::size_t max_output_bytes = EventHttpServerOptions{}.max_output_bytes) {
   engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
-  EventHttpServer server(runtime.dispatcher(), {}, {}, {.max_pending_requests = 1, .idle_timeout = kTimeout});
+  EventHttpServerOptions options{.max_pending_requests = 1, .idle_timeout = kTimeout};
+  options.max_output_bytes = max_output_bytes;
+  EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   if (const auto started = server.Start(); !started.ok()) {
     ADD_FAILURE() << started.error().message();
     return {};
@@ -630,16 +635,40 @@ TEST(EventHttpServer, NativeStreamErrorTerminatesOnceBeforePipelinedResponse) {
   EXPECT_LT(error, response.find(kFinalChunk)) << response;
 }
 
-TEST(EventHttpServer, NativeReadyEventsKeepWireOrderBeforePipelinedResponse) {
+TEST(EventHttpServer, NativeBatchSendsFirstEventBeforeCoalescedEventsAndPipelinedResponse) {
   const auto response = PipelineNativeSubscription(kBurstSubscription);
   ExpectFinalChunkBeforeNextResponse(response);
-  std::size_t start = 0;
-  for (const auto id : kBurstEventIds) {
-    const auto event = response.find(id, start);
-    ASSERT_NE(event, std::string::npos) << response;
-    start = event + id.size();
-  }
-  EXPECT_LT(start, response.find(kFinalChunk)) << response;
+  const auto headers_end = response.find(core::http::kHeaderDelimiter);
+  ASSERT_NE(headers_end, std::string::npos);
+  const auto length_end = response.find(core::http::kLineTerminator, headers_end + core::http::kHeaderDelimiter.size());
+  ASSERT_NE(length_end, std::string::npos);
+  const auto chunk_start = length_end + core::http::kLineTerminator.size();
+  const auto first_end = response.find(core::http::kLineTerminator, chunk_start);
+  ASSERT_NE(first_end, std::string::npos);
+  const auto tail_length_end =
+      response.find(core::http::kLineTerminator, first_end + core::http::kLineTerminator.size());
+  ASSERT_NE(tail_length_end, std::string::npos);
+  const auto tail_end =
+      response.find(core::http::kLineTerminator, tail_length_end + core::http::kLineTerminator.size());
+  ASSERT_NE(tail_end, std::string::npos);
+  const auto first = response.find(kBurstEventIds[0], chunk_start);
+  const auto second = response.find(kBurstEventIds[1], tail_length_end);
+  const auto third = response.find(kBurstEventIds[2], tail_length_end);
+  EXPECT_LT(first, first_end) << response;
+  EXPECT_LT(second, third) << response;
+  EXPECT_LT(third, tail_end) << response;
+}
+
+TEST(EventHttpServer, NativeBatchFallsBackToSingleEventsWithinTheOutputBound) {
+  const auto response = PipelineNativeSubscription(kBurstSubscription, kBoundedBurstOutputBytes);
+  ExpectFinalChunkBeforeNextResponse(response);
+  const auto second = response.find(kBurstEventIds[1]);
+  ASSERT_NE(second, std::string::npos) << response;
+  const auto second_chunk_end = response.find(core::http::kLineTerminator, second);
+  ASSERT_NE(second_chunk_end, std::string::npos) << response;
+  const auto third = response.find(kBurstEventIds[2], second_chunk_end);
+  ASSERT_NE(third, std::string::npos) << response;
+  EXPECT_LT(third, response.find(kFinalChunk)) << response;
 }
 
 struct DrainProbe final {

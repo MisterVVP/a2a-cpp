@@ -3,6 +3,7 @@
 #pragma once
 
 #include <boost/asio/io_context.hpp>
+#include <cstddef>
 
 #include "a2a/server/event_http_dispatcher.h"
 
@@ -10,6 +11,7 @@ namespace a2a::server::http_runtime {
 
 class NativeHttpStream : public HttpEventStream {
  public:
+  [[nodiscard]] virtual std::size_t BatchPayloadLimit() const noexcept { return 0; }
   virtual boost::asio::awaitable<core::Result<void>> Start(HttpServerResponse response, std::string first_event) = 0;
   virtual void Finish(std::string error_event) = 0;
   virtual void FinishEmpty(HttpServerResponse response) = 0;

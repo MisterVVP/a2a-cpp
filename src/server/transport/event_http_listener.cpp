@@ -177,6 +177,7 @@ class NativeConnectionStream final : public http_runtime::NativeHttpStream {
       : connection_(std::move(connection)), execution_(std::move(execution)), reusable_(reusable) {}
   asio::awaitable<core::Result<void>> Start(HttpServerResponse response, std::string first_event) override;
   asio::awaitable<core::Result<void>> Write(std::string bytes) override;
+  [[nodiscard]] std::size_t BatchPayloadLimit() const noexcept override;
   void Finish(std::string error_event) override;
   void FinishEmpty(HttpServerResponse response) override;
   void Abort() override;
@@ -750,6 +751,10 @@ asio::awaitable<core::Result<void>> NativeConnectionStream::Start(HttpServerResp
 
 asio::awaitable<core::Result<void>> NativeConnectionStream::Write(std::string bytes) {
   return connection_->WriteEvent(std::move(bytes), gate_);
+}
+
+std::size_t NativeConnectionStream::BatchPayloadLimit() const noexcept {
+  return connection_->max_output_bytes_ - kHexBytes - 4U;
 }
 
 void NativeConnectionStream::Finish(std::string error_event) {

@@ -32,6 +32,18 @@ protobuf until `OnWriteDone` and allows one in-flight write. A concurrent write 
 rejected. Always propagate write failures. The dispatcher retains the first write
 or authorization error even if an application mistakenly ignores it.
 
+For events already available to a finite producer, await `WriteBatch` with up
+to `AsyncServerStreamSession::kMaxBatchEvents` owned events. Empty batches succeed.
+Success acknowledges transport consumption of every event in order. A failed
+batch can deliver a prefix. The dispatcher sends the first event immediately with
+its own transport write. Direct HTTP SSE can combine subsequent compact status updates
+within the output limit. Native gRPC advances the batch from its write callbacks
+with one write outstanding. The dispatcher falls back to sequential writes when
+other requests are active. Custom sinks default to sequential `Write` calls.
+Requests with a security policy use per-event authorization and writes. Use
+`Write` for live events and for producers that need an acknowledgement after
+each event.
+
 Returning success ends the stream normally. Returning an error or throwing ends
 it with the existing error/status mapping. There is no separate application
 `Finish` call. Unimplemented streaming methods return unsupported-operation

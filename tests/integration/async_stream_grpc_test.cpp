@@ -73,6 +73,27 @@ TEST(AsyncStreamGrpc, RepeatedWritesAcknowledgeEachEventAndFinishInOrder) {
   EXPECT_TRUE(call->Finish().ok());
   EXPECT_EQ(server.application->acknowledged, kBurstStreamEvents);
 }
+TEST(AsyncStreamGrpc, BatchWritesAcknowledgeAllEventsAndFinishInOrder) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  server.application->batch = true;
+  server.application->event_count = AsyncServerStreamSession::kMaxBatchEvents;
+  const auto call = server.Start();
+  ExpectOrderedNativeEvents(*call, AsyncServerStreamSession::kMaxBatchEvents);
+  EXPECT_FALSE(call->Read());
+  EXPECT_TRUE(call->Finish().ok());
+  EXPECT_EQ(server.application->acknowledged, AsyncServerStreamSession::kMaxBatchEvents);
+}
+TEST(AsyncStreamGrpc, RejectsAnOversizedBatchBeforeSendingAnyEvent) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  server.application->batch = true;
+  server.application->event_count = AsyncServerStreamSession::kMaxBatchEvents + 1U;
+  const auto call = server.Start();
+  EXPECT_FALSE(call->Read());
+  EXPECT_EQ(call->Finish().error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
+  EXPECT_EQ(server.application->acknowledged, 0U);
+}
 TEST(AsyncStreamGrpc, SubscriptionConvertsTenantAndPropagatesOwnedMetadata) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());
@@ -198,6 +219,24 @@ TEST(AsyncStreamGrpc, CancelsSlowReaderWhileLargeWriteIsOutstanding) {
     EXPECT_EQ(call->Finish().error_code(), ::grpc::StatusCode::CANCELLED);
   }
   EXPECT_EQ(after->count, 1);
+}
+TEST(AsyncStreamGrpc, ShutdownReleasesSlowBatchWithoutAcknowledgingIt) {
+  constexpr std::size_t kLargeBatchEventBytes = 1024UL * 1024UL;
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  server.application->batch = true;
+  server.application->event_count = AsyncServerStreamSession::kMaxBatchEvents;
+  server.application->payload_bytes = kLargeBatchEventBytes;
+  const auto call = server.Start();
+  call->reader->WaitForInitialMetadata();
+  ASSERT_TRUE(call->Read());
+  ASSERT_TRUE(call->Read());
+  server.Shutdown();
+  while (call->Read()) {
+  }
+  const auto status = call->Finish().error_code();
+  EXPECT_TRUE(status == ::grpc::StatusCode::CANCELLED || status == ::grpc::StatusCode::UNAVAILABLE);
+  EXPECT_EQ(server.application->acknowledged, 0U);
 }
 class SdkStreamObserver final : public client::StreamObserver {
  public:

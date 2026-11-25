@@ -18,6 +18,7 @@
 #include <stop_token>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "a2a/server/required_extensions_validator.h"
 #include "server/engine/dispatch_pipeline.h"
@@ -72,14 +73,20 @@ struct CoroutineDispatchResult final {
 constexpr auto kMissingStream = "Streaming dispatch requires a stream operation and sink";
 constexpr auto kConcurrentWrite = "Only one stream write may be outstanding";
 
+struct AdmissionCounts final {
+  std::atomic_size_t active = 0;
+  std::atomic_size_t pending = 0;
+};
+
 class CheckedStream final : public AsyncServerStreamSession {
  public:
   CheckedStream(std::shared_ptr<AsyncServerStreamSession> sink, std::shared_ptr<RequestExecution> source,
-                std::shared_ptr<const DispatchSecurity> security, const RequestContext& context,
-                const DispatchRequest& request)
+                std::shared_ptr<const DispatchSecurity> security, std::shared_ptr<const AdmissionCounts> admission,
+                const RequestContext& context, const DispatchRequest& request)
       : sink_(std::move(sink)),
         source_(std::move(source)),
         security_(std::move(security)),
+        admission_(std::move(admission)),
         context_(security_ != nullptr ? context : RequestContext{}) {
     if (const auto* get = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload)) {
       task_id_ = get->id();
@@ -91,28 +98,39 @@ class CheckedStream final : public AsyncServerStreamSession {
     if (writing_.exchange(true)) {
       co_return Reject(core::Error::Validation(kConcurrentWrite));
     }
-    struct Reservation final {
-      std::atomic_bool& writing;
-      ~Reservation() { writing.store(false); }
-    } reservation{.writing = writing_};
-    if (auto failed = Failure(); failed.has_value()) {
-      co_return failed.value();
-    }
-    const auto view = source_->Context();
-    if (view.Deadline().has_value()) {
-      (void)source_->ExpireDeadline();
-    }
-    if (const auto outcome = view.Outcome(); outcome != RequestOutcome::kPending) {
-      co_return Reject(CancellationError(outcome));
-    }
-    if (security_ != nullptr) {
-      auto authorized = security_->AuthorizeStreamEvent(event, context_, task_id_);
-      if (!authorized.ok()) {
-        co_return Reject(authorized.error());
-      }
+    const Reservation reservation{.writing = writing_};
+    if (auto ready = CheckEvent(event); !ready.ok()) {
+      co_return ready;
     }
     auto result = co_await sink_->Write(std::move(event));
-    co_return result.ok() ? result : Reject(result.error());
+    co_return MarkWrite(std::move(result));
+  }
+  boost::asio::awaitable<core::Result<void>> WriteBatch(std::vector<lf::a2a::v1::StreamResponse> events) override {
+    if (events.empty()) {
+      co_return core::Result<void>{};
+    }
+    if (events.size() > kMaxBatchEvents) {
+      co_return Reject(core::Error::Validation(kBatchTooLarge));
+    }
+    if (writing_.exchange(true)) {
+      co_return Reject(core::Error::Validation(kConcurrentWrite));
+    }
+    const Reservation reservation{.writing = writing_};
+    for (auto event = events.begin(); event != events.end(); ++event) {
+      if (auto ready = CheckEvent(*event); !ready.ok()) {
+        co_return ready;
+      }
+      if (wrote_event_ && security_ == nullptr && events.end() - event > 1 &&
+          admission_->active.load(std::memory_order_relaxed) == 1) {
+        events.erase(events.begin(), event);
+        co_return MarkWrite(co_await sink_->WriteBatch(std::move(events)));
+      }
+      auto result = MarkWrite(co_await sink_->Write(std::move(*event)));
+      if (!result.ok()) {
+        co_return result;
+      }
+    }
+    co_return core::Result<void>{};
   }
   std::optional<core::Error> Failure() {
     std::lock_guard lock(mutex_);
@@ -120,6 +138,40 @@ class CheckedStream final : public AsyncServerStreamSession {
   }
 
  private:
+  struct Reservation final {
+    std::atomic_bool& writing;
+    ~Reservation() { writing.store(false); }
+  };
+
+  core::Result<void> MarkWrite(core::Result<void> result) {
+    if (!result.ok()) {
+      return Reject(result.error());
+    }
+    wrote_event_ = true;
+    return result;
+  }
+
+  core::Result<void> CheckWrite() {
+    if (auto failed = Failure(); failed.has_value()) {
+      return failed.value();
+    }
+    const auto view = source_->Context();
+    if (view.Deadline().has_value()) {
+      (void)source_->ExpireDeadline();
+    }
+    const auto outcome = view.Outcome();
+    return outcome == RequestOutcome::kPending ? core::Result<void>{} : Reject(CancellationError(outcome));
+  }
+
+  core::Result<void> CheckEvent(const lf::a2a::v1::StreamResponse& event) {
+    auto ready = CheckWrite();
+    if (!ready.ok() || security_ == nullptr) {
+      return ready;
+    }
+    auto authorized = security_->AuthorizeStreamEvent(event, context_, task_id_);
+    return authorized.ok() ? authorized : Reject(authorized.error());
+  }
+
   core::Result<void> Reject(const core::Error& error) {
     std::lock_guard lock(mutex_);
     if (failure_.has_value()) {
@@ -133,14 +185,11 @@ class CheckedStream final : public AsyncServerStreamSession {
   const std::shared_ptr<AsyncServerStreamSession> sink_;
   const std::shared_ptr<RequestExecution> source_;
   const std::shared_ptr<const DispatchSecurity> security_;
+  const std::shared_ptr<const AdmissionCounts> admission_;
   const RequestContext context_;
   std::string task_id_;
   std::atomic_bool writing_ = false;
-};
-
-struct AdmissionCounts final {
-  std::atomic_size_t active = 0;
-  std::atomic_size_t pending = 0;
+  bool wrote_event_ = false;
 };
 
 struct RollbackAdmission final {
@@ -167,6 +216,7 @@ class AdmissionReservation final : private core::NonCopyableOrMovable {
       counts_->active.fetch_sub(1);
     }
   }
+  [[nodiscard]] const std::shared_ptr<AdmissionCounts>& counts() const noexcept { return counts_; }
 
  private:
   const std::shared_ptr<AdmissionCounts> counts_;
@@ -255,7 +305,8 @@ struct AsyncDispatcher::State final {
 
     boost::asio::awaitable<core::Result<DispatchResponse>> RunStream(CoroutineAgentExecutor& application,
                                                                      RequestExecutionContext view) {
-      auto checked = std::make_shared<CheckedStream>(stream, source, pipeline->security, context, request);
+      auto checked =
+          std::make_shared<CheckedStream>(stream, source, pipeline->security, admission.counts(), context, request);
       core::Result<DispatchResponse> result = core::Error::Validation(kMissingStream);
       if (request.operation == DispatcherOperation::kSendStreamingMessage) {
         result = co_await RoutePayload<lf::a2a::v1::SendMessageRequest>(

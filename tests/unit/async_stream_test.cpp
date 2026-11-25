@@ -132,6 +132,16 @@ TEST_F(AsyncStreamTest, DemandAcknowledgementPrecedesNextEventAndAfter) {
   EXPECT_EQ(application->acknowledged, kStreamEvents);
   EXPECT_EQ(after->count, 1);
 }
+TEST_F(AsyncStreamTest, DefaultBatchWaitsForEachCustomSinkWrite) {
+  application->batch = true;
+  sink->automatic = false;
+  ASSERT_NE(Send(), nullptr);
+  ExpectPendingDemand();
+  AcknowledgeAllEvents();
+  EXPECT_TRUE(Receive());
+  ExpectOrderedMessages(sink->events);
+  EXPECT_EQ(application->acknowledged, kStreamEvents);
+}
 TEST_F(AsyncStreamTest, WriteFailurePropagatesAndStopsProduction) {
   sink->automatic = false;
   ASSERT_NE(Send(), nullptr);
