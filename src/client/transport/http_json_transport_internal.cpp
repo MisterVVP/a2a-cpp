@@ -34,31 +34,6 @@ constexpr std::string_view kProtocolCodeMemberName = "code";
 
 }  // namespace
 
-a2a::http::Request ToSharedHttpRequest(const HttpRequest& request) {
-  a2a::http::Request shared_request;
-  shared_request.tls = request.tls;
-  shared_request.method = request.method;
-  shared_request.url = request.url;
-  shared_request.body = request.body;
-  shared_request.timeout = request.timeout;
-  shared_request.headers.reserve(request.headers.size());
-  for (const auto& [name, value] : request.headers) {
-    shared_request.headers.push_back(a2a::http::Header{.name = name, .value = value});
-  }
-  return shared_request;
-}
-
-HttpClientResponse ToClientHttpResponse(a2a::http::Response response) {
-  HttpClientResponse client_response;
-  client_response.status_code = response.status_code;
-  client_response.body = std::move(response.body);
-  client_response.headers.reserve(response.headers.size());
-  for (auto& header : response.headers) {
-    client_response.headers.insert_or_assign(std::move(header.name), std::move(header.value));
-  }
-  return client_response;
-}
-
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::string JoinUrl(std::string_view interface_base_url, std::string_view rpc_endpoint) {
   std::string base(interface_base_url);
@@ -135,22 +110,6 @@ constexpr const char* kCreatePushTaskIdRequired = "TaskPushNotificationConfig.ta
 constexpr const char* kGetPushTaskIdRequired = "GetTaskPushNotificationConfigRequest.task_id is required";
 constexpr const char* kListPushTaskIdRequired = "ListTaskPushNotificationConfigsRequest.task_id is required";
 constexpr const char* kDeletePushTaskIdRequired = "DeleteTaskPushNotificationConfigRequest.task_id is required";
-constexpr std::string_view kDefaultMtlsUnsupportedMessage =
-    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
-
-HttpRequester MakeHttpRequesterForClient(std::shared_ptr<a2a::http::Client> client) {
-  return [client = std::move(client)](const HttpRequest& request) -> core::Result<HttpClientResponse> {
-    if (request.mtls.has_value()) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    auto response = client->SendRequest(ToSharedHttpRequest(request));
-    if (!response.ok()) {
-      return response.error();
-    }
-    return ToClientHttpResponse(std::move(response.value()));
-  };
-}
-
 template <typename T>
 core::Result<T> ParseBodyOrMapError(std::string_view method, std::string_view endpoint,
                                     const HttpClientResponse& response) {

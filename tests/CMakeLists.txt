@@ -68,7 +68,8 @@ if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   target_include_directories(subscription_diagnostics_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
   target_compile_definitions(subscription_diagnostics_test PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
   target_link_libraries(subscription_diagnostics_test PRIVATE a2a_core_diagnostics GTest::gtest_main)
-  gtest_discover_tests(subscription_diagnostics_test)
+  gtest_discover_tests(subscription_diagnostics_test
+    PROPERTIES ENVIRONMENT "A2A_SUBSCRIPTION_DIAGNOSTICS=1")
 endif()
 
 add_executable(non_copyable_test
@@ -152,6 +153,7 @@ if(A2A_HAS_LIBCURL)
 
   add_executable(curl_reactor_test
     unit/curl_reactor_deadline_test.cpp
+    unit/serial_stream_dispatch_test.cpp
     integration/curl_reactor_integration_test.cpp
     integration/curl_streaming_transport_test.cpp
   )
@@ -1059,7 +1061,8 @@ if(Python3_Interpreter_FOUND)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/subscription_diagnostics_build_test.py
               --symbol-tool ${A2A_SYMBOL_INSPECTOR}
               --symbol-argument=${A2A_SYMBOL_INSPECTOR_ARGUMENT}
-              $<TARGET_FILE:a2a_core> $<TARGET_FILE:a2a_client> $<TARGET_FILE:a2a_server>
+              $<TARGET_FILE:a2a_core> $<TARGET_FILE:a2a_http>
+              $<TARGET_FILE:a2a_client> $<TARGET_FILE:a2a_server>
     )
   endif()
   add_test(

@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <barrier>
+#include <boost/asio/io_context.hpp>
 #include <chrono>
 #include <future>
 #include <latch>
@@ -846,6 +847,27 @@ TEST(AsyncDispatcherTest, CancellationObserverCanDestroyDispatcherBeforeSdkStopC
   EXPECT_FALSE(transport.Receive().ok());
   EXPECT_EQ(accepted.value()->Context().Outcome(), RequestOutcome::kClientCancelled);
   EXPECT_EQ(transport.reply()->outcome, RequestOutcome::kClientCancelled);
+}
+
+TEST(AsyncDispatcherTest, CancellationBeforeStartupSkipsApplicationAndCompletesOnce) {
+  boost::asio::io_context runtime;
+  auto executor = std::make_shared<FakeExecutor>();
+  auto trace = std::make_shared<Trace>();
+  auto interceptor = std::make_shared<RecordingInterceptor>(trace);
+  AsyncDispatcherOptions options;
+  options.interceptors = {interceptor};
+  AsyncDispatcher dispatcher(executor, runtime.get_executor(), std::move(options));
+  FakeTransport transport;
+  const auto accepted = transport.Send(dispatcher);
+  ASSERT_TRUE(accepted.ok());
+  EXPECT_TRUE(accepted.value()->Cancel());
+  dispatcher.Shutdown();
+  (void)runtime.run();
+  EXPECT_FALSE(transport.Receive().ok());
+  EXPECT_EQ(transport.reply()->outcome, RequestOutcome::kClientCancelled);
+  EXPECT_EQ(transport.reply()->count.load(), 1);
+  EXPECT_EQ(executor->calls.load(), 0);
+  EXPECT_EQ(trace->Read(), (std::vector<std::string>{kBefore, kAfter}));
 }
 
 TEST(AsyncDispatcherTest, TransportCancellationSchedulesObserversOffCallerThread) {

@@ -22,8 +22,6 @@
 namespace a2a::client {
 namespace {
 constexpr const char* kMissingRequester = "HTTP requester is not configured";
-constexpr std::string_view kDefaultMtlsUnsupportedMessage =
-    "default libcurl HTTP requester does not support mTLS options; inject a custom requester for mTLS";
 }  // namespace
 using http_json_internal::MakeHttpRequesterForClient;
 using http_json_internal::PrepareCancelTask;
@@ -34,8 +32,6 @@ using http_json_internal::PrepareGetTaskPushNotificationConfig;
 using http_json_internal::PrepareListTaskPushNotificationConfigs;
 using http_json_internal::PrepareListTasks;
 using http_json_internal::PrepareSendMessage;
-using http_json_internal::ToClientHttpResponse;
-using http_json_internal::ToSharedHttpRequest;
 using http_json_internal::ValidateResponseVersion;
 
 HttpRequester MakeDefaultHttpRequester() { return MakeHttpRequesterForClient(std::make_shared<http::Client>()); }
@@ -58,24 +54,12 @@ HttpJsonTransport::HttpJsonTransport(ResolvedInterface resolved_interface, HttpR
 std::unique_ptr<HttpJsonTransport> HttpJsonTransport::CreateDefault(ResolvedInterface resolved_interface,
                                                                     std::chrono::milliseconds default_timeout) {
   auto default_http_client = std::make_shared<a2a::http::Client>();
-  auto async_requester = [client = default_http_client](
-                             const HttpRequest& request,
-                             core::Completion<HttpClientResponse> completion) -> core::Result<core::AsyncHandle> {
-    if (request.mtls) {
-      return core::Error::Validation(std::string(kDefaultMtlsUnsupportedMessage));
-    }
-    return client->SendRequestAsync(ToSharedHttpRequest(request),
-                                    [completion = std::move(completion)](core::Result<http::Response> response) {
-                                      if (!response.ok()) {
-                                        completion(response.error());
-                                      } else {
-                                        completion(ToClientHttpResponse(std::move(response.value())));
-                                      }
-                                    });
-  };
-  auto transport = std::make_unique<HttpJsonTransport>(
-      std::move(resolved_interface), MakeHttpRequesterForClient(default_http_client), HttpStreamRequester{},
-      default_timeout, std::move(async_requester));
+  auto transport = std::make_unique<HttpJsonTransport>(std::move(resolved_interface),
+                                                       MakeHttpRequesterForClient(default_http_client),
+                                                       HttpStreamRequester{}, default_timeout);
+  transport->async_transport_ = http_json_internal::MakeAsyncTransport(
+      transport->resolved_interface_, http_transport_internal::MakeOwnedHttpAsyncRequester(default_http_client),
+      default_timeout);
   transport->default_async_stream_client_ = std::move(default_http_client);
   return transport;
 }

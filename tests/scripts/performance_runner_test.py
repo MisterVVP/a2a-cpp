@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import csv
 import importlib.util
 import io
 import json
@@ -8,7 +9,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +20,13 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts" / "run_performance_tests.sh"
 RUNNER_MODULE = ROOT / "scripts" / "performance_runner.py"
+TASK_CREATION_SCENARIO = "SendMessage_CreateTask"
+COMPARISON_MODES = ("sync", "async")
+COMPARISON_REQUESTS = 8
+TASK_CREATION_SEND_PATH = "/a2a/message:send"
+DIAGNOSTICS_RESET_PATH = "/_a2a/performance/reset-subscription-diagnostics"
+TASK_CREATION_MESSAGE_PREFIX = "wire-create"
+TASK_CREATION_WARMUP_PREFIX = "wire-warmup-create"
 
 
 def load_runner_module():
@@ -31,23 +42,107 @@ class PerformanceRunnerTest(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("A2A_PERF_TEST_ASIO") == "1", "requires Asio performance SUT")
     def test_four_client_server_combinations_with_warmup(self):
         runner = load_runner_module()
+        scenarios = (*runner.ASYNC_CLIENT_SCENARIOS, *runner.WIRE_OBSERVER_SCENARIOS)
         with tempfile.TemporaryDirectory() as directory:
             subprocess.run([str(RUNNER), "--server-modes", "sync,async", "--client-modes", "sync,async",
                             "--repetitions", "1", "--transports", "grpc,http_json,jsonrpc",
-                            "--store-backends", "inmemory", "--scenarios", ",".join(runner.ASYNC_CLIENT_SCENARIOS),
-                            "--requests", "8", "--concurrency", "4", "--warmup-seconds", "0.01",
+                            "--store-backends", "inmemory", "--scenarios", ",".join(scenarios),
+                            "--requests", str(COMPARISON_REQUESTS), "--concurrency", "4", "--warmup-seconds", "0.01",
                             "--report-dir", directory], cwd=ROOT, check=True, capture_output=True, text=True)
             report = json.loads((Path(directory) / "results.json").read_text())
             wire = [row for row in report["results"] if row["transport_path"] != "in_process"]
-            self.assertEqual(36, len(wire))
-            self.assertTrue(all(row["operations"] == row["success"] == 8 and row["errors"] == 0 for row in wire))
-            self.assertEqual({("sync", "sync"), ("sync", "async"), ("async", "sync"), ("async", "async")},
-                             {(row["client_execution_mode"], row["server_execution_mode"]) for row in wire})
-            self.assertEqual(18, len(report["sync_async_comparisons"]))
+            expected = {
+                (scenario, transport, client, server)
+                for transport in runner.TRANSPORTS
+                for scenario in runner.wire_scenarios_for_transport(transport, scenarios)
+                for client in (COMPARISON_MODES if scenario in runner.ASYNC_CLIENT_SCENARIOS else ("observer",))
+                for server in COMPARISON_MODES
+            }
+            self.assertEqual(len(expected), len(wire))
+            self.assertEqual(expected, {(row["scenario"], row["transport"], row["client_execution_mode"],
+                                         row["server_execution_mode"]) for row in wire})
+            self.assertTrue(any(row["scenario"] == TASK_CREATION_SCENARIO for row in wire))
+            self.assertTrue(all(row["operations"] == row["success"] == COMPARISON_REQUESTS and row["errors"] == 0
+                                for row in wire))
+            comparisons = report["sync_async_comparisons"]
+            expected_pairs = {(scenario, transport, client) for scenario, transport, client, _ in expected}
+            self.assertEqual(len(expected_pairs), len(comparisons))
+            self.assertEqual(expected_pairs, {(row["scenario"], row["transport"], row["client_execution_mode"])
+                                              for row in comparisons})
+            for row in comparisons:
+                self.assertIsNotNone(row["throughput_ratio"])
+                self.assertEqual(set(COMPARISON_MODES), set(row["modes"]))
+                self.assertTrue(all(mode["valid"] for mode in row["modes"].values()))
+            with (Path(directory) / "results.csv").open() as csv_file:
+                csv_rows = list(csv.DictReader(csv_file))
+            self.assertEqual(expected, {(row["scenario"], row["transport"], row["client_execution_mode"],
+                                         row["server_execution_mode"]) for row in csv_rows
+                                        if row["transport_path"] != "in_process"})
             summary = (Path(directory) / "summary.md").read_text()
             self.assertIn("| Client | Sync server ops/s |", summary)
             self.assertIn("Ops/s range sync / async", summary)
-            self.assertTrue(all(row["throughput_ratio"] is not None for row in report["sync_async_comparisons"]))
+            for scenario, transport, client in expected_pairs:
+                self.assertIn(f"| {scenario} | {transport} | inmemory | 4 | {client} |", summary)
+
+    @unittest.skipUnless(os.environ.get("A2A_PERF_TEST_ASIO") == "1", "requires Asio performance build")
+    def test_task_creation_checks_task_id_and_keeps_warmup_out_of_measurement(self):
+        for mode in COMPARISON_MODES:
+            with self.subTest(mode=mode, phase="warmup"):
+                message_ids, result = self.run_task_creation_with_missing_id(mode, TASK_CREATION_WARMUP_PREFIX)
+                self.assertCountEqual(self.task_creation_ids(TASK_CREATION_WARMUP_PREFIX, 2), message_ids)
+                self.assertEqual((0, 0, 1), (result["operations"], result["success"], result["errors"]))
+            with self.subTest(mode=mode, phase="measurement"):
+                message_ids, result = self.run_task_creation_with_missing_id(mode, TASK_CREATION_MESSAGE_PREFIX)
+                self.assertCountEqual(self.task_creation_ids(TASK_CREATION_WARMUP_PREFIX, 2), message_ids[:2])
+                self.assertCountEqual(self.task_creation_ids(TASK_CREATION_MESSAGE_PREFIX, 3), message_ids[2:])
+                self.assertEqual((3, 2, 1), (result["operations"], result["success"], result["errors"]))
+
+    @staticmethod
+    def task_creation_ids(prefix, count):
+        return [f"{prefix}-{index}" for index in range(count)]
+
+    def run_task_creation_with_missing_id(self, mode, failure_prefix):
+        message_ids = []
+        failed_message_id, = self.task_creation_ids(failure_prefix, 1)
+
+        class TaskCreationHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                if self.path == DIAGNOSTICS_RESET_PATH:
+                    self.send_response(HTTPStatus.NO_CONTENT)
+                    self.end_headers()
+                    return
+                if self.path != TASK_CREATION_SEND_PATH:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                message_id = request["message"]["messageId"]
+                message_ids.append(message_id)
+                response = json.dumps({"task": {} if message_id == failed_message_id else {"id": message_id}}).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+
+            def log_message(self, *_args):
+                pass
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), TaskCreationHandler) as server:
+            serving = threading.Thread(target=server.serve_forever)
+            serving.start()
+            try:
+                completed = subprocess.run([
+                    os.environ["A2A_PERF_WIRE_DRIVER"], "--port", str(server.server_port),
+                    "--transport", "http_json", "--client-mode", mode, "--scenarios", TASK_CREATION_SCENARIO,
+                    "--requests", "3", "--concurrency", "2", "--warmup-seconds", "0.01",
+                ], check=True, capture_output=True, text=True, timeout=10)
+            finally:
+                server.shutdown()
+                serving.join()
+        result, = json.loads(completed.stdout)
+        return message_ids, result
 
     def test_client_modes_preserve_streaming_and_postgres_coverage(self):
         runner = load_runner_module()
@@ -183,7 +278,6 @@ class PerformanceRunnerTest(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("A2A_PERF_TEST_ASIO") == "1", "requires Asio performance SUT")
     def test_sync_async_wire_reports(self):
-        import csv
         with tempfile.TemporaryDirectory() as directory:
             subprocess.run([str(RUNNER), "--server-modes", "sync,async", "--repetitions", "2",
                             "--transports", "grpc,http_json,jsonrpc", "--store-backends", "inmemory",
@@ -348,9 +442,9 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertNotEqual(results[0]["server_subscription_diagnostics"],
                             results[1]["server_subscription_diagnostics"])
 
-    def test_wire_scenarios_share_one_sut_without_subscription_diagnostics(self):
+    def test_task_creation_gets_fresh_sut_while_read_scenarios_share_one(self):
         runner = load_runner_module()
-        scenarios = ("SendMessage_CreateTask", "GetTask_ExistingTask")
+        scenarios = (TASK_CREATION_SCENARIO, "GetTask_ExistingTask", "ListTasks_NoPagination")
         sut = SimpleNamespace(host="127.0.0.1", port=1234, log_path=Path("sut.log"))
         context = mock.MagicMock()
         context.__enter__.return_value = sut
@@ -364,13 +458,14 @@ class PerformanceRunnerTest(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(runner, "ensure_wire_driver", return_value=Path("wire-driver")), \
+             mock.patch.object(runner, "find_available_sut_port", return_value=2345), \
              mock.patch.object(runner, "SutProcess", return_value=context) as sut_process, \
              mock.patch.object(runner, "run_command_json", side_effect=driver_result) as run_command:
             results = runner.run_wire_driver(config, "grpc", "inmemory", 1, 1, 1234)
 
         self.assertEqual(scenarios, tuple(result["scenario"] for result in results))
         self.assertTrue(all(result["driver_type"] == "wire_tck_sut" for result in results))
-        sut_process.assert_called_once()
+        self.assertEqual([1234, 2345], [call.args[2] for call in sut_process.call_args_list])
         self.assertEqual(len(scenarios), run_command.call_count)
 
     def test_wire_scenarios_reject_rows_for_another_selected_scenario(self):
@@ -974,6 +1069,17 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(5, config.repetitions)
         self.assertEqual(runner.POSTGRES_WRITE_SCENARIOS, config.scenarios)
         self.assertEqual(80, runner.postgres_tail_expected_rows(config))
+
+    def test_postgres_profiles_allow_explicit_ci_concurrency(self):
+        runner = load_runner_module()
+        environment = {"A2A_PERF_CONCURRENCY": "16,64,256"}
+        with mock.patch.dict(os.environ, environment, clear=True):
+            tail = runner.parse_args(["--profile", "postgres-tail"])
+            write = runner.parse_args(["--profile", "postgres-write", "--concurrency", "1,16,64,256"])
+        self.assertEqual((16, 64, 256), tail.concurrency_levels)
+        self.assertEqual((1, 16, 64, 256), write.concurrency_levels)
+        self.assertEqual(225, runner.postgres_tail_expected_rows(tail))
+        self.assertEqual(80, runner.postgres_tail_expected_rows(write))
 
     def test_push_config_fanout_can_be_overridden_for_list_scaling(self):
         runner = load_runner_module()

@@ -88,16 +88,16 @@ lf::a2a::v1::Message AuthorizationExplanation() {
 
 class SecurityExecutor final : public examples::ExampleExecutor {
  public:
-  SecurityExecutor(server::TaskStore* store, server::PushNotificationStore* push_store,
-                   std::filesystem::path credential_directory, std::string credential)
+  SecurityExecutor(server::TaskStore* store, server::PushNotificationStore* push_store, const SutAgentOptions& options)
       : examples::ExampleExecutor(
             {.task_store = store, .push_store = push_store, .push_delivery = nullptr, .task_id_generator = {}}),
         store_(store),
         authorization_(store,
-                       [credential = std::move(credential)](const auto&, std::string_view supplied) {
+                       [credential = options.task_credential](const auto&, std::string_view supplied) {
                          return !credential.empty() && supplied == credential;
                        }),
-        credential_directory_(std::move(credential_directory)) {
+        credential_directory_(options.credential_directory),
+        get_task_delay_(options.blocking_get_task_delay) {
     if (!credential_directory_.empty()) {
       worker_ = std::thread([this] { PollCredentials(); });
     }
@@ -112,6 +112,14 @@ class SecurityExecutor final : public examples::ExampleExecutor {
     }
     authorization_.Shutdown();
     examples::ExampleExecutor::ShutdownSubscriptions();
+  }
+
+  core::Result<lf::a2a::v1::Task> GetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                          server::RequestContext& context) override {
+    if (get_task_delay_ > std::chrono::milliseconds::zero()) {
+      std::this_thread::sleep_for(get_task_delay_);
+    }
+    return examples::ExampleExecutor::GetTask(request, context);
   }
 
   core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
@@ -193,6 +201,7 @@ class SecurityExecutor final : public examples::ExampleExecutor {
   server::TaskStore* store_;
   server::TaskAuthorizationService authorization_;
   std::filesystem::path credential_directory_;
+  const std::chrono::milliseconds get_task_delay_;
   std::atomic_bool stopped_ = false;
   std::thread worker_;
 };
@@ -326,8 +335,8 @@ lf::a2a::v1::AgentCard BuildCard(const SutEndpoints& endpoints, const SutAgentOp
       core::AgentCardBuilder::ConformancePreset(
           {.rest_url = endpoints.rest_url, .json_rpc_url = endpoints.json_rpc_url, .grpc_url = endpoints.grpc_url},
           kAgentName, kAgentRelease, kAgentDescription)
-          // The generic agent retains opaque parts without decoding their media.
-          .AddDefaultInputMode(kAnyInputMediaType)
+          .AddDefaultInputMode(options.allow_opaque_input ? kAnyInputMediaType
+                                                          : core::http::kContentTypeApplicationJson)
           .WithPushNotifications(options.push_notifications)
           .WithExtendedAgentCard(options.extended_card_mode != kExtendedCardModeDisabled)
           .Build();
@@ -407,8 +416,7 @@ class SutAgent::Impl final {
   Impl(server::stores::StoreBundle stores, const SutEndpoints& endpoints, const SutAgentOptions& options)
       : stores_(std::move(stores)),
         card_(BuildCard(endpoints, options)),
-        executor_(stores_.task_store.get(), stores_.push_store.get(), options.credential_directory,
-                  options.task_credential),
+        executor_(stores_.task_store.get(), stores_.push_store.get(), options),
         cards_(std::make_shared<core::StaticAgentCardProvider>(ExtendedCard(card_, options))),
         interceptor_(std::make_shared<SutPolicy>(options, card_)),
         dispatcher_(&executor_, cards_) {

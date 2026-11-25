@@ -20,6 +20,7 @@ enum class Phase : std::size_t {
   kHttpDelivery,
   kClientTerminalObserverCallback,
   kClientCompletionCallback,
+  kClientCallbackQueueWait,
   kCount,
 };
 
@@ -32,7 +33,8 @@ inline constexpr std::array<std::string_view, kPhaseCount> kPhaseNames = {"serve
                                                                           "frame_construction",
                                                                           "http_delivery",
                                                                           "client_terminal_observer_callback",
-                                                                          "client_completion_callback"};
+                                                                          "client_completion_callback",
+                                                                          "client_callback_queue_wait"};
 
 struct PhaseAggregate final {
   std::uint64_t count = 0;

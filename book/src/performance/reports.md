@@ -10,27 +10,31 @@ locally. `results.json` contains raw repetitions and `sync_async_comparisons`;
 counters, and `async_vs_sync_throughput_ratio`. Raw streaming latency fields
 remain available in both formats.
 
-Adjacent sync/async columns show throughput and per-run p95/p99
-latency, with one row per workload/transport/store/concurrency. Resource and
+Adjacent sync/async columns show throughput and per-run p50/p95/p99
+latency, with one row per workload, transport, store, concurrency, and client mode. Resource and
 streaming latency tables also pair modes in each cell as `sync / async`.
 Paired in-memory wire comparisons appear first. PostgreSQL wire results remain
 sync-only in separate tables. Raw repetitions are kept in JSON/CSV instead of
 repeated in the CI summary.
 
-The client column distinguishes synchronous unary calls from callback-driven
-async calls. Supported unary workloads run all four client/server combinations
-when `--client-modes sync,async` is selected. Streaming retains its common
-observer API. The default and CI run each mode once: these are single-run
-observations, and throughput ranges are `n/a`. With explicit local repetitions,
+The client column shows `sync` for synchronous unary calls, `async` for
+callback-driven unary calls, and `observer` for wire streams and subscriptions.
+With `--client-modes sync,async`, supported unary workloads run all four
+client/server combinations. Read across one client row to compare server modes
+with the client held fixed. Read down one server column to compare client modes
+at the same workload, transport, store, and concurrency. Streaming uses one
+observer measurement per server mode. The default and CI run each mode once,
+so these are single-run observations and throughput ranges are `n/a`. With explicit local repetitions,
 ranges show the minimum and maximum; overlapping ranges warrant caution about
 small median differences.
 
 CI also runs a focused sustained matrix in `normal/sustained`, using at least 250 ms
 warmup on the measured clients, three-second measurements, concurrency 1/64,
 and one pass per mode. The same job summary and artifact include these results.
-The broad normal matrix retains short coverage runs. Read the sustained results
-for performance conclusions; CPU/RSS/thread counters still include setup and
-warmup as described below.
+The broad normal matrix retains short coverage runs. The `normal/task-creation`
+report covers 24 wire configurations with 2,000 measured requests per
+configuration. It uses both client APIs and server modes on all three transports
+at concurrency 1 and 64. CPU, RSS, and thread counters include setup and warmup.
 
 The throughput ratio is **async divided by sync**: above 1 is a gain,
 below 1 a regression, near 1 parity. With explicit local repetitions, latency

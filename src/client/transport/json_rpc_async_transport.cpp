@@ -34,8 +34,9 @@ constexpr const char* kMissingAsyncRequester = "HTTP async requester is not conf
 
 class JsonRpcAsyncTransport final : public AsyncClientTransport {
  public:
-  JsonRpcAsyncTransport(ResolvedInterface resolved_interface, HttpAsyncRequester requester,
-                        std::chrono::milliseconds timeout, std::shared_ptr<RequestIdGenerator> generator)
+  JsonRpcAsyncTransport(ResolvedInterface resolved_interface,
+                        http_transport_internal::OwnedHttpAsyncRequester requester, std::chrono::milliseconds timeout,
+                        std::shared_ptr<RequestIdGenerator> generator)
       : resolved_interface_(std::move(resolved_interface)),
         async_requester_(std::move(requester)),
         default_timeout_(timeout),
@@ -83,19 +84,20 @@ class JsonRpcAsyncTransport final : public AsyncClientTransport {
       completion.Complete(core::Error::Validation(kMissingAsyncRequester));
       return;
     }
-    auto started = async_requester_(
-        http_request.value(), [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
-          if (!response.ok()) {
-            completion.Complete(response.error());
-            return;
-          }
-          const auto version = ValidateResponseVersion(response.value());
-          if (!version.ok()) {
-            completion.Complete(version.error());
-            return;
-          }
-          completion.Complete(decode(response.value()));
-        });
+    auto started =
+        async_requester_(std::move(http_request.value()),
+                         [completion, decode = std::move(plan.decode)](core::Result<HttpClientResponse> response) {
+                           if (!response.ok()) {
+                             completion.CompleteContinuation(response.error());
+                             return;
+                           }
+                           const auto version = ValidateResponseVersion(response.value());
+                           if (!version.ok()) {
+                             completion.CompleteContinuation(version.error());
+                             return;
+                           }
+                           completion.CompleteContinuation(decode(response.value()));
+                         });
     if (!started.ok()) {
       completion.Complete(started.error());
       return;
@@ -108,7 +110,7 @@ class JsonRpcAsyncTransport final : public AsyncClientTransport {
                                                 options);
   }
   ResolvedInterface resolved_interface_;
-  HttpAsyncRequester async_requester_;
+  http_transport_internal::OwnedHttpAsyncRequester async_requester_;
   std::chrono::milliseconds default_timeout_;
   std::shared_ptr<RequestIdGenerator> id_generator_;
 };
@@ -126,7 +128,7 @@ void JsonRpcAsyncTransport::StartSendMessage(
     }
 
     return PreparedRpc<lf::a2a::v1::SendMessageResponse>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode =
             [request_id](const HttpClientResponse& input_response) -> core::Result<lf::a2a::v1::SendMessageResponse> {
           const auto parsed_result = ParseResponseResult(input_response, request_id);
@@ -165,7 +167,7 @@ void JsonRpcAsyncTransport::StartGetTask(const lf::a2a::v1::GetTaskRequest& requ
     }
 
     return PreparedRpc<lf::a2a::v1::Task>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<lf::a2a::v1::Task> {
           const auto parsed_result = ParseResponseResult(input_response, request_id);
           if (!parsed_result.ok()) {
@@ -200,13 +202,13 @@ void JsonRpcAsyncTransport::StartListTasks(const ListTasksRequest& request, cons
     if (request_id.empty()) {
       return core::Error::Internal(kEmptyRequestId);
     }
-    const auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kListTasks, params, request_id);
+    auto envelope_json = BuildJsonRpcEnvelope(core::json_rpc::MethodNames::kListTasks, params, request_id);
     if (!envelope_json.ok()) {
       return envelope_json.error();
     }
 
     return PreparedRpc<ListTasksResponse>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<ListTasksResponse> {
           auto typed_result = ParseListTasksResult(input_response, request_id);
           if (!typed_result.ok()) {
@@ -243,7 +245,7 @@ void JsonRpcAsyncTransport::StartCancelTask(const lf::a2a::v1::CancelTaskRequest
     }
 
     return PreparedRpc<lf::a2a::v1::Task>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<lf::a2a::v1::Task> {
           const auto parsed_result = ParseResponseResult(input_response, request_id);
           if (!parsed_result.ok()) {
@@ -278,7 +280,7 @@ void JsonRpcAsyncTransport::StartCreateTaskPushNotificationConfig(
     }
 
     return PreparedRpc<lf::a2a::v1::TaskPushNotificationConfig>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode = [request_id](const HttpClientResponse& input_response)
             -> core::Result<lf::a2a::v1::TaskPushNotificationConfig> {
           const auto parsed_result = ParseResponseResult(input_response, request_id);
@@ -319,7 +321,7 @@ void JsonRpcAsyncTransport::StartGetTaskPushNotificationConfig(
     }
 
     return PreparedRpc<lf::a2a::v1::TaskPushNotificationConfig>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode = [request_id](const HttpClientResponse& input_response)
             -> core::Result<lf::a2a::v1::TaskPushNotificationConfig> {
           const auto parsed_result = ParseResponseResult(input_response, request_id);
@@ -356,7 +358,7 @@ void JsonRpcAsyncTransport::StartListTaskPushNotificationConfigs(
     }
 
     return PreparedRpc<lf::a2a::v1::ListTaskPushNotificationConfigsResponse>{
-        .body = envelope_json.value(),
+        .body = std::move(envelope_json.value()),
         .decode = [request_id](const HttpClientResponse& input_response)
             -> core::Result<lf::a2a::v1::ListTaskPushNotificationConfigsResponse> {
           const auto parsed_result = ParseResponseResult(input_response, request_id);
@@ -396,7 +398,7 @@ void JsonRpcAsyncTransport::StartDeleteTaskPushNotificationConfig(
       return envelope_json.error();
     }
 
-    return PreparedRpc<void>{.body = envelope_json.value(),
+    return PreparedRpc<void>{.body = std::move(envelope_json.value()),
                              .decode = [request_id](const HttpClientResponse& input_response) -> core::Result<void> {
                                const auto parsed_result = ParseResponseResult(input_response, request_id);
                                if (!parsed_result.ok()) {
@@ -421,7 +423,7 @@ void JsonRpcAsyncTransport::StartDeleteTaskPushNotificationConfig(
 }  // namespace
 namespace json_rpc_internal {
 std::shared_ptr<AsyncClientTransport> MakeAsyncTransport(ResolvedInterface resolved_interface,
-                                                         HttpAsyncRequester requester,
+                                                         http_transport_internal::OwnedHttpAsyncRequester requester,
                                                          std::chrono::milliseconds default_timeout,
                                                          std::shared_ptr<RequestIdGenerator> id_generator) {
   return std::make_shared<JsonRpcAsyncTransport>(std::move(resolved_interface), std::move(requester), default_timeout,

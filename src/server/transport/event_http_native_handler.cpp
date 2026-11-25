@@ -1,21 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Vladimir Pavlov <mistervvp@outlook.com> (https://github.com/MisterVVP)
-#include "a2a/server/event_http_dispatcher.h"
+#include "event_http_native_handler.h"
 
+#include <algorithm>
+#include <atomic>
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/associated_executor.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <stop_token>
 #include <utility>
 
 #include "a2a/core/http_utils.h"
+#include "a2a/server/event_http_dispatcher.h"
 
-namespace a2a::server {
+namespace a2a::server::http_runtime {
 namespace {
 namespace asio = boost::asio;
 using DispatchResult = core::Result<DispatchResponse>;
@@ -344,13 +348,266 @@ asio::awaitable<core::Result<EventHttpResponse>> Handle(std::shared_ptr<Bindings
   }
   co_return co_await Unary(bindings->dispatcher, std::move(plan), std::move(context));
 }
+constexpr std::size_t kInlineTextBytes = 512;
+constexpr std::size_t kInlineListTasks = 4;
+
+bool IsSmallTextPart(const lf::a2a::v1::Part& part) {
+  return part.has_text() && part.text().size() <= kInlineTextBytes && !part.has_metadata() &&
+         part.filename().size() <= kInlineTextBytes && part.media_type().size() <= kInlineTextBytes;
+}
+
+bool IsSmallMessage(const lf::a2a::v1::Message& message) {
+  return message.message_id().size() <= kInlineTextBytes && message.context_id().size() <= kInlineTextBytes &&
+         message.task_id().size() <= kInlineTextBytes && !message.has_metadata() && message.extensions().empty() &&
+         message.reference_task_ids().empty() &&
+         (message.parts().empty() || (message.parts_size() == 1 && IsSmallTextPart(message.parts(0))));
+}
+
+bool IsSmallTask(const lf::a2a::v1::Task& task) {
+  return task.id().size() <= kInlineTextBytes && task.context_id().size() <= kInlineTextBytes &&
+         task.artifacts().empty() && task.history().empty() && !task.has_metadata() &&
+         (!task.status().has_message() || IsSmallMessage(task.status().message()));
+}
+
+bool CanEncodeInline(const DispatchResult& result) {
+  if (!result.ok()) {
+    return result.error().message().size() <= kInlineTextBytes;
+  }
+  const auto& payload = result.value().payload();
+  if (const auto* task = std::get_if<lf::a2a::v1::Task>(&payload)) {
+    return IsSmallTask(*task);
+  }
+  if (const auto* sent = std::get_if<lf::a2a::v1::SendMessageResponse>(&payload)) {
+    return sent->has_task() && IsSmallTask(sent->task());
+  }
+  if (const auto* listed = std::get_if<ListTasksResponse>(&payload)) {
+    return listed->tasks.size() <= kInlineListTasks && listed->next_page_token.size() <= kInlineTextBytes &&
+           std::ranges::all_of(listed->tasks, IsSmallTask);
+  }
+  return std::holds_alternative<std::monostate>(payload);
+}
+
+class NativeReply final : public std::enable_shared_from_this<NativeReply>, private core::NonCopyableOrMovable {
+ public:
+  NativeReply(PreparedDispatch<HttpServerResponse>& plan, NativeHttpCompletion done,
+              std::shared_ptr<std::atomic_size_t> active_unary = {})
+      : serialize_(std::move(plan.complete)), done_(std::move(done)), active_unary_(std::move(active_unary)) {
+    if (active_unary_) {
+      active_unary_->fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  ~NativeReply() { ReleaseUnary(); }
+
+  void Deliver(DispatchResult result) {
+    const auto done = Claim();
+    if (done) {
+      Complete(done, Encode(std::move(result)));
+    }
+  }
+
+  void Schedule(DispatchResult result, const NativeHttpWorkQueue& work) {
+    const auto done = Claim();
+    if (!done) {
+      return;
+    }
+    if (active_unary_->load(std::memory_order_relaxed) == 1 && CanEncodeInline(result)) {
+      Complete(done, Encode(std::move(result)));
+      return;
+    }
+    try {
+      asio::post(work.executor, [self = shared_from_this(), done, result = std::move(result)]() mutable {
+        self->Complete(done, self->Encode(std::move(result)));
+      });
+    } catch (...) {
+      Complete(done, core::Error::Internal(kDispatchResponseEncodingFailed));
+    }
+  }
+
+  void Cancel() {
+    auto done = Claim();
+    if (done) {
+      Complete(done, core::Error::Network(std::string(kCancelled)));
+    }
+  }
+
+  void ObserveDisconnect(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher,
+                         std::shared_ptr<engine::RequestExecution> execution, engine::RequestExecutionContext context) {
+    cancellation_ = CancelOnDisconnect(std::move(context), dispatcher, std::move(execution), [weak = weak_from_this()] {
+      if (const auto reply = weak.lock()) {
+        reply->Cancel();
+      }
+    });
+  }
+
+  NativeHttpCompletion Claim() {
+    std::lock_guard lock(mutex_);
+    return std::exchange(done_, {});
+  }
+
+ private:
+  static constexpr auto kDispatchResponseEncodingFailed = "HTTP dispatch response encoding failed";
+
+  core::Result<HttpServerResponse> Encode(DispatchResult result) {
+    try {
+      return serialize_(std::move(result));
+    } catch (...) {
+      return core::Error::Internal(kDispatchResponseEncodingFailed);
+    }
+  }
+
+  void Complete(const NativeHttpCompletion& done, core::Result<HttpServerResponse> result) {
+    ReleaseUnary();
+    done(std::move(result));
+  }
+
+  void ReleaseUnary() noexcept {
+    if (const auto active = std::move(active_unary_)) {
+      active->fetch_sub(1, std::memory_order_relaxed);
+    }
+  }
+
+  decltype(PreparedDispatch<HttpServerResponse>::complete) serialize_;
+  std::mutex mutex_;
+  NativeHttpCompletion done_;
+  std::shared_ptr<std::atomic_size_t> active_unary_;
+  std::unique_ptr<StopCallback> cancellation_;
+};
+
+void DirectUnary(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher, PreparedDispatch<HttpServerResponse> plan,
+                 engine::RequestExecutionContext context, NativeHttpCompletion done, const NativeHttpWorkQueue& work,
+                 const std::shared_ptr<std::atomic_size_t>& active_unary) {
+  const auto reply = std::make_shared<NativeReply>(plan, std::move(done), active_unary);
+  auto execution = dispatcher->Dispatch(std::move(plan.request), std::move(plan.context),
+                                        [reply, work](DispatchResult result, const engine::RequestExecutionContext&) {
+                                          reply->Schedule(std::move(result), work);
+                                        });
+  if (!execution.ok()) {
+    reply->Deliver(execution.error());
+    return;
+  }
+  reply->ObserveDisconnect(dispatcher, std::move(execution.value()), std::move(context));
+}
+
+class DirectStream final : public engine::AsyncServerStreamSession {
+ public:
+  DirectStream(PreparedDispatch<HttpServerResponse>& plan, NativeHttpCompletion done,
+               std::shared_ptr<NativeHttpStream> stream)
+      : head_(plan.complete(DispatchResponse(std::make_unique<EmptySession>()))),
+        reply_(std::make_shared<NativeReply>(plan, std::move(done))),
+        encode_(std::move(plan.encode_event)),
+        encode_error_(std::move(plan.encode_error)),
+        stream_(std::move(stream)) {}
+
+  asio::awaitable<core::Result<void>> Write(lf::a2a::v1::StreamResponse event) override {
+    auto frame = encode_(event);
+    if (!frame.ok()) {
+      co_return frame.error();
+    }
+    if (started_) {
+      co_return co_await stream_->Write(std::move(frame.value()));
+    }
+    if (!head_.ok()) {
+      co_return head_.error();
+    }
+    started_ = true;
+    co_return co_await stream_->Start(std::move(head_.value()), std::move(frame.value()));
+  }
+
+  void Complete(DispatchResult result) {
+    if (!started_ && (!result.ok() || !head_.ok())) {
+      reply_->Deliver(result.ok() ? DispatchResult(head_.error()) : std::move(result));
+      return;
+    }
+    const auto done = reply_->Claim();
+    if (!done) {
+      return;
+    }
+    try {
+      if (!started_) {
+        stream_->FinishEmpty(std::move(head_.value()));
+      } else if (result.ok()) {
+        stream_->Finish({});
+      } else {
+        auto error = encode_error_(result.error());
+        if (error.ok()) {
+          stream_->Finish(std::move(error.value()));
+        } else {
+          stream_->Abort();
+        }
+      }
+    } catch (...) {
+      stream_->Abort();
+    }
+  }
+
+  void ObserveDisconnect(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher,
+                         std::shared_ptr<engine::RequestExecution> execution, engine::RequestExecutionContext context) {
+    reply_->ObserveDisconnect(dispatcher, std::move(execution), std::move(context));
+  }
+
+ private:
+  core::Result<HttpServerResponse> head_;
+  std::shared_ptr<NativeReply> reply_;
+  decltype(PreparedDispatch<HttpServerResponse>::encode_event) encode_;
+  decltype(PreparedDispatch<HttpServerResponse>::encode_error) encode_error_;
+  std::shared_ptr<NativeHttpStream> stream_;
+  bool started_ = false;
+};
+
 }  // namespace
 
-EventHttpServer::AsyncHandler MakeEventHttpHandler(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
-                                                   lf::a2a::v1::AgentCard card, const ServerBindingsOptions& options) {
+EventHttpServer::AsyncHandler EventHttpHandlerFactory::Coroutine(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
+                                                                 lf::a2a::v1::AgentCard card,
+                                                                 const ServerBindingsOptions& options) {
   const auto bindings = std::make_shared<Bindings>(std::move(dispatcher), std::move(card), options);
   return [bindings](HttpServerRequest request, engine::RequestExecutionContext context) {
     return Handle(bindings, std::move(request), std::move(context));
   };
+}
+NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
+                                                  lf::a2a::v1::AgentCard card, const ServerBindingsOptions& options) {
+  if (!dispatcher) {
+    return {};
+  }
+  const auto bindings = std::make_shared<Bindings>(std::move(dispatcher), std::move(card), options);
+  auto active_unary = std::make_shared<std::atomic_size_t>(0);
+  return [bindings, active_unary = std::move(active_unary)](
+             const HttpServerRequest& request, engine::RequestExecutionContext context, NativeHttpCompletion done,
+             const NativeHttpStreamFactory& stream_factory, const NativeHttpWorkQueue& work) {
+    auto prepared = bindings->mux.PrepareRequest(request);
+    if (!prepared.ok()) {
+      done(prepared.error());
+      return;
+    }
+    if (auto* response = std::get_if<HttpServerResponse>(&prepared.value())) {
+      done(std::move(*response));
+      return;
+    }
+    auto plan = std::get<PreparedDispatch<HttpServerResponse>>(std::move(prepared.value()));
+    if (plan.request.operation == DispatcherOperation::kSendStreamingMessage ||
+        plan.request.operation == DispatcherOperation::kSubscribeTask) {
+      const auto stream = std::make_shared<DirectStream>(plan, std::move(done), stream_factory());
+      auto execution =
+          bindings->dispatcher->DispatchStream(std::move(plan.request), std::move(plan.context), stream,
+                                               [stream](DispatchResult result, const engine::RequestExecutionContext&) {
+                                                 stream->Complete(std::move(result));
+                                               });
+      if (execution.ok()) {
+        stream->ObserveDisconnect(bindings->dispatcher, std::move(execution.value()), std::move(context));
+      } else {
+        stream->Complete(execution.error());
+      }
+      return;
+    }
+    DirectUnary(bindings->dispatcher, std::move(plan), std::move(context), std::move(done), work, active_unary);
+  };
+}
+}  // namespace a2a::server::http_runtime
+
+namespace a2a::server {
+EventHttpServer::AsyncHandler MakeEventHttpHandler(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
+                                                   lf::a2a::v1::AgentCard card, const ServerBindingsOptions& options) {
+  return http_runtime::EventHttpHandlerFactory::Coroutine(std::move(dispatcher), std::move(card), options);
 }
 }  // namespace a2a::server

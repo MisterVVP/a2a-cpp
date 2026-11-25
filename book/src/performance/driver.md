@@ -107,12 +107,27 @@ need blocking work use `blocking_adapter`; PostgreSQL async measurements are
 outside the initial matrix.
 
 Add `--client-modes sync,async` (`A2A_PERF_CLIENT_MODES`) to measure all four
-client/server combinations for `GetTask_ExistingTask`, `ListTasks_NoPagination`,
-and `ListTasks_WithPagination`. Async client lanes submit the next request from
-the completion callback, with the same concurrency limit as sync workers;
-they do not block one thread per request. Other workloads retain their existing
-client API. Streaming has one observer API and is measured once per server mode.
-PostgreSQL remains sync-only.
+client/server combinations for `SendMessage_CreateTask`, `GetTask_ExistingTask`,
+`ListTasks_NoPagination`, and `ListTasks_WithPagination`. Each async client lane
+keeps one call in flight and submits its next request from the completion callback.
+Wire streaming and subscription rows use the `observer` client label and run once
+per server mode. PostgreSQL wire workloads use the synchronous unary and observer APIs.
+
+Run task creation with a fixed request cap to bound the growth of the in-memory
+store. CI runs the following matrix separately from the timed suite.
+
+```bash
+./scripts/run_performance_tests.sh --server-modes sync,async --client-modes sync,async \
+  --store-backends inmemory --transports grpc,jsonrpc,http_json \
+  --scenarios SendMessage_CreateTask --requests 2000 --duration-seconds 0 \
+  --warmup-seconds 0.25 --concurrency 1,64 --repetitions 1 \
+  --report-dir perf-artifacts/normal/task-creation
+```
+
+Each in-memory wire configuration starts with a fresh SUT. A positive
+`--warmup-seconds` enables exactly one warmup task per measured client through
+its selected API. The driver waits for all warmup calls, reports any failures,
+and reuses the warmed clients for the measured requests.
 
 For a sustained comparison of read-only calls and finite streams:
 
@@ -124,7 +139,7 @@ For a sustained comparison of read-only calls and finite streams:
   --concurrency 1,64 --report-dir perf-artifacts/normal/sustained
 ```
 
-Each wire run warms the actual measured clients through the selected API and
+Each run in the timed matrix warms the measured clients through the selected API and
 retains their connections. Read-only sync/async client cases share the same
 fixtures and warmup concurrency. Both duration and request count are limits:
 use a generous request cap for a timed run. Comparison validation rejects runs
@@ -147,8 +162,8 @@ separate because they bypass the gRPC/HTTP server transports.
 environment variables are `A2A_PERF_SERVER_MODES` and `A2A_PERF_REPETITIONS`.
 
 Comparison runs default to one measurement per mode and start a fresh SUT for
-each scenario/mode. CI also uses one pass for both the broad and sustained
-matrices. Use `--repetitions` explicitly for local variance analysis; repeated
+each scenario and client/server pair. CI uses one pass per configuration.
+Use `--repetitions` explicitly for local variance analysis; repeated
 runs alternate server order. On Linux, automatic CPU placement divides
 the available CPU budget between driver and server, taking the cgroup v2 quota
 into account and giving the driver the extra CPU for odd budgets. Both server modes receive the
@@ -160,6 +175,33 @@ shared or throttled machine.
 When supplying `A2A_PERF_DRIVER`, `A2A_PERF_WIRE_DRIVER`, or `A2A_PERF_SUT`, build
 all three from the same revision with Release and matching optional dependencies.
 The runner cannot verify the provenance of external binaries.
+
+## Subscription callback scheduling
+
+`SubscribeToTask_FirstEventLatency` reports three different intervals. The main
+`latency_ms` includes task creation, subscription setup, cancellation, and stream
+completion. `first_event_latency_ms` measures subscription setup to the first
+observer event; `stream_completion_latency_ms` measures subscription setup to
+completion. Compare these separately when investigating p99.
+
+Build with `A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=ON` and run with
+`A2A_SUBSCRIPTION_DIAGNOSTICS=1` to include `client_callback_queue_wait` in the
+client diagnostics. It measures enqueue-to-execution delay for HTTP metadata,
+body-chunk, and completion callbacks, including callbacks waiting behind earlier
+work on the same stream. The existing observer and completion phases measure
+callback execution time. These aggregates report counts, totals, and maxima,
+not percentiles; use the workload latency distributions for p99. Profiling is
+compiled into separate development libraries, including the HTTP library, and
+does not add clocks or diagnostic symbols to normal SDK builds.
+
+HTTP streams share four callback workers. Each stream runs at most 16 queued
+callbacks per worker turn before rejoining the executor queue. This bounds a
+busy stream's turn while preserving per-stream ordering, queue limits, and
+terminal completion. It does not preempt a blocking application callback.
+
+The shared deadline timer wakes when admission introduces an earlier deadline
+or release changes the earliest deadline. Later admissions and non-head releases
+do not interrupt its wait; maximum-timeout and expired cleanup entries are inert.
 
 ## PostgreSQL tail validation
 

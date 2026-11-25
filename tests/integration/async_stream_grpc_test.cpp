@@ -8,8 +8,11 @@
 #include <boost/asio/post.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <chrono>
+#include <filesystem>
+#include <functional>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,6 +30,10 @@ constexpr auto kShortStreamDeadline = std::chrono::milliseconds(500);
 constexpr auto kStreamRaceParticipants = 2;
 constexpr auto kMinimumStreamLookaheadBytes = 5;
 constexpr std::size_t kBurstStreamEvents = 128;
+#if defined(__linux__)
+constexpr auto kGrpcStreamTaskDirectory = "/proc/self/task";
+#endif
+constexpr auto kIdleThreadAllowance = kStreamConcurrency / 2;
 class NativeStreamAfter final : public ServerInterceptor {
  public:
   void AfterDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/,
@@ -194,15 +201,29 @@ TEST(AsyncStreamGrpc, CancelsSlowReaderWhileLargeWriteIsOutstanding) {
 }
 class SdkStreamObserver final : public client::StreamObserver {
  public:
-  void OnEvent(const lf::a2a::v1::StreamResponse& /*event*/) override {
+  void OnEvent(const lf::a2a::v1::StreamResponse& event) override {
     {
       std::lock_guard lock(mutex);
       ++events;
+      ids.push_back(event.message().message_id());
     }
     changed.notify_all();
+    if (on_event) {
+      on_event();
+    }
   }
-  void OnError(const core::Error& /*error*/) override { Complete(false); }
-  void OnCompleted() override { Complete(true); }
+  void OnError(const core::Error& error) override {
+    {
+      std::lock_guard lock(mutex);
+      protocol_code = error.protocol_code().value_or(std::string{});
+    }
+    ++terminals;
+    Complete(false);
+  }
+  void OnCompleted() override {
+    ++terminals;
+    Complete(true);
+  }
   bool WaitEvents(std::size_t count) {
     std::unique_lock lock(mutex);
     return changed.wait_for(lock, kCoroutineWait, [&] { return events >= count; });
@@ -212,6 +233,16 @@ class SdkStreamObserver final : public client::StreamObserver {
     std::lock_guard lock(mutex);
     return events;
   }
+  std::vector<std::string> Ids() {
+    std::lock_guard lock(mutex);
+    return ids;
+  }
+  std::string ProtocolCode() {
+    std::lock_guard lock(mutex);
+    return protocol_code;
+  }
+  std::function<void()> on_event;
+  std::atomic_size_t terminals = 0;
 
  private:
   void Complete(bool ok) {
@@ -222,10 +253,13 @@ class SdkStreamObserver final : public client::StreamObserver {
   std::mutex mutex;
   std::condition_variable changed;
   std::size_t events = 0;
+  std::vector<std::string> ids;
+  std::string protocol_code;
   std::atomic_bool completed = false;
   std::promise<bool> result;
   std::future<bool> completion = result.get_future();
 };
+
 void ExpectSdkMessageStream(client::A2AClient& sdk, const client::CallOptions& options) {
   SdkStreamObserver messages;
   auto send = sdk.SendStreamingMessage(lf::a2a::v1::SendMessageRequest{}, messages, options);
@@ -233,6 +267,195 @@ void ExpectSdkMessageStream(client::A2AClient& sdk, const client::CallOptions& o
   ASSERT_TRUE(messages.Finished());
   EXPECT_EQ(messages.Count(), kStreamEvents);
 }
+std::unique_ptr<client::A2AClient> MakeStreamSdk(const NativeStreamServer& server) {
+  return std::make_unique<client::A2AClient>(
+      std::make_unique<client::GrpcTransport>(client::ResolvedInterface{.transport = client::PreferredTransport::kGrpc,
+                                                                        .url = server.Endpoint(),
+                                                                        .security_requirements = {},
+                                                                        .security_schemes = {}},
+                                              server.Channel()));
+}
+client::CallOptions SdkStreamOptions() {
+  client::CallOptions options;
+  options.extensions = {kStreamExtension};
+  return options;
+}
+lf::a2a::v1::GetTaskRequest SdkSubscriptionRequest() {
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(kStreamTask);
+  return request;
+}
+
+void ExpectOrderedSdkEvents(SdkStreamObserver& observer) {
+  const auto ids = observer.Ids();
+  ASSERT_EQ(ids.size(), kBurstStreamEvents);
+  for (std::size_t index = 0; index < ids.size(); ++index) {
+    EXPECT_EQ(ids[index], std::to_string(index));
+  }
+}
+void ExpectCancelledSdkStream(const client::StreamHandle& stream, const SdkStreamObserver& observer) {
+  EXPECT_FALSE(stream.IsActive());
+  EXPECT_EQ(observer.terminals, 0);
+}
+
+TEST(AsyncStreamGrpc, SdkCallbackReaderPreservesBurstOrderAndRemoteErrors) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  server.application->event_count = kBurstStreamEvents;
+  server.application->fail = true;
+  auto sdk = MakeStreamSdk(server);
+  SdkStreamObserver observer;
+  auto stream = sdk->SendStreamingMessage({}, observer, SdkStreamOptions());
+  ASSERT_TRUE(stream.ok());
+  EXPECT_FALSE(observer.Finished());
+  EXPECT_EQ(observer.terminals, 1);
+  ExpectOrderedSdkEvents(observer);
+  EXPECT_EQ(observer.ProtocolCode(), std::to_string(static_cast<int>(::grpc::StatusCode::INVALID_ARGUMENT)));
+}
+
+TEST(AsyncStreamGrpc, SdkCallbackSubscriptionReportsNativeDeadlineOnce) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  auto sdk = MakeStreamSdk(server);
+  SdkStreamObserver observer;
+  auto options = SdkStreamOptions();
+  options.timeout = kShortStreamDeadline;
+  auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), observer, options);
+  ASSERT_TRUE(stream.ok());
+  EXPECT_TRUE(observer.WaitEvents(1));
+  EXPECT_FALSE(observer.Finished());
+  EXPECT_EQ(observer.terminals, 1);
+  EXPECT_EQ(observer.ProtocolCode(), std::to_string(static_cast<int>(::grpc::StatusCode::DEADLINE_EXCEEDED)));
+}
+
+TEST(AsyncStreamGrpc, SdkHandleCanCancelFromItsOwnCallback) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  auto sdk = MakeStreamSdk(server);
+  std::promise<client::StreamHandle*> handle;
+  auto available = handle.get_future().share();
+  std::promise<void> cancelled;
+  auto done = cancelled.get_future();
+  SdkStreamObserver observer;
+  observer.on_event = [available, &cancelled] {
+    available.get()->Cancel();
+    cancelled.set_value();
+  };
+  auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), observer, SdkStreamOptions());
+  ASSERT_TRUE(stream.ok());
+  handle.set_value(stream.value().get());
+  EXPECT_EQ(done.wait_for(kCoroutineWait), std::future_status::ready);
+  EXPECT_TRUE(sdk->Destroy().ok());
+  ExpectCancelledSdkStream(*stream.value(), observer);
+  EXPECT_EQ(observer.Count(), 1);
+}
+
+TEST(AsyncStreamGrpc, SdkOwnerCanBeDestroyedFromStreamCallback) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  auto sdk = MakeStreamSdk(server);
+  std::promise<void> destroyed;
+  auto done = destroyed.get_future();
+  std::promise<void> initiated;
+  const auto ready = initiated.get_future().share();
+  SdkStreamObserver observer;
+  observer.on_event = [&, ready] {
+    ready.wait();
+    sdk.reset();
+    destroyed.set_value();
+  };
+  auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), observer, SdkStreamOptions());
+  initiated.set_value();
+  ASSERT_TRUE(stream.ok());
+  ASSERT_EQ(done.wait_for(kCoroutineWait), std::future_status::ready);
+  stream.value()->Cancel();
+  EXPECT_EQ(sdk, nullptr);
+  EXPECT_FALSE(stream.value()->IsActive());
+  EXPECT_EQ(observer.terminals, 0);
+}
+
+void ExpectCancellationWaits(client::StreamHandle& stream, SdkStreamObserver& observer, std::promise<void>& release) {
+  const bool entered = observer.WaitEvents(1);
+  EXPECT_TRUE(entered);
+  auto cancelled = std::async(std::launch::async, [&] { stream.Cancel(); });
+  if (entered) {
+    EXPECT_EQ(cancelled.wait_for(kPumpInterval), std::future_status::timeout);
+  }
+  release.set_value();
+  EXPECT_EQ(cancelled.wait_for(kCoroutineWait), std::future_status::ready);
+}
+
+TEST(AsyncStreamGrpc, SdkExternalCancellationWaitsForExecutingObserver) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  auto sdk = MakeStreamSdk(server);
+  std::promise<void> release;
+  const auto allowed = release.get_future().share();
+  SdkStreamObserver observer;
+  observer.on_event = [allowed] { allowed.wait(); };
+  auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), observer, SdkStreamOptions());
+  ASSERT_TRUE(stream.ok());
+  ExpectCancellationWaits(*stream.value(), observer, release);
+  EXPECT_TRUE(sdk->Destroy().ok());
+  EXPECT_EQ(observer.terminals, 0);
+}
+
+TEST(AsyncStreamGrpc, ThrowingSdkObserverCancelsAndReleasesNativeCall) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  auto sdk = MakeStreamSdk(server);
+  SdkStreamObserver observer;
+  std::atomic_bool threw = false;
+  observer.on_event = [&] {
+    threw.store(true);
+    throw std::runtime_error(kStreamError);
+  };
+  auto stream = sdk->SubscribeTask(SdkSubscriptionRequest(), observer, SdkStreamOptions());
+  ASSERT_TRUE(stream.ok());
+  EXPECT_TRUE(observer.WaitEvents(1));
+  EXPECT_TRUE(sdk->Destroy().ok());
+  EXPECT_TRUE(threw.load());
+  EXPECT_FALSE(stream.value()->IsActive());
+}
+
+std::size_t StreamClientThreads() {
+#if defined(__linux__)
+  return static_cast<std::size_t>(std::distance(std::filesystem::directory_iterator(kGrpcStreamTaskDirectory), {}));
+#else
+  return 0;
+#endif
+}
+
+void StartIdleSdkSubscriptions(client::A2AClient& sdk, std::vector<std::unique_ptr<SdkStreamObserver>>& observers,
+                               std::vector<std::unique_ptr<client::StreamHandle>>& streams) {
+  for (std::size_t index = 0; index < kStreamConcurrency; ++index) {
+    auto observer = std::make_unique<SdkStreamObserver>();
+    auto stream = sdk.SubscribeTask(SdkSubscriptionRequest(), *observer, SdkStreamOptions());
+    ASSERT_TRUE(stream.ok());
+    EXPECT_TRUE(observer->WaitEvents(1));
+    observers.push_back(std::move(observer));
+    streams.push_back(std::move(stream.value()));
+  }
+}
+
+TEST(AsyncStreamGrpc, SdkIdleSubscriptionsDoNotOwnReaderThreadsAndShutdownDrainsThem) {
+  NativeStreamServer server;
+  ASSERT_TRUE(server.Ready());
+  auto sdk = MakeStreamSdk(server);
+  ExpectSdkMessageStream(*sdk, SdkStreamOptions());
+  const auto baseline = StreamClientThreads();
+  std::vector<std::unique_ptr<SdkStreamObserver>> observers;
+  std::vector<std::unique_ptr<client::StreamHandle>> streams;
+  StartIdleSdkSubscriptions(*sdk, observers, streams);
+  if (baseline != 0) {
+    EXPECT_LT(StreamClientThreads(), baseline + kIdleThreadAllowance);
+  }
+  EXPECT_TRUE(sdk->Destroy().ok());
+  for (std::size_t index = 0; index < streams.size(); ++index) {
+    ExpectCancelledSdkStream(*streams[index], *observers[index]);
+  }
+}
+
 TEST(AsyncStreamGrpc, ExistingSdkClientConsumesBothCoroutineStreamOperations) {
   NativeStreamServer server;
   ASSERT_TRUE(server.Ready());

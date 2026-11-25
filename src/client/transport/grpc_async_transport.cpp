@@ -82,6 +82,9 @@ class GrpcAsyncTransport final : public AsyncClientTransport {
       native_calls_->closed = true;
     }
     async_scope_.Shutdown();
+    if (core::async_detail::IsCallbackThread()) {
+      return;
+    }
     std::unique_lock lock(native_calls_->mutex);
     native_calls_->finished.wait(lock, [this] { return native_calls_->active == 0U; });
   }

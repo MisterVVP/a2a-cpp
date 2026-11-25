@@ -144,6 +144,10 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+The TCK conformance fixture accepts message parts labeled `text/plain` or
+`application/json`, as well as parts without a media type. The performance
+fixture also accepts opaque payloads with arbitrary media types.
+
 Contributors should read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 [`AGENTS.md`](AGENTS.md), then run:
 

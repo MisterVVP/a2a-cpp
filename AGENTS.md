@@ -64,7 +64,7 @@ AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assiste
 - Treat warnings as actionable; keep warning count at zero for touched code.
 - Keep diffs small and reviewable.
 - Do not suppress linter findings with `NOLINT` unless there is a documented, reviewer-approved justification in code comments and the PR description. Prefer structural refactors that eliminate the warning.
-- Document non-obvious decisions with short comments near the code.
+- Do not add inline implementation comments or comments that narrate the code. Use descriptive names, explicit control flow, and ownership scopes to make the implementation self-explanatory. Document public contracts and design rationale in API documentation or the relevant SDK guide. Preserve license notices and required formatter or tool directives.
 - **Magic strings are forbidden** in production and test code. Use named `constexpr` constants (or equivalent strongly typed constants) and centralize protocol literals in shared headers where possible.
 - Code must be both readable and efficient: prefer straightforward, maintainable constructs first, then use measured/pre-allocated optimizations for hot paths without obscuring intent.
 - Prioritize performance and algorithmic efficiency:
@@ -93,6 +93,13 @@ AI agents must follow the [AI-assisted contributions](CONTRIBUTING.md#ai-assiste
 - Use least privilege for credentials, tokens, and runtime permissions.
 - Do not hardcode secrets; use secure configuration and secret management.
 - Keep dependencies current and remove unused dependencies.
+
+## Dependency discovery and updates
+
+- Search the host for installed dependencies before attempting any download. Check system packages, existing CMake caches, and configured or known local installation prefixes. For dependencies such as simdjson and Boost.Asio, verify the installed version and the path CMake resolves, and reuse a compatible installation.
+- Do not download dependencies until the host search is complete.
+- Outside CI, if a dependency is missing or incompatible, prefer asking the user to install or update it on the host over downloading a temporary copy into `/tmp`. Explain which dependency and version the build or validation requires.
+- Apply the same host-first approach to validation tools such as mdBook. Reuse a compatible host installation if available. Outside CI, obtain the user's approval before installing a missing or incompatible tool on the host.
 
 ## Validation checklist for contributors
 Before submitting changes:
@@ -177,7 +184,7 @@ The Go-only benchmark-runner exception above is exempt from this gate.
   1. Start SUT: `./scripts/run_tck_sut.sh`
   2. Run TCK mandatory suite via `.github/workflows/tck.yml` equivalent entrypoint (for example the detected script in checked out TCK repo, such as `scripts/run_tck.sh` / `scripts/run_mandatory.sh`).
   3. Stop SUT: `./scripts/stop_tck_sut.sh`
-- Do not commit or push code unless TCK mandatory compliance is **100%** (all mandatory requirements passing).
+- Require **no regression in TCK compliance** compared with the target branch before committing or pushing. Compare mandatory-suite results using the same TCK revision, suite, SUT configuration, and transports. The mandatory score must stay at least as high, and each previously passing mandatory requirement must still pass.
 - If TCK tooling or fixtures are unavailable locally, treat that as a blocking issue and resolve environment parity before committing.
 
 ## AI agent pre-commit hygiene
