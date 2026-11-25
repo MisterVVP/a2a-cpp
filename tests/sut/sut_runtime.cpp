@@ -146,6 +146,14 @@ int Serve(SutAgent* agent, const SutServerConfig& config, const SutRuntimeOption
 }
 
 #ifdef A2A_SUT_ASYNC
+constexpr auto kTopologyMarker = "A2A_PERFORMANCE_TOPOLOGY ingress=";
+constexpr auto kSharedIngress = "shared";
+constexpr auto kSeparateIngress = "separate";
+constexpr auto kDispatcherThreadsField = " dispatcher_threads=";
+constexpr auto kHttpApplicationThreadsField = " http_application_threads=";
+constexpr auto kHttpNetworkThreadsField = " http_network_threads=";
+constexpr auto kHttpPendingLimitField = " http_pending_limit=";
+
 std::size_t DispatcherThreads(const SutRuntimeOptions& options) {
   return options.dispatcher_threads == 0 ? server::engine::AsyncRuntimeOptions::kDefaultThreads
                                          : options.dispatcher_threads;
@@ -178,12 +186,10 @@ class EventSutServer final {
       : server_(std::move(dispatcher), std::move(card), BindingOptions(), EventOptions(listener, options)) {
     if (options.report_topology) {
       const auto settings = EventOptions(listener, options);
-      std::cerr << "A2A_PERFORMANCE_TOPOLOGY ingress="
-                << (options.ingress == SutIngress::kShared ? "shared" : "separate")
-                << " dispatcher_threads=" << DispatcherThreads(options)
-                << " http_application_threads=" << settings.application_threads
-                << " http_network_threads=" << server_.network_workers()
-                << " http_pending_limit=" << settings.max_pending_requests << '\n';
+      std::cerr << kTopologyMarker << (options.ingress == SutIngress::kShared ? kSharedIngress : kSeparateIngress)
+                << kDispatcherThreadsField << DispatcherThreads(options) << kHttpApplicationThreadsField
+                << settings.application_threads << kHttpNetworkThreadsField << server_.network_workers()
+                << kHttpPendingLimitField << settings.max_pending_requests << '\n';
     }
   }
   bool Start() { return server_.Start().ok(); }
