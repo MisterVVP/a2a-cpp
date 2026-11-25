@@ -230,10 +230,16 @@ constexpr std::string_view kRpcStreamBody =
 constexpr std::string_view kRestStreamBody =
     R"({"message":{"messageId":"m","role":"user","parts":[{"text":"hello"}]}})";
 constexpr std::string_view kNativeId = "native";
+constexpr std::string_view kNativeMessageText = "direct response";
+constexpr std::string_view kRpcSendBody =
+    R"({"jsonrpc":"2.0","id":7,"method":"SendMessage","params":{"message":{"messageId":"m","role":"user","parts":[{"text":"hello"}]}}})";
 constexpr std::string_view kDiscoveryName = "native-discovery";
 constexpr std::string_view kDiscoveryRequest = "GET /.well-known/agent-card.json HTTP/1.1\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kListTasksRequest =
-    "GET /a2a/tasks HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+    "GET /a2a/tasks?pageSize=6 HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+constexpr std::string_view kLargeListTasksRequest =
+    "GET /a2a/tasks?pageSize=20 HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
+constexpr std::size_t kListTaskContextBytes = 256;
 
 constexpr std::string_view kRpcPath = "/rpc";
 constexpr std::string_view kRestStreamPath = "/a2a/message:stream";
@@ -246,6 +252,8 @@ constexpr std::string_view kRichTaskId = "rich";
 constexpr std::string_view kRichTaskRequest =
     "GET /a2a/tasks/rich HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kRichTaskArtifact = "rich-artifact";
+constexpr std::string_view kRichTaskDataKey = "artifact-details";
+constexpr std::string_view kRichTaskData = "artifact summary";
 constexpr std::string_view kShortStatusTask = "short-status";
 constexpr std::string_view kLongStatusTask = "long-status";
 constexpr std::string_view kShortStatusRequest =
@@ -253,7 +261,7 @@ constexpr std::string_view kShortStatusRequest =
 constexpr std::string_view kLongStatusRequest =
     "GET /a2a/tasks/long-status HTTP/1.1\r\nA2A-Version: 1.0\r\nConnection: close\r\n\r\n";
 constexpr std::string_view kStatusText = "working on the task";
-constexpr std::size_t kLongStatusBytes = 1024;
+constexpr std::size_t kLongStatusBytes = 8192;
 constexpr std::string_view kIdleSubscription = "GET /a2a/tasks/idle:subscribe HTTP/1.1\r\nA2A-Version: 1.0\r\n\r\n";
 constexpr std::string_view kIdleTaskId = "idle";
 constexpr std::size_t kConcurrentNativeRequests = 2;
@@ -269,12 +277,28 @@ constexpr std::string_view kPostHeaders =
 
 class NativeBackend final : public engine::CoroutineAgentExecutor {
  public:
+  asio::awaitable<core::Result<lf::a2a::v1::SendMessageResponse>> SendMessage(
+      lf::a2a::v1::SendMessageRequest /*request*/, engine::RequestExecutionContext /*context*/) override {
+    lf::a2a::v1::SendMessageResponse response;
+    auto* message = response.mutable_message();
+    message->set_message_id(std::string(kNativeId));
+    message->set_role(lf::a2a::v1::ROLE_AGENT);
+    message->add_parts()->set_text(std::string(kNativeMessageText));
+    co_return response;
+  }
+
   asio::awaitable<core::Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest request,
                                                            engine::RequestExecutionContext /*context*/) override {
     lf::a2a::v1::Task task;
     task.set_id(request.id());
     if (request.id() == kRichTaskId) {
-      task.add_artifacts()->set_artifact_id(std::string(kRichTaskArtifact));
+      auto* artifact = task.add_artifacts();
+      artifact->set_artifact_id(std::string(kRichTaskArtifact));
+      artifact->add_parts()->set_raw(std::string(kRichTaskArtifact));
+      auto* data = artifact->add_parts()->mutable_data()->mutable_struct_value()->mutable_fields();
+      (*data)[std::string(kRichTaskDataKey)].mutable_list_value()->add_values()->set_string_value(
+          std::string(kRichTaskData));
+      task.add_history()->set_message_id(std::string(kNativeId));
     } else if (request.id() == kShortStatusTask || request.id() == kLongStatusTask) {
       auto* status = task.mutable_status();
       status->set_state(lf::a2a::v1::TASK_STATE_WORKING);
@@ -286,12 +310,16 @@ class NativeBackend final : public engine::CoroutineAgentExecutor {
     }
     co_return task;
   }
-  asio::awaitable<core::Result<ListTasksResponse>> ListTasks(ListTasksRequest /*request*/,
+  asio::awaitable<core::Result<ListTasksResponse>> ListTasks(ListTasksRequest request,
                                                              engine::RequestExecutionContext /*context*/) override {
-    lf::a2a::v1::Task task;
-    task.set_id(std::string(kNativeId));
     ListTasksResponse response;
-    response.tasks.push_back(std::move(task));
+    response.tasks.reserve(request.page_size);
+    const std::string context_id(kListTaskContextBytes, 'c');
+    for (std::size_t index = 0; index < request.page_size; ++index) {
+      auto& task = response.tasks.emplace_back();
+      task.set_id(std::string(kNativeId).append(std::to_string(index)));
+      task.set_context_id(context_id);
+    }
     co_return response;
   }
   asio::awaitable<core::Result<void>> SendStreamingMessage(
@@ -348,9 +376,9 @@ TEST(EventHttpServer, NativeDispatcherReusesRestAndJsonRpcValidationAndSseEncodi
   EventHttpServer server(runtime.dispatcher(), {}, {});
   ASSERT_TRUE(server.Start().ok());
   asio::io_context io;
-  const std::vector<std::string> requests{std::string(kRestTask), std::string(kListTasksRequest),
-                                          Post(kRpcPath, kRpcBody), Post(kRpcPath, kRpcStreamBody),
-                                          Post(kRestStreamPath, kRestStreamBody)};
+  const std::vector<std::string> requests{std::string(kRestTask),         std::string(kListTasksRequest),
+                                          Post(kRpcPath, kRpcBody),       Post(kRpcPath, kRpcSendBody),
+                                          Post(kRpcPath, kRpcStreamBody), Post(kRestStreamPath, kRestStreamBody)};
   for (const auto& request : requests) {
     auto socket = Connect(io, server);
     asio::write(socket, asio::buffer(request));
@@ -410,12 +438,20 @@ TEST(EventHttpServer, NativeSmallTaskReplyEncodesOnDispatcher) {
   ExpectNativeSerialization(kRestTask, false, kNativeId);
 }
 
-TEST(EventHttpServer, NativeTaskWithArtifactsEncodesOnApplicationExecutor) {
-  ExpectNativeSerialization(kRichTaskRequest, true, kRichTaskArtifact);
+TEST(EventHttpServer, NativeCompactTaskWithArtifactsAndHistoryEncodesOnDispatcher) {
+  ExpectNativeSerialization(kRichTaskRequest, false, kRichTaskData);
 }
 
 TEST(EventHttpServer, NativeSmallListReplyEncodesOnDispatcher) {
   ExpectNativeSerialization(kListTasksRequest, false, kNativeId);
+}
+
+TEST(EventHttpServer, NativeListOverBudgetEncodesOnApplicationExecutor) {
+  ExpectNativeSerialization(kLargeListTasksRequest, true, kNativeId);
+}
+
+TEST(EventHttpServer, NativeJsonRpcMessageReplyEncodesOnDispatcher) {
+  ExpectNativeSerialization(Post(kRpcPath, kRpcSendBody), false, kNativeMessageText);
 }
 
 TEST(EventHttpServer, NativeShortStatusMessageEncodesOnDispatcher) {
