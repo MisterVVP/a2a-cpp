@@ -753,8 +753,9 @@ asio::awaitable<core::Result<void>> NativeConnectionStream::Write(std::string by
 
 http_runtime::NativeHttpBatchLimits NativeConnectionStream::BatchLimits() const noexcept {
   const auto& options = connection_->runtime_->options;
-  return {.payload_bytes = std::min(options.max_sse_batch_payload_bytes, connection_->max_output_bytes_ - kHexBytes - 4U),
-          .id_bytes = options.max_sse_batch_id_bytes};
+  return {
+      .payload_bytes = std::min(options.max_sse_batch_payload_bytes, connection_->max_output_bytes_ - kHexBytes - 4U),
+      .id_bytes = options.max_sse_batch_id_bytes};
 }
 
 void NativeConnectionStream::Finish(std::string error_event) {
