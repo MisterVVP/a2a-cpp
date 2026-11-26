@@ -10,11 +10,13 @@
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <chrono>
+#include <cstddef>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "server/transport/grpc_error.h"
 #include "server/transport/grpc_request_context.h"
@@ -148,10 +150,17 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     using Acknowledgement = boost::asio::experimental::concurrent_channel<void(boost::system::error_code, bool)>;
     struct Session final : engine::AsyncServerStreamSession, std::enable_shared_from_this<Session> {
       boost::asio::awaitable<core::Result<void>> Write(lf::a2a::v1::StreamResponse event) override {
-        return WriteOwned(shared_from_this(), std::move(event));
+        return WriteOwned(shared_from_this(), std::move(event), {});
+      }
+      boost::asio::awaitable<core::Result<void>> WriteBatch(std::vector<lf::a2a::v1::StreamResponse> events) override {
+        if (events.empty() || events.size() > kMaxBatchEvents) {
+          return AsyncServerStreamSession::WriteBatch(std::move(events));
+        }
+        return WriteOwned(shared_from_this(), {}, std::move(events));
       }
       static boost::asio::awaitable<core::Result<void>> WriteOwned(std::shared_ptr<Session> session,
-                                                                   lf::a2a::v1::StreamResponse event) {
+                                                                   lf::a2a::v1::StreamResponse event,
+                                                                   std::vector<lf::a2a::v1::StreamResponse> events) {
         const auto scheduler = co_await boost::asio::this_coro::executor;
         std::shared_ptr<Acknowledgement> ack;
         {
@@ -165,15 +174,26 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
           }
           ack = session->acknowledgement;
           session->writing = true;
-          session->current = std::move(event);
-          session->reactor->StartWrite(&session->current);
+          session->StartWrite(std::move(event), std::move(events));
         }
         const bool ok = co_await ack->async_receive(boost::asio::use_awaitable);
         co_return ok ? core::Result<void>{} : core::Error::Network(kStreamWriteFailed);
       }
+      void StartWrite(lf::a2a::v1::StreamResponse event, std::vector<lf::a2a::v1::StreamResponse> events) {
+        if (events.empty()) {
+          current = std::move(event);
+          reactor->StartWrite(&current);
+          return;
+        }
+        batch = std::move(events);
+        next = 1;
+        reactor->StartWrite(&batch.front());
+      }
       std::mutex mutex;
       StreamingReactor* reactor = nullptr;
       lf::a2a::v1::StreamResponse current;
+      std::vector<lf::a2a::v1::StreamResponse> batch;
+      std::size_t next = 0;
       std::shared_ptr<Acknowledgement> acknowledgement;
       std::optional<::grpc::Status> terminal;
       bool writing = false;
@@ -211,8 +231,16 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     void OnWriteDone(bool ok) override {
       const auto session = session_;
       std::lock_guard lock(session->mutex);
+      const bool more = !session->batch.empty() && session->next < session->batch.size();
+      if (more && ok && !session->terminal.has_value() && !context_.IsCancelled()) {
+        StartWrite(&session->batch[session->next++]);
+        return;
+      }
+      if (!session->batch.empty()) {
+        session->batch = decltype(session->batch){};
+      }
       session->writing = false;
-      (void)session->acknowledgement->try_send(boost::system::error_code{}, ok);
+      (void)session->acknowledgement->try_send(boost::system::error_code{}, ok && !more);
       const auto terminal = session->terminal;
       if (terminal.has_value()) {
         session->acknowledgement.reset();

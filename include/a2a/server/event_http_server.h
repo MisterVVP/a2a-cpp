@@ -51,6 +51,8 @@ struct EventHttpServerOptions final {
   static constexpr std::size_t kMaxNetworkWorkers = 2;
   static constexpr unsigned kDefaultNetworkAutoMinCpus = 4;
   static constexpr std::size_t kDefaultSecondNetworkConnectionThreshold = 4;
+  static constexpr std::size_t kDefaultMaxSseBatchPayloadBytes = 8192;
+  static constexpr std::size_t kDefaultMaxSseBatchIdBytes = 128;
   std::string address = "127.0.0.1";
   std::uint16_t port = 0;
   std::size_t max_connections = kDefaultConnections;
@@ -68,6 +70,8 @@ struct EventHttpServerOptions final {
   unsigned network_auto_min_cpus = kDefaultNetworkAutoMinCpus;
   // Active connections before new connections alternate between socket workers. Zero enables immediate alternation.
   std::size_t second_network_connection_threshold = kDefaultSecondNetworkConnectionThreshold;
+  std::size_t max_sse_batch_payload_bytes = kDefaultMaxSseBatchPayloadBytes;
+  std::size_t max_sse_batch_id_bytes = kDefaultMaxSseBatchIdBytes;
 };
 
 // Optional a2a::asio listener. Linux epoll, macOS kqueue, Windows IOCP through

@@ -44,13 +44,7 @@ class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor
     if (!events.ok()) {
       co_return events.error();
     }
-    for (auto& event : events.value()) {
-      auto written = co_await stream->Write(std::move(event));
-      if (!written.ok()) {
-        co_return written.error();
-      }
-    }
-    co_return core::Result<void>{};
+    co_return co_await stream->WriteBatch(std::move(events.value()));
   }
   boost::asio::awaitable<core::Result<void>> SubscribeTask(
       lf::a2a::v1::GetTaskRequest request, server::engine::RequestExecutionContext context,

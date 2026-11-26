@@ -231,6 +231,7 @@ if(A2A_ENABLE_ASIO)
     server/engine/async_push_notification_service.cpp
     server/transport/async_grpc_server_transport.cpp
     server/engine/coroutine_agent_executor.cpp
+    server/engine/async_server_stream_session.cpp
     server/engine/blocking_executor_adapter.cpp
     server/engine/async_runtime.cpp
     server/transport/async_server_bindings.cpp

@@ -53,14 +53,11 @@ class StreamBackend final : public server::engine::CoroutineAgentExecutor {
       lf::a2a::v1::SendMessageRequest /*request*/, server::engine::RequestExecutionContext context,
       std::shared_ptr<server::engine::AsyncServerStreamSession> stream) override {
     Record(context);
+    if (batch) {
+      co_return co_await SendBatch(*stream);
+    }
     for (std::size_t index = 0; index < event_count; ++index) {
-      lf::a2a::v1::StreamResponse event;
-      event.mutable_message()->set_message_id(std::to_string(index));
-      event.mutable_message()->set_task_id(kStreamTask);
-      if (payload_bytes != 0) {
-        event.mutable_message()->add_parts()->set_text(std::string(payload_bytes, 'x'));
-      }
-      const auto result = co_await stream->Write(std::move(event));
+      const auto result = co_await stream->Write(BuildEvent(index));
       if (!result.ok()) {
         co_return result.error();
       }
@@ -95,6 +92,7 @@ class StreamBackend final : public server::engine::CoroutineAgentExecutor {
   server::TaskSubscriptionService publications;
   std::size_t capacity = kStreamSmallCapacity;
   bool fail = false;
+  bool batch = false;
   std::size_t event_count = kStreamEvents;
   std::size_t payload_bytes = 0;
   std::atomic_size_t started = 0;
@@ -106,6 +104,29 @@ class StreamBackend final : public server::engine::CoroutineAgentExecutor {
   std::string tenant;
 
  private:
+  lf::a2a::v1::StreamResponse BuildEvent(std::size_t index) const {
+    lf::a2a::v1::StreamResponse event;
+    event.mutable_message()->set_message_id(std::to_string(index));
+    event.mutable_message()->set_task_id(kStreamTask);
+    if (payload_bytes != 0) {
+      event.mutable_message()->add_parts()->set_text(std::string(payload_bytes, 'x'));
+    }
+    return event;
+  }
+
+  boost::asio::awaitable<core::Result<void>> SendBatch(server::engine::AsyncServerStreamSession& stream) {
+    std::vector<lf::a2a::v1::StreamResponse> events;
+    events.reserve(event_count);
+    for (std::size_t index = 0; index < event_count; ++index) {
+      events.push_back(BuildEvent(index));
+    }
+    auto result = co_await stream.WriteBatch(std::move(events));
+    if (result.ok()) {
+      acknowledged += event_count;
+    }
+    co_return result;
+  }
+
   class AcknowledgedSubscriptionSession final : public server::engine::AsyncServerStreamSession {
    public:
     AcknowledgedSubscriptionSession(std::shared_ptr<server::engine::AsyncServerStreamSession> stream,

@@ -18,6 +18,7 @@
 #include <stop_token>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "a2a/core/http_utils.h"
 #include "a2a/server/event_http_dispatcher.h"
@@ -277,7 +278,6 @@ asio::awaitable<core::Result<EventHttpResponse>> Streaming(std::shared_ptr<engin
     }
     co_return EventHttpResponse{.response = std::move(response.value()), .stream = {}};
   }
-  // Reuse the protocol serializer's headers without running its blocking writer.
   auto response = plan.complete(DispatchResponse(std::make_unique<EmptySession>()));
   if (!response.ok()) {
     co_return response.error();
@@ -546,6 +546,12 @@ void DirectUnary(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher, Pre
   reply->ObserveDisconnect(dispatcher, std::move(execution.value()), std::move(context));
 }
 
+bool IsCompactStatusEvent(const lf::a2a::v1::StreamResponse& event, std::size_t max_id_bytes) {
+  const auto& status = event.status_update();
+  return event.has_status_update() && status.task_id().size() <= max_id_bytes &&
+         status.context_id().size() <= max_id_bytes && !status.has_metadata() && !status.status().has_message();
+}
+
 class DirectStream final : public engine::AsyncServerStreamSession {
  public:
   DirectStream(PreparedDispatch<HttpServerResponse>& plan, NativeHttpCompletion done,
@@ -561,14 +567,26 @@ class DirectStream final : public engine::AsyncServerStreamSession {
     if (!frame.ok()) {
       co_return frame.error();
     }
-    if (started_) {
-      co_return co_await stream_->Write(std::move(frame.value()));
+    co_return co_await WriteFrame(std::move(frame.value()));
+  }
+
+  asio::awaitable<core::Result<void>> WriteBatch(std::vector<lf::a2a::v1::StreamResponse> events) override {
+    const auto limits = stream_->BatchLimits();
+    if (limits.payload_bytes == 0 || events.size() <= 1 || events.size() > kMaxBatchEvents ||
+        !std::ranges::all_of(events, [max_id_bytes = limits.id_bytes](const auto& event) {
+          return IsCompactStatusEvent(event, max_id_bytes);
+        })) {
+      return AsyncServerStreamSession::WriteBatch(std::move(events));
     }
-    if (!head_.ok()) {
-      co_return head_.error();
+    std::string frames;
+    for (const auto& event : events) {
+      auto frame = encode_(event);
+      if (!frame.ok() || frame.value().size() > limits.payload_bytes - frames.size()) {
+        return AsyncServerStreamSession::WriteBatch(std::move(events));
+      }
+      frames.append(frame.value());
     }
-    started_ = true;
-    co_return co_await stream_->Start(std::move(head_.value()), std::move(frame.value()));
+    return WriteFrame(std::move(frames));
   }
 
   void Complete(DispatchResult result) {
@@ -604,6 +622,18 @@ class DirectStream final : public engine::AsyncServerStreamSession {
   }
 
  private:
+  asio::awaitable<core::Result<void>> WriteFrame(std::string bytes) {
+    if (started_) {
+      return stream_->Write(std::move(bytes));
+    }
+    if (!head_.ok()) {
+      return WriteError(head_.error());
+    }
+    started_ = true;
+    return stream_->Start(std::move(head_.value()), std::move(bytes));
+  }
+  static asio::awaitable<core::Result<void>> WriteError(core::Error error) { co_return std::move(error); }
+
   core::Result<HttpServerResponse> head_;
   std::shared_ptr<NativeReply> reply_;
   decltype(PreparedDispatch<HttpServerResponse>::encode_event) encode_;
