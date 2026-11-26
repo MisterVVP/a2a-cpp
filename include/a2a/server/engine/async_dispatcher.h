@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
@@ -18,7 +19,11 @@
 
 namespace a2a::server {
 class EventHttpServer;
+class AsyncGrpcServerTransport;
+namespace http_runtime {
+struct NativeHttpWorkQueue;
 }
+}  // namespace a2a::server
 
 namespace a2a::server::engine {
 class AsyncRuntime;
@@ -46,7 +51,7 @@ class AsyncDispatcher final : private core::NonCopyableOrMovable {
   ~AsyncDispatcher();
 
   // On admission failure no callback runs. Accepted requests complete exactly
-  // once on its Asio strand, after AfterDispatch. Never runs user code inline.
+  // once on its serialized executor, after AfterDispatch. Never runs user code inline.
   // Completion receives an owned lifecycle view, even if it runs before Dispatch
   // returns the cancellation handle. Its metadata is the ingress snapshot.
   // Transport owns deadline notification via the returned source; completion and
@@ -75,12 +80,16 @@ class AsyncDispatcher final : private core::NonCopyableOrMovable {
  private:
   friend class AsyncRuntime;
   friend class a2a::server::EventHttpServer;
-  void EnableNativeHttpIngress();
-  [[nodiscard]] boost::asio::any_io_executor NativeHttpIngressExecutor() const;
+  friend class a2a::server::AsyncGrpcServerTransport;
+  friend struct a2a::server::http_runtime::NativeHttpWorkQueue;
+  void EnableWorkerLanes(std::vector<boost::asio::any_io_executor> workers);
+  [[nodiscard]] std::pair<boost::asio::any_io_executor, std::optional<std::size_t>> NativeHttpLane() const;
 
   [[nodiscard]] core::Result<std::shared_ptr<RequestExecution>> DispatchImpl(
       DispatchRequest request, RequestContext metadata, TransportCompletion completion,
-      std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream);
+      std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream,
+      std::optional<std::size_t> ingress_lane = {},
+      const std::function<void(const std::shared_ptr<RequestExecution>&)>& admitted = {});
   struct State;
   std::shared_ptr<State> state_;
 };

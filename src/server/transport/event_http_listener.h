@@ -4,17 +4,23 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include "a2a/server/event_http_server.h"
 #include "event_http_native_handler.h"
 
 namespace a2a::server::http_runtime {
 
+using NativeLane = std::pair<boost::asio::any_io_executor, std::optional<std::size_t>>;
+using SelectNativeLane = std::function<NativeLane()>;
+
 class EventHttpListener final {
  public:
   EventHttpListener(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler,
-                    EventHttpServerOptions options, boost::asio::any_io_executor native_executor = {});
+                    EventHttpServerOptions options, SelectNativeLane select_lane = {});
   ~EventHttpListener();
 
   [[nodiscard]] core::Result<void> Start();

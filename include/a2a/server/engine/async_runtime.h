@@ -20,7 +20,9 @@ struct AsyncRuntimeOptions final {
 // coroutine cleanup; blocking backends must eventually return. Never call Join
 // or destroy the runtime from its callbacks. Keep transports and dispatcher
 // handles within this lifetime, and stop transport ingress before Join.
-// Existing caller-supplied executors remain supported by AsyncDispatcher.
+// Each worker owns a serialized Asio executor. Requests on the same worker
+// can make independent progress while other requests suspend. Caller-supplied
+// executors use the per-request serialization provided by AsyncDispatcher.
 class AsyncRuntime final : private core::NonCopyableOrMovable {
  public:
   explicit AsyncRuntime(std::shared_ptr<CoroutineAgentExecutor> executor, AsyncDispatcherOptions execution = {},

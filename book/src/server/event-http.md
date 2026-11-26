@@ -70,7 +70,9 @@ connections are active. Each socket stays on its assigned loop, and
 both loops share the server's connection and pending request limits. Handlers,
 stream producers, and cancellation observers run on application workers. Native
 dispatcher execution runs on the application's `AsyncRuntime` or supplied
-executor. The dispatcher-backed listener serializes a compact unary reply on
+executor. With `AsyncRuntime`, each native HTTP connection assigns request
+preparation and dispatch to the same runtime worker. The dispatcher-backed
+listener serializes a compact unary reply on
 the dispatcher when it is the only active unary request. A work budget accounts
 for payload bytes and nested elements, including artifacts and task history.
 Larger replies and replies under unary contention serialize on application
@@ -138,7 +140,7 @@ responses. After streaming starts, errors use the binding's SSE error encoding.
 
 The application awaits every event write. A capacity-one mailbox transfers the
 first event for HTTP header selection. Subsequent writes await the socket sink
-directly on the dispatcher strand. Every write is acknowledged only after the
+directly on the dispatcher executor. Every write is acknowledged only after the
 corresponding socket write completes. This provides bounded demand without
 pinning a worker during a slow read. Awaited writes preserve event order;
 heartbeats never accumulate behind a stalled write. Finite completion writes a

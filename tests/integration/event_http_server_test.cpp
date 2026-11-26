@@ -766,7 +766,8 @@ TEST(EventHttpServer, JoinDrainsBorrowedJsonRpcRequestAfterItsResponseFinishes) 
   std::atomic_bool returned = false;
   const auto executor = pool.get_executor();
   http_runtime::EventHttpListener listener({}, BorrowedIngressHandler(executor, released, returned),
-                                           {.idle_timeout = kTimeout}, executor);
+                                           {.idle_timeout = kTimeout},
+                                           [executor] { return http_runtime::NativeLane{executor, {}}; });
   ASSERT_TRUE(listener.Start().ok());
   asio::io_context io;
   Tcp::socket peer(io);
@@ -855,9 +856,9 @@ TEST(EventHttpServer, NativePendingLimitAppliesAcrossConnections) {
   EXPECT_EQ(backend->completed.load(), kPendingLimit);
 }
 
-TEST(EventHttpServer, LiveStreamsSuspendAndShutdownCleansEachSessionOnce) {
+TEST(EventHttpServer, LiveStreamsResumeOnTheirWorkerAndShutdownCleansEachSessionOnce) {
   const auto backend = std::make_shared<LiveBackend>();
-  engine::AsyncRuntime runtime(backend, {}, {.threads = 1});
+  engine::AsyncRuntime runtime(backend);
   EventHttpServerOptions options;
   options.application_threads = 1;
   EventHttpServer server(runtime.dispatcher(), {}, {}, options);

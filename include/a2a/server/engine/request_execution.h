@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -57,6 +58,9 @@ class RequestExecution final : private core::NonCopyableOrMovable {
   [[nodiscard]] bool ExpireDeadline(Clock::time_point now = Clock::now()) noexcept;
 
  private:
+  friend class AsyncDispatcher;
+  void SetLane(std::size_t index) noexcept;
+  [[nodiscard]] std::size_t Lane() const noexcept;
   std::shared_ptr<RequestExecutionState> state_;
 };
 

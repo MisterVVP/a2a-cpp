@@ -535,15 +535,15 @@ void DirectUnary(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher, Pre
                  engine::RequestExecutionContext context, NativeHttpCompletion done, const NativeHttpWorkQueue& work,
                  const std::shared_ptr<std::atomic_size_t>& active_unary) {
   const auto reply = std::make_shared<NativeReply>(plan, std::move(done), active_unary);
-  auto execution = dispatcher->Dispatch(std::move(plan.request), std::move(plan.context),
-                                        [reply, work](DispatchResult result, const engine::RequestExecutionContext&) {
-                                          reply->Schedule(std::move(result), work);
-                                        });
+  auto execution = work.Dispatch(
+      *dispatcher, plan,
+      [reply, work](DispatchResult result, const engine::RequestExecutionContext&) {
+        reply->Schedule(std::move(result), work);
+      },
+      nullptr, [&](const auto& source) { reply->ObserveDisconnect(dispatcher, source, std::move(context)); });
   if (!execution.ok()) {
     reply->Deliver(execution.error());
-    return;
   }
-  reply->ObserveDisconnect(dispatcher, std::move(execution.value()), std::move(context));
 }
 
 bool IsCompactStatusEvent(const lf::a2a::v1::StreamResponse& event, std::size_t max_id_bytes) {
@@ -644,6 +644,14 @@ class DirectStream final : public engine::AsyncServerStreamSession {
 
 }  // namespace
 
+core::Result<std::shared_ptr<engine::RequestExecution>> NativeHttpWorkQueue::Dispatch(
+    engine::AsyncDispatcher& dispatcher, PreparedDispatch<HttpServerResponse>& plan,
+    engine::AsyncDispatcher::TransportCompletion complete, std::shared_ptr<engine::AsyncServerStreamSession> stream,
+    const std::function<void(const std::shared_ptr<engine::RequestExecution>&)>& admitted) const {
+  return dispatcher.DispatchImpl(std::move(plan.request), std::move(plan.context), std::move(complete), {},
+                                 std::move(stream), lane, admitted);
+}
+
 EventHttpServer::AsyncHandler EventHttpHandlerFactory::Coroutine(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
                                                                  lf::a2a::v1::AgentCard card,
                                                                  const ServerBindingsOptions& options) {
@@ -675,14 +683,14 @@ NativeHttpHandler EventHttpHandlerFactory::Native(std::shared_ptr<engine::AsyncD
     if (plan.request.operation == DispatcherOperation::kSendStreamingMessage ||
         plan.request.operation == DispatcherOperation::kSubscribeTask) {
       const auto stream = std::make_shared<DirectStream>(plan, std::move(done), stream_factory());
-      auto execution =
-          bindings->dispatcher->DispatchStream(std::move(plan.request), std::move(plan.context), stream,
-                                               [stream](DispatchResult result, const engine::RequestExecutionContext&) {
-                                                 stream->Complete(std::move(result));
-                                               });
-      if (execution.ok()) {
-        stream->ObserveDisconnect(bindings->dispatcher, std::move(execution.value()), std::move(context));
-      } else {
+      auto execution = work.Dispatch(
+          *bindings->dispatcher, plan,
+          [stream](DispatchResult result, const engine::RequestExecutionContext&) {
+            stream->Complete(std::move(result));
+          },
+          stream,
+          [&](const auto& source) { stream->ObserveDisconnect(bindings->dispatcher, source, std::move(context)); });
+      if (!execution.ok()) {
         stream->Complete(execution.error());
       }
       return;

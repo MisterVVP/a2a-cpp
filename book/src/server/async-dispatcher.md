@@ -26,12 +26,14 @@ Unimplemented methods return the existing protocol unsupported-operation error.
 The dispatcher directly awaits the application, with no callback executor bridge
 or separate SDK worker queue.
 
-The application supplies and runs the Asio execution context. Each admitted call
-gets its own strand. Required-extension validation, authorization, interceptors,
-application execution, response projection and finalization run on that strand.
-Different requests may run concurrently, so shared application services must be
-thread-safe. Keep hooks and coroutine execution nonblocking. Existing synchronous
-security/store facilities still block their event-loop worker when invoked.
+`AsyncRuntime` assigns each request to one of its worker executors. Each worker
+serializes required-extension validation, authorization, interceptors, coroutine
+execution, cancellation and completion for its assigned requests. Suspended
+coroutines release the worker so other requests can progress. Dispatchers
+constructed with a caller-supplied executor use a strand per request. Workers
+can run concurrently, so shared application services must be thread-safe.
+Keep hooks and coroutine execution nonblocking. Synchronous security and store
+facilities block the worker that invokes them.
 
 Before hooks run in registration order and after hooks in reverse order. An
 accepted request has one terminal result and one after-hook sequence, including
@@ -58,11 +60,11 @@ returns `Result<shared_ptr<RequestExecution>>` immediately. It never executes us
 code inline. The completion sink is the boundary to native transport APIs such as
 gRPC reactors; application executor methods do not receive completion callbacks.
 Admission failure returns directly and invokes no transport completion. Accepted
-requests complete on their Asio strand after the after hooks.
+requests complete on their serialized executor after the final interceptor hooks.
 
 Retain the returned lifecycle source to report cancellation. A network reactor
-calls `dispatcher.Cancel(source, reason)`, which posts cancellation to the supplied
-Asio executor. Calling `source->Cancel()` directly retains the standalone
+calls `dispatcher.Cancel(source, reason)`, which posts cancellation to the assigned
+runtime worker or the supplied Asio executor. Calling `source->Cancel()` directly retains the standalone
 lifecycle's inline stop-observer semantics. A transport must not call `TryComplete`;
 terminal arbitration belongs to the dispatcher.
 

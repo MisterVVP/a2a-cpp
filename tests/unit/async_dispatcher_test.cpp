@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -21,6 +22,7 @@
 
 #include "a2a/core/extensions.h"
 #include "a2a/core/protocol_codes.h"
+#include "a2a/server/engine/async_runtime.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "support/coroutine_reply.h"
 
@@ -651,6 +653,56 @@ TEST(AsyncDispatcherTest, PendingCallsDoNotOccupyWorkersAndQueueRemainsBounded) 
     EXPECT_TRUE(transport->Receive().ok());
   }
 }
+class LaneProbe final : public FakeExecutor {
+ public:
+  boost::asio::awaitable<Result<lf::a2a::v1::Task>> GetTask(lf::a2a::v1::GetTaskRequest /*request*/,
+                                                            RequestExecutionContext context) override {
+    const std::stop_callback on_stop(context.StopToken(), [this] { stopped = std::this_thread::get_id(); });
+    entered.set_value(std::this_thread::get_id());
+    a2a::test::CoroutineReply<lf::a2a::v1::Task> reply;
+    auto result = co_await reply.Wait();
+    resumed = std::this_thread::get_id();
+    co_return result;
+  }
+
+  std::promise<std::thread::id> entered;
+  std::thread::id stopped;
+  std::thread::id resumed;
+};
+
+TEST(AsyncDispatcherTest, SuspendedRequestSharesItsWorkerAndReceivesCancellationOnIt) {
+  auto probe = std::make_shared<LaneProbe>();
+  AsyncRuntime runtime(probe, {}, {.threads = kWorkerCount});
+  auto dispatcher = runtime.dispatcher();
+  auto entered = probe->entered.get_future();
+  FakeTransport suspended;
+  const auto accepted = suspended.Send(*dispatcher);
+  ASSERT_TRUE(accepted.ok());
+  ASSERT_EQ(entered.wait_for(kWait), std::future_status::ready);
+  const auto worker = entered.get();
+  EXPECT_NE(worker, std::this_thread::get_id());
+
+  std::set<std::thread::id> available;
+  for (std::size_t index = 0; index < kWorkerCount; ++index) {
+    FakeTransport immediate;
+    ASSERT_TRUE(
+        immediate.Send(*dispatcher, {.operation = DispatcherOperation::kListTasks, .payload = ListTasksRequest{}})
+            .ok());
+    ASSERT_TRUE(immediate.Receive().ok());
+    available.insert(immediate.reply()->thread);
+  }
+  EXPECT_EQ(available.size(), kWorkerCount);
+  EXPECT_TRUE(available.contains(worker));
+
+  dispatcher->Cancel(accepted.value());
+  EXPECT_FALSE(suspended.Receive().ok());
+  runtime.Join();
+  EXPECT_EQ(probe->stopped, worker);
+  EXPECT_EQ(probe->resumed, worker);
+  EXPECT_EQ(suspended.reply()->thread, worker);
+  EXPECT_EQ(suspended.reply()->count.load(), 1);
+}
+
 class BlockingInterceptor final : public ServerInterceptor {
  public:
   Result<void> BeforeDispatch(const DispatchRequest& /*request*/, RequestContext& /*context*/) override {
