@@ -75,7 +75,6 @@ bool FitsOutput(const HttpServerResponse& response, std::size_t limit, bool stre
   if (response.body.size() > limit) {
     return false;
   }
-  // A stream prefix may be written separately from the response headers.
   std::size_t remaining = streaming ? limit : limit - response.body.size();
   for (const auto& [name, value] : response.headers) {
     if (name.size() > remaining) {
@@ -177,7 +176,7 @@ class NativeConnectionStream final : public http_runtime::NativeHttpStream {
       : connection_(std::move(connection)), execution_(std::move(execution)), reusable_(reusable) {}
   asio::awaitable<core::Result<void>> Start(HttpServerResponse response, std::string first_event) override;
   asio::awaitable<core::Result<void>> Write(std::string bytes) override;
-  [[nodiscard]] std::size_t BatchPayloadLimit() const noexcept override;
+  [[nodiscard]] http_runtime::NativeHttpBatchLimits BatchLimits() const noexcept override;
   void Finish(std::string error_event) override;
   void FinishEmpty(HttpServerResponse response) override;
   void Abort() override;
@@ -229,7 +228,6 @@ class Connection final : public std::enable_shared_from_this<Connection> {
     (void)heartbeat_.cancel();
     active_stream_.reset();
     if (execution_) {
-      // Stop callbacks are application code, including dispatcher cancellation.
       asio::post(runtime_->application, [execution = execution_, reason] { (void)execution->Cancel(reason); });
     }
     FailQueued();
@@ -753,8 +751,10 @@ asio::awaitable<core::Result<void>> NativeConnectionStream::Write(std::string by
   return connection_->WriteEvent(std::move(bytes), gate_);
 }
 
-std::size_t NativeConnectionStream::BatchPayloadLimit() const noexcept {
-  return connection_->max_output_bytes_ - kHexBytes - 4U;
+http_runtime::NativeHttpBatchLimits NativeConnectionStream::BatchLimits() const noexcept {
+  const auto& options = connection_->runtime_->options;
+  return {.payload_bytes = std::min(options.max_sse_batch_payload_bytes, connection_->max_output_bytes_ - kHexBytes - 4U),
+          .id_bytes = options.max_sse_batch_id_bytes};
 }
 
 void NativeConnectionStream::Finish(std::string error_event) {
@@ -879,7 +879,6 @@ EventHttpListener::~EventHttpListener() {
     Shutdown();
     Join();
   } catch (...) {
-    // Destruction must drain the owned threads; failure cannot leave them running.
     std::terminate();
   }
 }

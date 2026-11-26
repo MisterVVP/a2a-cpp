@@ -278,7 +278,6 @@ asio::awaitable<core::Result<EventHttpResponse>> Streaming(std::shared_ptr<engin
     }
     co_return EventHttpResponse{.response = std::move(response.value()), .stream = {}};
   }
-  // Reuse the protocol serializer's headers without running its blocking writer.
   auto response = plan.complete(DispatchResponse(std::make_unique<EmptySession>()));
   if (!response.ok()) {
     co_return response.error();
@@ -547,14 +546,10 @@ void DirectUnary(const std::shared_ptr<engine::AsyncDispatcher>& dispatcher, Pre
   reply->ObserveDisconnect(dispatcher, std::move(execution.value()), std::move(context));
 }
 
-constexpr std::size_t kCompactStreamIdBytes = 128;
-constexpr std::size_t kBatchSsePayloadBytes = 8192;
-
-bool IsCompactStatusEvent(const lf::a2a::v1::StreamResponse& event) {
+bool IsCompactStatusEvent(const lf::a2a::v1::StreamResponse& event, std::size_t max_id_bytes) {
   const auto& status = event.status_update();
-  return event.has_status_update() && status.task_id().size() <= kCompactStreamIdBytes &&
-         status.context_id().size() <= kCompactStreamIdBytes && !status.has_metadata() &&
-         !status.status().has_message();
+  return event.has_status_update() && status.task_id().size() <= max_id_bytes &&
+         status.context_id().size() <= max_id_bytes && !status.has_metadata() && !status.status().has_message();
 }
 
 class DirectStream final : public engine::AsyncServerStreamSession {
@@ -576,15 +571,17 @@ class DirectStream final : public engine::AsyncServerStreamSession {
   }
 
   asio::awaitable<core::Result<void>> WriteBatch(std::vector<lf::a2a::v1::StreamResponse> events) override {
-    const auto limit = std::min(kBatchSsePayloadBytes, stream_->BatchPayloadLimit());
-    if (limit == 0 || events.size() <= 1 || events.size() > kMaxBatchEvents ||
-        !std::ranges::all_of(events, IsCompactStatusEvent)) {
+    const auto limits = stream_->BatchLimits();
+    if (limits.payload_bytes == 0 || events.size() <= 1 || events.size() > kMaxBatchEvents ||
+        !std::ranges::all_of(events, [max_id_bytes = limits.id_bytes](const auto& event) {
+          return IsCompactStatusEvent(event, max_id_bytes);
+        })) {
       co_return co_await AsyncServerStreamSession::WriteBatch(std::move(events));
     }
     std::string frames;
     for (const auto& event : events) {
       auto frame = encode_(event);
-      if (!frame.ok() || frame.value().size() > limit - frames.size()) {
+      if (!frame.ok() || frame.value().size() > limits.payload_bytes - frames.size()) {
         co_return co_await AsyncServerStreamSession::WriteBatch(std::move(events));
       }
       frames.append(frame.value());

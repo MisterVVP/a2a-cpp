@@ -594,11 +594,10 @@ TEST(EventHttpServer, NativeDiscoveryCompletesWithoutDispatchAdmission) {
   runtime.Join();
 }
 
-std::string PipelineNativeSubscription(std::string_view subscription,
-                                       std::size_t max_output_bytes = EventHttpServerOptions{}.max_output_bytes) {
+std::string PipelineNativeSubscription(std::string_view subscription, EventHttpServerOptions options = {}) {
   engine::AsyncRuntime runtime(std::make_shared<NativeBackend>());
-  EventHttpServerOptions options{.max_pending_requests = 1, .idle_timeout = kTimeout};
-  options.max_output_bytes = max_output_bytes;
+  options.max_pending_requests = 1;
+  options.idle_timeout = kTimeout;
   EventHttpServer server(runtime.dispatcher(), {}, {}, options);
   if (const auto started = server.Start(); !started.ok()) {
     ADD_FAILURE() << started.error().message();
@@ -659,8 +658,7 @@ TEST(EventHttpServer, NativeBatchSendsFirstEventBeforeCoalescedEventsAndPipeline
   EXPECT_LT(third, tail_end) << response;
 }
 
-TEST(EventHttpServer, NativeBatchFallsBackToSingleEventsWithinTheOutputBound) {
-  const auto response = PipelineNativeSubscription(kBurstSubscription, kBoundedBurstOutputBytes);
+void ExpectSeparateBurstTailChunks(const std::string& response) {
   ExpectFinalChunkBeforeNextResponse(response);
   const auto second = response.find(kBurstEventIds[1]);
   ASSERT_NE(second, std::string::npos) << response;
@@ -669,6 +667,20 @@ TEST(EventHttpServer, NativeBatchFallsBackToSingleEventsWithinTheOutputBound) {
   const auto third = response.find(kBurstEventIds[2], second_chunk_end);
   ASSERT_NE(third, std::string::npos) << response;
   EXPECT_LT(third, response.find(kFinalChunk)) << response;
+}
+
+TEST(EventHttpServer, NativeBatchFallsBackToSingleEventsWithinTheOutputBound) {
+  ExpectSeparateBurstTailChunks(
+      PipelineNativeSubscription(kBurstSubscription, {.max_output_bytes = kBoundedBurstOutputBytes}));
+}
+
+TEST(EventHttpServer, NativeSseBatchPayloadLimitCanDisableCoalescing) {
+  ExpectSeparateBurstTailChunks(PipelineNativeSubscription(kBurstSubscription, {.max_sse_batch_payload_bytes = 0}));
+}
+
+TEST(EventHttpServer, NativeSseBatchIdLimitAppliesToContextIds) {
+  ExpectSeparateBurstTailChunks(
+      PipelineNativeSubscription(kBurstSubscription, {.max_sse_batch_id_bytes = kBurstContextBytes - 1U}));
 }
 
 struct DrainProbe final {

@@ -9,9 +9,14 @@
 
 namespace a2a::server::http_runtime {
 
+struct NativeHttpBatchLimits final {
+  std::size_t payload_bytes = 0;
+  std::size_t id_bytes = 0;
+};
+
 class NativeHttpStream : public HttpEventStream {
  public:
-  [[nodiscard]] virtual std::size_t BatchPayloadLimit() const noexcept { return 0; }
+  [[nodiscard]] virtual NativeHttpBatchLimits BatchLimits() const noexcept { return {}; }
   virtual boost::asio::awaitable<core::Result<void>> Start(HttpServerResponse response, std::string first_event) = 0;
   virtual void Finish(std::string error_event) = 0;
   virtual void FinishEmpty(HttpServerResponse response) = 0;

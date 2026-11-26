@@ -44,6 +44,12 @@ Requests with a security policy use per-event authorization and writes. Use
 `Write` for live events and for producers that need an acknowledgement after
 each event.
 
+Set `EventHttpServerOptions::max_sse_batch_payload_bytes` to cap the bytes in a
+coalesced SSE payload. The default is 8 KiB, and zero disables SSE coalescing.
+The server's `max_output_bytes` also bounds the resulting write. Set
+`max_sse_batch_id_bytes` to cap each task or context ID eligible for coalescing.
+The default is 128 bytes per ID.
+
 Returning success ends the stream normally. Returning an error or throwing ends
 it with the existing error/status mapping. There is no separate application
 `Finish` call. Unimplemented streaming methods return unsupported-operation
