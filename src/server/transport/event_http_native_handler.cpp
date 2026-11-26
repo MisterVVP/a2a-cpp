@@ -576,17 +576,17 @@ class DirectStream final : public engine::AsyncServerStreamSession {
         !std::ranges::all_of(events, [max_id_bytes = limits.id_bytes](const auto& event) {
           return IsCompactStatusEvent(event, max_id_bytes);
         })) {
-      co_return co_await AsyncServerStreamSession::WriteBatch(std::move(events));
+      return AsyncServerStreamSession::WriteBatch(std::move(events));
     }
     std::string frames;
     for (const auto& event : events) {
       auto frame = encode_(event);
       if (!frame.ok() || frame.value().size() > limits.payload_bytes - frames.size()) {
-        co_return co_await AsyncServerStreamSession::WriteBatch(std::move(events));
+        return AsyncServerStreamSession::WriteBatch(std::move(events));
       }
       frames.append(frame.value());
     }
-    co_return co_await WriteFrame(std::move(frames));
+    return WriteFrame(std::move(frames));
   }
 
   void Complete(DispatchResult result) {
