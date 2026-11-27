@@ -101,10 +101,10 @@ struct NetworkLoop final {
 
 struct Runtime final {
   Runtime(EventHttpServer::AsyncHandler callback, EventHttpServerOptions settings,
-          asio::any_io_executor native_executor, bool native_binding)
+          http_runtime::SelectNativeLane select_lane, bool native_binding)
       : handler(std::move(callback)),
         options(std::move(settings)),
-        native_executor(std::move(native_executor)),
+        select_lane(std::move(select_lane)),
         secondary(UseSecondLoop(options, native_binding) ? std::make_unique<NetworkLoop>() : nullptr),
         acceptor(network.context),
         drains(NetworkWorkers()) {}
@@ -131,7 +131,7 @@ struct Runtime final {
   EventHttpServer::AsyncHandler handler;
   std::shared_ptr<const http_runtime::NativeHttpHandler> native_handler;
   EventHttpServerOptions options;
-  const asio::any_io_executor native_executor;
+  const http_runtime::SelectNativeLane select_lane;
   NetworkLoop network;
   const std::unique_ptr<NetworkLoop> secondary;
   asio::io_context application;
@@ -194,6 +194,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
  public:
   Connection(std::shared_ptr<Runtime> runtime, NetworkLoop& loop, Tcp::socket socket)
       : runtime_(std::move(runtime)),
+        native_lane_(runtime_->select_lane ? runtime_->select_lane() : http_runtime::NativeLane{}),
         loop_(loop),
         socket_(std::move(socket)),
         idle_(loop_.context),
@@ -489,7 +490,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   }
 
   void StartNative(HttpServerRequest&& request, std::shared_ptr<const http_runtime::NativeHttpHandler> native_handler) {
-    const bool borrowed = static_cast<bool>(runtime_->native_executor);
+    const bool borrowed = static_cast<bool>(native_lane_.first);
     auto invoke = [self = shared_from_this(), execution = execution_, handler = std::move(native_handler),
                    request = std::move(request), borrowed]() mutable {
       const auto callback = std::move(handler);
@@ -500,7 +501,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       return;
     }
     runtime_->drains.fetch_add(1, std::memory_order_relaxed);
-    asio::post(runtime_->native_executor, [runtime = runtime_, invoke = std::move(invoke)]() mutable {
+    asio::post(native_lane_.first, [runtime = runtime_, invoke = std::move(invoke)]() mutable {
       invoke();
       ReleaseRuntime(runtime);
     });
@@ -529,7 +530,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
       handler(
           std::move(request), execution->Context(), std::move(complete),
           [self, execution, reusable] { return std::make_shared<NativeConnectionStream>(self, execution, reusable); },
-          {.executor = self->runtime_->application.get_executor()});
+          {.executor = self->runtime_->application.get_executor(), .lane = self->native_lane_.second});
     } catch (...) {
       self->PostTerminalResponse(execution, std::current_exception(), {});
     }
@@ -695,6 +696,7 @@ class Connection final : public std::enable_shared_from_this<Connection> {
   }
 
   std::shared_ptr<Runtime> runtime_;
+  const http_runtime::NativeLane native_lane_;
   NetworkLoop& loop_;
   Tcp::socket socket_;
   asio::steady_timer idle_;
@@ -792,8 +794,8 @@ namespace http_runtime {
 
 struct EventHttpListener::Impl final {
   Impl(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler, EventHttpServerOptions options,
-       asio::any_io_executor native_executor)
-      : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options), std::move(native_executor),
+       http_runtime::SelectNativeLane select_lane)
+      : runtime(std::make_shared<Runtime>(std::move(handler), std::move(options), std::move(select_lane),
                                           static_cast<bool>(native_handler))) {
     if (native_handler) {
       runtime->native_handler = std::make_shared<const NativeHttpHandler>(std::move(native_handler));
@@ -869,9 +871,9 @@ struct EventHttpListener::Impl final {
 };
 
 EventHttpListener::EventHttpListener(EventHttpServer::AsyncHandler handler, NativeHttpHandler native_handler,
-                                     EventHttpServerOptions options, asio::any_io_executor native_executor)
+                                     EventHttpServerOptions options, http_runtime::SelectNativeLane select_lane)
     : impl_(std::make_unique<Impl>(std::move(handler), std::move(native_handler), std::move(options),
-                                   std::move(native_executor))) {}
+                                   std::move(select_lane))) {}
 
 std::size_t EventHttpListener::network_workers() const noexcept { return impl_->runtime->NetworkWorkers(); }
 

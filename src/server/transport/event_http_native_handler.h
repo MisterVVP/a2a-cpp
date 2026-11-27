@@ -4,8 +4,12 @@
 
 #include <boost/asio/io_context.hpp>
 #include <cstddef>
+#include <functional>
+#include <memory>
+#include <optional>
 
 #include "a2a/server/event_http_dispatcher.h"
+#include "a2a/server/prepared_dispatch.h"
 
 namespace a2a::server::http_runtime {
 
@@ -27,6 +31,11 @@ using NativeHttpCompletion = std::function<void(core::Result<HttpServerResponse>
 using NativeHttpStreamFactory = std::function<std::shared_ptr<NativeHttpStream>()>;
 struct NativeHttpWorkQueue final {
   boost::asio::io_context::executor_type executor;
+  std::optional<std::size_t> lane = {};
+  [[nodiscard]] core::Result<std::shared_ptr<engine::RequestExecution>> Dispatch(
+      engine::AsyncDispatcher& dispatcher, PreparedDispatch<HttpServerResponse>& plan,
+      engine::AsyncDispatcher::TransportCompletion complete, std::shared_ptr<engine::AsyncServerStreamSession> stream,
+      const std::function<void(const std::shared_ptr<engine::RequestExecution>&)>& admitted) const;
 };
 using NativeHttpHandler = std::function<void(HttpServerRequest, engine::RequestExecutionContext, NativeHttpCompletion,
                                              NativeHttpStreamFactory, NativeHttpWorkQueue)>;

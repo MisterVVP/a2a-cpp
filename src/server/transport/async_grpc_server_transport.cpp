@@ -5,6 +5,7 @@
 
 #include <grpc/support/time.h>
 
+#include <atomic>
 #include <boost/asio/experimental/concurrent_channel.hpp>
 #include <boost/asio/recycling_allocator.hpp>
 #include <boost/asio/this_coro.hpp>
@@ -14,7 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <unordered_map>
+#include <stop_token>
 #include <utility>
 #include <vector>
 
@@ -69,57 +70,47 @@ std::optional<::grpc::StatusCode> CancellationStatus(RequestOutcome outcome) {
 }
 }  // namespace
 
-struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<State> {
+struct AsyncGrpcServerTransport::State final {
   struct Call final {
+    struct Shutdown final {
+      Call* call;
+      void operator()() const { call->Cancel(RequestCancellationReason::kServerShutdown); }
+    };
+
+    explicit Call(std::shared_ptr<engine::AsyncDispatcher> target) : dispatcher(std::move(target)) {}
+
+    void Bind(const std::shared_ptr<RequestExecution>& execution, std::stop_token token) {
+      source = execution;
+      shutdown.emplace(std::move(token), Shutdown{this});
+    }
+
     void Cancel(RequestCancellationReason reason) {
-      std::shared_ptr<RequestExecution> execution;
-      {
-        std::lock_guard lock(mutex);
-        if (cancellation.has_value()) {
-          return;
-        }
-        cancellation = reason;
-        execution = source;
-      }
-      if (execution != nullptr) {
-        if (const auto target = dispatcher.lock()) {
-          target->Cancel(std::move(execution), reason);
-        }
+      if (source && !cancelled.test_and_set()) {
+        dispatcher->Cancel(source, reason);
       }
     }
-    void Bind(std::shared_ptr<RequestExecution> execution) {
-      std::optional<RequestCancellationReason> reason;
-      {
-        std::lock_guard lock(mutex);
-        source = execution;
-        reason = cancellation;
-      }
-      if (reason.has_value()) {
-        if (const auto target = dispatcher.lock()) {
-          target->Cancel(std::move(execution), *reason);
-        }
-      }
-    }
-    std::weak_ptr<State> owner;
-    std::weak_ptr<engine::AsyncDispatcher> dispatcher;
+
+    const std::shared_ptr<engine::AsyncDispatcher> dispatcher;
     std::vector<std::string> extensions;
-    std::mutex mutex;
     std::shared_ptr<RequestExecution> source;
-    std::optional<RequestCancellationReason> cancellation;
+    std::atomic_flag cancelled;
+    std::optional<std::stop_callback<Shutdown>> shutdown;
   };
 
   template <typename Response>
   class Reactor final : public ::grpc::ServerUnaryReactor {
    public:
-    Reactor(std::shared_ptr<Call> call, ::grpc::CallbackServerContext& context, Response& response)
-        : call_(std::move(call)), context_(context), response_(response) {}
+    Reactor(std::shared_ptr<engine::AsyncDispatcher> dispatcher, ::grpc::CallbackServerContext& context,
+            Response& response)
+        : call(std::move(dispatcher)), context_(context), response_(response) {}
+    Call call;
     void Complete(core::Result<DispatchResponse> result, const RequestExecutionContext& execution) {
       ::grpc::Status status;
       if (!result.ok()) {
-        status = GrpcErrorStatus(result.error(), &context_, call_->extensions, CancellationStatus(execution.Outcome()));
+        status = GrpcErrorStatus(result.error(), &context_, call.extensions, CancellationStatus(execution.Outcome()));
       } else {
         status = WriteGrpcUnaryResponse(result.value(), response_, kUnexpectedPayload);
-        AddGrpcActivatedExtensions(&context_, call_->extensions);
+        AddGrpcActivatedExtensions(&context_, call.extensions);
       }
       // OnDone can delete this immediately after Finish. No member access follows.
       Finish(status);
@@ -129,18 +120,11 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       const auto reason = gpr_time_cmp(deadline, gpr_now(deadline.clock_type)) <= 0
                               ? RequestCancellationReason::kDeadlineExceeded
                               : RequestCancellationReason::kClientCancelled;
-      call_->Cancel(reason);
+      call.Cancel(reason);
     }
-    void OnDone() override {
-      if (const auto state = call_->owner.lock()) {
-        std::lock_guard lock(state->mutex);
-        state->calls.erase(call_.get());
-      }
-      delete this;
-    }
+    void OnDone() override { delete this; }
 
    private:
-    const std::shared_ptr<Call> call_;
     ::grpc::CallbackServerContext& context_;
     Response& response_;
   };
@@ -199,10 +183,11 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       bool writing = false;
     };
 
-    StreamingReactor(std::shared_ptr<Call> call, ::grpc::CallbackServerContext& context)
-        : call_(std::move(call)), context_(context), session_(std::make_shared<Session>()) {
+    StreamingReactor(std::shared_ptr<engine::AsyncDispatcher> dispatcher, ::grpc::CallbackServerContext& context)
+        : call(std::move(dispatcher)), context_(context), session_(std::make_shared<Session>()) {
       session_->reactor = this;
     }
+    Call call;
     [[nodiscard]] std::shared_ptr<Session> session() const { return session_; }
     void Complete(core::Result<DispatchResponse> result, const RequestExecutionContext& execution) {
       auto status = result.ok()
@@ -216,7 +201,7 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
       if (session->terminal.has_value()) {
         return;
       }
-      AddGrpcActivatedExtensions(&context_, call_->extensions);
+      AddGrpcActivatedExtensions(&context_, call.extensions);
       session->terminal = status;
       if (session->writing) {
         // A stalled HTTP/2 write must not hold host shutdown waiting for demand.
@@ -249,18 +234,14 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     }
     void OnCancel() override {
       const auto deadline = context_.raw_deadline();
-      call_->Cancel(gpr_time_cmp(deadline, gpr_now(deadline.clock_type)) <= 0
-                        ? RequestCancellationReason::kDeadlineExceeded
-                        : RequestCancellationReason::kClientCancelled);
+      call.Cancel(gpr_time_cmp(deadline, gpr_now(deadline.clock_type)) <= 0
+                      ? RequestCancellationReason::kDeadlineExceeded
+                      : RequestCancellationReason::kClientCancelled);
     }
     void OnDone() override {
       {
         std::lock_guard lock(session_->mutex);
         session_->reactor = nullptr;
-      }
-      if (const auto state = call_->owner.lock()) {
-        std::lock_guard lock(state->mutex);
-        state->calls.erase(call_.get());
       }
       delete this;
     }
@@ -268,7 +249,6 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
    private:
     static constexpr auto kStreamClosed = "Async gRPC stream is closed or already writing";
     static constexpr auto kStreamWriteFailed = "Async gRPC stream write failed";
-    const std::shared_ptr<Call> call_;
     ::grpc::CallbackServerContext& context_;
     const std::shared_ptr<Session> session_;
   };
@@ -277,40 +257,32 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
   ::grpc::ServerWriteReactor<lf::a2a::v1::StreamResponse>* StartStream(::grpc::CallbackServerContext& context,
                                                                        const Request* request,
                                                                        DispatcherOperation operation) {
-    auto call = std::make_shared<Call>();
-    call->owner = shared_from_this();
-    call->dispatcher = dispatcher;
-    auto* reactor = new StreamingReactor(call, context);
+    auto* reactor = new StreamingReactor(dispatcher, context);
     auto metadata = BuildGrpcRequestContext(context, extensions);
     if (request == nullptr || !metadata.ok()) {
       reactor->FinishOnce(request == nullptr ? ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, kMissingArguments)
                                              : GrpcErrorStatus(metadata.error(), &context));
       return reactor;
     }
-    call->extensions = std::move(metadata.value().activated_extensions);
+    reactor->call.extensions = std::move(metadata.value().activated_extensions);
     auto routed = ParseGrpcUnaryRequest(operation, *request);
     if (!routed.ok()) {
       reactor->FinishOnce(GrpcErrorStatus(routed.error(), &context));
       return reactor;
     }
-    {
-      std::lock_guard lock(mutex);
-      if (closed) {
-        reactor->FinishOnce(GrpcErrorStatus(core::Error::Network(kServiceClosed), &context));
-        return reactor;
-      }
-      calls.emplace(call.get(), call);
+    if (shutdown.stop_requested()) {
+      reactor->FinishOnce(GrpcErrorStatus(core::Error::Network(kServiceClosed), &context));
+      return reactor;
     }
-    const auto admitted = dispatcher->DispatchStream(
-        std::move(routed.value()), std::move(metadata.value().request_context), reactor->session(),
-        [call, reactor](auto result, const RequestExecutionContext& execution) {
+    const auto admitted = dispatcher->DispatchImpl(
+        std::move(routed.value()), std::move(metadata.value().request_context),
+        [reactor](auto result, const RequestExecutionContext& execution) {
           reactor->Complete(std::move(result), execution);
         },
-        SteadyDeadline(context.deadline()));
+        SteadyDeadline(context.deadline()), reactor->session(), {},
+        [&](const auto& source) { reactor->call.Bind(source, shutdown.get_token()); });
     if (!admitted.ok()) {
       reactor->FinishOnce(GrpcErrorStatus(admitted.error(), &context));
-    } else {
-      call->Bind(admitted.value());
     }
     return reactor;
   }
@@ -332,54 +304,28 @@ struct AsyncGrpcServerTransport::State final : std::enable_shared_from_this<Stat
     if (!routed.ok()) {
       return Reject(context, GrpcErrorStatus(routed.error(), &context, metadata.value().activated_extensions));
     }
-    auto call = std::make_shared<Call>();
-    call->owner = shared_from_this();
-    call->dispatcher = dispatcher;
-    call->extensions = std::move(metadata.value().activated_extensions);
-    {
-      std::lock_guard lock(mutex);
-      if (closed) {
-        return Reject(context, GrpcErrorStatus(core::Error::Network(kServiceClosed), &context, call->extensions));
-      }
-      calls.emplace(call.get(), call);
+    if (shutdown.stop_requested()) {
+      return Reject(context, GrpcErrorStatus(core::Error::Network(kServiceClosed), &context,
+                                             metadata.value().activated_extensions));
     }
-    auto* reactor = new Reactor<Response>(call, context, *response);
-    const auto admitted = dispatcher->Dispatch(
+    auto* reactor = new Reactor<Response>(dispatcher, context, *response);
+    reactor->call.extensions = std::move(metadata.value().activated_extensions);
+    const auto admitted = dispatcher->DispatchImpl(
         std::move(routed.value()), std::move(metadata.value().request_context),
         [reactor](auto result, const RequestExecutionContext& execution) {
           reactor->Complete(std::move(result), execution);
         },
-        SteadyDeadline(context.deadline()));
+        SteadyDeadline(context.deadline()), nullptr, {},
+        [&](const auto& source) { reactor->call.Bind(source, shutdown.get_token()); });
     if (!admitted.ok()) {
-      reactor->Finish(GrpcErrorStatus(admitted.error(), &context, call->extensions));
-    } else {
-      call->Bind(admitted.value());
+      reactor->Finish(GrpcErrorStatus(admitted.error(), &context, reactor->call.extensions));
     }
     return reactor;
   }
 
-  void Shutdown() {
-    std::vector<std::shared_ptr<Call>> pending;
-    {
-      std::lock_guard lock(mutex);
-      if (closed) {
-        return;
-      }
-      closed = true;
-      pending.reserve(calls.size());
-      for (const auto& [key, call] : calls) {
-        pending.push_back(call);
-      }
-    }
-    for (const auto& call : pending) {
-      call->Cancel(RequestCancellationReason::kServerShutdown);
-    }
-  }
   const std::shared_ptr<engine::AsyncDispatcher> dispatcher;
   const RequiredExtensionsValidator extensions;
-  std::mutex mutex;
-  std::unordered_map<Call*, std::shared_ptr<Call>> calls;
-  bool closed = false;
+  std::stop_source shutdown;
 };
 
 AsyncGrpcServerTransport::AsyncGrpcServerTransport(std::shared_ptr<engine::AsyncDispatcher> dispatcher,
@@ -390,7 +336,7 @@ AsyncGrpcServerTransport::AsyncGrpcServerTransport(std::shared_ptr<engine::Async
   state_ = std::make_shared<State>(std::move(dispatcher), std::move(options));
 }
 AsyncGrpcServerTransport::~AsyncGrpcServerTransport() { Shutdown(); }
-void AsyncGrpcServerTransport::Shutdown() { state_->Shutdown(); }
+void AsyncGrpcServerTransport::Shutdown() { (void)state_->shutdown.request_stop(); }
 
 ::grpc::ServerUnaryReactor* AsyncGrpcServerTransport::SendMessage(::grpc::CallbackServerContext* context,
                                                                   const lf::a2a::v1::SendMessageRequest* request,

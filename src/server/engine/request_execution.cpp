@@ -28,6 +28,7 @@ struct RequestExecutionState final {
     return true;
   }
 
+  std::size_t lane = 0;
   const RequestContext metadata;
   const std::optional<RequestExecutionContext::Clock::time_point> deadline;
   std::atomic<RequestOutcome> outcome{RequestOutcome::kPending};
@@ -57,6 +58,9 @@ std::stop_token RequestExecutionContext::StopToken() const noexcept { return sta
 
 RequestExecution::RequestExecution(RequestContext metadata, std::optional<Clock::time_point> deadline)
     : state_(std::make_shared<RequestExecutionState>(std::move(metadata), deadline)) {}
+
+void RequestExecution::SetLane(std::size_t index) noexcept { state_->lane = index; }
+std::size_t RequestExecution::Lane() const noexcept { return state_->lane; }
 
 RequestExecution::~RequestExecution() { (void)Cancel(RequestCancellationReason::kServerShutdown); }
 

@@ -45,10 +45,13 @@ EventHttpServer::EventHttpServer(AsyncHandler handler, EventHttpServerOptions op
 
 EventHttpServer::EventHttpServer(std::shared_ptr<engine::AsyncDispatcher> dispatcher, lf::a2a::v1::AgentCard card,
                                  const ServerBindingsOptions& bindings, EventHttpServerOptions options) {
-  auto native_executor = dispatcher ? dispatcher->NativeHttpIngressExecutor() : boost::asio::any_io_executor{};
+  http_runtime::SelectNativeLane select_lane;
+  if (dispatcher) {
+    select_lane = [dispatcher] { return dispatcher->NativeHttpLane(); };
+  }
   auto handler = http_runtime::EventHttpHandlerFactory::Native(std::move(dispatcher), std::move(card), bindings);
   impl_ = std::make_unique<Impl>(std::make_unique<http_runtime::EventHttpListener>(
-      AsyncHandler{}, std::move(handler), std::move(options), std::move(native_executor)));
+      AsyncHandler{}, std::move(handler), std::move(options), std::move(select_lane)));
 }
 
 EventHttpServer::~EventHttpServer() = default;

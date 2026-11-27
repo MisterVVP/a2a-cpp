@@ -12,6 +12,7 @@
 #include <boost/asio/post.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/system/system_error.hpp>
+#include <deque>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -64,8 +65,13 @@ struct CoroutineDispatchResult final {
   using ReturnType = boost::asio::awaitable<core::Result<DispatchResponse>>;
   template <typename T>
   ReturnType operator()(boost::asio::awaitable<core::Result<T>> operation) const {
+#if defined(__clang_analyzer__)
+    (void)operation;
+    co_return core::Error::Internal(kDispatchException);
+#else
     auto result = co_await std::move(operation);
     co_return ToDispatchResponse(std::move(result));
+#endif
   }
   ReturnType operator()(core::Result<DispatchResponse> result) const { co_return std::move(result); }
 };
@@ -225,21 +231,29 @@ class AdmissionReservation final : private core::NonCopyableOrMovable {
 }  // namespace
 
 struct AsyncDispatcher::State final {
+  struct Call;
+  struct Lane final {
+    explicit Lane(boost::asio::any_io_executor worker) : worker(std::move(worker)) {}
+    boost::asio::any_io_executor worker;
+    std::mutex mutex;
+    std::unordered_map<Call*, std::shared_ptr<Call>> calls;
+  };
   struct Call final {
     struct NotifyStop final {
       std::weak_ptr<Call> call;
       void operator()() const {
         if (const auto locked = call.lock()) {
-          boost::asio::post(locked->strand, [locked] { locked->Stopped(); });
+          boost::asio::post(locked->worker, [locked] { locked->Stopped(); });
         }
       }
     };
 
-    Call(const boost::asio::any_io_executor& scheduler, const std::shared_ptr<AdmissionCounts>& counts,
+    Call(boost::asio::any_io_executor worker, Lane& lane, const std::shared_ptr<AdmissionCounts>& counts,
          PendingAdmission& pending, DispatchRequest request, RequestContext metadata, TransportCompletion completion,
          std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<const DispatchPipeline> pipeline,
          std::shared_ptr<AsyncServerStreamSession> stream)
-        : strand(boost::asio::make_strand(scheduler)),
+        : worker(std::move(worker)),
+          lane(lane),
           admission(counts, pending),
           request(std::move(request)),
           context(HasDispatchHooks(*pipeline) || this->request.operation == DispatcherOperation::kGetExtendedAgentCard
@@ -256,8 +270,6 @@ struct AsyncDispatcher::State final {
         return;
       }
       cancellation.emit(boost::asio::cancellation_type::terminal);
-      // Before/After hooks are serialized on this strand. Run observes cancellation
-      // before entering application code even if this notification precedes startup.
       if (started) {
         Finish(CancellationError(source->Context().Outcome()));
       }
@@ -350,8 +362,8 @@ struct AsyncDispatcher::State final {
       }
       session.After(response, InterceptorExceptionPolicy::kContain);
       if (const auto state = owner.lock()) {
-        std::lock_guard lock(state->mutex);
-        state->calls.erase(this);
+        std::lock_guard lock(lane.mutex);
+        lane.calls.erase(this);
       }
       admission.ReleaseActive();
       auto deliver = std::move(completion);
@@ -362,7 +374,8 @@ struct AsyncDispatcher::State final {
       }
     }
 
-    boost::asio::strand<boost::asio::any_io_executor> strand;
+    const boost::asio::any_io_executor worker;
+    Lane& lane;
     AdmissionReservation admission;
     DispatchRequest request;
     RequestContext context;
@@ -381,7 +394,6 @@ struct AsyncDispatcher::State final {
   State(std::shared_ptr<CoroutineAgentExecutor> application, boost::asio::any_io_executor scheduler,
         AsyncDispatcherOptions options)
       : executor(std::move(application)),
-        scheduler(std::move(scheduler)),
         capacity(options.max_in_flight),
         max_pending(options.max_pending),
         pipeline(std::make_shared<const DispatchPipeline>(DispatchPipeline{
@@ -390,7 +402,9 @@ struct AsyncDispatcher::State final {
                             : nullptr,
             .interceptors = std::move(options.interceptors),
             .agent_card_provider = std::move(options.agent_card_provider)})),
-        extensions(std::move(options.required_extensions)) {}
+        extensions(std::move(options.required_extensions)) {
+    lanes.emplace_back(std::move(scheduler));
+  }
 
   core::Result<PendingAdmission> Reserve() {
     std::lock_guard lock(admission_mutex);
@@ -408,36 +422,58 @@ struct AsyncDispatcher::State final {
     return PendingAdmission(admission.get());
   }
 
-  void Shutdown() {
-    std::vector<std::shared_ptr<Call>> active;
+  static void Start(const std::shared_ptr<Call>& call, const std::shared_ptr<State>& state) {
+    boost::asio::co_spawn(
+        call->worker, Call::Run(state, call),
+        boost::asio::bind_cancellation_slot(call->cancellation.slot(), [call](const std::exception_ptr& exception) {
+          if (exception) {
+            call->Finish(CoroutineError(exception));
+          }
+          call->observer.reset();
+        }));
+    if (call->finished) {
+      return;
+    }
+    call->owner = state;
+    call->observer.emplace(call->source->Context().StopToken(), Call::NotifyStop{.call = call});
     {
-      std::lock_guard lock(mutex);
-      if (closed.exchange(true)) {
+      std::lock_guard lock(call->lane.mutex);
+      if (!state->closed.load()) {
+        call->lane.calls.emplace(call.get(), call);
         return;
       }
-      active.reserve(calls.size());
-      for (const auto& [key, call] : calls) {
+    }
+    call->ObserveShutdown(true);
+  }
+
+  void Shutdown() {
+    std::vector<std::shared_ptr<Call>> active;
+    if (closed.exchange(true)) {
+      return;
+    }
+    for (auto& lane : lanes) {
+      std::lock_guard lock(lane.mutex);
+      for (const auto& [key, call] : lane.calls) {
         active.push_back(call);
       }
     }
     for (const auto& call : active) {
-      boost::asio::post(call->strand,
+      boost::asio::post(call->worker,
                         [call] { (void)call->source->Cancel(RequestCancellationReason::kServerShutdown); });
     }
   }
 
   const std::shared_ptr<CoroutineAgentExecutor> executor;
-  const boost::asio::any_io_executor scheduler;
+  std::deque<Lane> lanes;
+  std::atomic_size_t next_lane = 0;
   const std::size_t capacity;
   const std::size_t max_pending;
   const std::shared_ptr<AdmissionCounts> admission = std::make_shared<AdmissionCounts>();
   const std::shared_ptr<const DispatchPipeline> pipeline;
   RequiredExtensionsValidator extensions;
   std::mutex admission_mutex;
-  std::mutex mutex;
-  std::unordered_map<Call*, std::shared_ptr<Call>> calls;
   std::atomic_bool closed = false;
-  bool native_http_ingress = false;
+  bool worker_affine = false;
 };
 
 AsyncDispatcher::AsyncDispatcher(std::shared_ptr<CoroutineAgentExecutor> executor,
@@ -456,16 +492,26 @@ AsyncDispatcher::~AsyncDispatcher() {
 }
 void AsyncDispatcher::Shutdown() { state_->Shutdown(); }
 
-void AsyncDispatcher::EnableNativeHttpIngress() { state_->native_http_ingress = true; }
+void AsyncDispatcher::EnableWorkerLanes(std::vector<boost::asio::any_io_executor> workers) {
+  state_->lanes.clear();
+  for (auto& worker : workers) {
+    state_->lanes.emplace_back(std::move(worker));
+  }
+  state_->worker_affine = true;
+}
 
-boost::asio::any_io_executor AsyncDispatcher::NativeHttpIngressExecutor() const {
-  return state_->native_http_ingress ? state_->scheduler : boost::asio::any_io_executor{};
+std::pair<boost::asio::any_io_executor, std::optional<std::size_t>> AsyncDispatcher::NativeHttpLane() const {
+  if (!state_->worker_affine) {
+    return {};
+  }
+  const auto index = state_->next_lane.fetch_add(1, std::memory_order_relaxed) % state_->lanes.size();
+  return {state_->lanes[index].worker, index};
 }
 
 void AsyncDispatcher::Cancel(std::shared_ptr<RequestExecution> execution, RequestCancellationReason reason) {
   if (execution != nullptr) {
-    boost::asio::post(state_->scheduler,
-                      [execution = std::move(execution), reason] { (void)execution->Cancel(reason); });
+    const auto& worker = state_->lanes[execution->Lane() % state_->lanes.size()].worker;
+    boost::asio::post(worker, [execution = std::move(execution), reason] { (void)execution->Cancel(reason); });
   }
 }
 
@@ -487,43 +533,37 @@ core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchStream(
 
 core::Result<std::shared_ptr<RequestExecution>> AsyncDispatcher::DispatchImpl(
     DispatchRequest request, RequestContext metadata, TransportCompletion completion,
-    std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream) {
+    std::optional<RequestExecution::Clock::time_point> deadline, std::shared_ptr<AsyncServerStreamSession> stream,
+    std::optional<std::size_t> ingress_lane,
+    const std::function<void(const std::shared_ptr<RequestExecution>&)>& admitted) {
   if (!completion) {
     return core::Error::Validation(kMissingCompletion);
   }
   const auto state = state_;
+  auto index = ingress_lane.value_or(0);
+  if (!ingress_lane && state->worker_affine) {
+    index = state->next_lane.fetch_add(1, std::memory_order_relaxed) % state->lanes.size();
+  }
+  auto& lane = state->lanes[index];
+  const auto submission_work = boost::asio::make_work_guard(lane.worker);
   auto reserved = state->Reserve();
   if (!reserved.ok()) {
     return reserved.error();
   }
-  auto call = std::make_shared<State::Call>(state->scheduler, state->admission, reserved.value(), std::move(request),
-                                            std::move(metadata), std::move(completion), deadline, state->pipeline,
-                                            std::move(stream));
-  call->owner = state;
-  call->observer.emplace(call->source->Context().StopToken(), State::Call::NotifyStop{.call = call});
-  const auto submission_work = boost::asio::make_work_guard(state->scheduler);
-  {
-    std::lock_guard lock(state->mutex);
-    if (state->closed.load()) {
-      return core::Error::Network(kAdmissionClosed);
-    }
-    state->calls.emplace(call.get(), call);
+  auto worker =
+      state->worker_affine ? lane.worker : boost::asio::any_io_executor(boost::asio::make_strand(lane.worker));
+  auto call = std::make_shared<State::Call>(std::move(worker), lane, state->admission, reserved.value(),
+                                            std::move(request), std::move(metadata), std::move(completion), deadline,
+                                            state->pipeline, std::move(stream));
+  call->source->SetLane(index);
+  if (admitted) {
+    admitted(call->source);
   }
-  try {
-    boost::asio::post(call->strand, [state, call] {
-      boost::asio::co_spawn(
-          call->strand, State::Call::Run(state, call),
-          boost::asio::bind_cancellation_slot(call->cancellation.slot(), [call](const std::exception_ptr& exception) {
-            if (exception) {
-              call->Finish(CoroutineError(exception));
-            }
-            call->observer.reset();
-          }));
-    });
-  } catch (...) {
-    std::lock_guard lock(state->mutex);
-    state->calls.erase(call.get());
-    throw;
+  auto start = [state, call] { State::Start(call, state); };
+  if (ingress_lane) {
+    start();
+  } else {
+    boost::asio::post(call->worker, std::move(start));
   }
   return call->source;
 }
