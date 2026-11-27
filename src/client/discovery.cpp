@@ -6,18 +6,24 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <condition_variable>
+#include <cstddef>
+#include <mutex>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <utility>
 
 #include "a2a/core/error.h"
+#include "a2a/core/extensions.h"
 #include "a2a/core/http_constants.h"
+#include "a2a/core/non_copyable.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protocol_paths.h"
 #include "a2a/core/protojson.h"
 #include "a2a/core/version.h"
 #include "a2a/http/http_client.h"
+#include "transport/request_headers.h"
 
 namespace a2a::client {
 
@@ -26,6 +32,9 @@ namespace {
 constexpr int kHttpStatusOkMin = 200;
 constexpr int kHttpStatusOkMax = 299;
 constexpr int kHttpStatusNotFound = 404;
+constexpr const char* kHttpTransport = "http";
+constexpr const char* kVerifierThrew = "async Agent Card verifier threw an exception";
+constexpr const char* kDiscoveryClosed = "async discovery shut down";
 
 std::string Trim(std::string_view input) {
   std::string value(input);
@@ -110,16 +119,245 @@ HttpFetcher MakeDefaultHttpFetcher(std::optional<http::TlsOptions> tls) {
   };
 }
 
-DiscoveryClient::DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl)
-    : fetcher_(std::move(fetcher)), cache_ttl_(cache_ttl) {}
+struct DiscoveryClient::AsyncCache final {
+  std::mutex mutex;
+  std::unordered_map<std::string, CacheEntry> entries;
+  std::condition_variable finished;
+  std::size_t active_verifications = 0;
+  bool closed = false;
+
+  class Verification final : private core::NonCopyableOrMovable {
+   public:
+    explicit Verification(AsyncCache& cache) : cache_(cache) {
+      std::lock_guard lock(cache_.mutex);
+      if (!cache_.closed) {
+        ++cache_.active_verifications;
+        active_ = true;
+        core::async_detail::EnterCallback();
+      }
+    }
+    ~Verification() {
+      if (active_) {
+        core::async_detail::LeaveCallback();
+        std::lock_guard lock(cache_.mutex);
+        --cache_.active_verifications;
+        cache_.finished.notify_all();
+      }
+    }
+    [[nodiscard]] bool IsActive() const { return active_; }
+
+   private:
+    AsyncCache& cache_;
+    bool active_ = false;
+  };
+
+  static AgentCardVerifier SnapshotVerifier(const AgentCardVerifier& verifier, std::shared_ptr<AsyncCache> cache) {
+    if (!verifier) {
+      return {};
+    }
+    return [verifier, cache = std::move(cache)](std::string_view json) -> core::Result<void> {
+      const Verification verification(*cache);
+      if (!verification.IsActive()) {
+        return core::Error::Network(kDiscoveryClosed).WithProtocolCode(core::AsyncHandle::kCancelled);
+      }
+      try {
+        return verifier(json);
+      } catch (...) {
+        return core::Error::Internal(kVerifierThrew);
+      }
+    };
+  }
+
+  static std::shared_ptr<core::AsyncScope> MakeScope(std::shared_ptr<AsyncCache> cache) {
+    // Only client copies own this scope. In-flight calls retain the cache, so
+    // last-owner teardown must close and drain verification before releasing it.
+    return {new core::AsyncScope, [cache = std::move(cache)](core::AsyncScope* scope) {
+              const std::unique_ptr<core::AsyncScope> owned(scope);
+              cache->Close();
+              owned->Shutdown();
+              cache->WaitForVerification();
+            }};
+  }
+
+  void Close() {
+    std::lock_guard lock(mutex);
+    closed = true;
+  }
+  void WaitForVerification() {
+    if (core::async_detail::IsCallbackThread()) {
+      return;
+    }
+    std::unique_lock lock(mutex);
+    finished.wait(lock, [this] { return active_verifications == 0; });
+  }
+};
+
+DiscoveryClient::DiscoveryClient(HttpFetcher fetcher, std::chrono::seconds cache_ttl, HttpAsyncFetcher async_fetcher)
+    : async_cache_(std::make_shared<AsyncCache>()),
+      async_fetcher_(std::move(async_fetcher)),
+      async_scope_(AsyncCache::MakeScope(async_cache_)),
+      fetcher_(std::move(fetcher)),
+      cache_ttl_(cache_ttl) {}
 
 DiscoveryClient DiscoveryClient::CreateDefault(std::chrono::seconds cache_ttl) {
-  return DiscoveryClient(MakeDefaultHttpFetcher(), cache_ttl);
+  return DiscoveryClient(MakeDefaultHttpFetcher(), cache_ttl,
+                         [client = http::Client{}](http::Request request, core::Completion<HttpResponse> completion) {
+                           return client.SendRequestAsync(
+                               std::move(request),
+                               [completion = std::move(completion)](core::Result<http::Response> response) {
+                                 if (!response.ok()) {
+                                   completion(response.error());
+                                 } else {
+                                   completion(ToDiscoveryHttpResponse(std::move(response.value())));
+                                 }
+                               });
+                         });
 }
 
 void DiscoveryClient::SetAgentCardVerifier(AgentCardVerifier verifier) {
   verifier_ = std::move(verifier);
   cache_.clear();
+  std::lock_guard lock(async_cache_->mutex);
+  async_cache_->entries.clear();
+}
+
+namespace {
+constexpr std::chrono::seconds kAsyncDiscoveryTimeout{30};
+core::Result<http::Request> BuildAsyncDiscoveryRequest(const std::string& url, const CallOptions& options) {
+  HeaderMap headers = options.headers;
+  if (!options.extensions.empty()) {
+    headers[std::string(core::Extensions::kHeaderName)] = core::Extensions::Format(options.extensions);
+  }
+  if (options.auth_hook) {
+    options.auth_hook(headers);
+  }
+  if (options.credential_provider) {
+    auto applied = ApplyCredentialProvider(*options.credential_provider, options.auth_context, &headers);
+    if (!applied.ok()) {
+      return applied.error();
+    }
+  }
+  const auto version = internal::ApplyProtocolVersion(options, headers);
+  if (!version.ok()) {
+    return version.error();
+  }
+  http::Request request;
+  request.url = url;
+  request.method = std::string(core::http::kMethodGet);
+  request.timeout = options.timeout.value_or(kAsyncDiscoveryTimeout);
+  request.tls = options.tls;
+  request.headers.reserve(headers.size());
+  for (const auto& [name, value] : headers) {
+    request.headers.push_back({name, value});
+  }
+  return request;
+}
+constexpr const char* kMissingAsyncFetcher = "async discovery fetcher is not configured";
+constexpr const char* kDiscoveryFailed = "Agent Card discovery failed";
+constexpr const char* kMtlsUnsupported = "default async discovery does not support mTLS";
+constexpr const char* kDiscoveryStartFailed = "async discovery initiation threw an exception";
+
+}  // namespace
+void DiscoveryClient::Shutdown() const {
+  const auto cache = async_cache_;
+  const auto scope = async_scope_;
+  cache->Close();
+  scope->Shutdown();
+  cache->WaitForVerification();
+}
+core::Result<core::AsyncHandle> DiscoveryClient::FetchAsync(std::string_view base_url,
+                                                            core::Completion<lf::a2a::v1::AgentCard> completion,
+                                                            const CallOptions& options) {
+  return StartFetchAsync(base_url, false, std::move(completion), options);
+}
+core::Result<core::AsyncHandle> DiscoveryClient::FetchExtendedAgentCardAsync(
+    std::string_view base_url, core::Completion<lf::a2a::v1::AgentCard> completion, const CallOptions& options) {
+  return StartFetchAsync(base_url, true, std::move(completion), options);
+}
+
+core::Result<core::AsyncHandle> DiscoveryClient::StartFetchAsync(std::string_view base_url, bool extended,
+                                                                 core::Completion<lf::a2a::v1::AgentCard> completion,
+                                                                 const CallOptions& options) {
+  auto started = async_scope_->Start<lf::a2a::v1::AgentCard>(std::move(completion),
+                                                             options.timeout.value_or(kAsyncDiscoveryTimeout));
+  if (!started.ok()) {
+    return started.error();
+  }
+  auto token = std::move(started.value());
+  if (!token.IsActive()) {
+    return token.handle();
+  }
+  auto url = extended ? BuildExtendedDiscoveryUrl(base_url) : BuildDiscoveryUrl(base_url);
+  if (!url.ok()) {
+    token.Complete(url.error());
+    return token.handle();
+  }
+  try {
+    StartDiscoveryRequest(url.value(), extended, options, token);
+  } catch (...) {
+    token.Complete(core::Error::Internal(kDiscoveryStartFailed));
+  }
+  return token.handle();
+}
+
+void DiscoveryClient::StartDiscoveryRequest(const std::string& url, bool extended, const CallOptions& options,
+                                            const core::AsyncCompletion<lf::a2a::v1::AgentCard>& token) {
+  // Parsing uses an owned verifier snapshot and never refers back to this client.
+  auto verifier = AsyncCache::SnapshotVerifier(verifier_, async_cache_);
+  if (!extended) {
+    std::optional<CacheEntry> cached;
+    {
+      std::lock_guard lock(async_cache_->mutex);
+      const auto found = async_cache_->entries.find(url);
+      if (found != async_cache_->entries.end() && found->second.expires_at >= std::chrono::steady_clock::now()) {
+        cached = found->second;
+      }
+    }
+    if (cached && (!verifier || verifier(cached->json).ok())) {
+      token.Complete(cached->card);
+      return;
+    }
+  }
+  if (!async_fetcher_) {
+    token.Complete(core::Error::Validation(kMissingAsyncFetcher));
+    return;
+  }
+  if (options.mtls) {
+    token.Complete(core::Error::Validation(kMtlsUnsupported));
+    return;
+  }
+  auto request = BuildAsyncDiscoveryRequest(url, options);
+  if (!request.ok()) {
+    token.Complete(request.error());
+    return;
+  }
+  auto fetched =
+      async_fetcher_(std::move(request.value()), [token, verifier = std::move(verifier), cache = async_cache_, url,
+                                                  extended, ttl = cache_ttl_](core::Result<HttpResponse> response) {
+        if (!response.ok()) {
+          token.Complete(response.error());
+          return;
+        }
+        if (response.value().status_code < kHttpStatusOkMin || response.value().status_code > kHttpStatusOkMax) {
+          token.Complete(core::Error::RemoteProtocol(kDiscoveryFailed)
+                             .WithTransport(kHttpTransport)
+                             .WithHttpStatus(response.value().status_code));
+          return;
+        }
+        auto card = VerifyAndParseAgentCard(response.value().body, verifier);
+        if (card.ok() && !extended) {
+          std::lock_guard lock(cache->mutex);
+          cache->entries.insert_or_assign(url, CacheEntry{.card = card.value(),
+                                                          .json = std::move(response.value().body),
+                                                          .expires_at = std::chrono::steady_clock::now() + ttl});
+        }
+        token.Complete(std::move(card));
+      });
+  if (!fetched.ok()) {
+    token.Complete(fetched.error());
+    return;
+  }
+  token.RegisterCancellation([handle = std::move(fetched.value())] { handle.Cancel(); });
 }
 
 core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view base_url) {
@@ -154,7 +392,7 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::Fetch(std::string_view bas
         .WithHttpStatus(response.value().status_code);
   }
 
-  auto card = VerifyAndParseAgentCard(response.value().body);
+  auto card = VerifyAndParseAgentCard(response.value().body, verifier_);
   if (!card.ok()) {
     return card.error();
   }
@@ -185,12 +423,13 @@ core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::FetchExtendedAgentCard(std
         .WithHttpStatus(response.value().status_code);
   }
 
-  return VerifyAndParseAgentCard(response.value().body);
+  return VerifyAndParseAgentCard(response.value().body, verifier_);
 }
 
-core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::VerifyAndParseAgentCard(std::string_view json) const {
-  if (verifier_) {
-    auto verified = verifier_(json);
+core::Result<lf::a2a::v1::AgentCard> DiscoveryClient::VerifyAndParseAgentCard(std::string_view json,
+                                                                              const AgentCardVerifier& verifier) {
+  if (verifier) {
+    auto verified = verifier(json);
     if (!verified.ok()) {
       return verified.error();
     }

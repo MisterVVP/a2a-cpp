@@ -55,12 +55,24 @@ class StreamSession final : public a2a::server::ServerStreamSession {
 
 constexpr std::string_view kClientCancelledSubscribeTaskId = "grpc-client-cancel-subscribe";
 constexpr auto kClientCancellationTimeout = std::chrono::seconds(2);
+constexpr auto kMissingPendingRead = "Server subscription did not enter its pending read before cancellation";
 constexpr std::string_view kConcurrentCancellationTaskPrefix = "grpc-concurrent-cancel-";
 constexpr std::size_t kCancellationWorkerCount = 16;
 constexpr std::size_t kCancellationsPerWorker = 16;
 
 class ControlledSubscriptionRecorder final {
  public:
+  void RecordPendingRead() {
+    {
+      std::lock_guard lock(mutex_);
+      pending_read_ = true;
+    }
+    changed_.notify_all();
+  }
+  [[nodiscard]] bool WaitForPendingRead() const {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, kClientCancellationTimeout, [this] { return pending_read_; });
+  }
   void RecordCancel() {
     cancel_count_.fetch_add(1);
     {
@@ -82,6 +94,7 @@ class ControlledSubscriptionRecorder final {
   mutable std::mutex mutex_;
   mutable std::condition_variable changed_;
   bool cancelled_ = false;
+  bool pending_read_ = false;
 };
 
 class ControlledSubscriptionSession final : public a2a::server::ServerStreamSession {
@@ -103,6 +116,7 @@ class ControlledSubscriptionSession final : public a2a::server::ServerStreamSess
     }
 
     std::unique_lock lock(mutex_);
+    recorder_->RecordPendingRead();
     if (supports_timed_next_) {
       changed_.wait_for(lock, timeout, [this] { return cancelled_.load(); });
     } else {
@@ -116,6 +130,7 @@ class ControlledSubscriptionSession final : public a2a::server::ServerStreamSess
   [[nodiscard]] bool IsLive() const noexcept override { return !cancelled_.load(); }
 
   void Cancel() noexcept override {
+    std::lock_guard lock(mutex_);
     if (!cancelled_.exchange(true) && recorder_ != nullptr) {
       recorder_->RecordCancel();
     }
@@ -636,6 +651,11 @@ std::unique_ptr<a2a::client::A2AClient> BuildClient(int port) {
     return a2a::core::Error::Internal("SubscribeTask did not deliver the initial event before client cancellation");
   }
 
+  // Exercise cancellation of a pending backend read, rather than racing the
+  // server's loop exit immediately after its initial write.
+  if (!recorder->WaitForPendingRead()) {
+    return a2a::core::Error::Internal(kMissingPendingRead);
+  }
   stream.value()->Cancel();
   if (!recorder->WaitForCancel()) {
     return a2a::core::Error::Internal("Server subscription did not observe client stream cancellation");
@@ -706,6 +726,32 @@ TEST(GrpcTransportIntegrationTest, ClientStreamCancellationCancelsServerSubscrip
   const auto cancellation = VerifyClientStreamCancellationCancelsServerSubscription(harness.get(), client.get());
   ASSERT_TRUE(cancellation.ok()) << cancellation.error().message();
 
+  harness->server->Shutdown();
+}
+
+TEST(GrpcTransportIntegrationTest, DestroyCancelsNativeSubscriptionWithoutCancellingHandleFirst) {
+  auto harness = StartHarness();
+  ASSERT_NE(harness->server, nullptr);
+  auto client = BuildClient(harness->port);
+  auto recorder = std::make_shared<ControlledSubscriptionRecorder>();
+  harness->executor.RecordSubscribeCancellationFor(std::string(kClientCancelledSubscribeTaskId), recorder);
+  lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send.mutable_message()->set_task_id(std::string(kClientCancelledSubscribeTaskId));
+  ASSERT_TRUE(client->SendMessage(send).ok());
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kClientCancelledSubscribeTaskId));
+  RecordingObserver observer;
+  auto stream = client->SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok());
+  ASSERT_TRUE(observer.WaitForEventCount(1));
+  ASSERT_TRUE(recorder->WaitForPendingRead());
+  EXPECT_TRUE(client->Destroy().ok());
+  EXPECT_FALSE(stream.value()->IsActive());
+  EXPECT_TRUE(recorder->WaitForCancel());
+  EXPECT_EQ(recorder->CancelCount(), 1);
+  EXPECT_TRUE(observer.GetSnapshot().errors.empty());
+  EXPECT_EQ(observer.GetSnapshot().completed_count, 0);
   harness->server->Shutdown();
 }
 

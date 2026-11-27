@@ -39,6 +39,8 @@ struct HttpClientResponse final {
   std::string body;
 };
 
+using HttpAsyncRequester = std::function<core::Result<core::AsyncHandle>(
+    const HttpRequest& request, core::Completion<HttpClientResponse> completion)>;
 using HttpRequester = std::function<core::Result<HttpClientResponse>(const HttpRequest& request)>;
 using HttpStreamMetadataHandler = std::function<core::Result<void>(const HttpClientResponse& response)>;
 using HttpStreamChunkHandler = std::function<core::Result<void>(std::string_view chunk)>;
@@ -65,7 +67,8 @@ class HttpJsonTransport final : public ClientTransport {
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              HttpStreamRequester stream_requester,
-                             std::chrono::milliseconds default_timeout = kDefaultTimeout);
+                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
+                             HttpAsyncRequester async_requester = {});
 
   explicit HttpJsonTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                              std::chrono::milliseconds default_timeout = kDefaultTimeout);
@@ -102,7 +105,11 @@ class HttpJsonTransport final : public ClientTransport {
                                                                           const CallOptions& options) override;
   [[nodiscard]] core::Result<void> Shutdown() override;
 
+  [[nodiscard]] std::shared_ptr<AsyncClientTransport> Async() const override { return async_transport_; }
+
  private:
+  [[nodiscard]] core::Result<HttpRequest> BuildUnaryRequest(HttpOperation operation, std::string body,
+                                                            const CallOptions& options) const;
   [[nodiscard]] core::Result<HttpClientResponse> SendRequest(HttpOperation operation, std::string body,
                                                              const CallOptions& options) const;
 
@@ -112,6 +119,7 @@ class HttpJsonTransport final : public ClientTransport {
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
+  std::shared_ptr<AsyncClientTransport> async_transport_;
   HttpStreamRequester stream_requester_;
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;

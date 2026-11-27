@@ -70,3 +70,12 @@ For documentation-only edits, use `mdbook build book` instead of the full code v
 ## Continue with a production tutorial
 
 The programs under `examples/apps/` are focused deterministic capability examples. The standalone projects under `examples/tutorials/` are realistic multi-process applications: a CLI discovers a coordinator, which discovers and delegates to a specialist over HTTP+JSON. After `hello_agent`, run either `job_application_assistant` or `customer_support_copilot` with `./scripts/run_tutorials.sh`; a streaming production tutorial is the planned next step.
+
+## Try the opt-in async examples
+
+SDK v0.6.0 adds `async_unary_client` (no Asio requirement), `asio_executor`,
+`blocking_executor`, `async_grpc_server`, and `event_http_server`.
+Follow [async consumer setup](../build/consumers.md#async-consumers-sdk-v060)
+to build them from FetchContent or an installed package. Coroutine server
+examples require `A2A_ENABLE_ASIO=ON` and link `a2a::asio`; synchronous builds
+remain the default. PostgreSQL store I/O remains synchronous.

@@ -113,6 +113,25 @@ std::string_view EventTaskId(const lf::a2a::v1::StreamResponse& event) {
   return event.message().task_id();
 }
 
+core::Result<void> AuthorizeEventTask(TaskStore& store, const SecurityPolicy& policy, const RequestContext& context,
+                                      const lf::a2a::v1::StreamResponse& event, std::string& task_id) {
+  auto id = EventTaskId(event);
+  if (id.empty()) {
+    if (!event.has_message()) {
+      return core::protocol_errors::TaskNotFound();
+    }
+    id = task_id;
+  }
+  if (!id.empty()) {
+    auto task = GetAuthorizedTask(store, policy, context, id);
+    if (!task.ok()) {
+      return task.error();
+    }
+    task_id = id;
+  }
+  return {};
+}
+
 class AuthorizedStream final : public ServerStreamSession {
  public:
   AuthorizedStream(std::unique_ptr<ServerStreamSession> stream, std::shared_ptr<const SecurityPolicy> policy,
@@ -147,23 +166,8 @@ class AuthorizedStream final : public ServerStreamSession {
     if (!item.has_value()) {
       return event;
     }
-    auto id = EventTaskId(*item);
-    if (id.empty()) {
-      if (!item->has_message()) {
-        return core::protocol_errors::TaskNotFound();
-      }
-      // A taskless message still belongs to an already associated stream.
-      if (task_id_.empty()) {
-        return event;
-      }
-      id = task_id_;
-    }
-    auto task = GetAuthorizedTask(*store_, *policy_, context_, id);
-    if (!task.ok()) {
-      return task.error();
-    }
-    task_id_ = id;
-    return event;
+    auto authorized = AuthorizeEventTask(*store_, *policy_, context_, *item, task_id_);
+    return authorized.ok() ? event : core::Result<std::optional<lf::a2a::v1::StreamResponse>>(authorized.error());
   }
   std::unique_ptr<ServerStreamSession> stream_;
   std::shared_ptr<const SecurityPolicy> policy_;
@@ -290,6 +294,20 @@ core::Result<DispatchSecurity::VisibleTaskPage> DispatchSecurity::SelectTaskIds(
     query.page_token = std::move(listed.value().next_page_token);
   } while (!query.page_token.empty());
   return selected;
+}
+
+core::Result<void> DispatchSecurity::AuthorizeStreamEvent(const lf::a2a::v1::StreamResponse& event,
+                                                          const RequestContext& context, std::string& task_id) const {
+  if (policy_ == nullptr || task_store_ == nullptr) {
+    return core::Error::Internal(std::string(kMissingSecurityConfiguration));
+  }
+  if (!task_id.empty()) {
+    auto previous = GetAuthorizedTask(*task_store_, *policy_, context, task_id);
+    if (!previous.ok()) {
+      return previous.error();
+    }
+  }
+  return AuthorizeEventTask(*task_store_, *policy_, context, event, task_id);
 }
 
 core::Result<void> DispatchSecurity::ProtectStream(const DispatchRequest& request, const RequestContext& context,

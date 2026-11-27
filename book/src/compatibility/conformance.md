@@ -4,6 +4,10 @@ The SDK implements A2A protocol `1.0` across HTTP+JSON, JSON-RPC and gRPC.
 [Binding compatibility](bindings.md), [version negotiation](protocol-versions.md)
 and [security integration](../auth/security.md) describe the public contracts.
 
+HTTP+JSON servers accept `application/a2a+json` and legacy `application/json`
+request envelopes, and use `application/a2a+json` in responses. Domain errors
+follow the A2A 1.0.1 HTTP and gRPC error bindings.
+
 ## Release validation snapshot
 
 For v0.5.2 release preparation, unmodified upstream TCK
@@ -20,17 +24,53 @@ Independent SDK C++ tests verify additional binding, version and security behavi
 they do not increase upstream TCK percentages. This snapshot is not a claim of
 full TCK compliance. Review reports for the specific commit you deploy.
 
+## SDK v0.6.0 candidate
+
+A local async in-memory run against unmodified upstream TCK
+`104a7b4ae0d83f65c075e3793e322953a830eaba` across HTTP+JSON, JSON-RPC and gRPC
+reported **215 passed, 14 skipped, no failures** when selecting the `must`
+category; 34 other cases were deselected. The complete compatibility suite
+reported **244 passed, 1 failed, 18 skipped**. The remaining failure is the
+`HTTP_JSON-SVC-001` SHOULD check described below. These results do not change
+the historical v0.5.2 snapshot above or establish full conformance for v0.6.0.
+
+The generic conformance agent advertises `*/*` input support and preserves
+opaque message parts without decoding them. Its supported-media negative probe
+was skipped by that TCK revision. Current upstream instead sends a fixed
+`application/x-unsupported-tck-type` part and expects rejection, including when
+the agent advertises wildcard support. This does not establish that the part is
+unsupported by the generic agent. A negative-media test needs an agent that
+actually excludes the tested type.
+
+HTTP+JSON protocol error envelopes use `application/a2a+json`, the recommended
+media type for specification 1.0.1, consistently with ordinary protocol responses.
+
 ## Reproduce the upstream suite
 
 
-Use the same deterministic workflow as `.github/workflows/tck.yml`:
+Use the same workflow as `.github/workflows/tck.yml`. CI checks out upstream
+`main` and runs its assertions without local TCK patches. Upstream requires
+Python 3.15 or newer; CI installs that runtime independently of the SDK tools.
+
+At upstream revision `104a7b4ae0d83f65c075e3793e322953a830eaba`, the mandatory
+AIP-193 structure test requires `application/json` for errors while the separate
+`HTTP_JSON-SVC-001` SHOULD test expects `application/a2a+json` for the same
+response. That contradiction is fixed in current upstream: mandatory error
+validation accepts both JSON media types, and the recommendation check selects
+`application/json` for 1.0.0 or `application/a2a+json` for 1.0.1. The SDK uses the
+1.0.1 recommendation. The full upstream runner's nonzero exit status is preserved. To run
+only the mandatory category, select `must` with pytest's `-m must` option.
+No upstream assertions or requirement definitions are modified.
+Registered requirements without upstream tests remain `NOT TESTED`.
 
 ```bash
 # Check out the TCK and prepare Python dependencies.
 TCK_REPO=${TCK_REPO:-a2aproject/a2a-tck}
 TCK_REF=${TCK_REF:-main}
-git clone --depth 1 --branch "${TCK_REF}" "https://github.com/${TCK_REPO}.git" tck-repo
-python3 -m venv tck-repo/.venv
+git clone --filter=blob:none --no-checkout "https://github.com/${TCK_REPO}.git" tck-repo
+git -C tck-repo fetch --depth 1 origin "${TCK_REF}"
+git -C tck-repo checkout --detach FETCH_HEAD
+python3.15 -m venv tck-repo/.venv
 source tck-repo/.venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -e ./tck-repo python-dotenv pyopenssl

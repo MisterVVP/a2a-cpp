@@ -11,8 +11,10 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 
 #include "a2a/core/agent_card/agent_card_provider.h"
+#include "a2a/core/http_constants.h"
 #include "a2a/core/protocol_bindings.h"
 #include "a2a/core/protocol_errors.h"
 #include "a2a/core/protojson.h"
@@ -21,18 +23,38 @@
 
 namespace {
 
+constexpr char kVersionHeaderName[] = "A2A-Version";
+constexpr char kExtensionsHeaderName[] = "A2A-Extensions";
+constexpr char kGetMethod[] = "GET";
+constexpr char kPostMethod[] = "POST";
+constexpr char kTextPlainContentType[] = "text/plain";
+
+constexpr char kErrorField[] = "error";
+constexpr char kStatusField[] = "status";
+
 constexpr std::time_t kAgentCardLastModifiedUnix = 1704067200;
 constexpr std::string_view kRequiredExtension = "urn:a2a:tck:required-extension";
 constexpr std::string_view kTenantId = "tenant-1";
 constexpr std::string_view kPageSizeQueryKey = "pageSize";
 constexpr std::string_view kPageTokenQueryKey = "pageToken";
 constexpr std::string_view kHistoryLengthQueryKey = "historyLength";
+constexpr std::string_view kFailedPreconditionStatus = "FAILED_PRECONDITION";
+
+void ExpectProtocolPrecondition(const a2a::server::HttpServerResponse& response) {
+  EXPECT_EQ(response.status_code, a2a::core::http::kStatusBadRequest);
+  EXPECT_EQ(response.headers.at(std::string(a2a::core::http::kContentTypeHeaderName)),
+            a2a::core::http::kContentTypeApplicationA2aJson);
+  google::protobuf::Struct error;
+  ASSERT_TRUE(a2a::core::JsonToMessage(response.body, &error).ok());
+  EXPECT_EQ(error.fields().at(kErrorField).struct_value().fields().at(kStatusField).string_value(),
+            kFailedPreconditionStatus);
+}
 
 class EchoExecutor final : public a2a::server::AgentExecutor {
  public:
   a2a::core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(const lf::a2a::v1::SendMessageRequest& request,
                                                                   a2a::server::RequestContext& context) override {
-    observed_request_header = context.client_headers["A2A-Version"];
+    observed_request_header = context.client_headers[kVersionHeaderName];
     observed_bearer_token = context.auth_metadata["bearer_token"];
     observed_api_key = context.auth_metadata["api_key"];
     lf::a2a::v1::SendMessageResponse response;
@@ -110,8 +132,8 @@ lf::a2a::v1::AgentCard BuildCard() {
   card.set_name("Unit Agent");
   card.set_description("Unit test agent");
   card.set_version(std::string(a2a::core::Version::kAgentCardVersion));
-  card.add_default_input_modes("text/plain");
-  card.add_default_output_modes("text/plain");
+  card.add_default_input_modes(kTextPlainContentType);
+  card.add_default_output_modes(kTextPlainContentType);
   auto* iface = card.add_supported_interfaces();
   iface->set_protocol_binding(std::string(a2a::core::protocol_bindings::kHttpJson));
   iface->set_protocol_version("1.0");
@@ -140,12 +162,15 @@ TEST(RestServerTransportTest, ServesAgentCardFromWellKnownEndpoint) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle(
-      {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
+  const auto response = server.Handle({.method = kGetMethod,
+                                       .target = "/.well-known/agent-card.json",
+                                       .headers = {},
+                                       .body = {},
+                                       .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
-  EXPECT_EQ(response.value().headers.at("A2A-Version"), "1.0");
+  EXPECT_EQ(response.value().headers.at(kVersionHeaderName), "1.0");
   EXPECT_FALSE(response.value().headers.contains("Cache-Control"));
   EXPECT_FALSE(response.value().headers.contains("Last-Modified"));
   EXPECT_TRUE(response.value().headers.contains("ETag"));
@@ -167,8 +192,11 @@ TEST(RestServerTransportTest, UsesConfigurableAgentCardCacheHeaders) {
                               .cache_control = "public, max-age=60, stale-while-revalidate=30",
                               .last_modified = std::chrono::system_clock::from_time_t(kAgentCardLastModifiedUnix)}));
 
-  const auto response = server.Handle(
-      {.method = "GET", .target = "/.well-known/agent-card.json", .headers = {}, .body = {}, .remote_address = {}});
+  const auto response = server.Handle({.method = kGetMethod,
+                                       .target = "/.well-known/agent-card.json",
+                                       .headers = {},
+                                       .body = {},
+                                       .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
@@ -183,7 +211,7 @@ TEST(RestServerTransportTest, ServesAgentCardFromLegacyWellKnownEndpoint) {
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
-      {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
+      {.method = kGetMethod, .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 200);
@@ -195,7 +223,7 @@ TEST(RestServerTransportTest, AddsBackwardCompatibleTransportFieldsToAgentCard) 
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
-      {.method = "GET", .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
+      {.method = kGetMethod, .target = "/.well-known/agent.json", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   google::protobuf::Struct parsed;
@@ -213,9 +241,9 @@ TEST(RestServerTransportTest, RoutesRequestUsingConfiguredBasePath) {
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
-      {.method = "POST",
+      {.method = kPostMethod,
        .target = "/a2a/message:send",
-       .headers = {{"A2A-Version", "1.0"}},
+       .headers = {{kVersionHeaderName, "1.0"}},
        .body = R"({"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}],"taskId":"t-1"}})",
        .remote_address = {}});
 
@@ -230,11 +258,11 @@ TEST(RestServerTransportTest, RejectsMissingVersionWhenConfigured) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response =
-      server.Handle({.method = "GET", .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
+  const auto response = server.Handle(
+      {.method = kGetMethod, .target = "/a2a/tasks/task-7", .headers = {}, .body = {}, .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 400);
+  ExpectProtocolPrecondition(response.value());
   EXPECT_NE(response.value().body.find("Missing required A2A-Version header"), std::string::npos);
 }
 
@@ -243,9 +271,9 @@ TEST(RestServerTransportTest, ParsesAndDecodesQueryString) {
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/a2a/tasks/task-3?historyLength=20",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
@@ -260,9 +288,9 @@ TEST(RestServerTransportTest, ExtractsAuthMetadataIntoRequestContext) {
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
   const auto response = server.Handle(
-      {.method = "POST",
+      {.method = kPostMethod,
        .target = "/a2a/message:send",
-       .headers = {{"A2A-Version", "1.0"}, {"Authorization", "Bearer token-rest"}, {"X-API-Key", "rest-key"}},
+       .headers = {{kVersionHeaderName, "1.0"}, {"Authorization", "Bearer token-rest"}, {"X-API-Key", "rest-key"}},
        .body = R"({"message":{"messageId":"msg-2","role":"ROLE_USER","parts":[{"text":"hello"}]}})",
        .remote_address = {}});
 
@@ -278,16 +306,16 @@ TEST(RestServerTransportTest, EchoesActivatedExtensionsOnPostValidationRouteErro
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
 
   const auto response =
-      server.Handle({.method = "GET",
+      server.Handle({.method = kGetMethod,
                      .target = "/wrong-base/tasks/task-7",
-                     .headers = {{"A2A-Version", "1.0"}, {"A2A-Extensions", std::string(kRequiredExtension)}},
+                     .headers = {{kVersionHeaderName, "1.0"}, {kExtensionsHeaderName, std::string(kRequiredExtension)}},
                      .body = {},
                      .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
   EXPECT_EQ(response.value().status_code, 404);
-  ASSERT_TRUE(response.value().headers.contains("A2A-Extensions"));
-  EXPECT_EQ(response.value().headers.at("A2A-Extensions"), std::string(kRequiredExtension));
+  ASSERT_TRUE(response.value().headers.contains(kExtensionsHeaderName));
+  EXPECT_EQ(response.value().headers.at(kExtensionsHeaderName), std::string(kRequiredExtension));
 }
 
 TEST(RestServerTransportTest, DoesNotEchoActivatedExtensionsWhenRequiredExtensionValidationFails) {
@@ -295,15 +323,15 @@ TEST(RestServerTransportTest, DoesNotEchoActivatedExtensionsWhenRequiredExtensio
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/a2a/tasks/task-7",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 400);
-  EXPECT_FALSE(response.value().headers.contains("A2A-Extensions"));
+  ExpectProtocolPrecondition(response.value());
+  EXPECT_FALSE(response.value().headers.contains(kExtensionsHeaderName));
 }
 
 TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCard) {
@@ -315,9 +343,9 @@ TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCard) {
   a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/extendedAgentCard",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
@@ -335,9 +363,9 @@ TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCardFromDiscoveryView
   a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/.well-known/agent-card.json?view=extended",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
@@ -355,9 +383,9 @@ TEST(RestServerTransportTest, ServesConfiguredExtendedAgentCardUnderRestBasePath
   a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/a2a/extendedAgentCard",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
@@ -373,9 +401,9 @@ TEST(RestServerTransportTest, PropagatesTenantFromExtendedAgentCardPath) {
   a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/a2a/tenant-1/extendedAgentCard",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
@@ -390,9 +418,9 @@ TEST(RestServerTransportTest, ExtendedAgentCardReturnsNotConfiguredWhenMissing) 
   a2a::server::Dispatcher dispatcher(&executor);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/extendedAgentCard",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
@@ -409,16 +437,73 @@ TEST(RestServerTransportTest, ExtendedAgentCardPreservesProviderErrorReason) {
   a2a::server::Dispatcher dispatcher(&executor, provider);
   a2a::server::RestServerTransport server(&dispatcher, BuildCard(), RestOptions("/a2a"));
 
-  const auto response = server.Handle({.method = "GET",
+  const auto response = server.Handle({.method = kGetMethod,
                                        .target = "/extendedAgentCard",
-                                       .headers = {{"A2A-Version", "1.0"}},
+                                       .headers = {{kVersionHeaderName, "1.0"}},
                                        .body = {},
                                        .remote_address = {}});
 
   ASSERT_TRUE(response.ok());
-  EXPECT_EQ(response.value().status_code, 502);
+  EXPECT_EQ(response.value().status_code, a2a::core::http::kStatusInternalServerError);
   EXPECT_NE(response.value().body.find(kExpectedReason), std::string::npos);
   EXPECT_EQ(response.value().body.find(kUnexpectedReason), std::string::npos);
+}
+
+constexpr std::string_view kMissingDispatcher = "REST transport dispatcher is not configured";
+
+a2a::server::HttpServerRequest ExtendedRequest(std::string_view target) {
+  return {.method = kGetMethod,
+          .target = std::string(target),
+          .headers = {{kVersionHeaderName, "1.0"}, {kExtensionsHeaderName, std::string(kRequiredExtension)}},
+          .body = {},
+          .remote_address = {}};
+}
+
+void ExpectMissingDispatcherBody(std::string_view body) {
+  google::protobuf::Struct error;
+  ASSERT_TRUE(a2a::core::JsonToMessage(body, &error).ok());
+  const auto& fields = error.fields().at(kErrorField).struct_value().fields();
+  EXPECT_EQ(fields.at(kStatusField).string_value(), "INTERNAL");
+  EXPECT_EQ(fields.at("code").number_value(), a2a::core::http::kStatusInternalServerError);
+  EXPECT_EQ(fields.at("message").string_value(), kMissingDispatcher);
+  EXPECT_EQ(fields.at("details").list_value().values(0).struct_value().fields().at("reason").string_value(),
+            "INTERNAL");
+}
+
+void ExpectMissingDispatcherResponse(const a2a::server::HttpServerResponse& response) {
+  EXPECT_EQ(response.status_code, a2a::core::http::kStatusInternalServerError);
+  EXPECT_EQ(response.headers.at(std::string(a2a::core::http::kContentTypeHeaderName)),
+            a2a::core::http::kContentTypeApplicationA2aJson);
+  EXPECT_EQ(response.headers.at(kVersionHeaderName), "1.0");
+  EXPECT_EQ(response.headers.at(kExtensionsHeaderName), kRequiredExtension);
+  ExpectMissingDispatcherBody(response.body);
+}
+
+TEST(RestServerTransportTest, MissingDispatcherPreservesExtendedCardWireErrorOnEveryRoute) {
+  a2a::server::RestServerTransport server(nullptr, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+  for (const std::string_view target : {"/extendedAgentCard", "/.well-known/agent-card.json?view=extended",
+                                        "/a2a/extendedAgentCard", "/a2a/tenant-1/extendedAgentCard"}) {
+    const auto response = server.Handle(ExtendedRequest(target));
+    ASSERT_TRUE(response.ok()) << target;
+    ExpectMissingDispatcherResponse(response.value());
+  }
+}
+
+TEST(RestServerTransportTest, MissingDispatcherPreservesUnaryResultError) {
+  a2a::server::RestServerTransport server(nullptr, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+  const auto response = server.Handle(ExtendedRequest("/a2a/tasks/task-7"));
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().message(), kMissingDispatcher);
+}
+
+TEST(RestServerTransportTest, PreparesExtendedCardWithoutSynchronousDispatcher) {
+  a2a::server::RestServerTransport server(nullptr, BuildCard(), RestOptionsWithRequiredExtension("/a2a"));
+  const auto response = server.Prepare(ExtendedRequest("/extendedAgentCard"));
+  ASSERT_TRUE(response.ok());
+  const auto* const plan =
+      std::get_if<a2a::server::PreparedDispatch<a2a::server::HttpServerResponse>>(&response.value());
+  ASSERT_NE(plan, nullptr);
+  EXPECT_EQ(plan->request.operation, a2a::server::DispatcherOperation::kGetExtendedAgentCard);
 }
 
 TEST(RestQueryParserTest, ParsesUnescapedKnownParameters) {

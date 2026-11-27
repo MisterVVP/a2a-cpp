@@ -25,6 +25,9 @@ constexpr std::string_view kAuthToken = "unit-sut-token";
 constexpr std::string_view kWrongToken = "other-unit-token";
 constexpr std::string_view kBearerKey = "bearer_token";
 constexpr std::size_t kBindingCount = 3;
+constexpr std::string_view kOpaqueMediaType = "application/x-opaque-sut-type";
+constexpr std::string_view kRawContent = "sut";
+constexpr char kMessageId[] = "media-type-message";
 
 std::unique_ptr<a2a::tests::sut::SutAgent> MakeAgent(a2a::tests::sut::SutAgentOptions options = {}) {
   const a2a::server::stores::InMemoryStoreFactory factory;
@@ -65,6 +68,55 @@ TEST(SutAgentTest, NegativeCapabilitiesAreEnforcedBeforeExecutorDispatch) {
                                    context);
   ASSERT_FALSE(push.ok());
   EXPECT_EQ(push.error().protocol_code(), a2a::core::protocol_codes::kPushNotificationNotSupported);
+}
+
+lf::a2a::v1::SendMessageRequest MediaRequest(std::string_view mode) {
+  lf::a2a::v1::SendMessageRequest send;
+  send.mutable_message()->set_role(lf::a2a::v1::ROLE_USER);
+  send.mutable_message()->set_message_id(kMessageId);
+  auto* part = send.mutable_message()->add_parts();
+  part->set_raw(std::string(kRawContent));
+  part->set_media_type(std::string(mode));
+  return send;
+}
+
+TEST(SutAgentTest, AdvertisedInputModesAreAccepted) {
+  const auto agent = MakeAgent();
+  a2a::server::RequestContext context;
+  for (const auto& mode : agent->agent_card().default_input_modes()) {
+    const auto result = agent->dispatcher().Dispatch(
+        {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = MediaRequest(mode)}, context);
+    EXPECT_TRUE(result.ok());
+  }
+}
+
+TEST(SutAgentTest, UnsupportedPartRejectsTheWholeConformanceRequest) {
+  const auto agent = MakeAgent();
+  auto request = MediaRequest(a2a::core::http::kContentTypeApplicationJson);
+  *request.mutable_message()->add_parts() = MediaRequest(kOpaqueMediaType).message().parts(0);
+  a2a::server::RequestContext context;
+  const auto result = agent->dispatcher().Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = std::move(request)}, context);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().protocol_code(), a2a::core::protocol_codes::kContentTypeNotSupported);
+}
+
+TEST(SutAgentTest, OpaqueMessagePartsAreRetainedWithoutDecoding) {
+  a2a::tests::sut::SutAgentOptions options;
+  options.allow_opaque_input = true;
+  const auto agent = MakeAgent(std::move(options));
+  a2a::server::RequestContext context;
+  const auto result = agent->dispatcher().Dispatch(
+      {.operation = a2a::server::DispatcherOperation::kSendMessage, .payload = MediaRequest(kOpaqueMediaType)},
+      context);
+  ASSERT_TRUE(result.ok());
+  const auto& response = std::get<lf::a2a::v1::SendMessageResponse>(result.value().payload());
+  ASSERT_TRUE(response.has_task());
+  ASSERT_GT(response.task().history_size(), 0);
+  ASSERT_EQ(response.task().history(0).parts_size(), 1);
+  const auto& part = response.task().history(0).parts(0);
+  EXPECT_EQ(part.media_type(), kOpaqueMediaType);
+  EXPECT_EQ(part.raw(), kRawContent);
 }
 
 TEST(SutAgentTest, SharedAuthorizationPolicyRejectsMissingAndIncorrectCredentials) {

@@ -171,6 +171,10 @@ size_t WriteResponseHeader(char* contents, size_t size, size_t nmemb, void* user
 
 }  // namespace
 
+std::size_t CaptureResponseHeader(char* contents, std::size_t size, std::size_t count, void* capture) {
+  return WriteResponseHeader(contents, size, count, capture);
+}
+
 core::Result<void> ValidateStreamMetadata(StreamCallbackContext* context) {
   const HeaderCapture& capture = *context->header_capture;
   if (capture.response_code == kHttpResponseCodeUnset) {

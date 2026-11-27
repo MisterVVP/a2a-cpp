@@ -3,276 +3,29 @@
 
 #include "a2a/server/dispatcher.h"
 
-#include <array>
-#include <memory>
 #include <mutex>
-#include <ranges>
-#include <shared_mutex>
 #include <utility>
 
-#include "a2a/core/error.h"
-#include "a2a/core/protocol_error_messages.h"
-#include "a2a/core/protocol_errors.h"
+#include "server/engine/dispatch_pipeline.h"
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
 #include "core/subscription_diagnostics.h"
 #endif
-#include "a2a/server/tasks/task_history.h"
-
 namespace a2a::server {
 namespace {
-
-void RestorePrincipal(RequestContext& context, const std::optional<std::string>& principal) {
-  if (principal.has_value()) {
-    context.principal = *principal;
-  }
-}
-
-template <std::size_t MessageSize>
-[[nodiscard]] core::Error DispatchPayloadTypeMismatchError(const std::array<char, MessageSize>& message) {
-  return core::Error::Validation(core::protocol_error_messages::ToString(message));
-}
-
-bool IsPushNotificationOperation(DispatcherOperation operation) {
-  return operation == DispatcherOperation::kCreateTaskPushNotificationConfig ||
-         operation == DispatcherOperation::kGetTaskPushNotificationConfig ||
-         operation == DispatcherOperation::kListTaskPushNotificationConfigs ||
-         operation == DispatcherOperation::kDeleteTaskPushNotificationConfig;
-}
-
-core::AgentCardRequestContext ToAgentCardRequestContext(const RequestContext& context, std::string_view tenant) {
-  return {.tenant = tenant.empty() ? std::optional<std::string>{} : std::optional<std::string>(tenant),
-          .remote_address = context.remote_address,
-          .client_headers = context.client_headers,
-          .auth_metadata = context.auth_metadata};
-}
-
-core::Result<DispatchResponse> DispatchPushToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                      RequestContext& context) {
-  switch (request.operation) {
-    case DispatcherOperation::kCreateTaskPushNotificationConfig: {
-      const auto* payload = std::get_if<lf::a2a::v1::TaskPushNotificationConfig>(&request.payload);
-      if (payload == nullptr) {
-        return DispatchPayloadTypeMismatchError(
-            core::protocol_error_messages::kDispatchPayloadTypeMismatchForCreateTaskPushNotificationConfig);
-      }
-      const auto response = executor.CreateTaskPushNotificationConfig(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
-    }
-    case DispatcherOperation::kGetTaskPushNotificationConfig: {
-      const auto* payload = std::get_if<lf::a2a::v1::GetTaskPushNotificationConfigRequest>(&request.payload);
-      if (payload == nullptr) {
-        return DispatchPayloadTypeMismatchError(
-            core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTaskPushNotificationConfig);
-      }
-      const auto response = executor.GetTaskPushNotificationConfig(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
-    }
-    case DispatcherOperation::kListTaskPushNotificationConfigs: {
-      const auto* payload = std::get_if<lf::a2a::v1::ListTaskPushNotificationConfigsRequest>(&request.payload);
-      if (payload == nullptr) {
-        return DispatchPayloadTypeMismatchError(
-            core::protocol_error_messages::kDispatchPayloadTypeMismatchForListTaskPushNotificationConfigs);
-      }
-      const auto response = executor.ListTaskPushNotificationConfigs(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse(response.value());
-    }
-    case DispatcherOperation::kDeleteTaskPushNotificationConfig: {
-      const auto* payload = std::get_if<lf::a2a::v1::DeleteTaskPushNotificationConfigRequest>(&request.payload);
-      if (payload == nullptr) {
-        return DispatchPayloadTypeMismatchError(
-            core::protocol_error_messages::kDispatchPayloadTypeMismatchForDeleteTaskPushNotificationConfig);
-      }
-      const auto response = executor.DeleteTaskPushNotificationConfig(*payload, context);
-      if (!response.ok()) {
-        return response.error();
-      }
-      return DispatchResponse();
-    }
-    case DispatcherOperation::kSendMessage:
-    case DispatcherOperation::kSendStreamingMessage:
-    case DispatcherOperation::kGetTask:
-    case DispatcherOperation::kSubscribeTask:
-    case DispatcherOperation::kListTasks:
-    case DispatcherOperation::kCancelTask:
-    case DispatcherOperation::kGetExtendedAgentCard:
-      return core::Error::Validation("Dispatch operation is not a push notification operation");
-  }
-  return core::Error::Validation("Unsupported push notification dispatcher operation");
-}
-
-core::Result<DispatchResponse> DispatchSubscribeToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                           RequestContext& context) {
-  const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
-  if (payload == nullptr) {
-    return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask);
-  }
-  auto response = executor.SubscribeTask(*payload, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(std::move(response.value()));
-}
-
-core::Result<DispatchResponse> DispatchSendMessageToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                             RequestContext& context, bool require_full_task) {
-  const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
-  if (payload == nullptr) {
-    return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendMessage);
-  }
-  std::optional<lf::a2a::v1::SendMessageRequest> full_query;
-  if (require_full_task && payload->configuration().has_history_length()) {
-    full_query = *payload;
-    full_query->mutable_configuration()->clear_history_length();
-  }
-  auto response = executor.SendMessage(full_query.has_value() ? *full_query : *payload, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(std::move(response.value()));
-}
-
-core::Result<DispatchResponse> DispatchSendStreamingMessageToExecutor(AgentExecutor& executor,
-                                                                      const DispatchRequest& request,
-                                                                      RequestContext& context) {
-  const auto* payload = std::get_if<lf::a2a::v1::SendMessageRequest>(&request.payload);
-  if (payload == nullptr) {
-    return DispatchPayloadTypeMismatchError(
-        core::protocol_error_messages::kDispatchPayloadTypeMismatchForSendStreamingMessage);
-  }
-  auto response = executor.SendStreamingMessage(*payload, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(std::move(response.value()));
-}
-
-core::Result<DispatchResponse> DispatchGetTaskToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                         RequestContext& context, bool require_full_task) {
-  const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload);
-  if (payload == nullptr) {
-    return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForGetTask);
-  }
-  std::optional<lf::a2a::v1::GetTaskRequest> full_query;
-  if (require_full_task && payload->has_history_length()) {
-    full_query = *payload;
-    full_query->clear_history_length();
-  }
-  auto response = executor.GetTask(full_query.has_value() ? *full_query : *payload, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(std::move(response.value()));
-}
-
-void ProjectTaskResponse(const DispatchRequest& request, DispatchResponse& response) {
-  if (request.operation == DispatcherOperation::kGetTask) {
-    const auto& query = std::get<lf::a2a::v1::GetTaskRequest>(request.payload);
-    if (query.has_history_length()) {
-      ApplyHistoryRetention(&std::get<lf::a2a::v1::Task>(response.payload()),
-                            query.history_length() <= 0 ? 0 : static_cast<std::size_t>(query.history_length()));
-    }
-  } else if (request.operation == DispatcherOperation::kSendMessage) {
-    const auto& query = std::get<lf::a2a::v1::SendMessageRequest>(request.payload);
-    auto& send = std::get<lf::a2a::v1::SendMessageResponse>(response.payload());
-    if (query.configuration().has_history_length() && send.has_task()) {
-      const auto limit = query.configuration().history_length();
-      ApplyHistoryRetention(send.mutable_task(), limit <= 0 ? 0 : static_cast<std::size_t>(limit));
-    }
-  }
-}
-
-core::Result<DispatchResponse> DispatchListTasksToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                           RequestContext& context) {
-  const auto* payload = std::get_if<ListTasksRequest>(&request.payload);
-  if (payload == nullptr) {
-    return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForListTasks);
-  }
-  const auto response = executor.ListTasks(*payload, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(response.value());
-}
-
-core::Result<DispatchResponse> DispatchCancelTaskToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                            RequestContext& context) {
+constexpr auto kExecutorNotConfigured = "Server dispatcher executor is not configured";
+core::Result<DispatchResponse> RouteSync(AgentExecutor& executor, const DispatchRequest& request,
+                                         RequestContext& context) {
 #if defined(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
-  const core::subscription_diagnostics::ScopedTimer timer(
-      core::subscription_diagnostics::Phase::kServerCancelTaskTotal);
+  if (request.operation == DispatcherOperation::kCancelTask &&
+      std::holds_alternative<lf::a2a::v1::CancelTaskRequest>(request.payload)) {
+    const core::subscription_diagnostics::ScopedTimer timer(
+        core::subscription_diagnostics::Phase::kServerCancelTaskTotal);
+    return engine::RouteDispatch(executor, request, context, engine::SyncDispatchResult{});
+  }
 #endif
-  const auto* payload = std::get_if<lf::a2a::v1::CancelTaskRequest>(&request.payload);
-  if (payload == nullptr) {
-    return DispatchPayloadTypeMismatchError(core::protocol_error_messages::kDispatchPayloadTypeMismatchForCancelTask);
-  }
-  const auto response = executor.CancelTask(*payload, context);
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(response.value());
+  return engine::RouteDispatch(executor, request, context, engine::SyncDispatchResult{});
 }
-
-core::Result<DispatchResponse> DispatchExtendedAgentCard(
-    const DispatchRequest& request, RequestContext& context,
-    const std::shared_ptr<core::AgentCardProvider>& agent_card_provider) {
-  const auto* payload = std::get_if<lf::a2a::v1::GetExtendedAgentCardRequest>(&request.payload);
-  if (payload == nullptr) {
-    return core::Error::Validation("Dispatch payload type mismatch for GetExtendedAgentCard");
-  }
-  if (agent_card_provider == nullptr) {
-    return core::protocol_errors::ExtendedAgentCardNotConfigured();
-  }
-  auto response = agent_card_provider->GetExtendedAgentCard(ToAgentCardRequestContext(context, payload->tenant()));
-  if (!response.ok()) {
-    return response.error();
-  }
-  return DispatchResponse(std::move(response.value()));
-}
-
-core::Result<DispatchResponse> DispatchToExecutor(AgentExecutor& executor, const DispatchRequest& request,
-                                                  RequestContext& context,
-                                                  const std::shared_ptr<core::AgentCardProvider>& agent_card_provider,
-                                                  bool require_full_task) {
-  if (IsPushNotificationOperation(request.operation)) {
-    return DispatchPushToExecutor(executor, request, context);
-  }
-
-  switch (request.operation) {
-    case DispatcherOperation::kSendMessage:
-      return DispatchSendMessageToExecutor(executor, request, context, require_full_task);
-    case DispatcherOperation::kSendStreamingMessage:
-      return DispatchSendStreamingMessageToExecutor(executor, request, context);
-    case DispatcherOperation::kGetTask:
-      return DispatchGetTaskToExecutor(executor, request, context, require_full_task);
-    case DispatcherOperation::kSubscribeTask: {
-      return DispatchSubscribeToExecutor(executor, request, context);
-    }
-    case DispatcherOperation::kListTasks:
-      return DispatchListTasksToExecutor(executor, request, context);
-    case DispatcherOperation::kCancelTask:
-      return DispatchCancelTaskToExecutor(executor, request, context);
-    case DispatcherOperation::kCreateTaskPushNotificationConfig:
-    case DispatcherOperation::kGetTaskPushNotificationConfig:
-    case DispatcherOperation::kListTaskPushNotificationConfigs:
-    case DispatcherOperation::kDeleteTaskPushNotificationConfig:
-      return core::Error::Validation("Push notification dispatch was not handled by push dispatcher");
-    case DispatcherOperation::kGetExtendedAgentCard:
-      return DispatchExtendedAgentCard(request, context, agent_card_provider);
-  }
-
-  return core::Error::Validation("Unsupported dispatcher operation");
-}
-
 }  // namespace
-
 Dispatcher::Dispatcher(AgentExecutor* executor) : executor_(executor) {}
 
 Dispatcher::Dispatcher(AgentExecutor* executor, std::shared_ptr<core::AgentCardProvider> agent_card_provider)
@@ -289,57 +42,32 @@ Dispatcher::Dispatcher(AgentExecutor* executor, std::vector<std::shared_ptr<Serv
 
 core::Result<DispatchResponse> Dispatcher::Dispatch(const DispatchRequest& request, RequestContext& context) const {
   if (executor_ == nullptr) {
-    return core::Error::Internal("Server dispatcher executor is not configured");
+    return core::Error::Internal(kExecutorNotConfigured);
   }
-
-  std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
-  const auto security = security_;
-  const auto authorized = security != nullptr ? security->Authorize(request, context) : core::Result<void>{};
-  const auto principal = security != nullptr ? std::optional(context.principal) : std::nullopt;
-  if (!authorized.ok()) {
-    core::Result<DispatchResponse> failure = authorized.error();
-    read_lock.unlock();
-    RunAfterInterceptors(request, context, failure, principal);
+  engine::DispatchPipeline pipeline;
+  {
+    std::shared_lock lock(interceptor_mutex_);
+    pipeline = {.security = security_, .interceptors = interceptors_, .agent_card_provider = agent_card_provider_};
+  }
+  engine::DispatchSession session(pipeline, request, context);
+  const auto before = session.Before();
+  if (!before.ok()) {
+    core::Result<DispatchResponse> failure = before.error();
+    session.After(failure);
     return failure;
   }
-  for (const auto& interceptor : interceptors_) {
-    if (interceptor == nullptr) {
-      continue;
-    }
-    const auto before_result = interceptor->BeforeDispatch(request, context);
-    RestorePrincipal(context, principal);
-    if (!before_result.ok()) {
-      core::Result<DispatchResponse> failure = before_result.error();
-      read_lock.unlock();
-      RunAfterInterceptors(request, context, failure, principal);
-      return before_result.error();
-    }
+  auto result = session.Handle();
+  if (!result.has_value()) {
+    const auto prepared = session.Prepare();
+    result = RouteSync(*executor_, prepared.has_value() ? *prepared : request, context);
   }
-  read_lock.unlock();
-
-  const auto* list = std::get_if<ListTasksRequest>(&request.payload);
-  auto dispatch_result = security != nullptr && request.operation == DispatcherOperation::kListTasks && list != nullptr
-                             ? security->ListTasks(*list, context)
-                             : DispatchToExecutor(*executor_, request, context, agent_card_provider_,
-                                                  /*require_full_task=*/security != nullptr);
-  RestorePrincipal(context, principal);
-  if (security != nullptr && dispatch_result.ok()) {
-    auto authorized = security->AuthorizeResponse(dispatch_result.value(), context);
-    if (authorized.ok()) {
-      authorized = security->ProtectStream(request, context, dispatch_result.value());
-    }
-    if (!authorized.ok()) {
-      dispatch_result = authorized.error();
-    }
+  if (!result.has_value()) {
+    return core::Error::Internal(engine::kUnsupportedDispatchOperation);
   }
-  if (dispatch_result.ok()) {
-    // Policies see the full task; callers and audit hooks see its projection.
-    ProjectTaskResponse(request, dispatch_result.value());
-  }
-  RunAfterInterceptors(request, context, dispatch_result, principal);
-  return dispatch_result;
+  session.Project(*result);
+  session.After(*result);
+  return std::move(*result);
 }
-
 void Dispatcher::SetSecurityPolicy(std::shared_ptr<const SecurityPolicy> policy, TaskStore* task_store) {
   std::unique_lock lock(interceptor_mutex_);
   security_ = std::make_shared<DispatchSecurity>(std::move(policy), task_store);
@@ -351,19 +79,6 @@ void Dispatcher::AddInterceptor(std::shared_ptr<ServerInterceptor> interceptor) 
   }
   std::unique_lock<std::shared_mutex> lock(interceptor_mutex_);
   interceptors_.push_back(std::move(interceptor));
-}
-
-void Dispatcher::RunAfterInterceptors(const DispatchRequest& request, RequestContext& context,
-                                      const core::Result<DispatchResponse>& result,
-                                      const std::optional<std::string>& authenticated_principal) const {
-  std::shared_lock<std::shared_mutex> read_lock(interceptor_mutex_);
-  for (const auto& interceptor : std::ranges::reverse_view(interceptors_)) {
-    if (interceptor == nullptr) {
-      continue;
-    }
-    interceptor->AfterDispatch(request, context, result);
-    RestorePrincipal(context, authenticated_principal);
-  }
 }
 
 }  // namespace a2a::server

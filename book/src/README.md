@@ -38,3 +38,7 @@ Repository-wide contribution and maintenance policies remain in the root
 - Package documentation describes vcpkg workflows only.
 - Examples are deterministic and run without external services unless their
   [guide](examples/overview.md) says otherwise.
+
+SDK **v0.6.0** is a release candidate targeting **A2A protocol 1.0
+(v1.0.1 specification)**. Read the [release notes](releases.md) for opt-in async
+APIs, dependencies and migration changes.

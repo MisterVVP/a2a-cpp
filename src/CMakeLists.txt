@@ -15,7 +15,24 @@ else()
   message(STATUS "StreamCancellationWatcher: interruptible std::thread fallback selected for native build")
 endif()
 
+# Keep synchronous SDK builds usable with standard libraries that do not yet
+# provide C++20 cancellation (for example older Apple libc++ installations).
+check_cxx_source_compiles("
+#include <stop_token>
+int main() {
+  std::stop_source source;
+  std::stop_callback observer(source.get_token(), [] {});
+  return source.request_stop() ? 0 : 1;
+}
+" A2A_STDLIB_HAS_STOP_TOKEN)
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  message(STATUS "RequestExecution: C++20 cancellation is available")
+else()
+  message(STATUS "RequestExecution: unavailable; standard library lacks C++20 cancellation")
+endif()
+
 set(A2A_CORE_SOURCES
+  core/async_operation.cpp
   core/agent_card/agent_card_builder.cpp
   core/agent_card/agent_card_provider.cpp
   core/core.cpp
@@ -44,6 +61,7 @@ target_link_libraries(a2a_core
   PUBLIC
     a2a::proto_generated
     protobuf::libprotobuf
+    Threads::Threads
   PRIVATE
     simdjson::simdjson
 )
@@ -59,46 +77,68 @@ if(A2A_ENABLE_SIGNING)
   target_compile_definitions(a2a_signing PUBLIC A2A_HAS_AGENT_CARD_SIGNING=1)
 endif()
 
-add_library(a2a_http STATIC
+set(A2A_HTTP_SOURCES
   http/curl_stream_reactor.cpp
+  http/curl_windows_readiness.cpp
+  http/http_client_async.cpp
   http/http_client.cpp
   http/http_client_curl.cpp
   http/http_client_streaming.cpp
 )
+add_library(a2a_http STATIC ${A2A_HTTP_SOURCES})
 add_library(a2a::http ALIAS a2a_http)
 set_target_properties(a2a_http PROPERTIES EXPORT_NAME http)
 
-target_include_directories(a2a_http
-  PUBLIC
-    $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-)
-
-target_link_libraries(a2a_http
-  PUBLIC
-    a2a::core
-)
-
-if(A2A_HAS_LIBCURL)
-  target_link_libraries(a2a_http
-    PRIVATE
-      CURL::libcurl
-  )
-  target_compile_definitions(a2a_http
+function(a2a_configure_http_target target core_target)
+  target_include_directories(${target}
     PUBLIC
-      A2A_HAS_LIBCURL=1
+      $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   )
-endif()
+
+  target_link_libraries(${target}
+    PUBLIC
+      ${core_target}
+  )
+
+  if(A2A_HAS_LIBCURL)
+    if(WIN32)
+      target_link_libraries(${target} PRIVATE ws2_32)
+    endif()
+    if(A2A_TEST_CURL_PORTABLE_REACTOR)
+      target_compile_definitions(${target} PRIVATE A2A_TEST_CURL_PORTABLE_REACTOR=1)
+    endif()
+    target_link_libraries(${target}
+      PRIVATE
+        CURL::libcurl
+    )
+    target_compile_definitions(${target}
+      PUBLIC
+        A2A_HAS_LIBCURL=1
+    )
+  endif()
+
+endfunction()
+
+a2a_configure_http_target(a2a_http a2a::core)
 
 set(A2A_CLIENT_SOURCES
+  client/async_transport.cpp
+  client/async_client.cpp
   client/auth.cpp
   client/client.cpp
   client/discovery.cpp
+  client/transport/grpc_async_transport.cpp
+  client/transport/grpc_client_streaming.cpp
+  client/transport/grpc_transport_internal.cpp
   client/transport/grpc_transport.cpp
+  client/transport/http_transport_internal.cpp
   client/transport/http_json_streaming.cpp
+  client/transport/http_json_async_transport.cpp
   client/transport/http_json_transport.cpp
   client/transport/http_json_transport_internal.cpp
   client/transport/json_rpc_streaming.cpp
+  client/transport/json_rpc_async_transport.cpp
   client/transport/json_rpc_transport.cpp
   client/transport/json_rpc_transport_internal.cpp
   client/transport/sse_parser.cpp
@@ -122,6 +162,10 @@ target_link_libraries(a2a_client
 set(A2A_SERVER_SOURCES
   server/agent_card/agent_card_serializer.cpp
   server/transport/grpc_server_transport.cpp
+  server/transport/grpc_error.cpp
+  server/transport/grpc_request_context.cpp
+  server/transport/grpc_status_details.cpp
+  server/transport/grpc_task_conversion.cpp
   server/transport/stream_cancellation_watcher.cpp
   server/transport/http_adapter.cpp
   server/transport/http_server_response_builder.cpp
@@ -130,6 +174,7 @@ set(A2A_SERVER_SOURCES
   server/version_header_validator.cpp
   server/transport/rest_transport.cpp
   server/transport/json_rpc_server_transport.cpp
+  server/push_notifications/async_push_notification_delivery.cpp
   server/push_notifications/push_notification_delivery.cpp
   server/push_notifications/push_notification_service.cpp
   server/push_notifications/push_notification_store.cpp
@@ -138,7 +183,9 @@ set(A2A_SERVER_SOURCES
   server/task_id_generator.cpp
   server/task_subscription_service.cpp
   server/transport/transport_mux.cpp
+  server/transport/server_bindings.cpp
   server/dispatcher.cpp
+  server/engine/dispatch_pipeline.cpp
   server/security_policy.cpp
   server/request_context.cpp
   server/tasks/in_memory_task_store.cpp
@@ -149,7 +196,11 @@ set(A2A_SERVER_SOURCES
   server/tasks/task_ordering.cpp
   server/stores/store_factory.cpp
 )
+if(A2A_STDLIB_HAS_STOP_TOKEN)
+  list(APPEND A2A_SERVER_SOURCES server/engine/request_execution.cpp)
+endif()
 add_library(a2a_server STATIC ${A2A_SERVER_SOURCES})
+target_compile_definitions(a2a_server PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
 add_library(a2a::server ALIAS a2a_server)
 set_target_properties(a2a_server PROPERTIES EXPORT_NAME server)
 
@@ -165,20 +216,57 @@ target_link_libraries(a2a_server
     a2a::http
 )
 
+if(A2A_ENABLE_ASIO)
+  if(NOT A2A_STDLIB_HAS_STOP_TOKEN)
+    message(FATAL_ERROR "A2A_ENABLE_ASIO requires C++20 standard-library cancellation support")
+  endif()
+  find_package(Boost ${A2A_BOOST_VERSION} CONFIG REQUIRED)
+  find_package(Threads REQUIRED)
+  add_library(a2a_asio STATIC
+    server/transport/event_http_native_handler.cpp
+    server/transport/event_http_listener.cpp
+    server/transport/event_http_server.cpp
+    server/engine/async_dispatcher.cpp
+    server/engine/async_task_subscription.cpp
+    server/engine/async_push_notification_service.cpp
+    server/transport/async_grpc_server_transport.cpp
+    server/engine/coroutine_agent_executor.cpp
+    server/engine/async_server_stream_session.cpp
+    server/engine/blocking_executor_adapter.cpp
+    server/engine/async_runtime.cpp
+    server/transport/async_server_bindings.cpp
+  )
+  if(WIN32)
+    target_link_libraries(a2a_asio PRIVATE ws2_32 mswsock)
+  endif()
+  add_library(a2a::asio ALIAS a2a_asio)
+  set_target_properties(a2a_asio PROPERTIES EXPORT_NAME asio)
+  target_compile_definitions(a2a_asio PUBLIC A2A_HAS_ASYNC_SERVER=1)
+  target_include_directories(a2a_asio PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(a2a_asio PUBLIC a2a::server Boost::headers Threads::Threads)
+  target_compile_features(a2a_asio PUBLIC cxx_std_20)
+  install(FILES ${PROJECT_SOURCE_DIR}/LICENSES/BSL-1.0.txt
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/a2a_cpp)
+endif()
+
 if(A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS)
   add_library(a2a_core_diagnostics STATIC ${A2A_CORE_SOURCES} core/subscription_diagnostics.cpp)
   target_include_directories(a2a_core_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf PRIVATE simdjson::simdjson)
+  target_link_libraries(a2a_core_diagnostics PUBLIC a2a::proto_generated protobuf::libprotobuf Threads::Threads PRIVATE simdjson::simdjson)
+
+  add_library(a2a_http_diagnostics STATIC ${A2A_HTTP_SOURCES})
+  a2a_configure_http_target(a2a_http_diagnostics a2a_core_diagnostics)
 
   add_library(a2a_client_diagnostics STATIC ${A2A_CLIENT_SOURCES})
   target_include_directories(a2a_client_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
+  target_link_libraries(a2a_client_diagnostics PUBLIC a2a_core_diagnostics a2a_http_diagnostics PRIVATE simdjson::simdjson)
 
   add_library(a2a_server_diagnostics STATIC ${A2A_SERVER_SOURCES})
+  target_compile_definitions(a2a_server_diagnostics PUBLIC A2A_HAS_REQUEST_EXECUTION=$<BOOL:${A2A_STDLIB_HAS_STOP_TOKEN}>)
   target_include_directories(a2a_server_diagnostics PUBLIC $<BUILD_INTERFACE:${A2A_PUBLIC_INCLUDE_DIR}>)
-  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a::http PRIVATE simdjson::simdjson)
+  target_link_libraries(a2a_server_diagnostics PUBLIC a2a_core_diagnostics a2a_http_diagnostics PRIVATE simdjson::simdjson)
 
-  foreach(diagnostics_target IN ITEMS a2a_core_diagnostics a2a_client_diagnostics a2a_server_diagnostics)
+  foreach(diagnostics_target IN ITEMS a2a_core_diagnostics a2a_http_diagnostics a2a_client_diagnostics a2a_server_diagnostics)
     target_include_directories(${diagnostics_target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(${diagnostics_target} PRIVATE A2A_ENABLE_SUBSCRIPTION_DIAGNOSTICS=1)
   endforeach()
@@ -233,6 +321,9 @@ if(A2A_ENABLE_POSTGRES_STORE)
 endif()
 
 set(A2A_INSTALL_TARGETS a2a_core a2a_http a2a_client a2a_server)
+if(A2A_ENABLE_ASIO)
+  list(APPEND A2A_INSTALL_TARGETS a2a_asio)
+endif()
 if(A2A_ENABLE_SIGNING)
   list(APPEND A2A_INSTALL_TARGETS a2a_signing)
 endif()

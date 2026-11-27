@@ -13,6 +13,7 @@
 #include "a2a/core/result.h"
 #include "a2a/server/dispatch_types.h"
 #include "a2a/server/dispatcher.h"
+#include "a2a/server/prepared_dispatch.h"
 #include "a2a/server/request_context.h"
 
 namespace a2a::server {
@@ -60,6 +61,7 @@ class RestTransport final {
   explicit RestTransport(Dispatcher* dispatcher);
 
   [[nodiscard]] static const std::vector<RestRoute>& Routes();
+  [[nodiscard]] static core::Result<PreparedResponse<RestResponse>> Prepare(const RestRequest& request);
   [[nodiscard]] core::Result<RestResponse> Handle(const RestRequest& request) const;
 
  private:
@@ -68,6 +70,9 @@ class RestTransport final {
                                                                             DispatchResponse& response);
   [[nodiscard]] static RestResponse BuildErrorResponse(const core::Error& error);
 
+  [[nodiscard]] static PreparedDispatch<RestResponse> MakePlan(DispatchRequest request, RequestContext context);
+  [[nodiscard]] static core::Result<RestResponse> Complete(DispatcherOperation operation,
+                                                           core::Result<DispatchResponse> result);
   Dispatcher* dispatcher_ = nullptr;
 };
 

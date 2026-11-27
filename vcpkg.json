@@ -1,11 +1,14 @@
 {
   "name": "a2a-cpp",
-  "version-semver": "0.5.2",
+  "version-semver": "0.6.0",
   "description": "C++ SDK for the Agent2Agent (A2A) Protocol",
   "license": "Apache-2.0",
   "dependencies": [
     "protobuf",
-    "grpc",
+    {
+      "name": "grpc",
+      "version>=": "1.41.0"
+    },
     "curl",
     {
       "name": "simdjson",
@@ -19,6 +22,16 @@
         {
           "name": "openssl",
           "version>=": "3.0.8"
+        }
+      ]
+    },
+    "asio": {
+      "description": "Boost.Asio coroutine executor support",
+      "dependencies": [
+        {
+          "name": "boost-asio",
+          "version>=": "1.92.0",
+          "default-features": false
         }
       ]
     }

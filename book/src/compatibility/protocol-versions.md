@@ -39,7 +39,7 @@ fallback. Wire headers/metadata remain available unchanged in `client_headers`.
 | `VER-CLIENT-001` | All eight unary/push methods, streaming send and subscription emit the version parameter on every binding |
 | `VER-CLIENT-002` | Requested `1.0.42` emits `1.0`; raw wire patch versions select the same 1.0 semantics; conflicting header aliases/hooks are removed |
 | `VER-SERVER-001` | Accepted requests dispatch with 1.0 semantics in `RequestContext`, independently of SUT handlers |
-| `VER-SERVER-002` | Unsupported versions never dispatch and return JSON-RPC `-32009`, HTTP 400, or gRPC `UNIMPLEMENTED` with protocol-code metadata |
+| `VER-SERVER-002` | Unsupported versions never dispatch and return JSON-RPC `-32009`, HTTP 400, or gRPC `FAILED_PRECONDITION` with protocol-code metadata |
 | `VER-SERVER-003` | Empty 0.3 fallback is rejected before dispatch on every operation and binding |
 
 Core/version-validator unit tests cover malformed components, patch handling,

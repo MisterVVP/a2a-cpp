@@ -14,3 +14,10 @@ The PostgreSQL store target is available when the postgres-store feature is enab
 In manifest mode, add the postgres-store feature to vcpkg.json and run vcpkg install without package arguments.
 
 In classic mode, run the install command from a directory that does not contain a vcpkg.json manifest.
+
+The asio feature builds the optional coroutine and event-driven HTTP server target:
+
+    target_link_libraries(main PRIVATE a2a::asio)
+
+Enable asio and postgres-store together when required. PostgreSQL I/O remains synchronous.
+Async unary clients use a2a::client without the asio feature.

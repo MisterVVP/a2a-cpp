@@ -12,66 +12,78 @@
 
 namespace a2a::core::protocol_errors {
 
-[[nodiscard]] inline Error Unauthenticated(std::string message = "authentication is required") {
+inline constexpr char kDefaultUnauthenticatedMessage[] = "authentication is required";
+inline constexpr char kDefaultPermissionDeniedMessage[] = "access is denied";
+inline constexpr char kDefaultTaskNotFoundMessage[] = "task not found";
+inline constexpr char kDefaultTaskNotCancelableMessage[] = "task is already terminal";
+inline constexpr char kDefaultPushNotSupportedMessage[] = "push notifications are not supported";
+inline constexpr char kDefaultUnsupportedOperationMessage[] = "operation is not supported";
+inline constexpr char kDefaultContentTypeNotSupportedMessage[] = "content type is not supported";
+inline constexpr char kDefaultInvalidAgentResponseMessage[] = "invalid agent response";
+inline constexpr char kDefaultExtendedCardNotConfiguredMessage[] = "extended agent card is not configured";
+inline constexpr char kDefaultVersionNotSupportedMessage[] = "version is not supported";
+inline constexpr char kDefaultExtensionRequiredMessage[] = "required extension support is missing";
+
+[[nodiscard]] inline Error Unauthenticated(std::string message = kDefaultUnauthenticatedMessage) {
   return Error::RemoteProtocol(std::move(message)).WithHttpStatus(http::kStatusUnauthorized);
 }
 
-[[nodiscard]] inline Error PermissionDenied(std::string message = "access is denied") {
+[[nodiscard]] inline Error PermissionDenied(std::string message = kDefaultPermissionDeniedMessage) {
   return Error::RemoteProtocol(std::move(message)).WithHttpStatus(http::kStatusForbidden);
 }
 
-[[nodiscard]] inline Error TaskNotFound(std::string message = "task not found") {
+[[nodiscard]] inline Error TaskNotFound(std::string message = kDefaultTaskNotFoundMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(404)
+      .WithHttpStatus(http::kStatusNotFound)
       .WithProtocolCode(std::string(protocol_codes::kTaskNotFound));
 }
 
-[[nodiscard]] inline Error TaskNotCancelable(std::string message = "task is already terminal") {
+[[nodiscard]] inline Error TaskNotCancelable(std::string message = kDefaultTaskNotCancelableMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(409)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kTaskNotCancelable));
 }
 
-[[nodiscard]] inline Error PushNotificationNotSupported(std::string message = "push notifications are not supported") {
+[[nodiscard]] inline Error PushNotificationNotSupported(std::string message = kDefaultPushNotSupportedMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(400)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kPushNotificationNotSupported));
 }
 
-[[nodiscard]] inline Error UnsupportedOperation(std::string message = "operation is not supported") {
+[[nodiscard]] inline Error UnsupportedOperation(std::string message = kDefaultUnsupportedOperationMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(400)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kUnsupportedOperation));
 }
 
-[[nodiscard]] inline Error ContentTypeNotSupported(std::string message = "content type is not supported") {
+[[nodiscard]] inline Error ContentTypeNotSupported(std::string message = kDefaultContentTypeNotSupportedMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(415)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kContentTypeNotSupported));
 }
 
-[[nodiscard]] inline Error InvalidAgentResponse(std::string message = "invalid agent response") {
+[[nodiscard]] inline Error InvalidAgentResponse(std::string message = kDefaultInvalidAgentResponseMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(502)
+      .WithHttpStatus(http::kStatusInternalServerError)
       .WithProtocolCode(std::string(protocol_codes::kInvalidAgentResponse));
 }
 
 [[nodiscard]] inline Error ExtendedAgentCardNotConfigured(
-    std::string message = "extended agent card is not configured") {
+    std::string message = kDefaultExtendedCardNotConfiguredMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(400)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kExtendedAgentCardNotConfigured));
 }
 
-[[nodiscard]] inline Error VersionNotSupported(std::string message = "version is not supported") {
+[[nodiscard]] inline Error VersionNotSupported(std::string message = kDefaultVersionNotSupportedMessage) {
   return Error::UnsupportedVersion(std::move(message))
-      .WithHttpStatus(400)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kVersionNotSupported));
 }
 
-[[nodiscard]] inline Error ExtensionSupportRequired(std::string message = "required extension support is missing") {
+[[nodiscard]] inline Error ExtensionSupportRequired(std::string message = kDefaultExtensionRequiredMessage) {
   return Error::RemoteProtocol(std::move(message))
-      .WithHttpStatus(400)
+      .WithHttpStatus(http::kStatusBadRequest)
       .WithProtocolCode(std::string(protocol_codes::kExtensionSupportRequired));
 }
 

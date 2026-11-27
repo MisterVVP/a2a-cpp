@@ -24,6 +24,7 @@
 
 #include "a2a/core/error.h"
 #include "http_client_internal.h"
+#include "serial_stream_dispatch.h"
 
 namespace a2a::http {
 namespace {
@@ -41,8 +42,6 @@ constexpr long kHttpResponseCodeUnset = 0;
 constexpr std::string_view kStreamCancelledMessage = "HTTP stream was cancelled";
 constexpr std::string_view kAsyncStreamCallbacksRequiredMessage = "HTTP asynchronous stream callbacks are required";
 constexpr std::string_view kClientShuttingDownMessage = "HTTP client is shutting down";
-constexpr std::size_t kMaximumPendingDispatchTasks = 256U;
-constexpr std::size_t kMaximumPendingDispatchBytes = std::size_t{4U} * 1024U * 1024U;
 constexpr std::size_t kStreamDispatchWorkerCount = 4U;
 constexpr std::string_view kDispatchBacklogExceededMessage = "HTTP stream callback backlog limit exceeded";
 constexpr std::string_view kDispatchInitializationFailureMessage = "failed to initialize HTTP stream callback executor";
@@ -56,8 +55,12 @@ class DispatchCallbackScope final {
  public:
   explicit DispatchCallbackScope(detail::ClientState* state) : previous_(g_dispatch_client_state) {
     g_dispatch_client_state = state;
+    core::async_detail::EnterCallback();
   }
-  ~DispatchCallbackScope() { g_dispatch_client_state = previous_; }
+  ~DispatchCallbackScope() {
+    g_dispatch_client_state = previous_;
+    core::async_detail::LeaveCallback();
+  }
 
  private:
   detail::ClientState* previous_;
@@ -146,10 +149,12 @@ class StreamDispatchExecutor final {
 struct HttpProcessState final {
   HttpProcessState() : global_state(std::make_shared<detail::ClientGlobalState>()) {}
   ~HttpProcessState() {
-    // Drop the process-global curl owner while callback workers can still
-    // accept terminal work emitted by reactor teardown.
-    global_state.reset();
+    // Pin the pool until reactors have exited and terminal callbacks have drained.
+    // Dropping it first can destroy the last client/global owner on a reactor,
+    // causing that reactor to join itself during process teardown.
+    global_state->stream_reactor_pool->Shutdown();
     stream_dispatch_executor.reset();
+    global_state.reset();
   }
 
   HttpProcessState(const HttpProcessState&) = delete;
@@ -200,60 +205,6 @@ core::Result<void> EnsureStreamDispatchExecutor() {
   return {};
 }
 
-class SerialStreamDispatch final : public std::enable_shared_from_this<SerialStreamDispatch> {
- public:
-  using Task = std::function<void()>;
-
-  bool Enqueue(Task task, std::size_t pending_bytes = 0U, bool terminal = false) {
-    bool schedule = false;
-    {
-      std::lock_guard lock(mutex_);
-      const std::size_t bounded_pending_bytes =
-          pending_bytes < kMaximumPendingDispatchBytes ? pending_bytes : kMaximumPendingDispatchBytes;
-      if (!terminal && (tasks_.size() >= kMaximumPendingDispatchTasks ||
-                        pending_bytes_ > kMaximumPendingDispatchBytes - bounded_pending_bytes)) {
-        return false;
-      }
-      tasks_.push_back(QueuedTask{.task = std::move(task), .pending_bytes = pending_bytes});
-      pending_bytes_ += pending_bytes;
-      schedule = !scheduled_;
-      scheduled_ = true;
-    }
-    if (schedule) {
-      GetStreamDispatchExecutor().Submit([self = shared_from_this()] { self->Drain(); });
-    }
-    return true;
-  }
-
- private:
-  void Drain() {
-    while (true) {
-      QueuedTask queued;
-      {
-        std::lock_guard lock(mutex_);
-        if (tasks_.empty()) {
-          scheduled_ = false;
-          return;
-        }
-        queued = std::move(tasks_.front());
-        tasks_.pop_front();
-        pending_bytes_ -= queued.pending_bytes;
-      }
-      queued.task();
-    }
-  }
-
-  struct QueuedTask final {
-    Task task;
-    std::size_t pending_bytes = 0U;
-  };
-
-  std::mutex mutex_;
-  std::deque<QueuedTask> tasks_;
-  std::size_t pending_bytes_ = 0U;
-  bool scheduled_ = false;
-};
-
 struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamState> {
   std::shared_ptr<detail::ClientState> client_state;
   std::shared_ptr<detail::CurlStreamReactor> reactor;
@@ -270,7 +221,8 @@ struct AsyncStreamState final : public std::enable_shared_from_this<AsyncStreamS
   std::function<core::Result<void>(std::string_view)> chunk_handler;
   std::function<bool()> is_cancelled;
   Client::StreamCompletion completion;
-  std::shared_ptr<SerialStreamDispatch> dispatch = std::make_shared<SerialStreamDispatch>();
+  std::shared_ptr<detail::SerialStreamDispatch> dispatch = std::make_shared<detail::SerialStreamDispatch>(
+      [](detail::SerialStreamDispatch::Task task) { GetStreamDispatchExecutor().Submit(std::move(task)); });
   std::mutex error_mutex;
   std::optional<core::Error> dispatch_error;
   bool registered = false;
@@ -647,9 +599,18 @@ bool CurlStreamReactorPoolDefersSelfThreadRelease() {
     return false;
   }
   auto transfer = std::make_shared<detail::CurlStreamReactor::Transfer>();
+  std::promise<void> callback_started_promise;
+  auto callback_started = callback_started_promise.get_future();
+  std::promise<void> caller_released_promise;
+  auto caller_released = caller_released_promise.get_future();
   std::promise<bool> deferred_release_promise;
   auto deferred_release = deferred_release_promise.get_future();
-  transfer->on_complete = [reactor_pool, &deferred_release_promise](CURLcode) {
+  std::atomic_bool deferred_while_owned{false};
+  transfer->on_complete = [reactor_pool, &callback_started_promise, &caller_released, &deferred_release_promise,
+                           &deferred_while_owned](CURLcode) {
+    deferred_while_owned.store(!reactor_pool->ReleaseUnused());
+    callback_started_promise.set_value();
+    caller_released.wait();
     const bool needs_retry = !reactor_pool->ReleaseUnused();
     if (needs_retry) {
       DeferUnusedReactorRelease(reactor_pool);
@@ -657,10 +618,14 @@ bool CurlStreamReactorPoolDefersSelfThreadRelease() {
     deferred_release_promise.set_value(needs_retry);
   };
   reactor->Cancel(transfer);
+  callback_started.wait();
+  // Exercise an early callback, but check self-release only after the pool owns
+  // the final reactor reference.
   reactor.reset();
+  caller_released_promise.set_value();
   const bool was_deferred = deferred_release.get();
   const bool released_off_thread = reactor_pool->ReleaseUnused();
-  return was_deferred && released_off_thread && reactor_pool->size() == 0U;
+  return deferred_while_owned.load() && was_deferred && released_off_thread && reactor_pool->size() == 0U;
 }
 
 std::pair<std::size_t, std::size_t> CurlStreamReactorLifecycleCounts() noexcept {

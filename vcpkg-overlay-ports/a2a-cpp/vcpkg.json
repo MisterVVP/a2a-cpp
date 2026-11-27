@@ -1,6 +1,6 @@
 {
   "name": "a2a-cpp",
-  "version-semver": "0.5.2",
+  "version-semver": "0.6.0",
   "description": "C++20 SDK for building Agent2Agent protocol clients and servers.",
   "homepage": "https://mistervvp.github.io/a2a-cpp/",
   "license": "Apache-2.0",
@@ -35,6 +35,16 @@
       "description": "Build PostgreSQL-backed A2A task and push-notification stores.",
       "dependencies": [
         "libpq"
+      ]
+    },
+    "asio": {
+      "description": "Opt-in Boost.Asio coroutine runtime, native async gRPC and event-driven HTTP server.",
+      "dependencies": [
+        {
+          "name": "boost-asio",
+          "version>=": "1.92.0",
+          "default-features": false
+        }
       ]
     }
   }

@@ -56,3 +56,12 @@ Run selected apps:
 - [Streaming client](streaming-client.md) and [server](streaming-server.md)
 - [Production tutorials](tutorials.md)
 - [CMake consumer templates](../build/consumers.md)
+
+## Try the opt-in async examples
+
+SDK v0.6.0 adds `async_unary_client` (no Asio requirement), `asio_executor`,
+`blocking_executor`, `async_grpc_server`, and `event_http_server`.
+Follow [async consumer setup](../build/consumers.md#async-consumers-sdk-v060)
+to build them from FetchContent or an installed package. Coroutine server
+examples require `A2A_ENABLE_ASIO=ON` and link `a2a::asio`; synchronous builds
+remain the default. PostgreSQL store I/O remains synchronous.

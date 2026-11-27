@@ -10,7 +10,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -20,9 +19,9 @@
 #else
 #define A2A_HAS_JTHREAD 0
 #endif
-#include <vector>
 
 #include "a2a/client/call_options.h"
+#include "a2a/client/client_types.h"
 #include "a2a/core/non_copyable.h"
 #include "a2a/core/result.h"
 #include "a2a/v1/a2a.pb.h"
@@ -33,38 +32,13 @@
 
 namespace a2a::client {
 
+namespace detail {
+struct ClientState;
+}
+class AsyncClient;
+class AsyncClientTransport;
 class HttpJsonTransport;
 class GrpcTransport;
-
-struct ListTasksRequest final {
-  std::size_t page_size = 0;
-  std::string page_token;
-};
-
-struct ListTasksResponse final {
-  std::vector<lf::a2a::v1::Task> tasks;
-  std::string next_page_token;
-};
-
-struct ClientCallContext final {
-  std::string_view operation;
-  const CallOptions* options = nullptr;
-};
-
-struct ClientCallResult final {
-  bool ok = true;
-  std::optional<core::Error> error = std::nullopt;
-};
-
-class ClientInterceptor {
- public:
-  virtual ~ClientInterceptor() = default;
-  virtual void BeforeCall(const ClientCallContext& context) { (void)context; }
-  virtual void AfterCall(const ClientCallContext& context, const ClientCallResult& result) {
-    (void)context;
-    (void)result;
-  }
-};
 
 class StreamObserver {
  public:
@@ -78,7 +52,7 @@ class StreamObserver {
 class StreamHandle final : private core::NonCopyable {
  public:
   struct State final {
-    class CallbackExecutionScope final : private core::NonCopyable {
+    class CallbackExecutionScope final : private core::NonCopyableOrMovable {
      public:
       explicit CallbackExecutionScope(State& state);
       ~CallbackExecutionScope();
@@ -137,6 +111,8 @@ class StreamHandle final : private core::NonCopyable {
 class ClientTransport {
  public:
   virtual ~ClientTransport() = default;
+  // Returns the composed async implementation, or null for sync-only transports.
+  [[nodiscard]] virtual std::shared_ptr<AsyncClientTransport> Async() const { return {}; }
 
   [[nodiscard]] virtual core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options) = 0;
@@ -172,9 +148,13 @@ class ClientTransport {
   [[nodiscard]] virtual core::Result<void> Shutdown() { return {}; }
 };
 
-class A2AClient final {
+class A2AClient final : private core::NonCopyableOrMovable {
  public:
   explicit A2AClient(std::unique_ptr<ClientTransport> transport);
+  ~A2AClient();
+
+  // Include async_client.h to use the returned callback facade.
+  [[nodiscard]] AsyncClient Async() const;
 
   [[nodiscard]] core::Result<lf::a2a::v1::SendMessageResponse> SendMessage(
       const lf::a2a::v1::SendMessageRequest& request, const CallOptions& options = {});
@@ -210,12 +190,7 @@ class A2AClient final {
   [[nodiscard]] core::Result<void> Destroy();
 
  private:
-  void RunBeforeInterceptors(const ClientCallContext& context) const;
-  void RunAfterInterceptors(const ClientCallContext& context, const ClientCallResult& result) const;
-
-  std::unique_ptr<ClientTransport> transport_;
-  mutable std::mutex interceptor_mutex_;
-  std::vector<std::shared_ptr<ClientInterceptor>> interceptors_;
+  std::shared_ptr<detail::ClientState> state_;
 };
 
 }  // namespace a2a::client

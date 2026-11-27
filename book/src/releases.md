@@ -2,27 +2,57 @@
 
 This documentation is intended to stay version-aware without embedding a release number in every page title.
 
-## Unreleased development toward `v0.6.0`
+## SDK v0.6.0 release candidate
 
-`ListTasks` development replaces numeric offsets with opaque, versioned cursors
-and orders tasks by storage update time descending, then task ID descending.
-Clients must restart old pagination sequences with an empty token. Custom stores
-used with secured listing must supply aligned cursor metadata, and externally
-managed PostgreSQL schemas need the ordering-index migration. See the
-[ListTasks cursor contract](server/list-tasks-pagination.md) for compatibility,
-consistency and migration details.
+These notes describe SDK **v0.6.0**, targeting **A2A protocol 1.0
+(v1.0.1 specification)**. These version numbers are independent. The candidate
+is not a published stable release until tagged. The previous stable release is
+v0.5.2. Consult the [conformance statement](compatibility/conformance.md) for
+actual upstream TCK coverage; SDK integration tests do not imply full TCK
+conformance.
+
+### Opt-in async execution
+
+The release combines [async unary clients](client/async-unary.md),
+[coroutine dispatch](server/async-dispatcher.md), the
+[Boost.Asio runtime](server/asio-coroutines.md), [native async gRPC](server/async-grpc.md),
+[coroutine streaming](server/async-streaming.md), asynchronous
+[push delivery](server/push-notifications.md), and the
+[event-driven HTTP/SSE server](server/event-http.md). The Windows outbound
+HTTP reactor uses [native readiness notifications](streaming/windows-reactor.md).
+
+Existing synchronous APIs and default builds remain supported. Async clients
+link `a2a::client`; coroutine servers additionally require
+`A2A_ENABLE_ASIO=ON`, Boost 1.92.0+ and `a2a::asio`. Installed CMake exports
+resolve enabled optional dependencies. The vcpkg overlay offers `asio` and
+`postgres-store`, separately or together. PostgreSQL store I/O remains
+**synchronous**; bounded blocking adapters do not turn database calls into
+nonblocking I/O. See [consumer setup](build/consumers.md).
+
+The release also fixes a completion-timer stall after deadline expiry on some
+standard-library configurations.
+
+### Migration and breaking changes
+
+`ListTasks` replaces numeric offsets with opaque, versioned cursors and orders
+tasks by storage update time descending, then task ID descending. Restart old
+pagination sequences with an empty token. Custom stores used with secured
+listing must supply aligned cursor metadata. Externally managed PostgreSQL
+schemas need the ordering-index migration. See the
+[ListTasks cursor contract](server/list-tasks-pagination.md).
 
 SDK JSON parsing now requires simdjson 3.0+ even when signing is disabled.
 The obsolete public `a2a/core/json_value.h` structural scanner was removed.
 General JSON input is limited to 64 MiB and nesting depth 128. See the
-[JSON parsing inventory](compatibility/json-parsing.md) for migration paths,
-protobuf compatibility exceptions, and ownership/input policies.
+[JSON parsing inventory](compatibility/json-parsing.md) for replacement APIs,
+protobuf exceptions and input ownership rules. libcurl enables built-in outbound
+HTTP clients; OpenSSL 3.0+ is required only for optional signing; libpq is needed
+only for PostgreSQL stores. Rebuild the SDK and downstream binaries together;
+this release does not promise binary compatibility with v0.5.2.
 
-The stable `v0.5.2` behavior and release notes below remain unchanged.
+## Previous release: `v0.5.2`
 
-## Current documented release
-
-The current documented release is **v0.5.2** and is recommended for new consumers.
+The following notes describe v0.5.2 and retain its historical compatibility scope.
 
 ### Highlights since `v0.5.1`
 

@@ -33,6 +33,8 @@
 #include <utility>
 #include <vector>
 
+#include "a2a/client/async_client.h"
+#include "a2a/client/async_transport.h"
 #include "a2a/client/client.h"
 #include "a2a/client/discovery.h"
 #include "a2a/client/http_json_transport.h"
@@ -622,7 +624,7 @@ class ConcurrentSseLoopbackServer final : private a2a::core::NonCopyable {
 
 class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
  public:
-  OpenSseLoopbackServer() {
+  explicit OpenSseLoopbackServer(std::string initial_body = {}) : initial_body_(std::move(initial_body)) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     EXPECT_NE(fd_, kSocketError);
     int reuse = 1;
@@ -666,7 +668,10 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
 
  private:
   void Release() {
-    released_.store(true);
+    {
+      std::lock_guard lock(mutex_);
+      released_.store(true);
+    }
     cv_.notify_all();
   }
 
@@ -678,6 +683,9 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
     std::array<char, a2a::core::http::kReceiveBufferSize> buffer{};
     (void)::recv(client, buffer.data(), buffer.size(), 0);
     (void)::send(client, kSseHeaders.data(), kSseHeaders.size(), 0);
+    if (!initial_body_.empty()) {
+      (void)::send(client, initial_body_.data(), initial_body_.size(), 0);
+    }
     {
       std::lock_guard lock(mutex_);
       stream_open_ = true;
@@ -690,6 +698,7 @@ class OpenSseLoopbackServer final : private a2a::core::NonCopyable {
     ::close(client);
   }
 
+  const std::string initial_body_;
   int fd_ = kSocketError;
   int port_ = 0;
   mutable std::mutex mutex_;
@@ -1318,12 +1327,23 @@ TEST(SharedHttpClientTest, StreamRequestSendsFullRequestAndHandlesFragmentedResp
   EXPECT_NE(server.request().find(R"({"hello":"world"})"), std::string::npos);
 }
 
+void ExpectShutdownCancellation(std::future<a2a::core::Result<a2a::http::Response>>& completed,
+                                const std::atomic_bool& shutdown_returned, const OpenSseLoopbackServer& server) {
+  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
+  EXPECT_TRUE(shutdown_returned.load());
+  const auto response = completed.get();
+  ASSERT_FALSE(response.ok());
+  EXPECT_EQ(response.error().code(), a2a::core::ErrorCode::kNetwork);
+  EXPECT_FALSE(server.released());
+}
+
 TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
-  LoopbackHttpServer server{std::string(kSseHeaders) + std::string(kFirstSseChunk)};
+  // Keep EOF from racing the callback: Shutdown must cancel this active stream.
+  OpenSseLoopbackServer server{std::string(kFirstSseChunk)};
   a2a::http::Client client;
   a2a::http::Request request;
   request.method = std::string(a2a::core::http::kMethodGet);
-  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, "/stream");
+  request.url = BuildLoopbackUrl(server.port(), a2a::core::http::kHttpScheme, kStreamPath);
   request.timeout = std::chrono::milliseconds(kStreamTimeoutMs);
   request.http_version = std::string(kHttpVersion11);
   std::promise<a2a::core::Result<a2a::http::Response>> completion;
@@ -1341,9 +1361,8 @@ TEST(SharedHttpClientTest, ShutdownFromChunkCallbackDoesNotDeadlock) {
       [&completion](a2a::core::Result<a2a::http::Response> response) { completion.set_value(std::move(response)); });
 
   ASSERT_TRUE(started.ok()) << started.error().message();
-  ASSERT_EQ(completed.wait_for(kCancellationDeadline), std::future_status::ready);
-  EXPECT_TRUE(shutdown_returned.load());
-  EXPECT_TRUE(completed.get().ok());
+  ASSERT_TRUE(server.WaitForOpenStream(std::chrono::milliseconds(kStreamTimeoutMs)));
+  ExpectShutdownCancellation(completed, shutdown_returned, server);
 }
 
 TEST(SharedHttpClientTest, SynchronousStreamRequestFromChunkCallbackIsRejected) {
@@ -1433,6 +1452,19 @@ TEST(SharedHttpClientTest, DispatchExecutorLifetimeIsOwnedByProcessState) {
 
 TEST(SharedHttpClientTest, ReactorThreadStartupFailureDoesNotEscape) {
   EXPECT_TRUE(a2a::http::testing::CurlStreamReactorHandlesThreadStartupFailure());
+}
+
+TEST(SharedHttpClientTest, ReactorPoolShutdownJoinsReferencedReactorsAndTerminalCallbacks) {
+  a2a::http::detail::CurlStreamReactorPool pool;
+  const auto reactor = pool.Acquire();
+  ASSERT_NE(reactor, nullptr);
+  const auto transfer = std::make_shared<a2a::http::detail::CurlStreamReactor::Transfer>();
+  std::atomic_bool completed{false};
+  transfer->on_complete = [&](CURLcode) { completed.store(true); };
+  reactor->Cancel(transfer);
+  pool.Shutdown();
+  EXPECT_TRUE(completed.load());
+  EXPECT_FALSE(reactor->IsCurrentThread());
 }
 
 TEST(SharedHttpClientTest, ReactorPoolDefersReleaseFromItsOwnThread) {
@@ -1696,6 +1728,66 @@ TEST(DefaultHttpTransportTest, LegacyEmptyStreamRequesterConstructionRemainsUnam
 
   (void)http_transport;
   (void)json_rpc_transport;
+}
+
+a2a::core::Result<lf::a2a::v1::Task> AwaitAsyncTask(a2a::client::A2AClient& client,
+                                                    const lf::a2a::v1::GetTaskRequest& request) {
+  std::promise<a2a::core::Result<lf::a2a::v1::Task>> promise;
+  auto future = promise.get_future();
+  auto operation = client.Async().GetTask(request, [&](auto response) { promise.set_value(std::move(response)); });
+  if (!operation.ok()) {
+    return operation.error();
+  }
+  EXPECT_EQ(future.wait_for(std::chrono::milliseconds(kStreamTimeoutMs)), std::future_status::ready);
+  auto response = future.get();
+  operation.value().Wait();
+  return response;
+}
+
+TEST(DefaultHttpTransportTest, HttpJsonAsyncUnaryAndStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server{std::string(kRestTaskBody)};
+  auto transport = a2a::client::HttpJsonTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kRest, server.port(), kLoopbackRestPath),
+      std::chrono::milliseconds(kStreamTimeoutMs));
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = AwaitAsyncTask(client, request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
+}
+
+TEST(DefaultHttpTransportTest, JsonRpcAsyncUnaryAndStreamReuseOneConnection) {
+  PersistentUnaryThenSseLoopbackServer server{std::string(kJsonRpcTaskBody)};
+  auto transport = a2a::client::JsonRpcTransport::CreateDefault(
+      MakeLoopbackInterface(a2a::client::PreferredTransport::kJsonRpc, server.port(), kLoopbackJsonRpcPath),
+      std::chrono::milliseconds(kStreamTimeoutMs), [] { return std::string(kJsonRpcRequestId); });
+  a2a::client::A2AClient client(std::move(transport));
+  lf::a2a::v1::GetTaskRequest request;
+  request.set_id(std::string(kTaskId));
+
+  const auto task = AwaitAsyncTask(client, request);
+  ASSERT_TRUE(task.ok()) << task.error().message();
+
+  RecordingStreamObserver observer;
+  auto stream = client.SubscribeTask(request, observer);
+  ASSERT_TRUE(stream.ok()) << stream.error().message();
+  ASSERT_TRUE(server.WaitForStreamRequest(std::chrono::milliseconds(kStreamTimeoutMs)));
+  server.ReleaseStreamResponse();
+
+  EXPECT_TRUE(WaitForStreamInactive(*stream.value()));
+  EXPECT_EQ(observer.errors(), 0);
+  EXPECT_EQ(server.accepted_connections(), kExpectedSingleConnection);
 }
 
 TEST(DefaultHttpTransportTest, HttpJsonUnaryAndStreamReuseOneConnection) {

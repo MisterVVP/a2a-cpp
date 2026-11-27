@@ -31,7 +31,7 @@ class JsonRpcTransport final : public ClientTransport {
   explicit JsonRpcTransport(ResolvedInterface resolved_interface, HttpRequester requester,
                             HttpStreamRequester stream_requester,
                             std::chrono::milliseconds default_timeout = kDefaultTimeout,
-                            RequestIdGenerator id_generator = {});
+                            RequestIdGenerator id_generator = {}, HttpAsyncRequester async_requester = {});
 
   [[nodiscard]] static std::unique_ptr<JsonRpcTransport> CreateDefault(
       ResolvedInterface resolved_interface, std::chrono::milliseconds default_timeout = kDefaultTimeout,
@@ -66,7 +66,10 @@ class JsonRpcTransport final : public ClientTransport {
                                                                           const CallOptions& options) override;
   [[nodiscard]] core::Result<void> Shutdown() override;
 
+  [[nodiscard]] std::shared_ptr<AsyncClientTransport> Async() const override { return async_transport_; }
+
  private:
+  [[nodiscard]] core::Result<HttpRequest> BuildUnaryRequest(std::string request_body, const CallOptions& options) const;
   [[nodiscard]] core::Result<HttpClientResponse> SendJsonRpcRequest(std::string request_body,
                                                                     const CallOptions& options) const;
 
@@ -81,10 +84,11 @@ class JsonRpcTransport final : public ClientTransport {
 
   ResolvedInterface resolved_interface_;
   HttpRequester requester_;
+  std::shared_ptr<AsyncClientTransport> async_transport_;
   HttpStreamRequester stream_requester_;
   HttpStreamRequesterWithCancellation cancellable_stream_requester_;
   std::chrono::milliseconds default_timeout_;
-  RequestIdGenerator id_generator_;
+  std::shared_ptr<RequestIdGenerator> id_generator_;
   std::shared_ptr<std::mutex> async_client_mutex_ = std::make_shared<std::mutex>();
   std::shared_ptr<http::Client> default_async_stream_client_;
   std::shared_ptr<std::atomic<bool>> async_shutdown_ = std::make_shared<std::atomic<bool>>(false);

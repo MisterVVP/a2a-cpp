@@ -13,9 +13,10 @@
 #include "a2a/core/error.h"
 #include "a2a/core/http_constants.h"
 #include "a2a/core/protojson.h"
+#include "push_notification_delivery_internal.h"
 
 namespace a2a::server {
-namespace {
+namespace delivery_internal {
 
 constexpr std::string_view kUnsupportedSchemeMessage = "push notification URL must use http or https";
 constexpr std::string_view kUnsupportedHttpVersionMessage =
@@ -91,14 +92,23 @@ core::Result<PushDeliveryResult> DeliverHttpRequest(const http::Client& http_cli
     return response.error();
   }
 
-  const auto http_status = response.value().status_code;
+  return MapResponse(response.value());
+}
+
+core::Result<PushDeliveryResult> MapResponse(const http::Response& response) {
+  const auto http_status = response.status_code;
   if (http_status < core::http::kSuccessStatusMin || http_status > core::http::kSuccessStatusMax) {
     return core::Error::RemoteProtocol(std::string(kWebhookNonSuccessMessage)).WithHttpStatus(http_status);
   }
   return PushDeliveryResult{.http_status = http_status, .error_message = {}};
 }
 
-}  // namespace
+}  // namespace delivery_internal
+
+using delivery_internal::BuildHttpRequest;
+using delivery_internal::DeliverHttpRequest;
+using delivery_internal::ValidateDeliveryOptions;
+using delivery_internal::ValidateUrlScheme;
 
 HttpPushNotificationDeliveryClient::HttpPushNotificationDeliveryClient(HttpPushNotificationDeliveryOptions options)
     : options_(std::move(options)) {}

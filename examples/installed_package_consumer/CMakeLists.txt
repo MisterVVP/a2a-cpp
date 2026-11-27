@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(a2a_cpp CONFIG REQUIRED)
+find_package(a2a_cpp 0.6.0 EXACT CONFIG REQUIRED)
 
 set(A2A_EXAMPLE_APP "hello_agent" CACHE STRING "Example app to build")
 set(A2A_EXAMPLE_APP_DIR "${CMAKE_CURRENT_LIST_DIR}/../apps/${A2A_EXAMPLE_APP}")
@@ -17,3 +17,14 @@ endif()
 
 add_executable(a2a_example "${A2A_EXAMPLE_APP_SOURCE}")
 target_link_libraries(a2a_example PRIVATE a2a::client a2a::server a2a::core)
+
+if(A2A_EXAMPLE_APP STREQUAL "asio_executor" OR A2A_EXAMPLE_APP STREQUAL "blocking_executor" OR A2A_EXAMPLE_APP STREQUAL "event_http_server")
+  if(NOT TARGET a2a::asio)
+    message(FATAL_ERROR "This coroutine example requires an SDK built with A2A_ENABLE_ASIO=ON")
+  endif()
+  target_link_libraries(a2a_example PRIVATE a2a::asio)
+endif()
+
+if(A2A_EXAMPLE_APP STREQUAL "async_grpc_server" AND TARGET a2a::asio)
+  target_link_libraries(a2a_example PRIVATE a2a::asio)
+endif()

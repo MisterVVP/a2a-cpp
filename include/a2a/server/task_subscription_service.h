@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <coroutine>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -24,6 +25,9 @@
 #include "a2a/v1/a2a.pb.h"
 
 namespace a2a::server {
+namespace engine {
+class AsyncTaskSubscription;
+}
 
 class TaskSubscriptionService final : private core::NonCopyableOrMovable {
  public:
@@ -35,6 +39,7 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
   void Shutdown();
 
  private:
+  friend class engine::AsyncTaskSubscription;
   struct LatestTaskState final {
     std::string context_id;
     lf::a2a::v1::TaskStatus status;
@@ -51,6 +56,9 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     lf::a2a::v1::Task current_task;
     std::deque<std::shared_ptr<const lf::a2a::v1::StreamResponse>> events;
     std::atomic_bool closed = false;
+    std::size_t capacity = 0;
+    std::optional<core::Error> failure;
+    std::function<void()> notify;
     // Counts published events until Next()/NextFor() hands them to the caller,
     // including an event already staged at a coroutine yield point.
     std::atomic_size_t pending_delivery_count = 0;
@@ -88,6 +96,9 @@ class TaskSubscriptionService final : private core::NonCopyableOrMovable {
     StreamResponseCoroutine coroutine_;
   };
 
+  core::Result<std::shared_ptr<SubscriberState>> RegisterSubscriber(const lf::a2a::v1::Task& task,
+                                                                    std::size_t capacity = 0,
+                                                                    std::function<void()> notify = {});
   static void RemoveSubscriber(const std::shared_ptr<ServiceState>& service_state,
                                const std::shared_ptr<SubscriberState>& state);
   class SubscriberEventAwaitable;

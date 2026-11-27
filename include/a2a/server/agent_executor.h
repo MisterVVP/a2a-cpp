@@ -15,6 +15,12 @@
 #include "a2a/server/tasks/list_tasks.h"
 #include "a2a/v1/a2a.pb.h"
 
+// Windows headers can define SendMessage as an ANSI/Unicode macro alias.
+// Keep the protocol method name stable regardless of dependency include order.
+#ifdef SendMessage
+#undef SendMessage
+#endif
+
 namespace a2a::server {
 
 class AgentExecutor {
