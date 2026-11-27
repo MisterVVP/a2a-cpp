@@ -51,4 +51,14 @@ boost::asio::awaitable<core::Result<void>> CoroutineAgentExecutor::DeleteTaskPus
     lf::a2a::v1::DeleteTaskPushNotificationConfigRequest /*request*/, RequestExecutionContext /*context*/) {
   co_return core::protocol_errors::UnsupportedOperation();
 }
+std::optional<core::Result<lf::a2a::v1::Task>> ImmediateReadExecutor::TryGetTask(
+    const lf::a2a::v1::GetTaskRequest& /*request*/, const RequestExecutionContext& /*context*/) {
+  return std::nullopt;
+}
+
+std::optional<core::Result<ListTasksResponse>> ImmediateReadExecutor::TryListTasks(
+    const ListTasksRequest& /*request*/, const RequestExecutionContext& /*context*/) {
+  return std::nullopt;
+}
+
 }  // namespace a2a::server::engine

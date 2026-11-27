@@ -612,6 +612,109 @@ TEST(AsyncDispatcherTest, SecuritySeesFullHistoryAndAuthenticatedPrincipalBefore
   EXPECT_EQ(std::get<lf::a2a::v1::Task>(result.value().payload()).history_size(), kHistoryLimit);
 }
 
+class ImmediateProbe final : public FakeExecutor, public ImmediateReadExecutor {
+ public:
+  std::optional<Result<lf::a2a::v1::Task>> TryGetTask(const lf::a2a::v1::GetTaskRequest& request,
+                                                      const RequestExecutionContext& context) override {
+    ++attempts;
+    if (decline) {
+      return std::nullopt;
+    }
+    if (fail) {
+      return Error::Validation(kFailure);
+    }
+    Record(context);
+    get_history_limit = request.has_history_length() ? request.history_length() : -1;
+    return MakeTask();
+  }
+
+  std::optional<Result<ListTasksResponse>> TryListTasks(const ListTasksRequest& /*request*/,
+                                                        const RequestExecutionContext& /*context*/) override {
+    return ListTasksResponse{};
+  }
+
+  int attempts = 0;
+  bool decline = false;
+};
+
+TEST(AsyncDispatcherTest, ImmediateReadUsesWorkerAndSharedSecurityPipeline) {
+  auto executor = std::make_shared<ImmediateProbe>();
+  auto interceptor = std::make_shared<RecordingInterceptor>(std::make_shared<Trace>());
+  InMemoryTaskStore store;
+  EXPECT_TRUE(store.CreateOrUpdate(MakeTask()).ok());
+  AsyncDispatcherOptions options;
+  options.interceptors = {interceptor};
+  options.security_policy = std::make_shared<AllowPolicy>();
+  options.task_store = &store;
+  AsyncRuntime runtime(executor, std::move(options));
+  auto request = GetTaskRequest();
+  std::get<lf::a2a::v1::GetTaskRequest>(request.payload).set_history_length(kHistoryLimit);
+  FakeTransport transport;
+  ASSERT_TRUE(transport.Send(*runtime.dispatcher(), request).ok());
+  const auto result = transport.Receive();
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(std::get<lf::a2a::v1::Task>(result.value().payload()).history_size(), kHistoryLimit);
+  EXPECT_EQ(executor->last_metadata.principal, kPrincipal);
+  EXPECT_EQ(executor->attempts, 1);
+}
+
+TEST(AsyncDispatcherTest, ImmediateListReturnsAvailableResult) {
+  auto executor = std::make_shared<ImmediateProbe>();
+  boost::asio::io_context loop;
+  AsyncDispatcher dispatcher(executor, loop.get_executor());
+  FakeTransport transport;
+  ASSERT_TRUE(
+      transport.Send(dispatcher, {.operation = DispatcherOperation::kListTasks, .payload = ListTasksRequest{}}).ok());
+  loop.run();
+  const auto result = transport.Receive();
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(std::get<ListTasksResponse>(result.value().payload()).tasks.empty());
+  EXPECT_EQ(executor->calls.load(), 0);
+}
+
+TEST(AsyncDispatcherTest, ImmediateReadErrorFinishesWithoutCoroutineFallback) {
+  auto executor = std::make_shared<ImmediateProbe>();
+  executor->fail = true;
+  boost::asio::io_context loop;
+  AsyncDispatcher dispatcher(executor, loop.get_executor());
+  FakeTransport transport;
+  ASSERT_TRUE(transport.Send(dispatcher).ok());
+  EXPECT_EQ(executor->attempts, 0);
+  loop.run();
+  const auto result = transport.Receive();
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().message(), kFailure);
+  EXPECT_EQ(executor->calls.load(), 0);
+}
+
+TEST(AsyncDispatcherTest, DeclinedImmediateReadCanSuspendAndBeCancelled) {
+  auto executor = std::make_shared<ImmediateProbe>();
+  executor->decline = true;
+  executor->pending = true;
+  auto held = executor->held.get_future();
+  AsyncRuntime runtime(executor);
+  FakeTransport transport;
+  const auto source = transport.Send(*runtime.dispatcher());
+  ASSERT_TRUE(source.ok());
+  ASSERT_EQ(held.wait_for(kWait), std::future_status::ready);
+  ExpectClientCancellation(transport, source.value());
+  runtime.Join();
+  EXPECT_EQ(executor->attempts, 1);
+  EXPECT_EQ(transport.reply()->count.load(), 1);
+}
+
+TEST(AsyncDispatcherTest, ExpiredDeadlineSkipsImmediateReadProbe) {
+  auto executor = std::make_shared<ImmediateProbe>();
+  boost::asio::io_context loop;
+  AsyncDispatcher dispatcher(executor, loop.get_executor());
+  FakeTransport transport;
+  ASSERT_TRUE(transport.Send(dispatcher, GetTaskRequest(), {}, RequestExecution::Clock::time_point{}).ok());
+  loop.run();
+  EXPECT_FALSE(transport.Receive().ok());
+  EXPECT_EQ(transport.reply()->outcome, RequestOutcome::kDeadlineExceeded);
+  EXPECT_EQ(executor->attempts, 0);
+}
+
 class BatchExecutor final : public FakeExecutor {
  public:
   explicit BatchExecutor(std::size_t expected) : started(static_cast<std::ptrdiff_t>(expected)) {}

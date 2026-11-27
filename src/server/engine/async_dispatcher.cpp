@@ -76,6 +76,25 @@ struct CoroutineDispatchResult final {
   ReturnType operator()(core::Result<DispatchResponse> result) const { co_return std::move(result); }
 };
 
+std::optional<core::Result<DispatchResponse>> TryImmediateRead(ImmediateReadExecutor& executor,
+                                                               const DispatchRequest& request,
+                                                               const RequestExecutionContext& view) {
+  if (request.operation == DispatcherOperation::kGetTask) {
+    if (const auto* payload = std::get_if<lf::a2a::v1::GetTaskRequest>(&request.payload)) {
+      if (auto result = executor.TryGetTask(*payload, view)) {
+        return ToDispatchResponse(std::move(*result));
+      }
+    }
+  } else if (request.operation == DispatcherOperation::kListTasks) {
+    if (const auto* payload = std::get_if<ListTasksRequest>(&request.payload)) {
+      if (auto result = executor.TryListTasks(*payload, view)) {
+        return ToDispatchResponse(std::move(*result));
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 constexpr auto kMissingStream = "Streaming dispatch requires a stream operation and sink";
 constexpr auto kConcurrentWrite = "Only one stream write may be outstanding";
 
@@ -275,43 +294,44 @@ struct AsyncDispatcher::State final {
       }
     }
 
-    static boost::asio::awaitable<void> Run(std::shared_ptr<State> state, std::shared_ptr<Call> call) {
-      call->started = true;
-      auto view = call->source->Context();
+    std::optional<core::Result<DispatchResponse>> Prepare(State& state, RequestExecutionContext& view) {
+      const auto valid = state.extensions.Validate(view.Metadata().client_headers);
+      if (!valid.ok()) {
+        return valid.error();
+      }
+      const auto before = session.Before();
+      if (view.Deadline().has_value()) {
+        (void)source->ExpireDeadline();
+      }
+      ObserveShutdown(state.closed.load());
+      if (!before.ok()) {
+        return before.error();
+      }
+      if (const auto outcome = view.Outcome(); outcome != RequestOutcome::kPending) {
+        return CancellationError(outcome);
+      }
+      if (auto handled = session.Handle()) {
+        return handled;
+      }
+      if (HasDispatchHooks(*pipeline)) {
+        view = view.WithMetadata(context);
+      }
+      return std::nullopt;
+    }
+
+    static boost::asio::awaitable<void> Run(std::shared_ptr<State> state, std::shared_ptr<Call> call,
+                                            RequestExecutionContext view, std::optional<DispatchRequest> prepared) {
       core::Result<DispatchResponse> response = core::Error::Internal({});
       try {
-        const auto valid = state->extensions.Validate(view.Metadata().client_headers);
-        if (!valid.ok()) {
-          response = valid.error();
+        if (call->stream != nullptr) {
+          response = co_await call->RunStream(*state->executor, view);
         } else {
-          const auto before = call->session.Before();
-          if (view.Deadline().has_value()) {
-            (void)call->source->ExpireDeadline();
-          }
-          call->ObserveShutdown(state->closed.load());
-          if (!before.ok()) {
-            response = before.error();
-          } else if (const auto outcome = view.Outcome(); outcome != RequestOutcome::kPending) {
-            response = CancellationError(outcome);
-          } else if (auto handled = call->session.Handle()) {
-            response = std::move(*handled);
-          } else {
-            if (HasDispatchHooks(*call->pipeline)) {
-              view = view.WithMetadata(call->context);
-            }
-            const auto prepared = call->session.Prepare();
-            if (call->stream != nullptr) {
-              response = co_await call->RunStream(*state->executor, view);
-            } else {
-              response = co_await RouteDispatch(*state->executor, prepared.has_value() ? *prepared : call->request,
-                                                view, CoroutineDispatchResult{});
-            }
-          }
+          response = co_await RouteDispatch(*state->executor, prepared.has_value() ? *prepared : call->request, view,
+                                            CoroutineDispatchResult{});
         }
       } catch (...) {
         response = CoroutineError(std::current_exception());
       }
-
       call->Finish(std::move(response));
     }
 
@@ -357,8 +377,11 @@ struct AsyncDispatcher::State final {
       } catch (...) {
         response = CoroutineError(std::current_exception());
       }
-      if (!source->TryComplete(response.ok() ? RequestCompletion::kSucceeded : RequestCompletion::kFailed)) {
-        response = CancellationError(source->Context().Outcome());
+      const auto view = source->Context();
+      const auto now =
+          view.Deadline().has_value() ? RequestExecution::Clock::now() : RequestExecution::Clock::time_point{};
+      if (!source->TryComplete(response.ok() ? RequestCompletion::kSucceeded : RequestCompletion::kFailed, now)) {
+        response = CancellationError(view.Outcome());
       }
       session.After(response, InterceptorExceptionPolicy::kContain);
       if (const auto state = owner.lock()) {
@@ -368,7 +391,7 @@ struct AsyncDispatcher::State final {
       admission.ReleaseActive();
       auto deliver = std::move(completion);
       try {
-        deliver(std::move(response), source->Context());
+        deliver(std::move(response), view);
       } catch (...) {
         return;
       }
@@ -394,6 +417,7 @@ struct AsyncDispatcher::State final {
   State(std::shared_ptr<CoroutineAgentExecutor> application, boost::asio::any_io_executor scheduler,
         AsyncDispatcherOptions options)
       : executor(std::move(application)),
+        immediate_reads(dynamic_cast<ImmediateReadExecutor*>(executor.get())),
         capacity(options.max_in_flight),
         max_pending(options.max_pending),
         pipeline(std::make_shared<const DispatchPipeline>(DispatchPipeline{
@@ -423,8 +447,37 @@ struct AsyncDispatcher::State final {
   }
 
   static void Start(const std::shared_ptr<Call>& call, const std::shared_ptr<State>& state) {
+    call->started = true;
+    auto view = call->source->Context();
+    std::optional<DispatchRequest> prepared;
+    std::optional<core::Result<DispatchResponse>> response;
+    try {
+      response = call->Prepare(*state, view);
+      if (!response.has_value()) {
+        prepared = call->session.Prepare();
+        if (state->immediate_reads != nullptr && call->stream == nullptr) {
+          response = TryImmediateRead(*state->immediate_reads, prepared.has_value() ? *prepared : call->request, view);
+          call->ObserveShutdown(state->closed.load());
+        }
+      }
+    } catch (...) {
+      response = CoroutineError(std::current_exception());
+    }
+    if (response.has_value()) {
+      call->Finish(std::move(*response));
+      return;
+    }
+    if (const auto outcome = view.Outcome(); outcome != RequestOutcome::kPending) {
+      call->Finish(CancellationError(outcome));
+      return;
+    }
+    Launch(call, state, std::move(view), std::move(prepared));
+  }
+
+  static void Launch(const std::shared_ptr<Call>& call, const std::shared_ptr<State>& state,
+                     RequestExecutionContext&& view, std::optional<DispatchRequest>&& prepared) {
     boost::asio::co_spawn(
-        call->worker, Call::Run(state, call),
+        call->worker, Call::Run(state, call, std::move(view), std::move(prepared)),
         boost::asio::bind_cancellation_slot(call->cancellation.slot(), [call](const std::exception_ptr& exception) {
           if (exception) {
             call->Finish(CoroutineError(exception));
@@ -464,6 +517,7 @@ struct AsyncDispatcher::State final {
   }
 
   const std::shared_ptr<CoroutineAgentExecutor> executor;
+  ImmediateReadExecutor* const immediate_reads;
   std::deque<Lane> lanes;
   std::atomic_size_t next_lane = 0;
   const std::size_t capacity;

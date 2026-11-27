@@ -13,17 +13,20 @@
 #include <boost/asio/use_awaitable.hpp>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "a2a/server/engine/async_task_subscription.h"
 #include "a2a/server/engine/blocking_executor_adapter.h"
+#include "a2a/server/engine/coroutine_agent_executor.h"
 #include "a2a/server/tasks/in_memory_task_store.h"
 #include "sut/sut_agent.h"
 
 namespace a2a::tests::sut {
 // Ready in-memory work runs on the coroutine executor. Blocking stores retain
 // bounded adaptation; live subscriptions await the shared publication core.
-class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor {
+class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor,
+                                   public server::engine::ImmediateReadExecutor {
  public:
   explicit SutCoroutineExecutor(SutAgent& agent, std::chrono::milliseconds get_task_delay = {})
       : agent_(agent),
@@ -67,6 +70,20 @@ class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor
       return InvokeGetTask(std::move(request), std::move(context));
     }
     return DelayedGetTask(std::move(request), std::move(context));
+  }
+  std::optional<core::Result<lf::a2a::v1::Task>> TryGetTask(
+      const lf::a2a::v1::GetTaskRequest& request, const server::engine::RequestExecutionContext& context) override {
+    if (!in_memory_ || get_task_delay_ != std::chrono::milliseconds::zero()) {
+      return std::nullopt;
+    }
+    return ReadReady(request, context, &server::AgentExecutor::GetTask);
+  }
+  std::optional<core::Result<server::ListTasksResponse>> TryListTasks(
+      const server::ListTasksRequest& request, const server::engine::RequestExecutionContext& context) override {
+    if (!in_memory_) {
+      return std::nullopt;
+    }
+    return ReadReady(request, context, &server::AgentExecutor::ListTasks);
   }
   boost::asio::awaitable<core::Result<server::ListTasksResponse>> ListTasks(
       server::ListTasksRequest request, server::engine::RequestExecutionContext context) override {
@@ -131,11 +148,17 @@ class SutCoroutineExecutor final : public server::engine::CoroutineAgentExecutor
   boost::asio::awaitable<core::Result<Response>> RunReady(
       Request request, server::engine::RequestExecutionContext context,
       core::Result<Response> (server::AgentExecutor::*operation)(const Request&, server::RequestContext&)) {
+    co_return ReadReady(request, context, operation);
+  }
+  template <typename Request, typename Response>
+  core::Result<Response> ReadReady(
+      const Request& request, const server::engine::RequestExecutionContext& context,
+      core::Result<Response> (server::AgentExecutor::*operation)(const Request&, server::RequestContext&)) {
     if (context.StopToken().stop_requested()) {
-      co_return core::Error::Network(kFixtureCancelled);
+      return core::Error::Network(kFixtureCancelled);
     }
     auto metadata = context.Metadata();
-    co_return (executor_.get()->*operation)(request, metadata);
+    return (executor_.get()->*operation)(request, metadata);
   }
   template <typename T, typename Work>
   boost::asio::awaitable<core::Result<T>> Backend(Work work) {

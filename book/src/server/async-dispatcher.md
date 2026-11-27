@@ -53,6 +53,16 @@ coroutine return cannot replace the winning outcome or invoke transport completi
 again. Never destroy an application-owned Asio I/O object after its execution
 context has already been destroyed.
 
+## Immediate reads
+
+A coroutine executor can also implement `ImmediateReadExecutor` to supply
+`TryGetTask` or `TryListTasks`. The dispatcher calls these methods on its
+application worker after validation, authorization, and before-dispatch hooks.
+Return a result when the read can complete without blocking. Returning
+`std::nullopt` leaves the request to the coroutine API and must have no side
+effects. A returned error completes the request. Response projection,
+cancellation, deadlines, and completion hooks apply to both paths.
+
 ## Transport boundary
 
 `Dispatch(request, metadata, transport_completion, deadline)` admits work and

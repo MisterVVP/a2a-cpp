@@ -5,6 +5,7 @@
 
 #include <boost/asio/awaitable.hpp>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "a2a/core/result.h"
@@ -47,5 +48,17 @@ class CoroutineAgentExecutor {
                                   RequestExecutionContext context);
   virtual boost::asio::awaitable<core::Result<void>> DeleteTaskPushNotificationConfig(
       lf::a2a::v1::DeleteTaskPushNotificationConfigRequest request, RequestExecutionContext context);
+};
+// An optional capability for CoroutineAgentExecutor implementations. The dispatcher
+// invokes these methods on its application executor after authorization and before
+// response projection. Only handle bounded, nonblocking work. Return std::nullopt
+// without side effects to use the coroutine operation. An error is a completed result.
+class ImmediateReadExecutor {
+ public:
+  virtual ~ImmediateReadExecutor() = default;
+  [[nodiscard]] virtual std::optional<core::Result<lf::a2a::v1::Task>> TryGetTask(
+      const lf::a2a::v1::GetTaskRequest& request, const RequestExecutionContext& context);
+  [[nodiscard]] virtual std::optional<core::Result<ListTasksResponse>> TryListTasks(
+      const ListTasksRequest& request, const RequestExecutionContext& context);
 };
 }  // namespace a2a::server::engine
