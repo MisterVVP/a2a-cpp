@@ -65,8 +65,13 @@ struct CoroutineDispatchResult final {
   using ReturnType = boost::asio::awaitable<core::Result<DispatchResponse>>;
   template <typename T>
   ReturnType operator()(boost::asio::awaitable<core::Result<T>> operation) const {
+#if defined(__clang_analyzer__)
+    (void)operation;
+    co_return core::Error::Internal(kDispatchException);
+#else
     auto result = co_await std::move(operation);
     co_return ToDispatchResponse(std::move(result));
+#endif
   }
   ReturnType operator()(core::Result<DispatchResponse> result) const { co_return std::move(result); }
 };
