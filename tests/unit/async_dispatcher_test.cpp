@@ -670,6 +670,26 @@ class LaneProbe final : public FakeExecutor {
   std::thread::id resumed;
 };
 
+void ExpectRequestsUseBothWorkers(AsyncDispatcher& dispatcher, std::thread::id worker) {
+  std::set<std::thread::id> available;
+  for (std::size_t index = 0; index < kWorkerCount; ++index) {
+    FakeTransport immediate;
+    ASSERT_TRUE(
+        immediate.Send(dispatcher, {.operation = DispatcherOperation::kListTasks, .payload = ListTasksRequest{}}).ok());
+    ASSERT_TRUE(immediate.Receive().ok());
+    available.insert(immediate.reply()->thread);
+  }
+  EXPECT_EQ(available.size(), kWorkerCount);
+  EXPECT_TRUE(available.contains(worker));
+}
+
+void ExpectCancellationOnWorker(const LaneProbe& probe, const FakeTransport& suspended, std::thread::id worker) {
+  EXPECT_EQ(probe.stopped, worker);
+  EXPECT_EQ(probe.resumed, worker);
+  EXPECT_EQ(suspended.reply()->thread, worker);
+  EXPECT_EQ(suspended.reply()->count.load(), 1);
+}
+
 TEST(AsyncDispatcherTest, SuspendedRequestSharesItsWorkerAndReceivesCancellationOnIt) {
   auto probe = std::make_shared<LaneProbe>();
   AsyncRuntime runtime(probe, {}, {.threads = kWorkerCount});
@@ -682,25 +702,12 @@ TEST(AsyncDispatcherTest, SuspendedRequestSharesItsWorkerAndReceivesCancellation
   const auto worker = entered.get();
   EXPECT_NE(worker, std::this_thread::get_id());
 
-  std::set<std::thread::id> available;
-  for (std::size_t index = 0; index < kWorkerCount; ++index) {
-    FakeTransport immediate;
-    ASSERT_TRUE(
-        immediate.Send(*dispatcher, {.operation = DispatcherOperation::kListTasks, .payload = ListTasksRequest{}})
-            .ok());
-    ASSERT_TRUE(immediate.Receive().ok());
-    available.insert(immediate.reply()->thread);
-  }
-  EXPECT_EQ(available.size(), kWorkerCount);
-  EXPECT_TRUE(available.contains(worker));
+  ExpectRequestsUseBothWorkers(*dispatcher, worker);
 
   dispatcher->Cancel(accepted.value());
   EXPECT_FALSE(suspended.Receive().ok());
   runtime.Join();
-  EXPECT_EQ(probe->stopped, worker);
-  EXPECT_EQ(probe->resumed, worker);
-  EXPECT_EQ(suspended.reply()->thread, worker);
-  EXPECT_EQ(suspended.reply()->count.load(), 1);
+  ExpectCancellationOnWorker(*probe, suspended, worker);
 }
 
 class BlockingInterceptor final : public ServerInterceptor {
