@@ -64,14 +64,10 @@ bool HasDispatchHooks(const DispatchPipeline& pipeline) noexcept {
 struct CoroutineDispatchResult final {
   using ReturnType = boost::asio::awaitable<core::Result<DispatchResponse>>;
   template <typename T>
-#if defined(__clang_analyzer__)
-  ReturnType operator()(boost::asio::awaitable<core::Result<T>> operation) const;
-#else
   ReturnType operator()(boost::asio::awaitable<core::Result<T>> operation) const {
     auto result = co_await std::move(operation);
     co_return ToDispatchResponse(std::move(result));
   }
-#endif
   ReturnType operator()(core::Result<DispatchResponse> result) const { co_return std::move(result); }
 };
 

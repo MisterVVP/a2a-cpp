@@ -93,7 +93,7 @@ struct AsyncGrpcServerTransport::State final {
     const std::shared_ptr<engine::AsyncDispatcher> dispatcher;
     std::vector<std::string> extensions;
     std::shared_ptr<RequestExecution> source;
-    std::atomic_flag cancelled;
+    std::atomic_flag cancelled{};
     std::optional<std::stop_callback<Shutdown>> shutdown;
   };
 
